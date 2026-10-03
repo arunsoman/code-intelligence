@@ -1,0 +1,523 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ApiResult, AuditEvent, ChangesSince, Claim, ConceptCard, ConverseResult, EditorContext, ExplainResult, ResolvedEvidence, RevisionInfo, SavedState, StatusInfo, VerdictKind, ViewNode, ViewSpec, WorkspaceOpen } from "@cie/schema";
+import { call } from "./api.ts";
+import { Canvas } from "./Canvas.tsx";
+import { ChatPanel, type Message } from "./ChatPanel.tsx";
+import { ClaimCard } from "./ClaimCard.tsx";
+import { ConceptBrowser } from "./ConceptBrowser.tsx";
+import { Outline } from "./Outline.tsx";
+import { Consequences } from "./Consequences.tsx";
+import { TerrainView } from "./TerrainView.tsx";
+import { VisualsGallery, type CatalogEntry } from "./VisualsGallery.tsx";
+import { FolderPicker } from "./FolderPicker.tsx";
+import { DEFAULT_LEVEL, LEVELS, MAX_LEVEL, basePositions, effectiveView, render, selectedAggregates, type RenderEdge, type RenderNode } from "./graph.ts";
+
+interface ExceptionRow { id: string; errorClass: string; message: string; trace: string; source: string; count: number; lastSeen: string }
+type Drawer =
+  | { kind: "explain"; data: ExplainResult }
+  | { kind: "inspect"; title: string; sub: string; notes: string[]; factors?: ViewNode["factors"]; claimIds: string[]; evidence: ResolvedEvidence[]; members?: string[]; entityId?: string }
+  | null;
+
+const uuid = () => crypto.randomUUID();
+const now = () => new Date().toISOString();
+const CLASS_LABEL: Record<string, string> = { STATIC_PARSED: "Parsed from source", STATIC_RESOLVED: "Statically resolved", INFERRED: "Model inference", RUNTIME: "Pasted trace (unverified)", HISTORY: "Git history", TEST: "Test" };
+const EXAMPLES = ["Show me how authentication works", "Show me everything that could cause a payment to fail", "Why could this balance become incorrect?"];
+
+export function App() {
+  const [info, setInfo] = useState<StatusInfo | null>(null);
+  const [repoPath, setRepoPath] = useState("");
+  const [view, setView] = useState<ViewSpec | null>(null);
+  const [claimMap, setClaimMap] = useState<Record<string, Claim>>({});
+  const [selection, setSelection] = useState<string[]>([]); // view node ids (symbol identity)
+  const [level, setLevel] = useState<number>(DEFAULT_LEVEL);
+  const [drawer, setDrawer] = useState<Drawer>(null);
+  const [code, setCode] = useState<{ title: string; file: string; startLine: number; snippet: string } | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [events, setEvents] = useState<SavedState["events"]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [workspaces, setWorkspaces] = useState<{ id: string; name: string; version: number; updatedAt: string }[]>([]);
+  const [ws, setWs] = useState<{ id?: string; version: number }>({ version: 0 });
+  const [wsName, setWsName] = useState("");
+  const [stale, setStale] = useState<{ files: string[]; evidence: number } | null>(null);
+  const [changes, setChanges] = useState<ChangesSince | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [boxSelect, setBoxSelect] = useState(false);
+  const [cards, setCards] = useState<ConceptCard[]>([]);
+  const [editorFocus, setEditorFocus] = useState<{ entityId: string; label: string }[]>([]);
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [fitTick, setFitTick] = useState(0);
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [terrainWeights, setTerrainWeights] = useState<Record<string, number>>({});
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  const [announcement, setAnnouncement] = useState("");
+  const [exceptions, setExceptions] = useState<ExceptionRow[]>([]);
+  const [browsingCards, setBrowsingCards] = useState(false);
+  const [cardPins, setCardPins] = useState<{ title: string; ids: string[] } | null>(null);
+  const [audit, setAudit] = useState<{ events: AuditEvent[]; chain: { ok: boolean } } | null>(null);
+
+  const log = useCallback((kind: string, detail?: string) => setEvents((e) => [...e, { kind, at: now(), detail }].slice(-200)), []);
+  const say = useCallback((role: Message["role"], text: string, isError = false) => setMessages((m) => [...m, { role, text, at: now(), error: isError }].slice(-200)), []);
+  const mergeClaims = useCallback((cs: Claim[]) => setClaimMap((m) => ({ ...m, ...Object.fromEntries(cs.map((c) => [c.draft.id, c])) })), []);
+
+  const refresh = useCallback(async () => {
+    const [s, l] = await Promise.all([call<StatusInfo>("C01", "status"), call<typeof workspaces>("C13", "listWorkspaces")]);
+    if (s.ok) {
+      setInfo(s.value);
+      if (s.value.revision) { setRepoPath((p) => p || s.value.revision!.repoRoot); const c = await call<ConceptCard[]>("C11", "listConcepts", { revision: s.value.revision.id }); if (c.ok) setCards(c.value); }
+    } else setError(s.error.message);
+    if (l.ok) setWorkspaces(l.value);
+  }, []);
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  // Editor context (VS Code extension): what you are looking at becomes an offered referent. Polled lightly; harmless if no editor is connected.
+  const editorRev = info?.revision?.id;
+  useEffect(() => {
+    if (!editorRev) return;
+    let live = true;
+    const tick = async () => {
+      const r = await call<EditorContext>("C01", "editorContext", { revision: editorRev }); if (live && r.ok) setEditorFocus(r.value.focus);
+      const x = await call<ExceptionRow[]>("C24", "listExceptions", {}); if (live && x.ok) setExceptions(x.value);
+    };
+    void tick();
+    const t = window.setInterval(tick, 4000);
+    return () => { live = false; window.clearInterval(t); };
+  }, [editorRev]);
+
+  const revision = view?.revision ?? info?.revision?.id;
+  const changedIds = useMemo(() => new Set(changes?.affectedNodes.map((n) => n.nodeId) ?? []), [changes]);
+  const eff = useMemo(() => (view ? effectiveView(view, claimMap) : null), [view, claimMap]);
+  const positions = useMemo(() => (view ? basePositions(view) : new Map()), [view]);
+  const rendered = useMemo(() => {
+    if (!eff) return { nodes: [], edges: [], groups: [] };
+    const staleSet = new Set([...eff.stale, ...changedIds]);
+    return render(eff.view, level, positions, staleSet);
+  }, [eff, level, positions, changedIds]);
+  const selectedRender = useMemo(() => selectedAggregates(rendered, selection), [rendered, selection]);
+  const nodeById = useMemo(() => new Map((view?.nodes ?? []).map((n) => [n.id, n])), [view]);
+  const mapReferents = selection.map((id) => ({ id, label: nodeById.get(id)?.label ?? id, source: "map" as const })).filter((r) => nodeById.has(r.id));
+  const editorReferents = editorFocus.filter((f) => !dismissed.has(f.entityId) && !selection.some((id) => nodeById.get(id)?.entityRefs.includes(f.entityId))).map((f) => ({ id: `editor:${f.entityId}`, label: f.label, source: "editor" as const }));
+  const cardReferents = cardPins ? [{ id: "card:pins", label: `card: ${cardPins.title}`, source: "editor" as const }] : [];
+  const referents = [...mapReferents, ...cardReferents, ...editorReferents];
+  const pins = selection.length ? [] : [...(cardPins?.ids ?? []), ...editorReferents.map((r) => r.id.slice(7))].slice(0, 8);
+  const viewKey = view ? `${view.id}:${view.version}:${view.revision}` : "";
+
+  async function withBusy<T>(label: string, fn: () => Promise<T>) {
+    setBusy(label); setError(null); setNotice(null);
+    try { return await fn(); } finally { setBusy(null); }
+  }
+  const failMsg = (r: Extract<ApiResult<unknown>, { ok: false }>) => `${r.error.code}: ${r.error.message}`;
+
+  // ------------------------------------------------------------ repository
+  const index = () => withBusy("Indexing…", async () => {
+    const r = await call<RevisionInfo>("C04", "ingestRepository", { repoPath }, uuid());
+    if (!r.ok) return setError(failMsg(r));
+    setNotice(`Indexed ${r.value.fileCount} files at ${r.value.id}${r.metadata.warnings.length ? ` — ${r.metadata.warnings.length} warning(s)` : ""}`);
+    log("INDEX", r.value.id);
+    await refresh();
+  });
+  const extract = () => withBusy("Extracting concepts…", async () => {
+    const r = await call<{ cards: ConceptCard[]; dropped: string[]; provider: string }>("C11", "extractConcepts", { revision: info?.revision?.id }, uuid());
+    if (!r.ok) return setError(failMsg(r));
+    setCards(r.value.cards);
+    setNotice(`Extracted ${r.value.cards.length} concept card(s) with ${r.value.provider}${r.value.dropped.length ? `; ${r.value.dropped.length} dropped (ungrounded)` : ""}.${r.metadata.warnings.length ? ` ${r.metadata.warnings[0]}` : ""}`);
+    log("CONCEPTS", String(r.value.cards.length));
+    await refresh();
+  });
+  const toggleHosted = async (allow: boolean) => {
+    const root = info?.revision?.repoRoot;
+    if (!root) return;
+    const r = await call("C03", "setEgress", { repoRoot: root, allow }, uuid());
+    if (!r.ok) return setError(failMsg(r));
+    setNotice(allow ? "Hosted model approved for this repository. Every send is logged." : "Hosted model blocked; the offline model will answer.");
+    await refresh();
+  };
+  const openAudit = async () => {
+    const r = await call<{ events: AuditEvent[]; chain: { ok: boolean } }>("C03", "auditLog", { limit: 60 });
+    if (r.ok) setAudit(r.value); else setError(failMsg(r));
+  };
+
+  // ------------------------------------------------------------ views
+  function adoptView(v: ViewSpec, claims: Claim[], keepSelection: boolean) {
+    mergeClaims(claims);
+    setSelection((sel) => (keepSelection ? sel.filter((id) => v.nodes.some((n) => n.id === id)) : []));
+    setView(v); setDrawer(null); setCode(null); setStale(null);
+    if (v.terrain) setTerrainWeights(Object.fromEntries(v.terrain.factors.map((f) => [f.id, f.weight])));
+    if (!keepSelection) { setLevel(v.level ?? DEFAULT_LEVEL); setFitTick((t) => t + 1); setChanges(null); }
+  }
+
+  const send = async (text: string) => {
+    say("user", text);
+    setBusy("Thinking…"); setError(null); setNotice(null);
+    try {
+      const r = await call<ConverseResult>("C15", "converse", { text, view, selection, revision: info?.revision?.id, pins });
+      if (!r.ok) { say("assistant", failMsg(r), true); return; }
+      const v = r.value;
+      for (const w of r.metadata.warnings) say("assistant", `Note: ${w}`);
+      switch (v.kind) {
+        case "view": adoptView(v.view, v.claims, !!view && view.id === v.view.id); say("assistant", v.message); log("ASK", text.slice(0, 80)); break;
+        case "explanation": mergeClaims(v.explanation.claims); setDrawer({ kind: "explain", data: v.explanation }); say("assistant", v.message); log("EXPLAIN", text.slice(0, 80)); break;
+        case "zoom": setLevel((l) => v.direction === "overview" ? 1 : Math.max(0, Math.min(MAX_LEVEL, l + (v.direction === "in" ? 1 : -1)))); setFitTick((t) => t + 1); say("assistant", v.message); break;
+        case "resume": say("assistant", v.message); await resume(v.workspaceId); break;
+        case "message": say("assistant", v.message); break;
+      }
+    } finally { setBusy(null); }
+  };
+
+  // ------------------------------------------------------------ inspection
+  async function evidence(ids: string[]): Promise<ResolvedEvidence[]> {
+    if (!revision) return [];
+    const out = await Promise.all(ids.slice(0, 4).map((id) => call<ResolvedEvidence>("C18", "evidence", { revision, evidenceId: id })));
+    return out.flatMap((r) => (r.ok ? [r.value] : []));
+  }
+  const inspectNode = async (n: RenderNode) => {
+    if (n.kind === "ext") {
+      setDrawer({ kind: "inspect", title: n.label, sub: "external dependency", notes: ["Imported from outside this repository; the code of the package is not analysed."], claimIds: [], evidence: await evidence(n.evidenceIds ?? []) });
+      return;
+    }
+    if (n.kind === "agg") {
+      setSelection(n.members);
+      setDrawer({ kind: "inspect", title: n.label, sub: `${n.count} element(s) collapsed at level ${level}`, notes: [`Zoom in or press + to see them individually. Selecting this selects all ${n.count}.`], claimIds: [], evidence: [], members: n.members.map((m) => nodeById.get(m)?.label ?? m) });
+      return;
+    }
+    await openNodeDrawer(n.node!);
+  };
+  const openNodeDrawer = async (vn: ViewNode) => {
+    setDrawer({ kind: "inspect", title: vn.label, sub: `${vn.role ?? vn.kind}${vn.file ? ` · ${vn.file}` : ""}`, notes: vn.notes ?? [], factors: vn.factors, claimIds: vn.claimIds, evidence: await evidence(vn.evidenceIds), entityId: vn.entityRefs[0] });
+    log("INSPECT", vn.label);
+  };
+  const askForm = async (question: string, form: string, subject?: string) => {
+    say("user", question);
+    setBusy("Composing view…"); setError(null); setNotice(null);
+    try {
+      const r = await call<{ view: ViewSpec; claims: Claim[] }>("C19", "ask", { question, revision: info?.revision?.id, form, subject });
+      if (!r.ok) { say("assistant", failMsg(r), true); return; }
+      adoptView(r.value.view, r.value.claims, !!view && view.id === r.value.view.id);
+      say("assistant", `${r.value.view.formReason ?? ""} ${r.value.view.caption}`.trim());
+      log("ASK", `${form}: ${question.slice(0, 60)}`);
+    } finally { setBusy(null); }
+  };
+  const openConsequence = async (id: string) => {
+    const c = view?.consequences?.find((x) => x.id === id);
+    if (!c) return;
+    setDrawer({ kind: "inspect", title: c.kind, sub: `${c.displayMode === "HYPOTHESIS" ? "Hypothesis" : "Inference"} · what this means`, notes: [c.text], claimIds: c.claimId ? [c.claimId] : [], evidence: await evidence(c.evidenceIds) });
+    if (c.entityIds?.length) setSelection(view!.nodes.filter((n) => n.entityRefs.some((e) => c.entityIds!.includes(e))).map((n) => n.id).slice(0, 12));
+  };
+  const inspectEdge = async (e: RenderEdge) => {
+    if (!view) return;
+    const under = view.edges.filter((x) => e.edgeIds.includes(x.id));
+    const first = under[0];
+    const lab = (id: string) => nodeById.get(id)?.label ?? id;
+    const title = e.count > 1 ? `${e.count} links` : first ? `${lab(first.fromNodeId)} → ${lab(first.toNodeId)}` : "link";
+    const how = e.displayMode === "FACT" ? "Fact · statically proven" : e.displayMode === "HYPOTHESIS" ? "Hypothesis · cannot be proven statically" : "Inference · derived from cited evidence";
+    setDrawer({ kind: "inspect", title, sub: `${first?.kind ?? "link"} · ${how}`, notes: e.count > 1 ? under.slice(0, 6).map((u) => `${lab(u.fromNodeId)} → ${lab(u.toNodeId)}${u.label ? ` (${u.label})` : ""}`) : [], claimIds: [...new Set(under.map((u) => u.claimId).filter((c): c is string => !!c))], evidence: await evidence(e.evidenceIds) });
+  };
+  const expand = async (n: RenderNode) => {
+    const vn = n.node;
+    if (!vn || !vn.evidenceIds[0]) return;
+    const [ev] = await evidence([vn.evidenceIds[0]]);
+    if (ev) setCode({ title: vn.label, file: ev.file, startLine: ev.startLine, snippet: ev.snippet });
+    log("EXPAND", vn.label);
+  };
+
+  // ------------------------------------------------------------ verdicts
+  const verdict = async (claim: Claim, v: VerdictKind, explanation: string): Promise<string | null> => {
+    const r = await call<{ claim: Claim; affected: Claim[] }>("C18", "verdict", { claimId: claim.draft.id, verdict: v, explanation, expectedVersion: claim.version }, uuid());
+    if (!r.ok) return r.error.code === "VERSION_CONFLICT" ? "This claim changed since you loaded it. Re-run the question to refresh." : r.error.message;
+    mergeClaims([r.value.claim, ...r.value.affected]);
+    log("VERDICT", `${v} ${claim.draft.id}`);
+    say("assistant", v === "REFUTE"
+      ? `Refuted. It is now hidden${r.value.affected.length ? ` and ${r.value.affected.length} dependent claim(s) are marked stale` : ""}.`
+      : v === "CONFIRM" ? "Confirmed. It stays labelled as an inference: a confirmation is your judgment, not static proof." : "Disputed. It is shown as a hypothesis until resolved.");
+    return null;
+  };
+  const claimsFor = (ids: string[]) => ids.map((id) => claimMap[id]).filter((c): c is Claim => !!c);
+
+  // ------------------------------------------------------------ investigations
+  const save = () => withBusy("Saving…", async () => {
+    const ids = new Set<string>([...(view?.nodes.flatMap((n) => n.claimIds) ?? []), ...(view?.edges.flatMap((e) => (e.claimId ? [e.claimId] : [])) ?? [])]);
+    const state: SavedState = {
+      question: view?.question ?? "", view, claims: [...ids].map((id) => claimMap[id]).filter((c): c is Claim => !!c),
+      selection: selection.flatMap((id) => nodeById.get(id)?.entityRefs ?? []), explanation: drawer?.kind === "explain" ? drawer.data : null, events, messages,
+    };
+    const name = wsName || view?.question || "Untitled investigation";
+    const r = await call<{ workspaceId: string; receipt: { resourceVersion: number } }>("C13", "saveWorkspace", { workspaceId: ws.id, name, expectedVersion: ws.version, revision, state }, uuid());
+    if (!r.ok) return setError(r.error.code === "VERSION_CONFLICT" ? "This investigation was saved elsewhere since you opened it. Re-open it before saving." : failMsg(r));
+    setWs({ id: r.value.workspaceId, version: r.value.receipt.resourceVersion });
+    setNotice(`Saved “${name}” (v${r.value.receipt.resourceVersion})`);
+    await refresh();
+  });
+
+  async function resume(id: string) {
+    const r = await call<WorkspaceOpen>("C13", "openWorkspace", { workspaceId: id });
+    if (!r.ok) { setError(failMsg(r)); return; }
+    const s = r.value.state;
+    mergeClaims([...s.claims, ...(s.explanation?.claims ?? []), ...(r.value.claimStates ?? [])]);
+    setWs({ id: r.value.id, version: r.value.version }); setWsName(r.value.name);
+    setView(s.view); setEvents(s.events); setMessages(s.messages ?? []); setLevel(DEFAULT_LEVEL); setCode(null);
+    setDrawer(s.explanation ? { kind: "explain", data: s.explanation } : null);
+    setSelection((s.view?.nodes ?? []).filter((n) => n.entityRefs.some((e) => s.selection.includes(e))).map((n) => n.id));
+    setStale(r.value.staleEvidence.length ? { files: r.value.staleFiles, evidence: r.value.staleEvidence.length } : null);
+    log("RESUME", r.value.name);
+    // Beat 6: report what changed in the repository since the investigation was saved.
+    setChanges(null);
+    if (r.value.revisionIndexed) {
+      setBusy("Checking what changed since you left…");
+      const c = await call<ChangesSince>("C13", "changesSince", { workspaceId: id }, uuid());
+      setBusy(null);
+      if (c.ok) { setChanges(c.value); say("assistant", `Restored “${r.value.name}”. ${c.value.summary}`); if (!c.value.changed) setStale(null); }
+      else say("assistant", `Restored “${r.value.name}”. Couldn't check for repository changes: ${c.error.message}`);
+    } else say("assistant", `Restored “${r.value.name}” exactly as saved.`);
+    await refresh();
+  }
+
+  const refreshOnLatest = () => withBusy("Refreshing on the latest revision…", async () => {
+    if (!view || !changes) return;
+    const inv = view.investigation;
+    const r = inv
+      ? await call<{ view: ViewSpec; claims: Claim[] }>("C19", "investigate", { trace: inv.trace, ignored: inv.ignored, revision: changes.toRevision })
+      : await call<{ view: ViewSpec; claims: Claim[] }>("C19", "ask", { question: view.question, revision: changes.toRevision });
+    if (!r.ok) return setError(failMsg(r));
+    adoptView(r.value.view, r.value.claims, true);
+    setChanges(null);
+    say("assistant", "Refreshed this investigation on the latest code. Your selection and identities were kept where the elements still exist.");
+  });
+
+  const investigateException = (x: ExceptionRow) => void send(x.trace);
+  const dismissException = async (x: ExceptionRow) => {
+    const r = await call("C24", "dismissException", { id: x.id }, uuid());
+    if (r.ok) setExceptions((e) => e.filter((y) => y.id !== x.id)); else setError(failMsg(r));
+  };
+  const override = async (entityId: string, mode: "pin" | "boost" | "demote" | null) => {
+    const r = await call("C19", "setOverride", { revision, entityId, mode }, uuid());
+    if (!r.ok) return setError(failMsg(r));
+    if (view) {
+      const f = await call<{ view: ViewSpec; claims: Claim[] }>("C19", "refresh", { view });
+      if (f.ok) adoptView(f.value.view, f.value.claims, true);
+    }
+    say("assistant", mode === "pin" ? "Pinned: it will always be shown." : mode === "boost" ? "Boosted: it ranks higher." : mode === "demote" ? "Demoted: it ranks lower." : "Reset to its computed relevance.");
+  };
+  const levelsApply = !!view && view.nodes.some((n) => !n.pos) && !view.terrain;
+  const stepLevel = (d: number) => { setLevel((l) => Math.max(0, Math.min(MAX_LEVEL, l + d))); setFitTick((t) => t + 1); };
+  const dm = (m: string) => (m === "FACT" ? "fact" : m === "INFERENCE" ? "inference" : m === "FOG" ? "fog" : "hyp");
+  const providerShort = info?.provider ?? "…";
+
+  return (
+    <div className="app">
+      {picking && <FolderPicker initialPath={repoPath} onClose={() => setPicking(false)} onPick={(p) => { setRepoPath(p); setPicking(false); log("PICK_REPO", p); }} />}
+      {galleryOpen && <VisualsGallery revision={info?.revision?.id} onClose={() => setGalleryOpen(false)} onShow={(it: CatalogEntry, q: string) => { setGalleryOpen(false); void askForm(q, it.formId); }} />}
+      {outlineOpen && <Outline rendered={rendered} level={level} onClose={() => setOutlineOpen(false)} onPick={(id) => { const n = rendered.nodes.find((x) => x.id === id); setOutlineOpen(false); if (n) void inspectNode(n); }} />}
+      {browsingCards && (
+        <ConceptBrowser revision={info?.revision?.id} onClose={() => { setBrowsingCards(false); void refresh(); }} onVerdict={verdict}
+          onAsk={(c) => { setCardPins({ title: c.title, ids: c.members.slice(0, 8) }); setBrowsingCards(false); say("assistant", `Referring to “${c.title}” (${c.members.length} element(s)). Ask your question; they are in the context.`); }} />
+      )}
+      {audit && (
+        <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setAudit(null); }}>
+          <div className="modal" role="dialog" aria-modal="true" aria-label="Audit log" tabIndex={-1} onKeyDown={(e) => { if (e.key === "Escape") setAudit(null); }}>
+            <h2>Audit log <span className={`badge ${audit.chain.ok ? "fact" : "warn"}`}>{audit.chain.ok ? "chain intact" : "chain broken"}</span></h2>
+            <ul className="dirs" tabIndex={0} aria-label="Audit events">{audit.events.map((e) => <li key={e.seq}><span className="mono">{e.ts.slice(11, 19)} {e.action}</span><span className="muted small">{e.resource.slice(0, 40)}</span></li>)}</ul>
+            <div className="modal-actions"><span className="muted small">Local, hash-chained. Source code is never written here.</span><button onClick={() => setAudit(null)}>Close</button></div>
+          </div>
+        </div>
+      )}
+      <header>
+        <h1>Code Intelligence</h1>
+        <span className="chip" title="Model provider">{providerShort}{info?.hosted ? " · hosted" : ""}</span>
+        {info?.revision && <span className="chip mono" title={info.revision.repoRoot}>rev {info.revision.id} · {info.revision.fileCount} files</span>}
+        {info && info.concepts > 0 && <span className="chip">{info.concepts} concept cards</span>}
+        {info?.tests && <span className="chip" title={`Loaded from ${info.tests.found.join(", ")}${info.tests.staleness.length ? `. ${info.tests.staleness.join("; ")}` : ""}`}>tests: {info.tests.tests.passed} pass · {info.tests.tests.failed} fail{info.tests.coverageLinePercent !== null ? ` · ${info.tests.coverageLinePercent}% covered` : ""}{info.tests.staleness.length ? " ⚠" : ""}</span>}
+        {busy && <span className="chip busy" role="status">{busy}</span>}
+        <button className="secondary small push" onClick={() => setGalleryOpen(true)}>Visuals</button>
+        <button className="link" onClick={openAudit}>Audit log</button>
+      </header>
+
+      <aside className="side" aria-label="Controls">
+        <section>
+          <h2>Repository</h2>
+          <label className="sr" htmlFor="repo">Absolute repository path</label>
+          <input id="repo" value={repoPath} onChange={(e) => setRepoPath(e.target.value)} placeholder="/absolute/path/to/ts/repo" />
+          <div className="row">
+            <button className="secondary" onClick={() => setPicking(true)} disabled={!!busy}>Browse…</button>
+            <button onClick={index} disabled={!repoPath || !!busy} title="Index the selected repository">Index</button>
+          </div>
+          <button className="secondary" onClick={extract} disabled={!info?.revision || !!busy} title="Extract capabilities, failure modes, invariants and workflows">Extract concepts{cards.length ? ` (${cards.length})` : ""}</button>
+          {info?.hosted && info.revision && (
+            <div className="egress">
+              <label><input type="checkbox" checked={info.allowHosted} onChange={(e) => void toggleHosted(e.target.checked)} /> Allow the hosted model for this repo</label>
+              <p className="muted small">{info.allowHosted
+                ? "Entity names, file paths, relationship kinds and behavioral facts (throws, writes, topics) for each question are sent to the hosted model. Source code, authors, commit messages and git history never are. Secret-looking names are removed. Every send is logged."
+                : "Not approved: answers use the offline model, and nothing leaves this machine."}</p>
+            </div>
+          )}
+          {cards.length > 0 && <button className="secondary" onClick={() => setBrowsingCards(true)}>Browse concept cards</button>}
+        </section>
+
+        <section>
+          <h2>Exceptions {exceptions.length > 0 && <small>({exceptions.length})</small>}</h2>
+          {exceptions.length === 0 ? <p className="muted small">None reported. Apps can send exceptions here with <code>@cie/reporter</code>, or just paste a stack trace into the conversation.</p> : (
+            <ul className="exceptions">
+              {exceptions.slice(0, 8).map((x) => (
+                <li key={x.id}>
+                  <div><strong>{x.errorClass}</strong> <span className="chip">{x.count}×</span></div>
+                  <div className="muted small">{x.message || "(no message)"} · {x.source}</div>
+                  <div className="row"><button className="secondary small" onClick={() => investigateException(x)} disabled={!!busy}>Investigate</button><button className="secondary small" onClick={() => void dismissException(x)}>Dismiss</button></div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section>
+          <h2>Elements {view && <small>({selection.length} selected)</small>}</h2>
+          {!eff || eff.view.nodes.length === 0 ? <p className="muted">Nothing shown yet.</p> : (
+            <ul className="elements" tabIndex={0} aria-label="Elements in this view">
+              {eff.view.nodes.map((n) => (
+                <li key={n.id}>
+                  <label>
+                    <input type="checkbox" checked={selection.includes(n.id)} onChange={(e) => setSelection(e.target.checked ? [...selection, n.id] : selection.filter((x) => x !== n.id))} />
+                    <span className={`dot ${dm(n.displayMode)}`} aria-hidden /> {n.rank ? `#${n.rank} ` : ""}{n.label} <small className="muted">{n.role ?? n.kind}</small>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="hint">Select by clicking, Ctrl-clicking, Box select, or the checkboxes. Selected elements become the “these” in your next message.</p>
+        </section>
+
+        <section>
+          <h2>Investigation</h2>
+          <label className="sr" htmlFor="wsn">Investigation name</label>
+          <input id="wsn" value={wsName} onChange={(e) => setWsName(e.target.value)} placeholder="Payment failure investigation" />
+          <button onClick={save} disabled={!view || !!busy}>{ws.id ? `Save (v${ws.version + 1})` : "Save investigation"}</button>
+          <ul className="workspaces">
+            {workspaces.map((w) => <li key={w.id}><button className="link" onClick={() => void withBusy("Opening…", () => resume(w.id))}>{w.name}</button> <small className="muted">v{w.version}</small></li>)}
+            {workspaces.length === 0 && <li className="muted">No saved investigations.</li>}
+          </ul>
+        </section>
+      </aside>
+
+      <main>
+        <div className="sr" role="status" aria-live="polite" aria-atomic="true">{announcement}</div>
+        <p id="canvas-help" className="sr">Keyboard: arrow keys move between elements, Enter inspects, Space selects, E opens the code, plus and minus change the level of detail, O opens a text outline of the whole map, Escape clears the selection.</p>
+        {error && <div className="banner error" role="alert">{error} <button className="link" onClick={() => setError(null)}>dismiss</button></div>}
+        {notice && <div className="banner ok" role="status">{notice}</div>}
+        {changes && changes.changed && (
+          <div className="banner warn" role="status">
+            {changes.summary}
+            {changes.affectedNodes.length > 0 && <> Affected: {changes.affectedNodes.slice(0, 5).map((n) => n.label).join(", ")}{changes.affectedNodes.length > 5 ? "…" : ""}.</>}
+            {changes.commits.slice(0, 2).map((c) => <div key={c.file} className="small">• “{c.subject}” by {c.author} ({c.file})</div>)}
+            <button className="link" onClick={refreshOnLatest}>Refresh on the latest code</button>
+          </div>
+        )}
+        {stale && !changes?.changed && (
+          <div className="banner warn" role="alert">Source changed since this was saved ({stale.files.join(", ")}). {stale.evidence} evidence span(s) may no longer match — treat affected claims as stale.</div>
+        )}
+        <div className="caption">
+          {view ? view.caption : "This map is empty on purpose. Index a repository, then tell me what you're trying to understand."}
+          {view?.formReason && <div className="reason muted small">{view.formReason}</div>}
+        </div>
+        {view?.formId === "RuntimeOverlay" && (
+          <div className="formctl" role="group" aria-label="Time window">
+            <span className="muted small">Window</span>
+            {["24h", "7d", "all"].map((w) => <button key={w} className={`secondary small ${view.params?.subject === w ? "on" : ""}`} aria-pressed={view.params?.subject === w} onClick={() => void askForm(view.question, "RuntimeOverlay", w)}>{w === "all" ? "everything" : `last ${w}`}</button>)}
+          </div>
+        )}
+        {view?.formId === "ChangeRisk" && (
+          <div className="formctl" role="group" aria-label="Kind of change">
+            <span className="muted small">Weighted for</span>
+            {[["default", "any change"], ["security", "security work"], ["refactor", "a refactor"], ["incident", "an incident"]].map(([k, l]) => <button key={k} className={`secondary small ${view.params?.subject === k ? "on" : ""}`} aria-pressed={view.params?.subject === k} onClick={() => void askForm(view.question, "ChangeRisk", k)}>{l}</button>)}
+          </div>
+        )}
+        {view?.consequences && <Consequences items={view.consequences} onOpen={(id) => void openConsequence(id)} />}
+        <div className="stage">
+          {view?.terrain ? (
+            <TerrainView view={view} weights={terrainWeights} onWeights={setTerrainWeights} selected={new Set(selection)}
+              onPick={(id) => { const vn = view.nodes.find((n) => n.id === id); if (vn) { setSelection([id]); void openNodeDrawer(vn); } }}
+              onToggle={(id) => setSelection((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]))} />
+          ) : (
+          <Canvas rendered={rendered} viewKey={viewKey} level={level} fitTick={fitTick} selected={selectedRender} boxSelect={boxSelect} caption={view?.caption ?? ""}
+            onSelectNodes={(ids) => setSelection([...new Set(rendered.nodes.filter((n) => ids.includes(n.id)).flatMap((n) => n.members))])}
+            onTapNode={inspectNode} onTapEdge={inspectEdge} onExpand={expand} onZoomLevel={setLevel}
+            onToggleNode={(n) => setSelection((sel) => (n.members.every((m) => sel.includes(m)) ? sel.filter((x) => !n.members.includes(x)) : [...new Set([...sel, ...n.members])]))}
+            onStepLevel={stepLevel} onClear={() => setSelection([])} onOpenOutline={() => setOutlineOpen(true)} announce={setAnnouncement} />
+          )}
+          {view && view.nodes.length > 0 && !view.terrain && (
+            <div className="toolbar" role="toolbar" aria-label="Canvas tools">
+              <button className={`tool ${boxSelect ? "on" : ""}`} aria-pressed={boxSelect} onClick={() => setBoxSelect(!boxSelect)}>{boxSelect ? "Box select: drag to select (click to stop)" : "Box select"}</button>
+              <button className="tool" onClick={() => setOutlineOpen(true)} title="The whole map as text (shortcut: O)">Text outline</button>
+              {levelsApply && <span className="levelctl" role="group" aria-label="Level of detail">
+                <button className="tool" onClick={() => stepLevel(-1)} disabled={level <= 0} aria-label="Zoom out one level">−</button>
+                <span className="level" aria-live="polite" title={LEVELS[level].hint}>L{level} · {LEVELS[level].name}</span>
+                <button className="tool" onClick={() => stepLevel(1)} disabled={level >= MAX_LEVEL} aria-label="Zoom in one level">+</button>
+              </span>}
+            </div>
+          )}
+          {!view && <div className="empty">Ask a question to compose a map.</div>}
+        </div>
+        <footer>
+          <ul className="legend">
+            {(view?.legend ?? []).map((l) => <li key={l.label}><span className={`swatch ${dm(l.displayMode)}`} aria-hidden /> <strong>{l.label}</strong> — {l.description}</li>)}
+          </ul>
+          {view && view.gaps.length > 0 && <details><summary>{view.gaps.length} gap(s) in this view</summary><ul>{view.gaps.map((g, i) => <li key={i}>{g}</li>)}</ul></details>}
+          {view?.hidden && view.hidden.length > 0 && <details><summary>{view.hidden.length} candidate(s) left out</summary><ul>{view.hidden.slice(0, 12).map((h) => <li key={h.entityId}>{h.label}: {h.reason}</li>)}</ul><div className="muted small">Ask “why isn't X shown?” about any of them.</div></details>}
+        </footer>
+      </main>
+
+      <aside className="right">
+        <ChatPanel messages={messages} referents={referents} busy={!!busy} canAsk={!!info?.revision} examples={EXAMPLES} onSend={(t) => void send(t)} onDropReferent={(id) => (id === "card:pins" ? setCardPins(null) : id.startsWith("editor:") ? setDismissed(new Set([...dismissed, id.slice(7)])) : setSelection(selection.filter((x) => x !== id)))} />
+        <section className="drawer" aria-label="Evidence">
+          {code && (
+            <div className="codecard">
+              <div className="between"><strong>{code.title}</strong><button className="link" onClick={() => setCode(null)}>close</button></div>
+              <div className="mono muted small">{code.file}:{code.startLine}</div>
+              <pre tabIndex={0} role="group" aria-label={`Code of ${code.title}`}><code>{code.snippet}</code></pre>
+            </div>
+          )}
+          {drawer?.kind === "explain" ? (
+            <>
+              <h2>Explanation</h2>
+              <p>{drawer.data.summary}</p>
+              {drawer.data.claims.map((c) => <ClaimCard key={c.draft.id} claim={claimMap[c.draft.id] ?? c} onVerdict={verdict} />)}
+              <h3>Evidence</h3>
+              {drawer.data.evidence.map((e) => <EvidenceCard key={e.id} e={e} />)}
+            </>
+          ) : drawer?.kind === "inspect" ? (
+            <>
+              <h2>{drawer.title}</h2>
+              <p className="muted">{drawer.sub}</p>
+              {drawer.entityId && (
+                <div className="verdicts" role="group" aria-label="Relevance for this element">
+                  <button className="secondary small" onClick={() => void override(drawer.entityId!, "pin")} title="Always show this element">Pin</button>
+                  <button className="secondary small" onClick={() => void override(drawer.entityId!, "boost")} title="Rank it higher">Boost</button>
+                  <button className="secondary small" onClick={() => void override(drawer.entityId!, "demote")} title="Rank it lower">Demote</button>
+                  <button className="secondary small" onClick={() => void override(drawer.entityId!, null)} title="Back to computed relevance">Reset</button>
+                </div>
+              )}
+              {drawer.members && <ul className="memberlist">{drawer.members.slice(0, 12).map((m, i) => <li key={i}>{m}</li>)}{drawer.members.length > 12 && <li className="muted">+{drawer.members.length - 12} more</li>}</ul>}
+              {drawer.notes.map((n, i) => <p key={i} className="note">{n}</p>)}
+              {drawer.factors && <details><summary>Why it is shown (6 factors)</summary><table className="gates"><tbody>{drawer.factors.map((f) => <tr key={f.factor}><th scope="row">{f.factor.replace(/_/g, " ").toLowerCase()}</th><td>{f.normalizedScore.toFixed(2)}</td><td>{f.reason}</td></tr>)}</tbody></table></details>}
+              {claimsFor(drawer.claimIds).map((c) => <ClaimCard key={c.draft.id} claim={c} onVerdict={verdict} />)}
+              {drawer.evidence.map((e) => <EvidenceCard key={e.id} e={e} />)}
+            </>
+          ) : !code && <p className="muted">Click an element or edge to see exactly where it comes from. Double-click an element to expand its code.</p>}
+        </section>
+      </aside>
+    </div>
+  );
+}
+
+function EvidenceCard({ e }: { e: ResolvedEvidence }) {
+  const code = e.startLine > 0;
+  return (
+    <figure className="evidence">
+      <figcaption>
+        <span className="mono">{e.file}{code ? `:${e.startLine}${e.endLine !== e.startLine ? `–${e.endLine}` : ""}` : ""}</span>
+        {e.absPath && <a className="open" href={`vscode://file${e.absPath}:${e.startLine || 1}`} title="Open this location in VS Code">Open in VS Code</a>}
+        <span className={`badge ${e.class.startsWith("STATIC") ? "fact" : "inference"}`}>{CLASS_LABEL[e.class] ?? e.class}</span>
+        {e.state !== "CURRENT" && <span className="badge warn">{e.state === "STALE" ? "Source changed" : "Unavailable"}</span>}
+      </figcaption>
+      {e.snippet && <pre tabIndex={0} role="group" aria-label={`Code from ${e.file}`}><code>{e.snippet}</code></pre>}
+    </figure>
+  );
+}

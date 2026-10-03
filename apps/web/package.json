@@ -1,0 +1,6 @@
+{
+  "name": "@cie/web", "version": "0.1.0", "private": true, "type": "module",
+  "scripts": { "dev": "vite", "build": "vite build" },
+  "dependencies": { "react": "^19", "react-dom": "^19", "cytoscape": "^3.33" },
+  "devDependencies": { "vite": "^7", "@vitejs/plugin-react": "^5", "@types/react": "^19", "@types/react-dom": "^19", "@types/cytoscape": "^3.21" }
+}

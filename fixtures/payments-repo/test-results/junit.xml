@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="payments" tests="3" failures="1">
+  <testsuite name="payments" tests="3" failures="1" skipped="0">
+    <testcase classname="payments" name="charges an account" file="tests/payment-service.test.ts" time="0.012"/>
+    <testcase classname="payments" name="flags large amounts" file="tests/payment-service.test.ts" time="0.004">
+      <failure message="FraudRejectedError: acct-1 over limit" type="FraudRejectedError">FraudRejectedError: acct-1 over limit
+    at checkFraud (src/payments/fraud.ts:5:18)</failure>
+    </testcase>
+    <testcase classname="payments" name="retries a declined card" time="0.0"><skipped/></testcase>
+  </testsuite>
+</testsuites>

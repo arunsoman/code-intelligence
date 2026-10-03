@@ -1,0 +1,23 @@
+{
+  "name": "cie",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "extensions/*"
+  ],
+  "scripts": {
+    "build:worker": "cargo build --release",
+    "test": "cargo test && node --test packages/core/test/*.test.ts packages/model/test/*.test.ts apps/web/test/*.test.ts extensions/vscode/test/*.test.ts packages/reporter/test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "web:build": "npm -w apps/web run build",
+    "start": "node packages/core/src/server.ts",
+    "eval": "node packages/core/src/demobar.ts",
+    "build:ext": "npm -w extensions/vscode run build"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "typescript": "^5.9"
+  }
+}
