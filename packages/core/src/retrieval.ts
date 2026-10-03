@@ -56,7 +56,7 @@ function assemble(store: Store, revision: string, entityIds: string[], notes: st
   const bundle: EvidenceBundle = {
     id: `bundle:${createHash("sha256").update(revision + [...idSet].sort().join("|")).digest("hex").slice(0, 16)}`,
     revision, evidence: [...evidence.values()], entities, relationships: [...rels.values()], facts: [...facts.values()],
-    coverage: ["TypeScript static analysis (tree-sitter)", ...notes],
+    coverage: ["TypeScript, Rust and Nirdosha v2 static analysis (tree-sitter)", ...notes],
     unresolved: unresolved.length ? [`${unresolved.length} call(s) could not be statically resolved`] : [],
     tokenEstimate: 0,
   };

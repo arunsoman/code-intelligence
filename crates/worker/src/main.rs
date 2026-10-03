@@ -3,6 +3,7 @@ mod index;
 mod language;
 mod model;
 mod protocol;
+mod rust_language;
 
 use protocol::{read_frame, write_frame, FrameError};
 use serde_json::{json, Value};
@@ -17,7 +18,11 @@ fn handle(req: &Value) -> Value {
     let op = req.get("op").and_then(Value::as_str).unwrap_or("");
     let result: Result<Value, (&str, String)> = match op {
         "ping" => Ok(json!({"pong": true, "analyzerVersion": index::ANALYZER_VERSION})),
-        "languageCapabilities" => Ok(json!({"languages": {"typescript": ["PARSED", "RESOLVED(relative imports, same-file, namespace)"]}})),
+        "languageCapabilities" => Ok(json!({"languages": {
+            "typescript": ["PARSED", "RESOLVED(relative imports, same-file, namespace)"],
+            "rust": ["PARSED", "RESOLVED(crate/self/super modules, same-file, imported functions)"],
+            "nirdosha-v2": ["PARSED_AS_RUST", "RESOLVED(path modules, crate modules, Nirdosha screen macros)"]
+        }})),
         "index" => match req.pointer("/params/repoPath").and_then(Value::as_str) {
             None => Err(("INVALID_SCHEMA", "params.repoPath required".into())),
             Some(p) => index::index_repo(Path::new(p))

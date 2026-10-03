@@ -1,5 +1,6 @@
 //! Repository walk (C04 local ingestion) + cross-file resolution (C05 resolveSemantics / C09 graph).
 use crate::language::{parse_ts, RawFile};
+use crate::rust_language::parse_rust;
 use crate::model::*;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -8,7 +9,7 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 const SKIP_DIRS: &[&str] = &["node_modules", ".git", "dist", "build", "target", ".next", "coverage"];
-pub const ANALYZER_VERSION: &str = "worker-0.1.0/tree-sitter-typescript-0.23";
+pub const ANALYZER_VERSION: &str = "worker-0.2.0/tree-sitter-typescript-0.23+rust-0.24+nirdosha-v2";
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -53,7 +54,7 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
         .filter(|p| {
             let n = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
             !n.ends_with(".d.ts")
-                && matches!(p.extension().and_then(|s| s.to_str()), Some("ts" | "tsx" | "mts" | "cts"))
+                && matches!(p.extension().and_then(|s| s.to_str()), Some("ts" | "tsx" | "mts" | "cts" | "rs" | "nir"))
         })
         .collect();
     paths.sort();
@@ -101,7 +102,10 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
                 continue;
             }
         };
-        let raw = parse_ts(&src, rel.ends_with(".tsx"));
+        let raw = match p.extension().and_then(|s| s.to_str()) {
+            Some("rs" | "nir") => parse_rust(&src, rel.ends_with(".nir")),
+            _ => parse_ts(&src, rel.ends_with(".tsx")),
+        };
         if raw.had_errors {
             batch.diagnostics.push(Diagnostic {
                 code: "PARSE_ERRORS".into(),
@@ -165,12 +169,22 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
             batch.relationships.push(Relationship {
                 id: format!("rel:contains:{id}"),
                 from: fid.clone(),
-                to: id,
+                to: id.clone(),
                 kind: "contains".into(),
                 evidence: vec![evidence(&rec.rel, &rec.hash, s.start, s.end, "STATIC_PARSED")],
                 resolution: "PARSED",
                 label: None,
             });
+            if s.exported {
+                batch.facts.push(Fact {
+                    id: format!("fact:visibility:{id}"),
+                    subject: id,
+                    predicate: "visibility".into(),
+                    object: json!({"kind":"ScalarValue","value":"public"}),
+                    evidence: vec![evidence(&rec.rel, &rec.hash, s.start, s.end, "STATIC_PARSED")],
+                    resolution: "PARSED",
+                });
+            }
         }
     }
 
@@ -255,7 +269,7 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
                     })
                     .or_else(|| find_symbol(fi, &call.callee))
                     .map(|t| (t, "STATIC_RESOLVED")),
-                Some("this") => caller_class.and_then(|c| {
+                Some("this" | "self") => caller_class.and_then(|c| {
                     let q = format!("{c}.{}", call.callee);
                     rec.raw.symbols.iter().position(|s| s.qualified == q).map(|i| (rec.ids[i].clone(), "STATIC_RESOLVED"))
                 }),
@@ -476,9 +490,21 @@ fn git_history(root: &Path) -> HashMap<String, History> {
 }
 
 fn resolve_module(from_rel: &str, module: &str, known: &HashMap<String, usize>) -> Option<usize> {
-    if !module.starts_with('.') {
-        return None;
+    if let Some(path) = module.strip_prefix("crate::") {
+        let base = path.replace("::", "/");
+        return rust_module_candidates(&base, known);
     }
+    if let Some(path) = module.strip_prefix("self::") {
+        let dir = Path::new(from_rel).parent().unwrap_or(Path::new(""));
+        let base = dir.join(path.replace("::", "/")).to_string_lossy().replace('\\', "/");
+        return rust_module_candidates(&base, known);
+    }
+    if let Some(path) = module.strip_prefix("super::") {
+        let dir = Path::new(from_rel).parent().and_then(Path::parent).unwrap_or(Path::new(""));
+        let base = dir.join(path.replace("::", "/")).to_string_lossy().replace('\\', "/");
+        return rust_module_candidates(&base, known);
+    }
+    if !module.starts_with('.') { return None; }
     let dir = Path::new(from_rel).parent().unwrap_or(Path::new(""));
     let mut parts: Vec<String> = dir.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
     for seg in module.split('/') {
@@ -494,14 +520,20 @@ fn resolve_module(from_rel: &str, module: &str, known: &HashMap<String, usize>) 
     let stripped = base.trim_end_matches(".js").trim_end_matches(".jsx").to_string();
     let mut cands = vec![];
     for b in [&base, &stripped] {
-        for ext in ["", ".ts", ".tsx", ".mts", ".cts"] {
+        for ext in ["", ".ts", ".tsx", ".mts", ".cts", ".rs", ".nir"] {
             cands.push(format!("{b}{ext}"));
         }
-        for ext in ["ts", "tsx"] {
+        for ext in ["ts", "tsx", "rs", "nir"] {
             cands.push(format!("{b}/index.{ext}"));
         }
     }
     cands.into_iter().find_map(|c| known.get(&c).copied())
+}
+
+fn rust_module_candidates(base: &str, known: &HashMap<String, usize>) -> Option<usize> {
+    let roots = if base.starts_with("src/") { vec![base.to_string()] } else { vec![format!("src/{base}"), base.to_string()] };
+    roots.into_iter().flat_map(|b| [format!("{b}.rs"), format!("{b}.nir"), format!("{b}/mod.rs"), format!("{b}/mod.nir")])
+        .find_map(|c| known.get(&c).copied())
 }
 
 #[cfg(test)]
@@ -666,5 +698,27 @@ mod reads_tests {
         assert!(!b.facts.iter().any(|f| f.predicate == "reads" && f.object["value"] == "body"));
         let mut seen = std::collections::HashSet::new();
         assert!(b.facts.iter().filter(|f| f.predicate == "reads").all(|f| seen.insert((f.subject.clone(), f.object["value"].to_string()))), "one read fact per reader and field");
+    }
+}
+
+#[cfg(test)]
+mod rust_nir_tests {
+    use super::*;
+
+    fn fixture() -> AnalysisBatch {
+        index_repo(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/rust-nir-repo")).unwrap()
+    }
+
+    #[test]
+    fn indexes_rust_and_nirdosha_v2_files_together() {
+        let b = fixture();
+        assert!(b.entities.iter().any(|e| e.entity_id == "function:src/auth.rs#verify"));
+        assert!(b.entities.iter().any(|e| e.entity_id == "function:src/screens/tasks.nir#load_tasks"));
+        assert!(b.entities.iter().any(|e| e.entity_id == "screen:src/screens/tasks.nir#mount_tasks"));
+        assert!(b.relationships.iter().any(|r| r.kind == "imports" && r.from == "file:src/lib.rs" && r.to == "file:src/auth.rs"));
+        assert!(b.relationships.iter().any(|r| r.kind == "imports" && r.from == "file:src/lib.rs" && r.to == "file:src/screens/tasks.nir"));
+        assert!(b.relationships.iter().any(|r| r.kind == "calls" && r.from == "function:src/lib.rs#entry" && r.to == "function:src/auth.rs#verify"));
+        assert!(b.facts.iter().any(|f| f.predicate == "throws" && f.subject == "function:src/auth.rs#verify" && f.object["value"] == "panic!"));
+        assert!(!b.diagnostics.iter().any(|d| d.code == "PARSE_ERRORS"), "{:#?}", b.diagnostics);
     }
 }

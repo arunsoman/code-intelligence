@@ -1,6 +1,6 @@
 # Code Intelligence — MVP ("The Questionable Map")
 
-A developer asks a question about an unfamiliar TypeScript repository and gets a **view generated for that question** (one of sixteen forms, below), in which every element says how it is known: **Fact** (statically proven), **Inference** (derived from cited evidence), **Hypothesis** (cannot be proven from the code alone) or **Fog** (static analysis could not resolve it). Nothing is shown without evidence you can click, and the system says "I can't determine this" rather than guess.
+A developer asks a question about an unfamiliar TypeScript, Rust or Nirdosha v2 repository and gets a **view generated for that question** (one of sixteen forms, below), in which every element says how it is known: **Fact** (statically proven), **Inference** (derived from cited evidence), **Hypothesis** (cannot be proven from the code alone) or **Fog** (static analysis could not resolve it). Nothing is shown without evidence you can click, and the system says "I can't determine this" rather than guess.
 
 Built from `Unified_Code_Intelligence_Product_Specification` (the S5 MVP definition, plus S1/S2 requirements it does not contradict) and `Code_Intelligence_Component_API_Contracts` v1.1. Excluded, as every source excludes them: intent→code generation, general counterfactual simulation (the MVP supports removal-only impact analysis), agent mode, live runtime adapters, PR view, multi-repo, JetBrains.
 
@@ -89,7 +89,7 @@ If Ollama is down or the model is missing, the server logs why and uses the stub
 
 ## Verify it
 ```
-npm test          # 14 Rust + 108 TypeScript tests
+npm test          # Rust worker tests + 108 TypeScript tests
 npm run eval      # the six-point MVP demo bar, as an executable gate, with the real configured model
 ```
 `npm run eval` checks all six demo steps, median synthesis time (< 10 s), and **zero silently-wrong provenance**: every displayed edge and node is re-checked against stored evidence (a "calls" edge's evidence must actually mention the callee; nothing shown as Fact may be backed by a claim; every inferred element must have gone through all five checks).
@@ -97,7 +97,7 @@ npm run eval      # the six-point MVP demo bar, as an executable gate, with the 
 Measured here: every visual passes the provenance audit; all six demo steps pass with `ollama/gpt-oss:120b-cloud`, 0 provenance violations, map questions in ~3 s (hosted) / ~30 ms (offline); a real 32k-line repo indexes in 0.7 s.
 
 ## Layout
-- `crates/worker` — Rust: tree-sitter parsing, cross-file resolution, throw/write/transaction/async-topic facts, test symbols, git history. Length-prefixed JSON over stdio.
+- `crates/worker` — Rust: tree-sitter parsing for TypeScript, Rust, and Rust-dialect Nirdosha v2 `.nir`; cross-file resolution, throw/write/transaction/async-topic facts, Nirdosha screen macros, test symbols, and git history. Length-prefixed JSON over stdio.
 - `packages/schema` — contract types and the registry of model-output schemas.
 - `packages/model` — provider interface, schema-checking gateway, Ollama provider, offline stub.
 - `packages/core` — SQLite store, idempotent journal, salience, claim gates, conversation router, egress policy, audit, HTTP gateway, demo-bar eval. `src/forms/` has one builder per visual (shared analysis in `analysis.ts` and `common.ts`); `src/visuals.ts` is the catalogue that picks a form from a question; `src/gitinfo.ts` reads history, authors, CODEOWNERS and comments.
@@ -119,7 +119,7 @@ Measured here: every visual passes the provenance audit; all six demo steps pass
   - V13 has no review latency, on-call or ticket data; V14 needs concept cards extracted for the *current* revision.
   - V16 cannot yet plan a route across the terrain or compare terrains over time.
 - **Exceptions** arrive only from a pasted trace or from `@cie/reporter` in a Node or browser app; there is no tracing/OpenTelemetry ingestion, and a trace from a language other than TypeScript is not mapped. Coverage and test results are read from files the project's own tooling produced earlier (stale ones are flagged); nothing is run.
-- Static analysis only: **TypeScript only**; calls through objects it cannot resolve are fog; the async join matches **literal topic strings**.
+- Static analysis supports **TypeScript, Rust, and Rust-dialect Nirdosha v2 `.nir`**. Rust/Nirdosha resolves crate/self/super and `#[path]` modules plus direct imported/same-file calls; trait dispatch, generic resolution, macro expansion, and calls through values remain fog. The retired native Nirdosha language is intentionally unsupported. Async joins currently apply to TypeScript literal topic strings.
 - Hosted-model answers vary between runs; the gates, not the model, decide what is displayed. The new forms are deterministic and do not use the model at all.
 - Wheel-driven zoom was verified with dispatched wheel events and the stepper with clicks, not a physical trackpad.
-- Indexing re-reads everything each time; fine at tested scale (32 kLOC in 0.7 s), untested near 500 kLOC. No authentication (single local user). Nothing committed to git yet.
+- Indexing re-reads everything each time; fine at tested scale (32 kLOC in 0.7 s), untested near 500 kLOC. No authentication (single local user).

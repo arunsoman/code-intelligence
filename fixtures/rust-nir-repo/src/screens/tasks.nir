@@ -1,0 +1,12 @@
+use crate::auth::Session;
+
+pub fn load_tasks() -> Session {
+    Session { valid: true }
+}
+
+nirdosha_rt::crud_screens! {
+    mount: mount_tasks,
+    entity: Task,
+    store: task_store,
+    path: "/tasks",
+}
