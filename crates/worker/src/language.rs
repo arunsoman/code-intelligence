@@ -76,6 +76,25 @@ pub struct RawTx {
     pub end: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct RawDeclarationReference {
+    pub kind: String,
+    pub target: String,
+    pub property: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RawDeclaration {
+    pub kind: String,
+    pub name: String,
+    pub macro_name: Option<String>,
+    pub properties: serde_json::Value,
+    pub references: Vec<RawDeclarationReference>,
+    pub symbol_index: usize,
+    pub start: usize,
+    pub end: usize,
+}
+
 #[derive(Debug, Default)]
 pub struct RawFile {
     pub symbols: Vec<RawSymbol>,
@@ -86,6 +105,7 @@ pub struct RawFile {
     pub writes: Vec<RawWrite>,
     pub reads: Vec<RawRead>,
     pub txs: Vec<RawTx>,
+    pub declarations: Vec<RawDeclaration>,
     pub had_errors: bool,
 }
 

@@ -4,6 +4,7 @@ mod language;
 mod model;
 mod protocol;
 mod rust_language;
+mod source_ir;
 
 use protocol::{read_frame, write_frame, FrameError};
 use serde_json::{json, Value};

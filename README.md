@@ -84,6 +84,9 @@ Default: the **local Ollama daemon** serving a **remote `:cloud` model** (`gpt-o
 
 If Ollama is down or the model is missing, the server logs why and uses the stub (the header chip shows which is active).
 
+### Nirdosha v2 source semantics
+`.nir` always receives ordinary Rust indexing. For Nirdosha-specific declarations, install the Nirdosha-owned `nirdosha-source-ir` binary on `PATH`, or set `CIE_NIRDOSHA_SOURCE_IR=/absolute/path/to/nirdosha-source-ir`. CIE invokes it once per repository and consumes only schema `nirdosha.source-ir/1`; procedural macros are never expanded or executed during indexing. The resulting guard, role, purpose, route, store, policy, workflow, approval and capability references retain exact source evidence.
+
 ### VS Code
 `extensions/vscode` sends **file path + line numbers only** (never contents) for open file, selection and breakpoints to the local server; what you are looking at then appears as an editor chip in the conversation and is pinned into your next question. Evidence cards have "Open in VS Code" links. Build with `npm run build:ext`, then "Developer: Install Extension from Location".
 

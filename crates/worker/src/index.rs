@@ -1,6 +1,7 @@
 //! Repository walk (C04 local ingestion) + cross-file resolution (C05 resolveSemantics / C09 graph).
 use crate::language::{parse_ts, RawFile};
 use crate::rust_language::parse_rust;
+use crate::source_ir;
 use crate::model::*;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -65,6 +66,15 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
         analyzer_version: ANALYZER_VERSION.into(),
         ..Default::default()
     };
+    let mut nirdosha_ir = if paths.iter().any(|p| p.extension().and_then(|e| e.to_str()) == Some("nir")) {
+        match source_ir::inspect(&root) {
+            Ok(v) => v,
+            Err(e) => {
+                batch.diagnostics.push(Diagnostic { code:"NIRDOSHA_SOURCE_IR_FAILED".into(), message:e, related_entity_ids:vec![], retryable:false });
+                None
+            }
+        }
+    } else { None };
 
     // Pass 1: read + hash + parse.
     let mut sources: Vec<(String, String)> = Vec::new();
@@ -102,10 +112,11 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
                 continue;
             }
         };
-        let raw = match p.extension().and_then(|s| s.to_str()) {
+        let mut raw = match p.extension().and_then(|s| s.to_str()) {
             Some("rs" | "nir") => parse_rust(&src, rel.ends_with(".nir")),
             _ => parse_ts(&src, rel.ends_with(".tsx")),
         };
+        if rel.ends_with(".nir") { if let Some(ir)=nirdosha_ir.as_mut() { ir.merge(&rel,&hash,&mut raw); } }
         if raw.had_errors {
             batch.diagnostics.push(Diagnostic {
                 code: "PARSE_ERRORS".into(),
@@ -118,6 +129,7 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
         recs.push(FileRec { rel, hash, src, raw, ids: vec![] });
     }
     batch.revision = format!("wt-{}", &hex(&rev_hasher.finalize())[..16]);
+    if let Some(ir)=nirdosha_ir { for (rel,code,message) in ir.diagnostics { batch.diagnostics.push(Diagnostic{code,message,related_entity_ids:vec![format!("file:{rel}")],retryable:false}); } }
     let rev = batch.revision.clone();
 
     let span = |rel: &str, hash: &str, s: usize, e: usize| SourceSpan {
@@ -184,6 +196,24 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
                     evidence: vec![evidence(&rec.rel, &rec.hash, s.start, s.end, "STATIC_PARSED")],
                     resolution: "PARSED",
                 });
+            }
+        }
+    }
+
+    // Nirdosha's own source IR adds domain declarations and typed references.
+    // Reference nodes are explicit concepts, not claims that the referenced
+    // runtime object was successfully resolved or enforced.
+    let mut reference_entities: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for rec in &recs {
+        for d in &rec.raw.declarations {
+            let subject=rec.ids[d.symbol_index].clone();
+            let ev=evidence(&rec.rel,&rec.hash,d.start,d.end,"STATIC_PARSED");
+            batch.facts.push(Fact{id:format!("fact:nirdosha:{}:{}",rec.rel,d.start),subject:subject.clone(),predicate:"nirdosha_declaration".into(),object:json!({"kind":"ScalarValue","value":{"kind":d.kind,"name":d.name,"macro":d.macro_name,"properties":d.properties}}),evidence:vec![ev.clone()],resolution:"PARSED"});
+            for r in &d.references {
+                let target=format!("nirdosha-ref:{}:{}",r.kind,r.target);
+                if reference_entities.insert(target.clone()) { batch.entities.push(Entity{entity_id:target.clone(),kind:format!("nirdosha_{}",r.kind),name:r.target.clone(),file:rec.rel.clone(),spans:vec![span(&rec.rel,&rec.hash,d.start,d.end)],symbol_hash:None}); }
+                let rel_kind=match r.kind.as_str(){"role"=>"requires_role","entity"=>"uses_entity","store"=>"uses_store","purpose"=>"has_purpose","route"=>"exposes_route","capability"=>"capability_gate",_=>"nirdosha_reference"};
+                batch.relationships.push(Relationship{id:format!("rel:{rel_kind}:{subject}->{target}:{}",r.property),from:subject.clone(),to:target,kind:rel_kind.into(),evidence:vec![ev.clone()],resolution:"PARSED",label:Some(r.property.clone())});
             }
         }
     }
