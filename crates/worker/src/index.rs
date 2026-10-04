@@ -55,6 +55,115 @@ fn cache_put(rel: &str, hash: &str, raw: &RawFile) {
     c.entries.insert(CacheKey(rel.to_string(), hash.to_string()), raw.clone());
 }
 
+/// Rows are built with this stand-in for the revision id (which is only known once every file has been read and changes with every edit anywhere),
+/// so a row's bytes do not depend on it; the real id is written into the rows that are kept, after they are digested.
+const REV_PLACEHOLDER: &str = "@REV@";
+
+/// A 128-bit, non-cryptographic digest (two independently seeded SipHash-1-3 streams) for the per-row digests. They only have to notice that a row changed, and
+/// they are computed for every row of the repository on every index run: software SHA-256 over that volume was most of the cost on machines without SHA instructions.
+/// The per-file digest and the revision id still use SHA-256.
+struct RowHash(std::collections::hash_map::DefaultHasher, std::collections::hash_map::DefaultHasher);
+impl RowHash {
+    fn new(tag: u8) -> Self {
+        use std::hash::Hasher;
+        let (mut a, mut b) = (std::collections::hash_map::DefaultHasher::new(), std::collections::hash_map::DefaultHasher::new());
+        a.write_u8(tag); b.write_u8(tag ^ 0x5a); b.write_u64(0x9e37_79b9_7f4a_7c15);
+        RowHash(a, b)
+    }
+    fn update(&mut self, bytes: &[u8]) { use std::hash::Hasher; self.0.write(bytes); self.1.write(bytes); }
+    fn finish(self) -> [u8; 16] { use std::hash::Hasher; let mut o = [0u8; 16]; o[..8].copy_from_slice(&self.0.finish().to_le_bytes()); o[8..].copy_from_slice(&self.1.finish().to_le_bytes()); o }
+}
+impl std::io::Write for RowHash {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> { self.update(buf); Ok(buf.len()) }
+    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+}
+/// Length-prefixed, so ("ab","c") and ("a","bc") digest differently.
+fn put(h: &mut RowHash, s: &str) { h.update(&(s.len() as u32).to_le_bytes()); h.update(s.as_bytes()); }
+fn put_json<T: serde::Serialize>(h: &mut RowHash, v: &T) { let _ = serde_json::to_writer(h, v); }
+/// Every field of an evidence reference except the revision id inside its span.
+fn put_evidence(h: &mut RowHash, ev: &EvidenceRef) {
+    put(h, &ev.id); put(h, &ev.source_id); put(h, ev.class); put(h, &ev.observed_at); put(h, &ev.access_scope_id); put(h, ev.state);
+    let l = &ev.location;
+    put(h, l.get("kind").and_then(|v| v.as_str()).unwrap_or(""));
+    let sp = l.get("span");
+    for k in ["sourceId", "contentHash"] { put(h, sp.and_then(|s| s.get(k)).and_then(|v| v.as_str()).unwrap_or("")); }
+    for k in ["startByte", "endByteExclusive"] { h.update(&sp.and_then(|s| s.get(k)).and_then(|v| v.as_u64()).unwrap_or(0).to_le_bytes()); }
+}
+fn entity_digest(e: &Entity) -> [u8; 16] {
+    let mut h = RowHash::new(b'E');
+    put(&mut h, &e.entity_id); put(&mut h, &e.kind); put(&mut h, &e.name); put(&mut h, &e.file); put(&mut h, e.symbol_hash.as_deref().unwrap_or(""));
+    for sp in &e.spans { put(&mut h, &sp.source_id); put(&mut h, &sp.content_hash); h.update(&(sp.start_byte as u64).to_le_bytes()); h.update(&(sp.end_byte_exclusive as u64).to_le_bytes()); }
+    h.finish()
+}
+fn fact_digest(f: &Fact) -> [u8; 16] {
+    let mut h = RowHash::new(b'F');
+    put(&mut h, &f.id); put(&mut h, &f.subject); put(&mut h, &f.predicate); put(&mut h, f.resolution);
+    put_json(&mut h, &f.object);
+    for ev in &f.evidence { put_evidence(&mut h, ev); }
+    h.finish()
+}
+fn relationship_digest(r: &Relationship) -> [u8; 16] {
+    let mut h = RowHash::new(b'R');
+    put(&mut h, &r.id); put(&mut h, &r.from); put(&mut h, &r.to); put(&mut h, &r.kind); put(&mut h, r.resolution); put(&mut h, r.label.as_deref().unwrap_or(""));
+    for ev in &r.evidence { put_evidence(&mut h, ev); }
+    h.finish()
+}
+fn set_revision(ev: &mut EvidenceRef, rev: &str) {
+    if let Some(r) = ev.location.pointer_mut("/span/revision") { *r = serde_json::Value::String(rev.to_string()); }
+}
+
+/// Digest everything emitted for each file, and, when the caller holds a base revision, keep only the rows of files whose digest differs.
+/// A file's rows are its entities, the facts about them and the relationships from them. Row order does not matter (rows are digested one by one
+/// and sorted), so a nondeterministic emission order cannot change a digest. Afterwards the real revision id replaces the placeholder in every kept row.
+fn shard(batch: &mut AnalysisBatch, base: Option<&BaseRef>) {
+    use std::collections::{BTreeMap, HashSet};
+    let file_of: HashMap<&str, &str> = batch.entities.iter().map(|e| (e.entity_id.as_str(), e.file.as_str())).collect();
+    let owner = |id: &str| -> &str { file_of.get(id).copied().unwrap_or("") };
+    let t0 = std::time::Instant::now();
+    let mut rows: BTreeMap<&str, Vec<[u8; 16]>> = BTreeMap::new();
+    for e in &batch.entities { rows.entry(e.file.as_str()).or_default().push(entity_digest(e)); }
+    timing("  shard: entity digests", t0);
+    for f in &batch.facts { rows.entry(owner(&f.subject)).or_default().push(fact_digest(f)); }
+    timing("  shard: + fact digests", t0);
+    for r in &batch.relationships { rows.entry(owner(&r.from)).or_default().push(relationship_digest(r)); }
+    timing("  shard: + relationship digests", t0);
+    let mut manifest = BTreeMap::new();
+    for (file, mut ds) in rows {
+        ds.sort();
+        let mut h = Sha256::new();
+        for d in &ds { h.update(d); }
+        manifest.insert(file.to_string(), hex(&h.finalize()));
+    }
+    let owned_facts: Vec<String> = batch.facts.iter().map(|f| owner(&f.subject).to_string()).collect();
+    let owned_rels: Vec<String> = batch.relationships.iter().map(|r| owner(&r.from).to_string()).collect();
+    batch.manifest = manifest;
+    batch.mode = "full".into();
+    let delta = base.filter(|b| b.analyzer_version == ANALYZER_VERSION && !b.digests.is_empty());
+    if let Some(b) = delta {
+        let changed: HashSet<String> = batch.manifest.iter().filter(|(f, d)| b.digests.get(*f) != Some(*d)).map(|(f, _)| f.clone()).collect();
+        batch.removed_files = b.digests.keys().filter(|f| !batch.manifest.contains_key(*f)).cloned().collect();
+        batch.removed_files.sort();
+        // The rows that are not sent are freed on another thread: releasing ~100,000 facts took longer than digesting them.
+        let (mut gone_e, mut gone_f, mut gone_r) = (Vec::new(), Vec::new(), Vec::new());
+        let ents = std::mem::take(&mut batch.entities);
+        for e in ents { if changed.contains(&e.file) { batch.entities.push(e); } else { gone_e.push(e); } }
+        let facts = std::mem::take(&mut batch.facts);
+        for (f, owner) in facts.into_iter().zip(owned_facts.iter()) { if changed.contains(owner) { batch.facts.push(f); } else { gone_f.push(f); } }
+        let rels = std::mem::take(&mut batch.relationships);
+        for (r, owner) in rels.into_iter().zip(owned_rels.iter()) { if changed.contains(owner) { batch.relationships.push(r); } else { gone_r.push(r); } }
+        std::thread::spawn(move || drop((gone_e, gone_f, gone_r)));
+        batch.changed_files = changed.into_iter().collect();
+        batch.changed_files.sort();
+        batch.mode = "delta".into();
+        batch.base_revision = Some(b.revision.clone());
+    }
+    timing("  shard: + manifest and filtering", t0);
+    let rev = batch.revision.clone();
+    for e in batch.entities.iter_mut() { for sp in e.spans.iter_mut() { sp.revision = rev.clone(); } }
+    for f in batch.facts.iter_mut() { for ev in f.evidence.iter_mut() { set_revision(ev, &rev); } }
+    for r in batch.relationships.iter_mut() { for ev in r.evidence.iter_mut() { set_revision(ev, &rev); } }
+}
+
 pub fn git_head(root: &Path) -> Option<String> {
     let out = std::process::Command::new("git")
         .arg("-C")
@@ -65,7 +174,16 @@ pub fn git_head(root: &Path) -> Option<String> {
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-pub fn index_repo(root: &Path, changes: Option<&ChangeSet>) -> Result<AnalysisBatch, String> {
+/// CIE_WORKER_TIMING=<file> appends how long each phase of an index run took (the worker's stderr is discarded on purpose: it may contain source).
+fn timing(phase: &str, since: std::time::Instant) {
+    if let Some(f) = std::env::var_os("CIE_WORKER_TIMING") {
+        use std::io::Write;
+        if let Ok(mut h) = std::fs::OpenOptions::new().create(true).append(true).open(f) { let _ = writeln!(h, "{phase}: {} ms", since.elapsed().as_millis()); }
+    }
+}
+
+pub fn index_repo(root: &Path, changes: Option<&ChangeSet>, base: Option<&BaseRef>) -> Result<AnalysisBatch, String> {
+    let t_all = std::time::Instant::now();
     if !root.is_dir() {
         return Err(format!("not a directory: {}", root.display()));
     }
@@ -85,6 +203,8 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>) -> Result<AnalysisBa
         })
         .collect();
     paths.sort();
+    timing("walk", t_all);
+    let t_pass1 = std::time::Instant::now();
 
     let mut batch = AnalysisBatch {
         repo_root: root.to_string_lossy().into(),
@@ -112,8 +232,8 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>) -> Result<AnalysisBa
     // ---- incremental pass over the walk: hash every file, reuse parses of unchanged ones.
     // Hashing must touch every file (a change is undetectable otherwise); only *parsing* is skipped.
     let mut reused = 0usize;
-    let cache = changes.map(|c| c.files.clone()).unwrap_or_default();
-    let cache_by_rel: HashMap<&str, &str> = cache.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let _ = changes; // accepted for older callers; the content-keyed cache makes it unnecessary
+    let mut read_files: Vec<(PathBuf, String, String, String)> = Vec::new();
     for p in &paths {
         let rel = p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
         let bytes = match std::fs::read(p) {
@@ -143,14 +263,29 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>) -> Result<AnalysisBa
                 continue;
             }
         };
+        read_files.push((p.clone(), rel, hash, src));
+    }
+    timing("pass1a read+hash", t_pass1);
+    // The revision id is a hash of every file's path and bytes, so it is known before anything is parsed: when it is the base revision, stop here.
+    let revision_id = format!("wt-{}", &hex(&rev_hasher.finalize())[..16]);
+    if let Some(b) = base {
+        if b.revision == revision_id && b.analyzer_version == ANALYZER_VERSION {
+            batch.revision = revision_id;
+            batch.mode = "unchanged".into();
+            batch.base_revision = Some(b.revision.clone());
+            timing("unchanged: early exit", t_all);
+            return Ok(batch);
+        }
+    }
+    for (p, rel, hash, src) in read_files {
         // Same content hash as the caller's previous revision: the parse is content-identical, reuse it.
-        if cache_by_rel.get(rel.as_str()).map_or(false, |h| *h == hash) {
-            if let Some(raw) = cache_get(&rel, &hash) {
-                reused += 1;
-                sources.push((rel.clone(), hash.clone()));
-                recs.push(FileRec { rel, hash, src, raw, ids: vec![] });
-                continue;
-            }
+        // The cache is keyed by (path, content hash) and the hash was just computed from the bytes read, so a hit is exactly an unchanged file:
+        // the caller does not need to tell us what it thinks changed.
+        if let Some(raw) = cache_get(&rel, &hash) {
+            reused += 1;
+            sources.push((rel.clone(), hash.clone()));
+            recs.push(FileRec { rel, hash, src, raw, ids: vec![] });
+            continue;
         }
         let mut raw = match p.extension().and_then(|s| s.to_str()) {
             Some("rs" | "nir") => parse_rust(&src, rel.ends_with(".nir")),
@@ -180,9 +315,11 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>) -> Result<AnalysisBa
             retryable: false,
         });
     }
-    batch.revision = format!("wt-{}", &hex(&rev_hasher.finalize())[..16]);
+    timing("pass1 read+hash+parse", t_pass1);
+    let t_graph = std::time::Instant::now();
+    batch.revision = revision_id;
     if let Some(ir)=nirdosha_ir { for (rel,code,message) in ir.diagnostics { batch.diagnostics.push(Diagnostic{code,message,related_entity_ids:vec![format!("file:{rel}")],retryable:false}); } }
-    let rev = batch.revision.clone();
+    let rev = REV_PLACEHOLDER.to_string();
 
     let span = |rel: &str, hash: &str, s: usize, e: usize| SourceSpan {
         source_id: rel.to_string(),
@@ -586,7 +723,11 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>) -> Result<AnalysisBa
     }
 
     // Git history (HISTORY evidence), when the root is inside a work tree.
-    for (rel, h) in git_history(&root) {
+    timing("graph (before history)", t_graph);
+    let t_hist = std::time::Instant::now();
+    let hist_map = git_history(&root);
+    timing("git history", t_hist);
+    for (rel, h) in hist_map {
         if !known_files.contains_key(&rel) {
             continue;
         }
@@ -610,6 +751,10 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>) -> Result<AnalysisBa
             resolution: "OBSERVED",
         });
     }
+    let t_shard = std::time::Instant::now();
+    shard(&mut batch, base);
+    timing("shard digests + delta", t_shard);
+    timing("total index_repo", t_all);
     Ok(batch)
 }
 
@@ -736,7 +881,7 @@ mod tests {
 
     fn fixture() -> AnalysisBatch {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sample-repo");
-        index_repo(&root, None).unwrap()
+        index_repo(&root, None, None).unwrap()
     }
 
     fn has_rel(b: &AnalysisBatch, kind: &str, from: &str, to: &str) -> bool {
@@ -788,8 +933,8 @@ mod revision_tests {
             }
         }
         copy(&src, &dst);
-        let a = index_repo(&src, None).unwrap();
-        let b = index_repo(&dst, None).unwrap();
+        let a = index_repo(&src, None, None).unwrap();
+        let b = index_repo(&dst, None, None).unwrap();
         let _ = std::fs::remove_dir_all(&dst);
         assert_ne!(a.revision, b.revision);
         assert_eq!(a.entities.len(), b.entities.len());
@@ -807,7 +952,7 @@ mod incremental_tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.ts"), "export function a() {}\n").unwrap();
         std::fs::write(dir.join("b.ts"), "export function b() {}\n").unwrap();
-        let first = index_repo(&dir, None).unwrap();
+        let first = index_repo(&dir, None, None).unwrap();
         assert!(!first.diagnostics.iter().any(|d| d.code == "REUSED_CACHED_PARSES"));
 
         // Same content, passed as the previous revision's hashes: everything should be reused
@@ -815,7 +960,7 @@ mod incremental_tests {
         let files: Vec<(String, String)> = first.entities.iter().filter(|e| e.kind == "file")
             .map(|e| (e.file.clone(), e.spans[0].content_hash.clone())).collect();
         let cs = ChangeSet { files: files.into_iter().collect(), revision: first.revision.clone() };
-        let second = index_repo(&dir, Some(&cs)).unwrap();
+        let second = index_repo(&dir, Some(&cs), None).unwrap();
         assert_eq!(second.revision, first.revision, "revision is content-addressed");
         assert_eq!(second.entities.len(), first.entities.len());
         assert_eq!(second.facts.len(), first.facts.len());
@@ -829,7 +974,7 @@ mod incremental_tests {
         let b_hash = second.entities.iter().find(|e| e.file == "b.ts").unwrap().spans[0].content_hash.clone();
         let a_hash = "stale".to_string();
         cs2.files = [("b.ts".to_string(), b_hash), ("a.ts".to_string(), a_hash)].into_iter().collect();
-        let third = index_repo(&dir, Some(&cs2)).unwrap();
+        let third = index_repo(&dir, Some(&cs2), None).unwrap();
         assert_ne!(third.revision, first.revision);
         let reuse3 = third.diagnostics.iter().find(|d| d.code == "REUSED_CACHED_PARSES").expect("reuse diagnostic");
         assert!(reuse3.message.contains("1 of 2"), "only b.ts reused: {}", reuse3.message);
@@ -843,7 +988,7 @@ mod behavior_tests {
     use super::*;
 
     fn payments() -> AnalysisBatch {
-        index_repo(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/payments-repo"), None).unwrap()
+        index_repo(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/payments-repo"), None, None).unwrap()
     }
     fn facts<'a>(b: &'a AnalysisBatch, pred: &str, subject: &str) -> Vec<&'a Fact> {
         b.facts.iter().filter(|f| f.predicate == pred && f.subject == subject).collect()
@@ -909,7 +1054,7 @@ mod behavior_tests {
         sh(&["commit", "-qm", "first"]);
         std::fs::write(dir.join("a.ts"), "export function a() { return 1 }\n").unwrap();
         sh(&["commit", "-qam", "second"]);
-        let b = index_repo(&dir, None).unwrap();
+        let b = index_repo(&dir, None, None).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         let h = b.facts.iter().find(|f| f.predicate == "history" && f.subject == "file:a.ts").expect("history fact");
         assert_eq!(h.object["value"]["commits"], 2);
@@ -925,7 +1070,7 @@ mod reads_tests {
 
     #[test]
     fn records_reads_only_of_fields_that_are_written_somewhere() {
-        let b = index_repo(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/payments-repo"), None).unwrap();
+        let b = index_repo(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/payments-repo"), None, None).unwrap();
         let readers = |field: &str| b.facts.iter().filter(|f| f.predicate == "reads" && f.object["value"] == field).map(|f| f.subject.clone()).collect::<Vec<_>>();
         let r = readers("balance");
         assert!(r.contains(&"function:src/ledger/ledger.ts#reserve".to_string()), "reserve reads account.balance: {r:?}");
@@ -942,7 +1087,7 @@ mod rust_nir_tests {
     use super::*;
 
     fn fixture() -> AnalysisBatch {
-        index_repo(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/rust-nir-repo"), None).unwrap()
+        index_repo(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/rust-nir-repo"), None, None).unwrap()
     }
 
     #[test]
@@ -958,3 +1103,91 @@ mod rust_nir_tests {
         assert!(!b.diagnostics.iter().any(|d| d.code == "PARSE_ERRORS"), "{:#?}", b.diagnostics);
     }
 }
+
+#[cfg(test)]
+mod delta_tests {
+    use super::*;
+
+    fn copy(a: &Path, b: &Path) {
+        std::fs::create_dir_all(b).unwrap();
+        for e in std::fs::read_dir(a).unwrap() {
+            let e = e.unwrap();
+            let t = b.join(e.file_name());
+            if e.file_type().unwrap().is_dir() { copy(&e.path(), &t) } else { std::fs::copy(e.path(), t).unwrap(); }
+        }
+    }
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("cie-delta-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/payments-repo/src"), &d);
+        d
+    }
+    fn base_of(b: &AnalysisBatch) -> BaseRef { BaseRef { revision: b.revision.clone(), analyzer_version: b.analyzer_version.clone(), digests: b.manifest.iter().map(|(k, v)| (k.clone(), v.clone())).collect() } }
+    fn all_rows(b: &AnalysisBatch) -> usize { b.entities.len() + b.facts.len() + b.relationships.len() }
+
+    #[test]
+    fn a_files_digest_is_stable_between_runs_and_ignores_the_revision_id() {
+        let dir = tmp("stable");
+        let a = index_repo(&dir, None, None).unwrap();
+        let b = index_repo(&dir, None, None).unwrap();
+        assert_eq!(a.manifest, b.manifest, "the same worktree gives the same digests, whatever order rows were emitted in");
+        assert_eq!(a.mode, "full");
+        let text = serde_json::to_string(&a).unwrap();
+        assert!(!text.contains(REV_PLACEHOLDER), "the placeholder never leaves the worker");
+        assert!(text.contains(&a.revision), "rows carry the real revision id");
+        // Editing one file changes the revision id; every other file's rows still carry the old id's replacement, and must keep their digest.
+        let target = dir.join("errors.ts");
+        std::fs::write(&target, format!("{}\n// a comment\n", std::fs::read_to_string(&target).unwrap())).unwrap();
+        let c = index_repo(&dir, None, None).unwrap();
+        assert_ne!(a.revision, c.revision);
+        let differing: Vec<&String> = a.manifest.keys().filter(|f| a.manifest[*f] != c.manifest[*f]).collect();
+        assert_eq!(differing, vec!["errors.ts"], "only the edited file's digest changes");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unchanged_worktree_returns_nothing_and_an_edit_returns_only_the_files_whose_rows_changed() {
+        let dir = tmp("delta");
+        let full = index_repo(&dir, None, None).unwrap();
+        let base = base_of(&full);
+        let same = index_repo(&dir, None, Some(&base)).unwrap();
+        assert_eq!(same.mode, "unchanged");
+        assert_eq!(all_rows(&same), 0);
+
+        // Nothing parsed to decide it: with the cached parse of a file removed, an unchanged worktree is still recognised, and the file is not parsed on the way.
+        let unique = format!("export const marker{} = 1;\n", std::process::id());
+        std::fs::write(dir.join("unique-marker.ts"), &unique).unwrap();
+        let with_marker = index_repo(&dir, None, None).unwrap();
+        let key = CacheKey("unique-marker.ts".to_string(), sha(unique.as_bytes()));
+        assert!(parse_cache().entries.remove(&key).is_some(), "the full index cached the parse");
+        let again = index_repo(&dir, None, Some(&base_of(&with_marker))).unwrap();
+        assert_eq!(again.mode, "unchanged");
+        assert!(parse_cache().entries.get(&key).is_none(), "an unchanged worktree is recognised before any file is parsed");
+        std::fs::remove_file(dir.join("unique-marker.ts")).unwrap();
+
+        let target = dir.join("errors.ts");
+        std::fs::write(&target, format!("{}\n// a comment\n", std::fs::read_to_string(&target).unwrap())).unwrap();
+        let delta = index_repo(&dir, None, Some(&base)).unwrap();
+        assert_eq!(delta.mode, "delta");
+        assert!(!serde_json::to_string(&delta).unwrap().contains(REV_PLACEHOLDER), "kept rows of a delta carry the real revision id too");
+        assert_eq!(delta.base_revision.as_deref(), Some(full.revision.as_str()));
+        assert_eq!(delta.changed_files, vec!["errors.ts".to_string()]);
+        assert!(delta.entities.iter().all(|e| e.file == "errors.ts"));
+        assert!(all_rows(&delta) < all_rows(&full) / 4, "{} of {} rows", all_rows(&delta), all_rows(&full));
+        assert_eq!(delta.manifest.len(), full.manifest.len(), "the manifest still lists every file");
+
+        // A deleted file is named, and a new file is a changed file.
+        std::fs::remove_file(dir.join("errors.ts")).unwrap();
+        std::fs::write(dir.join("added.ts"), "export function added(): number { return 1 }\n").unwrap();
+        let moved = index_repo(&dir, None, Some(&base)).unwrap();
+        assert!(moved.removed_files.contains(&"errors.ts".to_string()));
+        assert!(moved.changed_files.contains(&"added.ts".to_string()));
+
+        // A base from another analyzer version is not trusted: everything is sent.
+        let mut old = base.clone(); old.analyzer_version = "something-else".into();
+        let all = index_repo(&dir, None, Some(&old)).unwrap();
+        assert_eq!(all.mode, "full");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+

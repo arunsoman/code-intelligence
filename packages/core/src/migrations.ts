@@ -185,6 +185,26 @@ export const MIGRATIONS: Migration[] = [
       create table if not exists c22_grants(id text primary key, scope text not null, created_at text not null);`),
     down: (db) => db.exec("drop table if exists c22_grants; drop table if exists c22_authority; drop table if exists c22_payloads; drop table if exists c22_experiments; drop table if exists c22_checkpoints; drop table if exists c22_events; drop index if exists c22_attempts_dispatch; drop table if exists c22_attempts; drop table if exists c22_steps; drop table if exists c22_checks; drop table if exists c22_assessments; drop table if exists c22_observations; drop table if exists c22_hypotheses; drop table if exists c22_investigations;"),
   },
+  {
+    version: 22, name: "incremental-index",
+    up: (db) => db.exec(`
+      alter table relationships add column file text;
+      alter table facts add column file text;
+
+      create index if not exists rel_file on relationships(revision, file);
+      create index if not exists facts_file on facts(revision, file);
+      create table if not exists rev_files(revision text not null, file text not null, digest text not null, primary key(revision, file));`),
+    down: (db) => db.exec("drop table if exists rev_files; drop index if exists facts_file; drop index if exists rel_file; alter table facts drop column file; alter table relationships drop column file;"),
+  },
+  {
+    version: 23, name: "incremental-index-evidence-ids",
+    // The ids of the evidence each row embeds, so a revision built from a previous one can rebuild its evidence table without parsing every row.
+    up: (db) => db.exec(`
+      alter table relationships add column ev text;
+      alter table facts add column ev text;
+      delete from rev_files;`),
+    down: (db) => db.exec("alter table facts drop column ev; alter table relationships drop column ev;"),
+  },
 ];
 
 export function currentVersion(db: DatabaseSync): number {

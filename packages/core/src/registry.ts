@@ -68,8 +68,16 @@ export class Registry {
       for (const e of entities) (parent && parentIds.has(e.entityId) ? carried : newOnly).push(e);
       const oldOnly = parent ? [...parentIds].filter((id) => !nowIds.has(id)) : [];
       const files = new Map<string, Buffer | null>();
-      const digest = new Map(entities.map((e) => [e.entityId, bodyDigest(this.store, revision, e, files)]));
-      for (const e of carried) { const p = row(parent!, e.entityId); ins.run(revision, e.entityId, p.canon_id, digest.get(e.entityId) ?? null, JSON.stringify(shapes.get(e.entityId) ?? { callees: [], callers: [] })); }
+      // A carried symbol whose own text is unchanged (same symbol hash and name) has the digest it had: reading its file again would only give the same answer.
+      const before = parent ? new Map(this.store.entities(parent).map((e) => [e.entityId, e])) : new Map<string, Entity>();
+      const parentRows = new Map<string, any>();
+      for (const e of carried) parentRows.set(e.entityId, row(parent!, e.entityId));
+      const digest = new Map<string, string | null>();
+      for (const e of entities) {
+        const was = before.get(e.entityId), p = parentRows.get(e.entityId);
+        digest.set(e.entityId, was && p && p.body_digest && was.symbolHash && was.symbolHash === e.symbolHash && was.name === e.name ? p.body_digest : bodyDigest(this.store, revision, e, files));
+      }
+      for (const e of carried) { const p = parentRows.get(e.entityId); ins.run(revision, e.entityId, p.canon_id, digest.get(e.entityId) ?? null, JSON.stringify(shapes.get(e.entityId) ?? { callees: [], callers: [] })); }
       const proposals: Proposal[] = [];
       const claimedNew = new Set<string>(), claimedOld = new Set<string>();
       if (parent) {

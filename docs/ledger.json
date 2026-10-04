@@ -206,6 +206,16 @@
      "generation fence: a change that arrives"
     ],
     "state": "done"
+   },
+   {
+    "item": "Incremental indexing: the revision built from the previous one plus the changed files equals a clean index (rows and evidence), is recognised as unchanged without parsing, and falls back to a full index when its base cannot be used",
+    "tests": [
+     "incremental indexing equals a clean index after every kind of edit",
+     "incremental indexing is exact for Java, Go and Python too",
+     "a base that cannot be built on is never trusted",
+     "a delta that does not add up is rolled back whole"
+    ],
+    "state": "done"
    }
   ]
  },

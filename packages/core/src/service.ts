@@ -6,7 +6,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { BudgetController, runModel, StubProvider, type GatewayFailure, type GatewayResult } from "@cie/model";
 import type {
-  ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptStore, ConceptsOutput, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceRef, ExplainResult, ExplanationOutput,
+  AnalysisBatch, ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptStore, ConceptsOutput, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceRef, ExplainResult, ExplanationOutput,
   HypothesesOutput, ModelProvider, ModelRequest, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec,
   DefectDetectionInput, DetectorFinding, BenchmarkPolicy, BenchmarkResult,
 } from "@cie/schema";
@@ -34,7 +34,7 @@ import { EGRESS_FIELDS, payloadHash, scrubBundle } from "./policy.ts";
 import { bundleFor, retrieveAround, retrieveForQuestion } from "./retrieval.ts";
 import { matchName, readText, type RouterModel } from "./llm-router.ts";
 import { revisionIndex, scoreEntity, WEIGHTS } from "./salience.ts";
-import type { RevisionRow, Store } from "./store.ts";
+import { DeltaBaseError, type RevisionRow, type Store } from "./store.ts";
 import { entityAt, fingerprint, locateFrames, looksLikeTrace, parseTrace } from "./trace.ts";
 import { compileView } from "./viewspec.ts";
 import { catalog, ensureEdgeClaims, visualByForm, type CatalogEntry } from "./visuals.ts";
@@ -391,54 +391,62 @@ export class Service {
   private persist(claims: Claim[]) { for (const c of claims) this.store.putClaim(c); }
 
   // ---------------------------------------------------------------- repository
-  async ingestRepository(ctx: CallContext, req: { repoPath: string }, control?: JobControl): Promise<ApiResult<RevisionRow & { reuse?: { files: number; of: number } }>> {
+  async ingestRepository(ctx: CallContext, req: { repoPath: string }, control?: JobControl): Promise<ApiResult<RevisionRow & { reuse?: { files: number; of: number }; delta?: { mode: string; changed: number; removed: number; of: number; phasesMs?: Record<string, number> } }>> {
     if (!req.repoPath || !isAbsolute(req.repoPath)) return fail(ctx, { code: "INVALID_SCHEMA", message: "repoPath must be an absolute path", retryable: false });
     if (this.store.isRevoked(req.repoPath)) return fail(ctx, { code: "FORBIDDEN", message: "access to this source was withdrawn; it is not indexed until access is granted again", retryable: false });
     try {
-      // Incremental re-index (CE-3): hash the worktree against the previous revision and pass it
-      // to the worker, which re-parses only files whose bytes changed. Budgeted: hashing costs
-      // a full walk but never parses; on any error the full index is used.
-      let changes: { revision: string; files: Record<string, string> } | undefined;
-      control?.progress({ phase: "hashing", message: "Checking which files changed…" });
-      try {
-        const prev = this.store.latestRevision(req.repoPath);
-        if (prev && existsSync(prev.repoRoot)) {
-          const t0 = Date.now();
-          const files = hashFiles(prev.repoRoot, 30_000, 5_000);
-          if (files.error) {
-            this.store.audit(actor(ctx), "repo.ingest", req.repoPath, { incremental: `aborted after ${files.scanned} file(s): ${files.error}` });
-          } else {
-            // The whole map: the worker reuses a parse when it holds the same (path, hash) from this
-            // process's previous index run, which is exactly the set of unchanged files.
-            changes = { revision: prev.id, files: Object.fromEntries(files.map) };
-            this.store.audit(actor(ctx), "repo.ingest", req.repoPath, { incremental: `${files.count} file(s) hashed for the incremental pass`, walkAndHashMs: Date.now() - t0, filesScanned: files.scanned });
-          }
-        }
-      } catch { changes = undefined; /* fall back to a full index */ }
+      // Incremental re-index: tell the parser which revision we already hold and what it holds of it (a digest per file), and it sends back only the
+      // files whose rows differ, or nothing when the worktree is that revision. Parses of unchanged files are reused by the parser itself, by content.
+      const phases: Record<string, number> = {};
+      const lap = <T>(name: string, fn: () => T): T => { const t = performance.now(); try { return fn(); } finally { phases[name] = Math.round((phases[name] ?? 0) + performance.now() - t); } };
+      const prev = this.store.latestRevision(req.repoPath);
+      const prevFiles = prev ? this.store.revisionFiles(prev.id) : {};
+      const base = prev && Object.keys(prevFiles).length ? { revision: prev.id, analyzerVersion: prev.analyzerVersion, digests: prevFiles } : undefined;
+      control?.progress({ phase: "hashing", message: base ? "Checking which files changed…" : "Reading the repository…" });
       control?.checkpoint();
       control?.progress({ phase: "parsing", message: "Parsing the code…" });
       // The parser is one blocking call, so cancelling it means ending the process (a fresh one replaces it).
+      // The parser is one blocking call, so cancelling it means ending the process (a fresh one replaces it).
       const stopWorker = control?.onCancel(() => this.worker.abort());
-      let batch;
+      const runIndex = async (withBase: typeof base) => {
+        const run = this.worker.index(req.repoPath, control ? 600_000 : 120_000, undefined, withBase);
+        return control ? await control.guard(run) : await run;
+      };
+      let batch: AnalysisBatch, row: RevisionRow;
+      const parentId = prev?.id ?? null;
       try {
-        const run = this.worker.index(req.repoPath, control ? 600_000 : 120_000, changes);
-        batch = control ? await control.guard(run) : await run;
+        const tw = performance.now();
+        batch = await runIndex(base);
+        phases.parserAndTransfer = Math.round(performance.now() - tw);
+        control?.commit();
+        if (batch.mode === "unchanged" && this.store.revision(batch.revision)) row = this.store.revision(batch.revision)!;
+        else if (batch.mode === "delta") {
+          try { row = lap("store", () => this.store.putDelta(batch)); }
+          catch (e) {
+            if (!(e instanceof DeltaBaseError)) throw e;
+            // The base could not be built on (an older database, or a mismatch): index in full instead, and say so.
+            this.store.audit(actor(ctx), "repo.ingest", req.repoPath, { incremental: `delta refused: ${e.message}; indexing in full` });
+            batch = await runIndex(undefined);
+            row = lap("store", () => this.store.putBatch(batch));
+          }
+        } else if (batch.mode === "unchanged") { batch = await runIndex(undefined); row = lap("store", () => this.store.putBatch(batch)); } // the parser said unchanged but the revision is gone
+        else row = lap("store", () => this.store.putBatch(batch));
       } finally { stopWorker?.(); }
-      control?.commit();
-      const parentId = this.store.latestRevision(req.repoPath)?.id ?? null;
-      const row = this.store.putBatch(batch);
       // Stable identities across revisions (C08). A failure here must not lose the index: identities can be rebuilt later.
-      try { this.registry.registerRevision(row.id, parentId && parentId !== row.id ? parentId : null); } catch (e) { this.store.audit(actor(ctx), "registry.failed", row.id, { error: String((e as Error).message).slice(0, 200) }); }
+      try { lap("identities", () => this.registry.registerRevision(row.id, parentId && parentId !== row.id ? parentId : null)); } catch (e) { this.store.audit(actor(ctx), "registry.failed", row.id, { error: String((e as Error).message).slice(0, 200) }); }
       const reused = batch.diagnostics.find((d) => d.code === "REUSED_CACHED_PARSES");
-      const reuse = reused ? { files: Number((/^incremental: (\d+)/.exec(reused.message)?.[1]) ?? 0), of: row.fileCount } : undefined;
-      this.store.audit(actor(ctx), "repo.ingest", row.repoRoot, { revision: row.id, files: row.fileCount, reusedParses: reused?.message ?? "none (full parse)" });
-      const tests = ingestTestArtifacts(this.store, row);
+      const unchanged = batch.mode === "unchanged";
+      const reuse = unchanged ? { files: row.fileCount, of: row.fileCount } : reused ? { files: Number((/^incremental: (\d+)/.exec(reused.message)?.[1]) ?? 0), of: row.fileCount } : undefined;
+      const delta = { mode: batch.mode ?? "full", changed: batch.changedFiles?.length ?? row.fileCount, removed: batch.removedFiles?.length ?? 0, of: row.fileCount };
+      this.store.audit(actor(ctx), "repo.ingest", row.repoRoot, { revision: row.id, files: row.fileCount, mode: delta.mode, changedFiles: delta.changed, removedFiles: delta.removed, reusedParses: unchanged ? "all (worktree is the previous revision)" : reused?.message ?? "none (full parse)", phasesMs: phases });
+      const tests = lap("testArtifacts", () => ingestTestArtifacts(this.store, row));
       const warnings = batch.diagnostics.filter((d) => d.code !== "REUSED_CACHED_PARSES").map((d) => d.message);
-      const spans = ingestTraceExports(this.store, row);
+      const spans = lap("traceExports", () => ingestTraceExports(this.store, row));
       if (spans) warnings.push(`Loaded trace exports (${spans.found.join(", ")}): ${spans.spans} span(s), ${spans.errors} error span(s)${spans.p95 !== null ? `, p95 ${spans.p95} ms` : ""}.`, ...spans.staleness.map((x) => `Trace data may be out of date: ${x}`));
-      if (reuse) warnings.unshift(reuse.files === reuse.of ? "All files unchanged since the previous revision; every parse was reused." : `Incremental: parsed ${reuse.of - reuse.files} of ${reuse.of} file(s); the rest were reused from cache.`);
+      if (delta.mode === "delta") warnings.unshift(`Incremental: ${delta.changed} of ${delta.of} file(s) changed${delta.removed ? `, ${delta.removed} removed` : ""}; the rest were carried over from the previous revision.`);
+      else if (reuse) warnings.unshift(reuse.files === reuse.of ? "All files unchanged since the previous revision; every parse was reused." : `Incremental: parsed ${reuse.of - reuse.files} of ${reuse.of} file(s); the rest were reused from cache.`);
       if (tests) warnings.push(`Loaded test artifacts (${tests.found.join(", ")}): ${tests.tests.passed} passed, ${tests.tests.failed} failed${tests.coverageLinePercent !== null ? `, ${tests.coverageLinePercent}% line coverage` : ""}.`, ...tests.staleness.map((x) => `Test data may be out of date: ${x}`));
-      return ok(ctx, { ...row, reuse }, { revision: row.id, warnings, completeness: batch.diagnostics.some((d) => d.code !== "REUSED_CACHED_PARSES") ? "PARTIAL" : "COMPLETE" });
+      return ok(ctx, { ...row, reuse, delta: { ...delta, phasesMs: phases } }, { revision: row.id, warnings, completeness: batch.diagnostics.some((d) => d.code !== "REUSED_CACHED_PARSES") ? "PARTIAL" : "COMPLETE" });
     } catch (e) {
       if (e instanceof Cancelled || (control && e instanceof WorkerError && e.api.code === "CANCELLED")) throw new Cancelled();
       return fail(ctx, e instanceof WorkerError ? e.api : storageFailure(e));
@@ -844,6 +852,7 @@ export class Service {
     let chunksDone = 0;
     while (queue.length) {
       control?.checkpoint();
+      await new Promise<void>((r) => setImmediate(r)); // building a bundle is synchronous database work; let requests in between parts
       control?.progress({ phase: "extracting", done: chunksDone, total: chunksDone + queue.length, message: `Reading the code with the model: part ${chunksDone + 1} of about ${chunksDone + queue.length}` });
       const whole = queue.shift()!;
       // Region-level re-extraction: only symbols that changed, are new, or belong to a card that must be rebuilt go to the model.

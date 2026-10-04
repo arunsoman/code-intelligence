@@ -10,6 +10,8 @@ import type { AnalysisBatch, Claim, ConceptCard, Entity, EvidenceRef, Fact, JobV
 
 export interface RevisionRow { id: string; repoRoot: string; gitHead: string | null; createdAt: string; analyzerVersion: string; diagnostics: AnalysisBatch["diagnostics"]; fileCount: number }
 
+export class DeltaBaseError extends Error {}
+
 export class Store {
   readonly db: DatabaseSync;
   readonly path: string;
@@ -52,6 +54,36 @@ export class Store {
   }
 
   /** Atomic: either the whole revision is stored or none of it. */
+  /** The file each relationship and fact belongs to: the file of the entity it starts from (relationship) or is about (fact). "" when there is none. */
+  private ownerOf(b: AnalysisBatch): (id: string) => string {
+    const file = new Map(b.entities.map((e) => [e.entityId, e.file]));
+    return (id) => file.get(id) ?? "";
+  }
+  private insertRows(revision: string, b: AnalysisBatch, ownerOf: (id: string) => string) {
+    const ie = this.db.prepare("insert into entities values (?,?,?,?,?,?)");
+    for (const e of b.entities) ie.run(revision, e.entityId, e.kind, e.name, e.file, JSON.stringify(e));
+    failpoint("index.commit"); // test hook: a crash here must leave no revision at all
+    const ir = this.db.prepare("insert or ignore into relationships(revision, id, from_id, to_id, kind, json, file, ev) values (?,?,?,?,?,?,?,?)");
+    const ev = this.db.prepare("insert or ignore into evidence values (?,?,?)");
+    for (const r of b.relationships) {
+      // A repeated id (two calls from one function to the same target) keeps the first row; the evidence stored is the evidence of rows that were kept,
+      // so the evidence table is exactly what the stored rows embed, and a revision built from a previous one can reproduce it.
+      if (Number(ir.run(revision, r.id, r.from, r.to, r.kind, JSON.stringify(r), ownerOf(r.from), JSON.stringify(r.evidence.map((e) => e.id))).changes) > 0) for (const e of r.evidence) ev.run(revision, e.id, JSON.stringify(e));
+    }
+    const iff = this.db.prepare("insert or ignore into facts(revision, id, subject, predicate, resolution, json, file, ev) values (?,?,?,?,?,?,?,?)");
+    for (const f of b.facts) {
+      if (Number(iff.run(revision, f.id, f.subject, f.predicate, f.resolution, JSON.stringify(f), ownerOf(f.subject), JSON.stringify(f.evidence.map((e) => e.id))).changes) > 0) for (const e of f.evidence) ev.run(revision, e.id, JSON.stringify(e));
+    }
+  }
+  private insertManifest(revision: string, manifest: Record<string, string> | undefined) {
+    const im = this.db.prepare("insert or replace into rev_files values (?,?,?)");
+    for (const [file, digest] of Object.entries(manifest ?? {})) im.run(revision, file, digest);
+  }
+  /** What the parser reported for each file of a revision (digest of its rows), or an empty map for a revision stored before that was recorded. */
+  revisionFiles(revision: string): Record<string, string> {
+    return Object.fromEntries((this.db.prepare("select file, digest from rev_files where revision = ?").all(revision) as { file: string; digest: string }[]).map((r) => [r.file, r.digest]));
+  }
+
   putBatch(b: AnalysisBatch): RevisionRow {
     const files = b.entities.filter((e) => e.kind === "file").length;
     const row: RevisionRow = { id: b.revision, repoRoot: b.repoRoot, gitHead: b.gitHead, createdAt: new Date().toISOString(), analyzerVersion: b.analyzerVersion, diagnostics: b.diagnostics, fileCount: files };
@@ -59,20 +91,46 @@ export class Store {
       const exists = this.db.prepare("select 1 from revisions where id = ?").get(b.revision);
       if (exists) return; // content-addressed revision: identical content already indexed
       this.db.prepare("insert into revisions values (?,?,?,?,?,?,?)").run(row.id, row.repoRoot, row.gitHead, row.createdAt, row.analyzerVersion, JSON.stringify(row.diagnostics), files);
-      const ie = this.db.prepare("insert into entities values (?,?,?,?,?,?)");
-      for (const e of b.entities) ie.run(b.revision, e.entityId, e.kind, e.name, e.file, JSON.stringify(e));
-      failpoint("index.commit"); // test hook: a crash here must leave no revision at all
-      const ir = this.db.prepare("insert or ignore into relationships values (?,?,?,?,?,?)");
-      const ev = this.db.prepare("insert or ignore into evidence values (?,?,?)");
-      for (const r of b.relationships) {
-        ir.run(b.revision, r.id, r.from, r.to, r.kind, JSON.stringify(r));
-        for (const e of r.evidence) ev.run(b.revision, e.id, JSON.stringify(e));
-      }
-      const iff = this.db.prepare("insert or ignore into facts values (?,?,?,?,?,?)");
-      for (const f of b.facts) {
-        iff.run(b.revision, f.id, f.subject, f.predicate, f.resolution, JSON.stringify(f));
-        for (const e of f.evidence) ev.run(b.revision, e.id, JSON.stringify(e));
-      }
+      this.insertRows(b.revision, b, this.ownerOf(b));
+      this.insertManifest(b.revision, b.manifest);
+    });
+    return row;
+  }
+
+  /**
+   * A revision made from one this store already holds plus the rows of the files that changed. The rows of every other file are copied inside
+   * SQLite (the revision id in their evidence spans is rewritten to the new one), so nothing unchanged is serialized, sent or parsed again.
+   * Throws DeltaBaseError when the base is not usable, and the caller indexes in full instead; nothing is written in that case.
+   */
+  putDelta(b: AnalysisBatch): RevisionRow {
+    const base = b.baseRevision ? this.revision(b.baseRevision, true) : null;
+    if (!base || base.repoRoot !== b.repoRoot) throw new DeltaBaseError("the base revision is not held for this repository");
+    const baseFiles = this.revisionFiles(base.id);
+    if (Object.keys(baseFiles).length === 0) throw new DeltaBaseError("the base revision was stored before per-file digests were recorded");
+    const leaving = new Set([...(b.changedFiles ?? []), ...(b.removedFiles ?? [])]);
+    let row!: RevisionRow;
+    this.tx(() => {
+      const existing = this.revision(b.revision, true);
+      if (existing) { row = existing; return; } // content-addressed revision: identical content already indexed
+      const d = this.db;
+      d.exec("create temp table if not exists _delta_files(file text primary key); delete from _delta_files;");
+      const leave = d.prepare("insert or ignore into _delta_files values (?)");
+      for (const f of leaving) leave.run(f);
+      const old = base.id, nu = b.revision;
+      d.prepare("insert into revisions values (?,?,?,?,?,?,0)").run(nu, b.repoRoot, b.gitHead, new Date().toISOString(), b.analyzerVersion, JSON.stringify(b.diagnostics));
+      d.prepare("insert into entities select ?, entity_id, kind, name, file, replace(json, ?, ?) from entities where revision = ? and file not in (select file from _delta_files)").run(nu, old, nu, old);
+      d.prepare("insert into relationships(revision, id, from_id, to_id, kind, json, file, ev) select ?, id, from_id, to_id, kind, replace(json, ?, ?), file, ev from relationships where revision = ? and file not in (select file from _delta_files)").run(nu, old, nu, old);
+      d.prepare("insert into facts(revision, id, subject, predicate, resolution, json, file, ev) select ?, id, subject, predicate, resolution, replace(json, ?, ?), file, ev from facts where revision = ? and file not in (select file from _delta_files)").run(nu, old, nu, old);
+      // The evidence table is exactly the evidence embedded in the rows, so rebuild it from the ids of the rows just copied (each row keeps the ids it embeds; CROSS JOIN fixes the order, otherwise SQLite loops over every evidence row for each fact)
+      // and take the evidence itself from the base revision: an id is content-addressed, so it is the same evidence there.
+      for (const tbl of ["relationships", "facts"]) d.prepare(`insert or ignore into evidence select ?, e.id, replace(e.json, ?, ?) from ${tbl} r cross join json_each(r.ev) j cross join evidence e where e.revision = ? and e.id = j.value and r.revision = ? and r.file not in (select file from _delta_files)`).run(nu, old, nu, old, nu);
+      this.insertRows(nu, b, this.ownerOf(b));
+      this.insertManifest(nu, b.manifest);
+      const files = (d.prepare("select count(*) n from entities where revision = ? and kind = 'file'").get(nu) as { n: number }).n;
+      const listed = Object.keys(b.manifest ?? {}).filter((f) => f !== "").length;
+      if (files !== listed) throw new DeltaBaseError(`the new revision has ${files} files but the parser listed ${listed}`);
+      d.prepare("update revisions set file_count = ? where id = ?").run(files, nu);
+      row = this.revision(nu, true)!;
     });
     return row;
   }
@@ -121,20 +179,24 @@ export class Store {
   }
 
   entities(rev: string): Entity[] {
-    return (this.db.prepare("select json from entities where revision = ?").all(rev) as any[]).map((r) => JSON.parse(r.json));
+    return (this.db.prepare("select json from entities where revision = ? order by file, rowid").all(rev) as any[]).map((r) => JSON.parse(r.json));
   }
   entitiesById(rev: string, ids: string[]): Entity[] {
     const get = this.db.prepare("select json from entities where revision = ? and entity_id = ?");
     return ids.flatMap((id) => { const r = get.get(rev, id) as any; return r ? [JSON.parse(r.json) as Entity] : []; });
   }
   relationshipsFor(rev: string, entityId: string): Relationship[] {
-    return (this.db.prepare("select json from relationships where revision = ? and (from_id = ? or to_id = ?)").all(rev, entityId, entityId) as any[]).map((r) => JSON.parse(r.json));
+    // Two index lookups, not `from_id = ? or to_id = ?`: SQLite plans that OR as a scan of every relationship in the revision, once per entity.
+    // Reads are ordered explicitly, as the indexes that existed when they were written happened to give: emission order within a file (rowid). Which index SQLite scans, and so the order
+    // rows come back in, changes whenever an index is added, and layouts depend on the order of nodes and edges. Ties across files break by file, so a revision built from a previous
+    // one (copied rows first, changed files after) reads in the same order as a clean index.
+    return (this.db.prepare("select json from (select rowid as rid, to_id, file, json from relationships where revision = ? and from_id = ? union all select rowid as rid, to_id, file, json from relationships where revision = ? and to_id = ? and from_id <> ?) order by to_id, file, rid").all(rev, entityId, rev, entityId, entityId) as any[]).map((r) => JSON.parse(r.json));
   }
   relationshipsAmong(rev: string, kind: string): Relationship[] {
-    return (this.db.prepare("select json from relationships where revision = ? and kind = ?").all(rev, kind) as any[]).map((r) => JSON.parse(r.json));
+    return (this.db.prepare("select json from relationships where revision = ? and kind = ? order by to_id, file, rowid").all(rev, kind) as any[]).map((r) => JSON.parse(r.json));
   }
   factsFor(rev: string, subject: string): Fact[] {
-    return (this.db.prepare("select json from facts where revision = ? and subject = ?").all(rev, subject) as any[]).map((r) => JSON.parse(r.json));
+    return (this.db.prepare("select json from facts where revision = ? and subject = ? order by rowid").all(rev, subject) as any[]).map((r) => JSON.parse(r.json));
   }
   evidence(rev: string, id: string): EvidenceRef | null {
     const r = this.db.prepare("select json from evidence where revision = ? and id = ?").get(rev, id) as any;
@@ -143,13 +205,13 @@ export class Store {
 
   // ---- facts / relationships (revision-wide reads) ----
   factsByPredicate(rev: string, predicate: string): Fact[] {
-    return (this.db.prepare("select json from facts where revision = ? and predicate = ?").all(rev, predicate) as any[]).map((r) => JSON.parse(r.json));
+    return (this.db.prepare("select json from facts where revision = ? and predicate = ? order by subject, rowid").all(rev, predicate) as any[]).map((r) => JSON.parse(r.json));
   }
   allFacts(rev: string): Fact[] {
-    return (this.db.prepare("select json from facts where revision = ?").all(rev) as any[]).map((r) => JSON.parse(r.json));
+    return (this.db.prepare("select json from facts where revision = ? order by subject, rowid").all(rev) as any[]).map((r) => JSON.parse(r.json));
   }
   allRelationships(rev: string): Relationship[] {
-    return (this.db.prepare("select json from relationships where revision = ?").all(rev) as any[]).map((r) => JSON.parse(r.json));
+    return (this.db.prepare("select json from relationships where revision = ? order by to_id, file, rowid").all(rev) as any[]).map((r) => JSON.parse(r.json));
   }
   putEvidence(rev: string, e: EvidenceRef) {
     this.db.prepare("insert or ignore into evidence values (?,?,?)").run(rev, e.id, JSON.stringify(e));
@@ -323,7 +385,7 @@ export class Store {
   replaceFactsBySource(rev: string, idPrefix: string, facts: Fact[]) {
     this.tx(() => {
       this.db.prepare("delete from facts where revision = ? and id like ?").run(rev, `${idPrefix}%`);
-      const ins = this.db.prepare("insert or replace into facts values (?,?,?,?,?,?)");
+      const ins = this.db.prepare("insert or replace into facts(revision, id, subject, predicate, resolution, json) values (?,?,?,?,?,?)");
       for (const f of facts) {
         ins.run(rev, f.id, f.subject, f.predicate, f.resolution, JSON.stringify(f));
         for (const e of f.evidence) this.putEvidence(rev, e);

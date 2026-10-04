@@ -2,7 +2,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { AnalysisBatch, ApiError } from "@cie/schema";
+import type { AnalysisBatch, ApiError, BaseRevision } from "@cie/schema";
 
 const MAX_FRAME = 8 * 1024 * 1024;
 
@@ -140,10 +140,10 @@ export class WorkerClient {
     this.start();
   }
 
-  async index(repoPath: string, timeoutMs = 120_000, changes?: { revision: string; files: Record<string, string> }): Promise<AnalysisBatch> {
+  async index(repoPath: string, timeoutMs = 120_000, changes?: { revision: string; files: Record<string, string> }, base?: BaseRevision): Promise<AnalysisBatch> {
     const watch = setInterval(() => { const mb = this.rssMb(); if (mb !== null && mb > this.rssLimitMb) { clearInterval(watch); this.killForMemory(mb); } }, 40);
     let msg: any;
-    try { msg = await this.callRetry("index", { repoPath, changes }, timeoutMs); } finally { clearInterval(watch); }
+    try { msg = await this.callRetry("index", { repoPath, changes, base }, timeoutMs); } finally { clearInterval(watch); }
     if (!msg.ok) throw new WorkerError(msg.error);
     if (msg.handle) {
       try { return JSON.parse(readFileSync(msg.handle, "utf8")); } finally { try { unlinkSync(msg.handle); } catch {} }

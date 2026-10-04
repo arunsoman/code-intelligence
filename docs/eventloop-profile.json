@@ -1,0 +1,319 @@
+{
+ "repo": "/home/arun/shahy-restructure",
+ "entities": 10086,
+ "at": "2026-10-04T07:51:22.647Z",
+ "rows": [
+  {
+   "op": "index repository",
+   "wallMs": 8508,
+   "maxStallMs": 4621,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "778ms index packages/core/src/worker.ts:143",
+    "399ms (anon) packages/core/src/store.ts:58",
+    "58ms bodyDigest packages/core/src/registry.ts:22"
+   ]
+  },
+  {
+   "op": "extract concepts (offline model)",
+   "wallMs": 37626,
+   "maxStallMs": 778,
+   "stalls100": 2,
+   "ok": true,
+   "hot": [
+    "14726ms (anon) packages/core/src/store.ts:124",
+    "3418ms entities packages/core/src/store.ts:123",
+    "2730ms cardsFromOutput packages/core/src/concepts.ts:27"
+   ]
+  },
+  {
+   "op": "list visuals",
+   "wallMs": 213,
+   "maxStallMs": 1127,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "9ms getClaim packages/core/src/store.ts:200",
+    "5ms (anon) packages/core/src/store.ts:173",
+    "1ms concepts packages/core/src/store.ts:172"
+   ]
+  },
+  {
+   "op": "ask: SemanticMap",
+   "wallMs": 3557,
+   "maxStallMs": 4431,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "506ms factsFor packages/core/src/store.ts:137",
+    "470ms fnv packages/core/src/embeddings.ts:14",
+    "437ms (anon) packages/core/src/salience.ts:106"
+   ]
+  },
+  {
+   "op": "ask: CausalGraph",
+   "wallMs": 1179,
+   "maxStallMs": 2131,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "618ms scoreEntity packages/core/src/salience.ts:65",
+    "91ms entities packages/core/src/store.ts:123",
+    "40ms allRelationships packages/core/src/store.ts:152"
+   ]
+  },
+  {
+   "op": "ask: TransactionJourney",
+   "wallMs": 484,
+   "maxStallMs": 1485,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "129ms allRelationships packages/core/src/store.ts:152",
+    "62ms entities packages/core/src/store.ts:123",
+    "24ms ensureEdgeClaims packages/core/src/visuals.ts:47"
+   ]
+  },
+  {
+   "op": "ask: DataLineage",
+   "wallMs": 1189,
+   "maxStallMs": 2402,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "109ms (anon) packages/core/src/store.ts:153",
+    "105ms (anon) packages/core/src/store.ts:147",
+    "80ms factsByPredicate packages/core/src/store.ts:146"
+   ]
+  },
+  {
+   "op": "ask: SemanticDiff",
+   "wallMs": 94,
+   "maxStallMs": 237,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "55ms (anon) packages/core/src/store.ts:153",
+    "8ms allRelationships packages/core/src/store.ts:152",
+    "7ms ensureEdgeClaims packages/core/src/visuals.ts:47"
+   ]
+  },
+  {
+   "op": "ask: Archaeology",
+   "wallMs": 181,
+   "maxStallMs": 325,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "50ms (anon) packages/core/src/store.ts:153",
+    "28ms entities packages/core/src/store.ts:123",
+    "13ms allRelationships packages/core/src/store.ts:152"
+   ]
+  },
+  {
+   "op": "ask: TrustBoundary",
+   "wallMs": 625,
+   "maxStallMs": 772,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "113ms (anon) packages/core/src/store.ts:153",
+    "33ms factsByPredicate packages/core/src/store.ts:146",
+    "30ms entities packages/core/src/store.ts:123"
+   ]
+  },
+  {
+   "op": "ask: RuntimeOverlay",
+   "wallMs": 499,
+   "maxStallMs": 663,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "119ms (anon) packages/core/src/store.ts:153",
+    "63ms entities packages/core/src/store.ts:123",
+    "18ms allRelationships packages/core/src/store.ts:152"
+   ]
+  },
+  {
+   "op": "ask: RaceWindow",
+   "wallMs": 994,
+   "maxStallMs": 1176,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "136ms factsByPredicate packages/core/src/store.ts:146",
+    "111ms (anon) packages/core/src/store.ts:153",
+    "30ms entities packages/core/src/store.ts:123"
+   ]
+  },
+  {
+   "op": "ask: Counterfactual",
+   "wallMs": 132,
+   "maxStallMs": 342,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "51ms (anon) packages/core/src/store.ts:153",
+    "31ms entities packages/core/src/store.ts:123",
+    "8ms allRelationships packages/core/src/store.ts:152"
+   ]
+  },
+  {
+   "op": "ask: TestConfidence",
+   "wallMs": 614,
+   "maxStallMs": 827,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "112ms factsFor packages/core/src/store.ts:137",
+    "108ms (anon) packages/core/src/store.ts:153",
+    "55ms entities packages/core/src/store.ts:123"
+   ]
+  },
+  {
+   "op": "ask: Ownership",
+   "wallMs": 1311,
+   "maxStallMs": 1546,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "102ms (anon) packages/core/src/store.ts:153",
+    "55ms entities packages/core/src/store.ts:123",
+    "17ms allRelationships packages/core/src/store.ts:152"
+   ]
+  },
+  {
+   "op": "ask: ConceptAtlas",
+   "wallMs": 529,
+   "maxStallMs": 806,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "113ms (anon) packages/core/src/store.ts:153",
+    "28ms entities packages/core/src/store.ts:123",
+    "26ms factsByPredicate packages/core/src/store.ts:146"
+   ]
+  },
+  {
+   "op": "ask: PolicyMap",
+   "wallMs": 1272,
+   "maxStallMs": 1565,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "316ms commentsAround packages/core/src/gitinfo.ts:107",
+    "109ms (anon) packages/core/src/store.ts:153",
+    "75ms routes packages/core/src/forms/analysis.ts:84"
+   ]
+  },
+  {
+   "op": "ask: ChangeRisk",
+   "wallMs": 25733,
+   "maxStallMs": 25866,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "144ms factsFor packages/core/src/store.ts:137",
+    "107ms (anon) packages/core/src/store.ts:153",
+    "79ms buildTerrain packages/core/src/forms/terrain.ts:23"
+   ]
+  },
+  {
+   "op": "ask: free text (retrieval)",
+   "wallMs": 1149,
+   "maxStallMs": 1300,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "386ms (anon) packages/core/src/salience.ts:106",
+    "116ms scoreEntity packages/core/src/salience.ts:65",
+    "74ms (anon) packages/core/src/store.ts:124"
+   ]
+  },
+  {
+   "op": "converse: project overview",
+   "wallMs": 928,
+   "maxStallMs": 1052,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "489ms scoreEntity packages/core/src/salience.ts:65",
+    "81ms entities packages/core/src/store.ts:123",
+    "28ms cosine packages/core/src/embeddings.ts:54"
+   ]
+  },
+  {
+   "op": "security analysis",
+   "wallMs": 2861,
+   "maxStallMs": 3046,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "446ms scanFunction packages/core/src/defect/source.ts:73",
+    "381ms blank packages/core/src/defect/source.ts:33",
+    "262ms lineAt packages/core/src/defect/source.ts:57"
+   ]
+  },
+  {
+   "op": "defect detection (indexed)",
+   "wallMs": 11778,
+   "maxStallMs": 12033,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "1402ms scanFunction packages/core/src/defect/source.ts:73",
+    "1031ms lineAt packages/core/src/defect/source.ts:57",
+    "1023ms (anon) packages/core/src/store.ts:132"
+   ]
+  },
+  {
+   "op": "revision stats",
+   "wallMs": 40,
+   "maxStallMs": 532,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "33ms entities packages/core/src/store.ts:123",
+    "1ms (anon) packages/core/src/service.ts:1357",
+    "1ms (anon) packages/core/src/service.ts:1358"
+   ]
+  },
+  {
+   "op": "changes since index",
+   "wallMs": 4236,
+   "maxStallMs": 2281,
+   "stalls100": 2,
+   "ok": true,
+   "hot": [
+    "935ms index packages/core/src/worker.ts:143",
+    "156ms (anon) packages/core/src/store.ts:124",
+    "46ms entities packages/core/src/store.ts:123"
+   ]
+  },
+  {
+   "op": "explain one element",
+   "wallMs": 48,
+   "maxStallMs": 490,
+   "stalls100": 1,
+   "ok": true,
+   "hot": [
+    "29ms entities packages/core/src/store.ts:123",
+    "4ms retrieveAround packages/core/src/retrieval.ts:201",
+    "1ms (anon) packages/core/src/store.ts:132"
+   ]
+  },
+  {
+   "op": "re-index (unchanged)",
+   "wallMs": 3722,
+   "maxStallMs": 1903,
+   "stalls100": 2,
+   "ok": true,
+   "hot": [
+    "918ms index packages/core/src/worker.ts:143",
+    "29ms (anon) packages/core/src/store.ts:124",
+    "10ms walk packages/core/src/service.ts:77"
+   ]
+  }
+ ]
+}

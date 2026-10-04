@@ -111,8 +111,26 @@ Both can take minutes, so they run as jobs (C07): the call returns at once, the 
 - **Cancel while saving**: refused, with the reason, and the job finishes whole. Stopping then would leave half a result.
 - **A server restart** marks a job it interrupted as failed ("nothing from the interrupted run was saved"). Jobs cannot resume; run them again.
 - Each model call in a job gets its own deadline; before, the request that started extraction set one deadline for all chunks.
-- Limits: while the repository is being hashed for the incremental pass (synchronous, bounded) a cancel waits for it to finish; the rest of the progress is phases and chunk counts, not a percentage of the parse.
+- Limits: the parser is one blocking call, so progress is phases and chunk counts, not a percentage of the parse.
 
+### Incremental indexing
+An edit does not re-index the repository from nothing. The server tells the parser which revision it already holds and a digest of everything stored for each file (its entities, the facts about them, the relationships from them, evidence included, with the revision id left out). The parser reads and hashes the worktree, and:
+- **Nothing changed** (the revision id, a hash of every file's path and bytes, is the one held): it answers "unchanged" before parsing anything, and nothing is sent or stored.
+- **Some files changed**: it rebuilds the graph in memory (cross-file resolution can change a file's rows although its bytes did not: rename an export and its importers' rows change), digests every file's rows, and sends back only the files whose digest differs, plus the names of removed files. The new revision is made from the held one by copying the unchanged files' rows inside SQLite (their revision id is rewritten) and adding the changed files' rows, in one transaction. Parses of unchanged files are reused by content.
+- **Anything doubtful** (a revision stored before digests existed, another analyzer version, a base that does not add up): the delta is refused, nothing is written, and the repository is indexed in full. The result says which path ran (`delta.mode`: `unchanged`, `delta` or `full`, and how many files changed).
+
+It is exact, and tested as such: after a comment, a new function and its caller, a renamed export, a deleted directory, a moved file, an added file and an undone change (and edits in Java, Go and Python), the incremental revision equals a clean index of the same files, row for row and in the same read order, evidence included (`incremental-index.test.ts`; `compareWithCleanIndex` checks the same on any repository).
+
+Measured on a 1,735-file, 10,086-entity, 94,000-fact repository (`node scripts/reindex-time.ts <repo>`, on a copy; laptop CPU):
+
+| | before | now |
+|---|---|---|
+| full index | 7.3 s | 7.3 s |
+| re-index, nothing changed | 3.1 s | **0.18 s** |
+| re-index after editing one file | about 5.0 s | **4.1 s** |
+| re-index after removing a file | about 3 s | 2.3 s |
+
+The honest reading: "nothing changed" is now nearly free, but an edit still costs about 4 s on a repository this size, not time proportional to the edit. Two costs remain: the parser rebuilds the whole graph (about 0.7 s, plus about 0.4 s to digest it) and the store copies every unchanged file's rows into the new revision (about 1.9 s, mostly the 94,000 facts). Removing both would need an incremental resolver and revisions that share rows; neither is built. On repositories of a few hundred files all of this is well under a second.
 ## The 32 components and their acceptance ledger
 Every component of `Code_Intelligence_Component_API_Contracts.md` has its acceptance suite written out as items in `docs/ledger.json`; an item is **done** only when named tests prove it (`ledger.test.ts` fails if a named test does not exist). `node scripts/status.ts -v` prints the state. At the time of writing: **165 of 167 items done, 2 blocked, 0 open**. The two blocked items are the ones whose acceptance criterion is *people*, not code: held-out labels by ≥ 8 independent experts, and a task-completion study with real participants. The machinery for both (label store, held-out split, synthetic-label rule, expert-coverage report, study analysis with intervals) is built and tested; generated data is marked synthetic and is never reported as either.
 

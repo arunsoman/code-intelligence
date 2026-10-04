@@ -75,7 +75,7 @@ function dropRevision(store: Store, id: string) {
   d.prepare("delete from subscriber_progress where event_id in (select event_id from outbox where json_extract(payload, '$.revision') = ?)").run(id);
   d.prepare("delete from outbox where json_extract(payload, '$.revision') = ?").run(id);
   d.prepare("delete from verdicts where claim_id in (select id from claims where revision = ?)").run(id);
-  for (const t of ["entities", "relationships", "facts", "evidence", "concepts", "claims", "context_events", "embeddings", "exports"]) d.prepare(`delete from ${t} where revision = ?`).run(id);
+  for (const t of ["entities", "relationships", "facts", "evidence", "rev_files", "concepts", "claims", "context_events", "embeddings", "exports"]) d.prepare(`delete from ${t} where revision = ?`).run(id);
   d.prepare("delete from webhook_deliveries where revision = ? or payload like ?").run(id, `%${id}%`);
   d.prepare("delete from revisions where id = ?").run(id);
 }

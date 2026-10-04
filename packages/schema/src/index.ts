@@ -42,7 +42,15 @@ export interface AnalysisBatch {
   revision: RevisionId; gitHead: string | null; repoRoot: string;
   entities: Entity[]; facts: Fact[]; relationships: Relationship[];
   diagnostics: Diagnostic[]; analyzerVersion: string;
+  /** "full": every row. "delta": only the rows of changedFiles (the rest equal baseRevision's). "unchanged": the worktree is baseRevision. Absent: full (older parsers). */
+  mode?: "full" | "delta" | "unchanged";
+  baseRevision?: RevisionId;
+  /** Digest of everything emitted per file (revision id left out); "" holds rows that belong to no file. */
+  manifest?: Record<string, string>;
+  changedFiles?: string[]; removedFiles?: string[];
 }
+/** What a caller holds of a revision, so the parser can send back only what differs. */
+export interface BaseRevision { revision: RevisionId; analyzerVersion: string; digests: Record<string, string> }
 
 export interface EvidenceBundle {
   id: Id; revision: RevisionId; evidence: EvidenceRef[];

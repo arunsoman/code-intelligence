@@ -81,6 +81,23 @@ pub struct AnalysisBatch {
     pub relationships: Vec<Relationship>,
     pub diagnostics: Vec<Diagnostic>,
     pub analyzer_version: String,
+    /// "full": every row. "delta": only the rows of `changedFiles`; the rest equal the base revision's rows. "unchanged": the worktree hashes to the base revision.
+    pub mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_revision: Option<String>,
+    /// Digest of everything emitted for each file (its entities, the facts about them, the relationships from them), with the revision id left out.
+    pub manifest: std::collections::BTreeMap<String, String>,
+    pub changed_files: Vec<String>,
+    pub removed_files: Vec<String>,
+}
+
+/// The revision the caller already holds, and what it holds of it, so only what differs needs to be sent back.
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BaseRef {
+    pub revision: String,
+    pub analyzer_version: String,
+    pub digests: HashMap<String, String>,
 }
 
 /// The caller's previous revision, per file: content hashes (which files existed and what their
@@ -88,6 +105,7 @@ pub struct AnalysisBatch {
 #[derive(Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ChangeSet {
+    #[allow(dead_code)]
     pub files: HashMap<String, String>,
     /// Which revision the hashes are from (for diagnostics and audit). Not used for dedupe:
     /// the worker matches on content only.

@@ -8,7 +8,7 @@ mod rust_language;
 mod source_ir;
 
 use protocol::{read_frame, write_frame, FrameError};
-use crate::model::ChangeSet;
+use crate::model::{BaseRef, ChangeSet};
 use serde_json::{json, Value};
 use std::io::{stdin, stdout};
 use std::path::Path;
@@ -33,7 +33,8 @@ fn handle(req: &Value) -> Value {
             None => Err(("INVALID_SCHEMA", "params.repoPath required".into())),
             Some(p) => {
                 let changes: Option<ChangeSet> = req.pointer("/params/changes").and_then(|v| serde_json::from_value(v.clone()).ok());
-                match index::index_repo(Path::new(p), changes.as_ref()) {
+                let base: Option<BaseRef> = req.pointer("/params/base").and_then(|v| serde_json::from_value(v.clone()).ok());
+                match index::index_repo(Path::new(p), changes.as_ref(), base.as_ref()) {
                     Err(e) => Err(("NOT_FOUND", e)),
                     // The batch is streamed straight to a handle file: no intermediate JSON value and no second copy in a byte
                     // buffer, which together cost several times the batch itself at the peak.

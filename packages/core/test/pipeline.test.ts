@@ -145,7 +145,7 @@ test("re-indexing after an edit re-parses only the changed file", async () => {
   assert.notEqual(second.value.id, first.value.id);
   assert.ok(second.value.reuse, "incremental info reported");
   assert.ok(second.value.reuse.files < second.value.reuse.of, `some parses were reused: ${JSON.stringify(second.value.reuse)}`);
-  assert.ok(second.metadata.warnings.some((w) => /Incremental: parsed/.test(w)), `warnings mention it: ${second.metadata.warnings}`);
+  assert.ok(second.metadata.warnings.some((w) => /Incremental: \d+ of \d+ file\(s\) changed/.test(w)), `warnings mention it: ${second.metadata.warnings}`);
   const stats = await svc.revisionStats(ctx(), { revision: second.value.id });
   assert.ok(stats.ok && stats.value.symbols > 0);
   worker.close();
