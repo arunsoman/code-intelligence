@@ -67,6 +67,8 @@ export function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [events, setEvents] = useState<SavedState["events"]>([]);
   const [busy, setBusy] = useState<string | null>(null);
+  // Gaps and left-out candidates open in a popover above the footer, so reading them cannot resize the canvas. (#52)
+  const [footerOpen, setFooterOpen] = useState({ gaps: false, hidden: false });
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<{ id: string; name: string; version: number; updatedAt: string }[]>([]);
@@ -671,8 +673,14 @@ export function App() {
           <ul className="legend">
             {(view?.legend ?? []).map((l) => <li key={l.label}><span className={`swatch ${dm(l.displayMode)}`} aria-hidden /> <strong>{l.label}</strong> — {l.description}</li>)}
           </ul>
-          {view && view.gaps.length > 0 && <details><summary>{view.gaps.length} gap(s) in this view</summary><ul>{view.gaps.map((g, i) => <li key={i}>{g}</li>)}</ul></details>}
-          {view?.hidden && view.hidden.length > 0 && <details><summary>{view.hidden.length} candidate(s) left out</summary><ul>{view.hidden.slice(0, 12).map((h) => <li key={h.entityId}>{h.label}: {h.reason}</li>)}</ul><div className="muted small">Ask “why isn't X shown?” about any of them.</div></details>}
+          {view && view.gaps.length > 0 && <button className="link footer-toggle" aria-expanded={footerOpen.gaps} aria-controls="footer-more" onClick={() => setFooterOpen((o) => ({ ...o, gaps: !o.gaps }))}>{view.gaps.length} gap(s) in this view</button>}
+          {view?.hidden && view.hidden.length > 0 && <button className="link footer-toggle" aria-expanded={footerOpen.hidden} aria-controls="footer-more" onClick={() => setFooterOpen((o) => ({ ...o, hidden: !o.hidden }))}>{view.hidden.length} candidate(s) left out</button>}
+          {(footerOpen.gaps || footerOpen.hidden) && (
+            <div id="footer-more" className="footer-panel" role="region" aria-label="Gaps and left-out candidates">
+              {footerOpen.gaps && view && view.gaps.length > 0 && <section><h3>Gaps in this view</h3><ul>{view.gaps.map((g, i) => <li key={i}>{g}</li>)}</ul></section>}
+              {footerOpen.hidden && view?.hidden && view.hidden.length > 0 && <section><h3>Candidates left out</h3><ul>{view.hidden.slice(0, 12).map((h) => <li key={h.entityId}>{h.label}: {h.reason}</li>)}</ul><p className="muted small">Ask “why isn't X shown?” about any of them.</p></section>}
+            </div>
+          )}
         </footer>
       </main>
 

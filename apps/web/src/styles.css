@@ -41,7 +41,13 @@ button.link { background: none; border: none; color: var(--accent); padding: 0 4
 .caption { padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .stage { position: relative; flex: 1; min-height: 0; } .canvas { position: absolute; inset: 0; }
 .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); pointer-events: none; }
-footer { padding: 8px 16px; border-top: 1px solid var(--line); background: var(--panel); font-size: 12px; }
+footer { padding: 8px 16px; border-top: 1px solid var(--line); background: var(--panel); font-size: 12px; position: relative; }
+/* Gaps and left-out candidates open above the footer, out of flow, so the canvas keeps its height (#52). */
+.footer-toggle { padding: 0 4px; }
+.footer-panel { position: absolute; bottom: 100%; left: 16px; right: 16px; max-height: 42vh; overflow: auto; overscroll-behavior: contain; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 -8px 24px rgba(0, 0, 0, .22); padding: 10px 14px; }
+.footer-panel h3 { margin: 0 0 4px; }
+.footer-panel section + section { margin-top: 10px; }
+.footer-panel ul { margin: 0 0 4px; padding-left: 18px; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 18px; }
 .banner { padding: 8px 16px; font-size: 13px; border-bottom: 1px solid var(--line); }
 .banner.error { background: color-mix(in srgb, var(--warn) 14%, var(--panel)); color: var(--warn); }
