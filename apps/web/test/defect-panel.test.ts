@@ -1,6 +1,8 @@
 // The findings list machinery is pure and tested here: identity per row, filters, grouping,
 // virtualized windowing and honest severity counts. The React shell around it is not rendered by tests.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import type { DetectorFinding, ResolvedEvidence, Severity } from "@cie/schema";
 import { filterFindings, flatten, groupByFile, plural, rowLabel, severityCounts, cumulative, truncateMiddle, windowByOffsets, windowOf, type ListOptions, type TriageStatus } from "../src/defect-list.ts";
@@ -101,4 +103,13 @@ test("mixed-height windowing: windowByOffsets covers the viewport plus overscan 
 test("plural reads like a person wrote it", () => {
   assert.equal(plural(1, "piece of evidence"), "1 piece of evidence");
   assert.equal(plural(3, "piece of evidence", "pieces of evidence"), "3 pieces of evidence");
+});
+
+test("the empty state is a row-shaped block inside the list column, inset like the rows", () => {
+  const css = readFileSync(join(import.meta.dirname, "../src/styles.css"), "utf8");
+  assert.match(css, /\.d-empty \{[^}]*padding: 10px 8px 10px 6px/, "the empty state has the rows' inset");
+  assert.match(css, /\.d-empty \{[^}]*overflow-wrap: anywhere/, "long text wraps inside the column");
+  assert.match(css, /\.d-list \{[^}]*min-width: 0/, "the list column can shrink instead of overflowing");
+  const panel = readFileSync(join(import.meta.dirname, "../src/DefectPanel.tsx"), "utf8");
+  assert.equal([...panel.matchAll(/<div className="d-empty">/g)].length, 2, "both empty states use the class");
 });

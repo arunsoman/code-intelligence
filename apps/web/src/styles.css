@@ -235,8 +235,8 @@ ul.gallery li { border: 1px solid var(--line); border-radius: 8px; padding: 10px
 .d-status { flex: none; font-size: 10.5px; padding: 2px 6px; border-radius: 999px; border: 1px dashed var(--line); color: var(--muted); }
 .d-status.s-dismissed { opacity: .8; }
 .d-body { flex: 1; display: grid; grid-template-columns: minmax(320px, 340px) minmax(0, 1fr); min-height: 0; }
-.d-list-wrap { position: relative; border-right: 1px solid var(--line); min-height: 0; display: flex; }
-.d-list { width: 100%; overflow: auto; overscroll-behavior: contain; }
+.d-list-wrap { position: relative; border-right: 1px solid var(--line); min-height: 0; display: flex; min-width: 0; }
+.d-list { width: 100%; overflow: auto; overscroll-behavior: contain; min-width: 0; }
 .d-group { display: flex; align-items: center; gap: 6px; padding: 0 8px; border-bottom: 1px solid var(--line); background: var(--bg); position: sticky; top: 0; z-index: 2; }
 .d-group-toggle { flex: 1; display: flex; align-items: center; gap: 6px; border: none; background: none; color: var(--ink); padding: 4px 2px; font: inherit; font-size: 12.5px; cursor: pointer; text-align: left; min-width: 0; }
 .d-group-toggle > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -247,6 +247,8 @@ ul.gallery li { border: 1px solid var(--line); border-radius: 8px; padding: 10px
 .d-row { display: flex; align-items: center; gap: 8px; padding: 0 8px 0 6px; cursor: pointer; border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent); font-size: 12.8px; }
 .d-row:hover { background: color-mix(in srgb, var(--accent) 7%, var(--panel)); }
 .d-row.on { background: color-mix(in srgb, var(--accent) 16%, var(--panel)); box-shadow: inset 3px 0 0 var(--accent); }
+/* The empty state is a row-shaped block, not bare text: the same inset as .d-row, and it wraps inside the column. */
+.d-empty { padding: 10px 8px 10px 6px; color: var(--muted); font-size: 12.8px; line-height: 1.45; max-width: 100%; overflow-wrap: anywhere; }
 .d-row.dim { opacity: .55; }
 .d-row .d-where { flex: none; color: var(--muted); min-width: 96px; text-align: right; font-size: 11.5px; }
 .d-row .d-kind { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
