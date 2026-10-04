@@ -461,10 +461,13 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>, base: Option<&BaseRe
         if r.rel.ends_with(".go") && !r.rel.ends_with("_test.go") { let d = &segs[..segs.len() - 1]; for k in 0..d.len() { go_dir_by_suffix.entry(d[k..].join("/")).or_insert(i); } }
     }
 
-    let mut rel_ids: HashMap<String, ()> = batch.relationships.iter().map(|r| (r.id.clone(), ())).collect();
+    let mut rel_ids: HashMap<String, usize> = batch.relationships.iter().enumerate().map(|(i, r)| (r.id.clone(), i)).collect();
     let mut add_rel = |batch: &mut AnalysisBatch, r: Relationship| {
-        if rel_ids.insert(r.id.clone(), ()).is_none() {
-            batch.relationships.push(r);
+        // The same edge can be emitted once per call site. The store keeps only the first row for an id, so
+        // merge the evidence into the row already held instead of dropping it (evidence ids are content-addressed).
+        match rel_ids.get(&r.id).copied() {
+            Some(i) => { let existing = &mut batch.relationships[i]; for ev in r.evidence { if !existing.evidence.iter().any(|e| e.id == ev.id) { existing.evidence.push(ev); } } }
+            None => { rel_ids.insert(r.id.clone(), batch.relationships.len()); batch.relationships.push(r); }
         }
     };
 
@@ -764,15 +767,42 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>, base: Option<&BaseRe
         });
     }
     let t_shard = std::time::Instant::now();
+    merge_duplicate_rows(&mut batch);
     shard(&mut batch, base);
     timing("shard digests + delta", t_shard);
     timing("total index_repo", t_all);
     Ok(batch)
 }
 
+/// Rows with the same id are one row: the same edge seen from two call sites, or the same fact emitted twice.
+/// Their evidence is merged, deduplicated by content-addressed evidence id; the store keeps only the first
+/// row it is given for an id, so any evidence dropped here would be lost from views and claim cards.
+fn merge_duplicate_rows(batch: &mut AnalysisBatch) {
+    fn merge_evidence(into: &mut Vec<EvidenceRef>, extra: Vec<EvidenceRef>) {
+        for ev in extra { if !into.iter().any(|e| e.id == ev.id) { into.push(ev); } }
+    }
+    let mut rel_index: HashMap<String, usize> = HashMap::new();
+    let mut rels: Vec<Relationship> = Vec::with_capacity(batch.relationships.len());
+    for r in batch.relationships.drain(..) {
+        match rel_index.get(&r.id).copied() {
+            Some(i) => merge_evidence(&mut rels[i].evidence, r.evidence),
+            None => { rel_index.insert(r.id.clone(), rels.len()); rels.push(r); }
+        }
+    }
+    batch.relationships = rels;
+    let mut fact_index: HashMap<String, usize> = HashMap::new();
+    let mut facts: Vec<Fact> = Vec::with_capacity(batch.facts.len());
+    for f in batch.facts.drain(..) {
+        match fact_index.get(&f.id).copied() {
+            Some(i) => merge_evidence(&mut facts[i].evidence, f.evidence),
+            None => { fact_index.insert(f.id.clone(), facts.len()); facts.push(f); }
+        }
+    }
+    batch.facts = facts;
+}
+
 struct History {
-    commits: usize,
-    last_commit: String,
+    commits: usize,    last_commit: String,
     last_author: String,
     last_date: String,
     last_subject: String,
