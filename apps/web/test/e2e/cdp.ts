@@ -1,7 +1,7 @@
 // A very small Chrome DevTools Protocol driver (no dependencies): enough to open a page, press keys, and read what a person (or a
 // screen reader's accessibility tree) would see. Only keyboard input is exposed on purpose: the tests that use it cannot cheat with a mouse.
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,6 +10,7 @@ type Pending = { resolve: (v: any) => void; reject: (e: Error) => void };
 
 export class Browser {
   private proc!: ChildProcess;
+  private profile = "";
   private ws!: WebSocket;
   private id = 0;
   private pending = new Map<number, Pending>();
@@ -20,7 +21,8 @@ export class Browser {
   static async launch(): Promise<Browser> {
     const b = new Browser();
     const port = 9300 + Math.floor(Math.random() * 600);
-    b.proc = spawn(CHROME, ["--headless=new", `--remote-debugging-port=${port}`, `--user-data-dir=${mkdtempSync(join(tmpdir(), "cie-chrome-"))}`, "--no-sandbox", "--disable-gpu", "--window-size=1400,900", "--no-first-run", "about:blank"], { stdio: "ignore" });
+    b.profile = mkdtempSync(join(tmpdir(), "cie-chrome-"));
+    b.proc = spawn(CHROME, ["--headless=new", `--remote-debugging-port=${port}`, `--user-data-dir=${b.profile}`, "--no-sandbox", "--disable-gpu", "--window-size=1400,900", "--no-first-run", "about:blank"], { stdio: "ignore" });
     let version: any = null;
     for (let i = 0; i < 100 && !version; i++) { try { version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json(); } catch { await new Promise((r) => setTimeout(r, 100)); } }
     if (!version) { b.proc.kill(); throw new Error("Chrome did not start"); }
@@ -75,5 +77,12 @@ export class Browser {
     const { nodes } = await this.send("Accessibility.getFullAXTree");
     return nodes.filter((n: any) => !n.ignored).map((n: any) => `${n.role?.value ?? ""}: ${n.name?.value ?? ""}`.trim());
   }
-  close() { try { this.ws.close(); } catch { /* closed */ } this.proc.kill("SIGKILL"); }
+  // The profile directory is 20 to 130 MB per run; without this every test run left one behind in /tmp until the disk was full.
+  close() {
+    try { this.ws.close(); } catch { /* closed */ }
+    const remove = () => { try { rmSync(this.profile, { recursive: true, force: true }); } catch { /* best effort */ } };
+    this.proc.once("exit", remove);
+    this.proc.kill("SIGKILL");
+    setTimeout(remove, 1500).unref();
+  }
 }
