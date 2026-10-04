@@ -76,7 +76,10 @@ const TAB_TIPS: Record<Tab, string> = {
 };
 const statusKind = (s: string): "fact" | "inference" | "warn" | "hyp" => (["RESOLVED", "HEALTHY", "EVALUATED", "ALARM", "CONFIRMED", "SUPPORTED"].includes(s) ? "fact" : ["ABSENT", "CONFLICTING", "EXPIRED", "REVERSED", "UNMEASURED_MODEL", "NEVER_EVALUATED", "UNREACHABLE"].includes(s) ? "warn" : ["AMBIGUOUS", "PARTIAL", "RATE_LIMITED", "PROPOSED", "DISPUTED", "CANDIDATE"].includes(s) ? "hyp" : "inference");
 
-export function InsightsPanel({ revision, view, onClose, onAsk }: { revision: string; view: ViewSpec | null; onClose: () => void; onAsk?: (question: string) => void }) {
+export function InsightsPanel({ revision: openedRevision, view, onClose, onAsk, onReindexed }: { revision: string; view: ViewSpec | null; onClose: () => void; onAsk?: (question: string) => void; onReindexed?: () => void }) {
+  // The drawer shows the revision it was opened on; a re-index started here must not move it under the user. App is
+  // told so it can refresh and hand the new revision to the *next* opening, which is what "close and reopen" means.
+  const [revision] = useState(openedRevision);
   const [tab, setTab] = useState<Tab>("security");
   const [width, setWidth] = useState(() => loadWidth());
   const [maximized, setMaximized] = useState(false);
@@ -99,11 +102,11 @@ export function InsightsPanel({ revision, view, onClose, onAsk }: { revision: st
     const poll = setInterval(async () => {
       const j = await call<JobView>("C07", "getJob", { jobId: reindex.jobId });
       if (!j.ok) return;
-      if (j.value.state === "SUCCEEDED") setReindex({ phase: "done", note: "New index ready — close and reopen to view it." });
+      if (j.value.state === "SUCCEEDED") { onReindexed?.(); setReindex({ phase: "done", note: "New index ready — close and reopen to view it." }); }
       else if (j.value.state === "FAILED") setReindex({ phase: "failed", note: `Re-index failed: ${j.value.error?.message ?? j.value.message}` });
     }, 700);
     return () => clearInterval(poll);
-  }, [reindex.phase, reindex.jobId]);
+  }, [reindex.phase, reindex.jobId, onReindexed]);
   const startReindex = async () => {
     if (!meta || reindex.phase === "busy") return;
     const note = "Indexing… the drawer keeps the commit it was opened on until you reopen it.";

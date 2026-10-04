@@ -488,7 +488,7 @@ export function App() {
         {campaignsOpen && <CampaignPanel onClose={() => setCampaignsOpen(false)} />}
         {searchOpen && repoPath && <SearchPanel repoPath={repoPath} revision={revision} onClose={() => setSearchOpen(false)} />}
         {hotspotsOpen && repoPath && <HotspotPanel repoPath={repoPath} revision={revision} onClose={() => setHotspotsOpen(false)} />}
-        {insightsOpen && revision && <InsightsPanel revision={revision} view={view} onClose={() => setInsightsOpen(false)} onAsk={askFromInsights} />}
+        {insightsOpen && revision && <InsightsPanel revision={revision} view={view} onClose={() => setInsightsOpen(false)} onAsk={askFromInsights} onReindexed={refresh} />}
         {investigationsOpen && revision && <InvestigationPanel key={`${revision}:${ws.id ?? "repo"}`} revision={revision} workspaceId={ws.id ?? `repo:${info?.revision?.repoRoot ?? repoPath}`} initialQuestion={view?.question ?? ""} entityRefs={[...new Set(selection.flatMap((id) => nodeById.get(id)?.entityRefs ?? []))]} onClose={() => setInvestigationsOpen(false)} />}
         <h1>Code Intelligence</h1>
         <span className="chip" title="Model provider">{providerShort}{info?.hosted ? " · hosted" : ""}</span>
