@@ -1,0 +1,14 @@
+{
+  "nodes": [
+    { "id": 1, "callFrame": { "functionName": "(root)", "url": "", "lineNumber": 0, "columnNumber": 0 }, "children": [2] },
+    { "id": 2, "callFrame": { "functionName": "main", "url": "src/app.ts", "lineNumber": 10, "columnNumber": 0 }, "children": [3, 4, 5] },
+    { "id": 3, "callFrame": { "functionName": "computeTax", "url": "src/tax/rules.ts", "lineNumber": 88, "columnNumber": 0 }, "children": [] },
+    { "id": 4, "callFrame": { "functionName": "JSON.stringify", "url": "runtime", "lineNumber": 0, "columnNumber": 0 }, "children": [] },
+    { "id": 5, "callFrame": { "functionName": "db.query", "url": "src/db.ts", "lineNumber": 21, "columnNumber": 0 }, "children": [] }
+  ],
+  "samples": [3, 3, 3, 4, 5, 3, 4, 3, 5, 4],
+  "timeDeltas": [1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000],
+  "startTime": 1000,
+  "endTime": 11000,
+  "sampleInterval": 1000
+}

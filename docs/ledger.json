@@ -21,7 +21,14 @@
     "tests": [
      "stale and reordered events are dropped, not applied over newer ones",
      "events are sequenced per session, lines become 1-based",
-     "I-17\u2026I-20: code and runtime events"
+     "I-17…I-20: code and runtime events"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "cross-repository search panel: keyboard operable, spoken coverage (F01-D9/D10)",
+    "tests": [
+     "search: Ctrl+K opens it, results are a keyboard-driven listbox, coverage and counts are spoken (F01-D9/D10)"
     ],
     "state": "done"
    }
@@ -116,6 +123,13 @@
      "webhook replay: only a correctly signed"
     ],
     "state": "done"
+   },
+   {
+    "item": "search index builds ride the ingest pipeline (bounded, honest when a file is lost)",
+    "tests": [
+     "F01-A4 (honesty): a build whose file vanished answers PARTIAL and names it in warnings, never silently"
+    ],
+    "state": "done"
    }
   ]
  },
@@ -153,6 +167,20 @@
     "tests": [
      "incremental vs clean-index equivalence",
      "incremental vs clean index across Java, Go and Python"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "F01 navigation: resolveDefinition and findReferences against the compiler as oracle",
+    "tests": [
+     "F01-A1: references and definitions match the TypeScript compiler for supported constructs"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "re-export chains are bounded and the cut is disclosed (F01-D5)",
+    "tests": [
+     "F01-D5: a re-export chain five deep is followed four hops and the cut is disclosed"
     ],
     "state": "done"
    }
@@ -214,6 +242,14 @@
      "incremental indexing is exact for Java, Go and Python too",
      "a base that cannot be built on is never trusted",
      "a delta that does not add up is rolled back whole"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "F01-A4 fenced publish: superseded builds publish nothing; generations are idempotent",
+    "tests": [
+     "F01-A4: a snapshot is fenced — an interrupted build publishes nothing, a superseded run publishes only the current revision, and a republish keeps the generation",
+     "F01-A4 (rows only from fenced outcomes): a built revision writes exactly one publish row"
     ],
     "state": "done"
    }
@@ -297,6 +333,14 @@
      "C09: projections are reproducible"
     ],
     "state": "done"
+   },
+   {
+    "item": "revocation removes search rows and invalidates cursors (F01-D6); identical content stored once (F01-D8)",
+    "tests": [
+     "F01-D6: revoking a repository removes its rows and invalidates a held cursor",
+     "F01-D8: identical content is stored once, and a caller without the other repository sees only its own paths"
+    ],
+    "state": "done"
    }
   ]
  },
@@ -335,6 +379,36 @@
     "item": "token-budget truncation disclosures",
     "tests": [
      "C10: token-budget truncation"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "cross-repository search: tiers, modes, bounds and honest zero-hit answers",
+    "tests": [
+     "literal text search answers with location, snippet and the match's words",
+     "AUTO treats a bare identifier as symbol search plus text, a query with a dot stays text",
+     "an occurrence inside a string or comment is labelled, not passed off as a use",
+     "short queries answer with an explicit scan-limited disclosure",
+     "a hit page cap discloses continuation instead of silently dropping rows",
+     "regex alternation runs in the worker engine (F01 decision D1); unsupported constructs are rejected by name (D2); pathological patterns terminate (D3)",
+     "D7: a zero-hit answer distinguishes fully indexed from a repository still missing",
+     "cursor pagination: pages are disjoint, an alien cursor and a changed policy are refused (D1 seed)",
+     "path globs: restricted globs work, {a,b} is refused rather than approximated"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "F01-A5 cross-repository edges: counted when invisible, named when resolvable",
+    "tests": [
+     "F01-A5: cross-repository dependencies are disclosed, a version mismatch is named, invisible providers are counted not named"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "F01-A2 identical names across repositories never merge",
+    "tests": [
+     "F01-A2: identical names in two repositories never merge — definitions, references and scopes stay disjoint",
+     "A2 (scope collision): three same-named symbols in one repository are three hits; an unbound use lists all and picks none"
     ],
     "state": "done"
    }
@@ -706,7 +780,7 @@
   "title": "Canvas, layout and visualization forms",
   "items": [
    {
-    "item": "Forms V1\u2013V15 contracts",
+    "item": "Forms V1–V15 contracts",
     "tests": [
      "every form at every level: no node overlaps",
      "form-plugin conformance: every registered form"
@@ -750,10 +824,10 @@
   "title": "Interaction and referent resolver",
   "items": [
    {
-    "item": "I-01\u2026I-20 catalogues",
+    "item": "I-01…I-20 catalogues",
     "tests": [
      "interaction catalogue I-01",
-     "I-17\u2026I-20: code and runtime"
+     "I-17…I-20: code and runtime"
     ],
     "state": "done"
    },
@@ -839,140 +913,140 @@
     "state": "done"
    },
    {
-    "item": "H02 (design \u00a718)",
+    "item": "H02 (design §18)",
     "tests": [
      "H02: ten descriptions of one trace are o"
     ],
     "state": "done"
    },
    {
-    "item": "H03 (design \u00a718)",
+    "item": "H03 (design §18)",
     "tests": [
      "H03: a missing log line under sampling i"
     ],
     "state": "done"
    },
    {
-    "item": "H04 (design \u00a718)",
+    "item": "H04 (design §18)",
     "tests": [
      "H04: complete predicate coverage that co"
     ],
     "state": "done"
    },
    {
-    "item": "H07 (design \u00a718)",
+    "item": "H07 (design §18)",
     "tests": [
      "H07: unsupported entity or evidence ids "
     ],
     "state": "done"
    },
    {
-    "item": "H09 (design \u00a718)",
+    "item": "H09 (design §18)",
     "tests": [
      "H09: two advances of the same version: o"
     ],
     "state": "done"
    },
    {
-    "item": "H10 (design \u00a718)",
+    "item": "H10 (design §18)",
     "tests": [
      "H10: pausing or cancelling while a read "
     ],
     "state": "done"
    },
    {
-    "item": "H13 (design \u00a718)",
+    "item": "H13 (design §18)",
     "tests": [
      "H13: a late result from an expired lease"
     ],
     "state": "done"
    },
    {
-    "item": "H14 (design \u00a718)",
+    "item": "H14 (design §18)",
     "tests": [
      "H14: revoking access mid-run stops dispa"
     ],
     "state": "done"
    },
    {
-    "item": "H15 (design \u00a718)",
+    "item": "H15 (design §18)",
     "tests": [
      "H15: when the code a conclusion rests on"
     ],
     "state": "done"
    },
    {
-    "item": "H17 (design \u00a718)",
+    "item": "H17 (design §18)",
     "tests": [
      "H17: duplicated, reordered and retracted"
     ],
     "state": "done"
    },
    {
-    "item": "H18 (design \u00a718)",
+    "item": "H18 (design §18)",
     "tests": [
      "H18: a runtime event with no code attrib"
     ],
     "state": "done"
    },
    {
-    "item": "H20 (design \u00a718)",
+    "item": "H20 (design §18)",
     "tests": [
      "H20: a human confirmation that disagrees"
     ],
     "state": "done"
    },
    {
-    "item": "H21 (design \u00a718)",
+    "item": "H21 (design §18)",
     "tests": [
      "H21: after retention removes old events,"
     ],
     "state": "done"
    },
    {
-    "item": "H22 (design \u00a718)",
+    "item": "H22 (design §18)",
     "tests": [
      "H22: after deletion nothing private can "
     ],
     "state": "done"
    },
    {
-    "item": "H23 (design \u00a718)",
+    "item": "H23 (design §18)",
     "tests": [
      "H23: a board update never moves the came"
     ],
     "state": "done"
    },
    {
-    "item": "H24 (design \u00a718)",
+    "item": "H24 (design §18)",
     "tests": [
      "H24: a visible experiment proposal is no"
     ],
     "state": "done"
    },
    {
-    "item": "H25 (design \u00a718)",
+    "item": "H25 (design §18)",
     "tests": [
      "H25: calibration is explicitly absent un"
     ],
     "state": "done"
    },
    {
-    "item": "H26 (design \u00a718)",
+    "item": "H26 (design §18)",
     "tests": [
      "H26: a universal goal gets bounded cover"
     ],
     "state": "done"
    },
    {
-    "item": "H27 (design \u00a718)",
+    "item": "H27 (design §18)",
     "tests": [
      "H27: an investigation step cannot start "
     ],
     "state": "done"
    },
    {
-    "item": "H28 (design \u00a718)",
+    "item": "H28 (design §18)",
     "tests": [
      "H28: a finalized investigation that rece"
     ],
@@ -1072,8 +1146,8 @@
     "item": "Phase 0 (causality v2 extension): scope register with corrected baseline",
     "tests": [
      "RC11 property: reconciling the same proposal set under 120 permutations yields the identical outcome, and every quarantined edge retains its conflict report",
-     "RC11 oracle: quarantined membership agrees with an independent Floyd\u2013Warshall cycle computation",
-     "RC03: a smaller Lamport stamp and an earlier wall clock imply nothing without a path \u2014 UNKNOWN, and never certified concurrent",
+     "RC11 oracle: quarantined membership agrees with an independent Floyd–Warshall cycle computation",
+     "RC03: a smaller Lamport stamp and an earlier wall clock imply nothing without a path — UNKNOWN, and never certified concurrent",
      "RC04: no path in a sampled region is UNKNOWN, never CONCURRENT_CERTIFIED; a valid certificate covering both endpoints is required",
      "RC15: nested and overlapping durations are not summed; uncovered time stays unexplained",
      "RC15 oracle: covered totals agree with an independent integer-grid scan across re-segmentations",
@@ -1082,7 +1156,7 @@
      "checker mutation: summing instead of unioning is caught by the no-double-count property",
      "permitted: an execution-relation claim with trusted adapter evidence grounds and stays a relation-level claim",
      "prohibited (RC26): a relation-level assertion must not display as fact, and a model-authored one never becomes FACT",
-     "prohibited (RC27/RC28): execution evidence alone must never reach INTERVENTION_SUPPORTED \u2014 no experiment ids, scope-mismatched one blocks",
+     "prohibited (RC27/RC28): execution evidence alone must never reach INTERVENTION_SUPPORTED — no experiment ids, scope-mismatched one blocks",
      "permitted: an intervention claim wired to a real experiment report id grounds (through the gates) and is scoped in its assertion",
      "prohibited (RC28): a confounded before/after comparison stays observational",
      "corpus: all 28 acceptance ids present, exactly once, with class and derivation recorded",
@@ -1104,25 +1178,25 @@
    {
     "item": "Runtime causality v2 phase-1 (engine + gateway, observed fixture behavior)",
     "tests": [
-     "RC01: exact RPC send/receive with skewed clocks \u2014 trusted relation retained, contradiction disclosed",
-     "RC06: retry/redelivery/batch \u2014 attempt-aware lineage, batch is many-to-one, no exactly-once claim",
+     "RC01: exact RPC send/receive with skewed clocks — trusted relation retained, contradiction disclosed",
+     "RC06: retry/redelivery/batch — attempt-aware lineage, batch is many-to-one, no exactly-once claim",
      "RC08: PID/task/lock/trace reuse across process epochs is quarantined with a reason, not merged",
-     "RC10: unknown clock bounds \u2014 no precise cross-host latency claim",
+     "RC10: unknown clock bounds — no precise cross-host latency claim",
      "RC12: a legitimate wait-cycle is analyzed in the wait layer with escape conditions, never quarantined as ordering",
      "RC13: sampled CPU stacks are attribution only; no task ordering is fabricated from samples",
-     "RC14: missing spans/retention/drop \u2014 material gaps; absence-based exoneration is blocked",
+     "RC14: missing spans/retention/drop — material gaps; absence-based exoneration is blocked",
      "RC15: nested/overlapping operations are unioned, never summed (engine-level path accounting)",
      "RC17: a source correction invalidates dependent edges and marks claims stale before refresh",
-     "RC22: crash between source cursor, projection and outbox \u2014 dedup and durable replay; no mixed snapshot",
-     "RC23: revoked source / deleted raw handle \u2014 restricted reports, no historic payload recovery",
+     "RC22: crash between source cursor, projection and outbox — dedup and durable replay; no mixed snapshot",
+     "RC23: revoked source / deleted raw handle — restricted reports, no historic payload recovery",
      "RC24: a late event after a finalized watermark produces a versioned correction, never silent folding",
      "contract: stale expectedSourceVersion is refused as a version conflict, marked retryable",
-     "contract: the v1 C24 catalogue surfaces unchanged attributes beside the v2 catalogue (v1 preserved, \u00a712)"
+     "contract: the v1 C24 catalogue surfaces unchanged attributes beside the v2 catalogue (v1 preserved, §12)"
     ],
     "state": "done"
    },
    {
-    "item": "Runtime causality v2 \u2014 independent fixture review + real-adapter evidence",
+    "item": "Runtime causality v2 — independent fixture review + real-adapter evidence",
     "tests": [],
     "state": "blocked",
     "needs": "independent human review (or independent authorship) of the 28-fixture corpus; real-adapter coverage (OTLP collector/broker/scheduler/pool/lock/profiler/deployment pipeline) deferred per D1 default; full-suite evidence re-taken after the concurrent router refactor lands"

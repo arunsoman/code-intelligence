@@ -1,0 +1,6 @@
+main;computeTax;parseRules 12
+main;computeTax;evaluateRule 8
+main;JSON.stringify 5
+main;matchRegion;lookup 4
+main;db.query 2
+runtime;gc 3

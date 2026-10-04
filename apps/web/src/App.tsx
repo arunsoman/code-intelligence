@@ -13,6 +13,8 @@ import { JobBar } from "./JobBar.tsx";
 import { VisualsGallery, type CatalogEntry } from "./VisualsGallery.tsx";
 import { FolderPicker } from "./FolderPicker.tsx";
 import { DefectPanel } from "./DefectPanel.tsx";
+import { PrPanel } from "./PrPanel.tsx";
+import { SearchPanel } from "./SearchPanel.tsx";
 import { InsightsPanel } from "./InsightsPanel.tsx";
 import { InvestigationPanel } from "./InvestigationPanel.tsx";
 import { overlayMarks } from "./mapoverlays.ts";
@@ -72,6 +74,8 @@ export function App() {
   const [fitTick, setFitTick] = useState(0);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [defectsOpen, setDefectsOpen] = useState(false);
+  const [prOpen, setPrOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
   const [chatSeed, setChatSeed] = useState<{ text: string; n: number } | null>(null);
   /** "Ask about this finding" (UX-57): close the drawer, fill the composer, put the focus there. */
@@ -100,6 +104,15 @@ export function App() {
     if (l.ok) setWorkspaces(l.value);
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
+
+  // F01: Ctrl/Cmd+K opens cross-repository search from anywhere in the app.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && !e.defaultPrevented) { e.preventDefault(); setSearchOpen(true); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Editor context (VS Code extension): what you are looking at becomes an offered referent. Polled lightly; harmless if no editor is connected.
   const editorRev = info?.revision?.id;
@@ -435,6 +448,8 @@ export function App() {
       )}
       <header>
         {defectsOpen && revision && <DefectPanel revision={revision} onClose={() => setDefectsOpen(false)} />}
+        {prOpen && repoPath && <PrPanel repoPath={repoPath} onClose={() => setPrOpen(false)} />}
+        {searchOpen && repoPath && <SearchPanel repoPath={repoPath} revision={revision} onClose={() => setSearchOpen(false)} />}
         {insightsOpen && revision && <InsightsPanel revision={revision} view={view} onClose={() => setInsightsOpen(false)} onAsk={askFromInsights} />}
         {investigationsOpen && revision && <InvestigationPanel key={`${revision}:${ws.id ?? "repo"}`} revision={revision} workspaceId={ws.id ?? `repo:${info?.revision?.repoRoot ?? repoPath}`} initialQuestion={view?.question ?? ""} entityRefs={[...new Set(selection.flatMap((id) => nodeById.get(id)?.entityRefs ?? []))]} onClose={() => setInvestigationsOpen(false)} />}
         <h1>Code Intelligence</h1>
@@ -443,8 +458,10 @@ export function App() {
         {info && info.concepts > 0 && <span className="chip">{info.concepts} concept cards</span>}
         {info?.tests && <span className="chip" title={`Loaded from ${info.tests.found.join(", ")}${info.tests.staleness.length ? `. ${info.tests.staleness.join("; ")}` : ""}`}>tests: {info.tests.tests.passed} pass · {info.tests.tests.failed} fail{info.tests.coverageLinePercent !== null ? ` · ${info.tests.coverageLinePercent}% covered` : ""}{info.tests.staleness.length ? " ⚠" : ""}</span>}
         {busy && <span className="chip busy" role="status">{busy}</span>}
-        <button className="secondary small push" onClick={() => setGalleryOpen(true)}>Visuals</button>
+        <button className="secondary small push" accessKey="k" title="Cross-repository search (Ctrl+K): revision-bound text, symbol and regex search, then jump to definitions and references" aria-keyshortcuts="Ctrl+K" onClick={() => setSearchOpen(true)}>Search</button>
+        <button className="secondary small" onClick={() => setGalleryOpen(true)}>Visuals</button>
         <button className="secondary small" disabled={!revision} onClick={() => setDefectsOpen(true)}>Defects</button>
+        <button className="secondary small" onClick={() => setPrOpen(true)} title="Analyse a pull request: changed-code findings, the quality gate, and publishing its status to GitHub">Pull requests</button>
         <button className="secondary small" disabled={!revision} onClick={() => setInsightsOpen(true)}>Insights</button>
         <button className="secondary small" disabled={!revision} onClick={() => setInvestigationsOpen(true)}>Investigations</button>
         <button className="link" onClick={openAudit}>Audit log</button>

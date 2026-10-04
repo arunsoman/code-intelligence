@@ -1,6 +1,6 @@
 // Orchestration. Public operations return ApiResult (contracts §1). Every model call goes through callModel,
 // which enforces the per-repository egress opt-in, scrubs secrets, and writes the audit trail.
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -25,6 +25,10 @@ import { History } from "./history.ts";
 import { Runtime } from "./runtime.ts";
 import { mapOverlays } from "./overlays.ts";
 import { Security } from "./security.ts";
+import { PrAnalysis, PrCheckError, resolvePr, type PrRef } from "./pr-analysis.ts";
+import { GitHubCheckPublisher, newGrant } from "./pr-publish.ts";
+import { githubRemote } from "./gh.ts";
+import type { PrAnalysisView } from "@cie/schema";
 import { projectProfile } from "./profile.ts";
 import { Registry } from "./registry.ts";
 import { WorkspaceLog } from "./workspaces.ts";
@@ -44,6 +48,7 @@ import { backup as backupStore, deleteRepository as deleteRepo, gc as gcStore, t
 import { API_VERSION, MIN_EXTENSION, health as healthOf, restoreDrill, type Health, type RestoreDrill } from "./ops.ts";
 import { EventBus } from "./events.ts";
 import { buildExport, ExportError, ExportStore, Notifications, type ExportArtifact } from "./exports.ts";
+import { SearchEngine, type ApiFail } from "./search.ts";
 import { ChangeEngine, ChangeError, type ChangeProposal, type DragResult, type Intent } from "./changes.ts";
 import { compareScenarios, evaluateScenario, ScenarioError, type AssumptionInput, type CapacityData, type Scenario, type ScenarioResult } from "./scenarios.ts";
 import { policyFor } from "./access.ts";
@@ -63,6 +68,7 @@ import { DefectDetectionInputSchema } from "@cie/schema";
 import { DefectError, DefectWorkflow } from "./defect-workflow.ts";
 import { detectIndexedDefects } from "./defect-indexed.ts";
 import { artifactHash } from "./defect-schedule.ts";
+import { Profiling } from "./profiling.ts";
 
 const chunkTokenBudget = () => Number(process.env.CIE_CHUNK_TOKEN_BUDGET) || 60_000; // per concept-extraction request; the gateway hard limit is 200k
 
@@ -114,12 +120,17 @@ export class Service {
   readonly journal: Journal;
   readonly store: Store;
   readonly jobs: JobRunner;
+  /** F02: the PR-analysis engine (§6.1) and its GitHub status publisher (§7.12). */
+  readonly pr: PrAnalysis;
+  readonly prPublisher: GitHubCheckPublisher;
   readonly bus: EventBus;
   readonly c22: InvestigationEngine;
   /** C24 causality v2: execution-reconstruction engine. */
   readonly c24: CausalityEngine;
   readonly changes: ChangeEngine;
   readonly notifications: Notifications;
+  /** F01: repository registry, text/symbol index and the query paths built on it (search.ts). */
+  readonly search: SearchEngine;
   private readonly exportStore: ExportStore;
   readonly defects: DefectWorkflow;
   /** What turns text into vectors for semantic retrieval. The default is local and deterministic; see embeddings.ts. */
@@ -147,6 +158,8 @@ export class Service {
   readonly runtime: Runtime;
   /** C25: security findings and the alarm gate. */
   readonly security: Security;
+  /** F05: trace-linked continuous profiling. */
+  readonly profiling: Profiling;
   /** C29: shared investigations and team knowledge. */
   readonly collab: Collab;
   /** C17: the evaluation registry. */
@@ -193,6 +206,14 @@ export class Service {
     "C29/handover": (c, b) => this.collabResult(c, this.collab.handover(c.actor.principalId, b)),
     "C29/confirmSharedConcept": (c, b) => this.collabResult(c, this.collab.confirmSharedConcept(c.actor.principalId, b)),
     "C29/conceptsFor": (c, b) => ok(c, this.collab.conceptsFor(c.actor.principalId, b.revision)),
+  };
+  /** F05 gateway operations for trace-linked continuous profiling. */
+  readonly profilingOps: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>> | ApiResult<unknown>> = {
+    "C04/ingestProfile": (c, b) => this.profiling.ingestProfile(c, b),
+    "C24/correlateProfile": (c, b) => this.profiling.correlateProfile(c, b),
+    "C26/queryHotspots": (c, b) => this.profiling.queryHotspots(c, b),
+    "C26/compareProfiles": (c, b) => this.profiling.compareProfiles(c, b),
+    "C19/buildFlamegraph": (c, b) => this.profiling.buildFlamegraph(c, b),
   };
   private collabResult(ctx: CallContext, r: { ok: true } | { ok: false; error: ApiError }): ApiResult<any> { return r.ok ? ok(ctx, r) : fail(ctx, r.error); }
   /** C25 gateway operations. */
@@ -246,6 +267,7 @@ export class Service {
     this.history = new History(store, this.registry);
     this.runtime = new Runtime(store, this.registry);
     this.security = new Security(store);
+    this.profiling = new Profiling(worker, store);
     this.indexer = new Indexer(this);
     this.evaluator = new Evaluator(store);
     this.workspaceLog = new WorkspaceLog(store, {
@@ -256,6 +278,8 @@ export class Service {
     this.collab = new Collab(store, this.workspaceLog);
     this.journal = new Journal(store);
     this.jobs = new JobRunner(store);
+    // F01: the cross-repository search engine shares the store (its own schema slice) and the worker (regex runs there).
+    this.search = new SearchEngine(store, () => this.worker);
     this.bus = new EventBus(store);
     // Model-backed seeding (design §20 step 3): hypothesis drafts come from the model gateway through the same
     // egress, scrubbing and budget path as every other model call. The proposers' output is registry-validated
@@ -271,6 +295,28 @@ export class Service {
       if (ev.topic === "c22.COMPLETION_RECORDED") this.notifications.publish({ eventId: ev.eventId, type: "investigation.completed", revision: null, summary: "An investigation was finalized.", links: { investigation: String(ev.payload.investigationId ?? "") } });
     });
     this.defects = new DefectWorkflow(store);
+    // F02: the PR-analysis engine. Its indexing reuses the exact C04 pipeline (same store, same worker);
+    // a pending status is publishable on receipt, before any heavy work has run (§7.12).
+    this.pr = new PrAnalysis(store, {
+      security: this.security, registry: this.registry, history: this.history,
+      indexRevision: async (repoPath, control) => {
+        const jctx: CallContext = { requestId: `req-pr-index:${randomUUID()}`, idempotencyKey: `pr-index:${repoPath}`, actor: { principalId: "system", tenantId: "local", sessionId: "system" }, deadlineMs: Date.now() + 900_000, traceId: `trace-pr:${randomUUID()}` };
+        const r = await this.ingestRepository(jctx, { repoPath }, control);
+        if (!r.ok) throw new PrCheckError((r.error.code === "NOT_FOUND" || r.error.code === "INVALID_SCHEMA" || r.error.code === "FORBIDDEN" || r.error.code === "STALE_REVISION" || r.error.code === "EVIDENCE_STALE" ? r.error.code : "NOT_FOUND"), r.error.message);
+        return { id: r.value.id, repoRoot: r.value.repoRoot };
+      },
+    }, { onPending: (analysisId, info) => this.prPendingPublication(analysisId, info) });
+    this.prPublisher = new GitHubCheckPublisher(store, this.pr);
+  }
+
+  /** A pending status, published through the same grant discipline; the local server acts as the trusted host. */
+  private async prPendingPublication(analysisId: string, info: { headHash: string; prNumber: number }) {
+    try {
+      const r = this.pr.row(analysisId) as { repository_id: string } | undefined;
+      if (!r) return;
+      const grant = newGrant(this.store, { repositoryId: r.repository_id, headHash: info.headHash, principalId: "system", pending: true, ttlMs: 120_000 });
+      await this.prPublisher.publish(grant.id, { repositoryId: r.repository_id, prNumber: info.prNumber, analysisId, headHash: info.headHash, principalId: "system" });
+    } catch { /* the publication row carries its own state and error; a pending failure never fails the analysis */ }
   }
 
   /** C26 Phase A is deliberately report-only: callers supply registered semantic facts for a pinned indexed revision. */
@@ -459,6 +505,7 @@ export class Service {
         const ghConn = ensureGhForgeConnector(this.store, row.repoRoot);
         if (ghConn) this.store.audit(actor(ctx), "source.gh.auto", row.repoRoot, { sourceId: ghConn.health().sourceId });
       } catch (e) { this.store.audit(actor(ctx), "source.gh.auto_failed", row.repoRoot, { error: String((e as Error).message).slice(0, 200) }); }
+      this.scheduleSearchIndex(row.repoRoot, row.id, ctx);
       return ok(ctx, { ...row, reuse, delta: { ...delta, phasesMs: phases } }, { revision: row.id, warnings, completeness: batch.diagnostics.some((d) => d.code !== "REUSED_CACHED_PARSES") ? "PARTIAL" : "COMPLETE" });
     } catch (e) {
       if (e instanceof Cancelled || (control && e instanceof WorkerError && e.api.code === "CANCELLED")) throw new Cancelled();
@@ -587,7 +634,10 @@ export class Service {
       for (const j of this.store.activeJobs()) if (j.params.repoPath === req.repoRoot) { const c = this.jobs.cancel(j.id); if (c?.cancelled) jobsCancelled++; }
       this.store.audit(actor(ctx), "source.revoke", "(source)", { investigations, jobsCancelled, purge: req.purge !== false });
       let rowsAfter = 0, purged = false;
-      if (req.purge !== false) { const d = deleteRepo(this.store, req.repoRoot, actor(ctx)); rowsAfter = d.rowsAfter; purged = true; }
+      if (req.purge !== false) {
+        try { const rid = this.search.repositoryOfRoot(req.repoRoot)?.repositoryId; if (rid) this.search.purgeRepository(rid); } catch (e) { this.store.audit(actor(ctx), "search.purge_failed", req.repoRoot, { error: String((e as Error).message).slice(0, 200) }); }
+        const d = deleteRepo(this.store, req.repoRoot, actor(ctx)); rowsAfter = d.rowsAfter; purged = true;
+      }
       return ok(ctx, { revoked: true, purged, investigations, jobsCancelled, rowsAfter });
     } catch (e) { return fail(ctx, storageFailure(e)); }
   }
@@ -596,6 +646,60 @@ export class Service {
     this.store.audit(actor(ctx), "source.grant", "(source)", {});
     return ok(ctx, { granted: true });
   }
+
+  // ---------------------------------------------------------------- F01 cross-repository search (search.ts)
+  /** Idempotent per revision: a worktree that did not change does not enqueue another build; priorities let the
+   *  caller's interactive build pass a backfill. Returns the job, or null when search is off for the deployment. */
+  private scheduleSearchIndex(repoRoot: string, revision: string, caller?: CallContext, priority = 10) {
+    if (!this.search.searchEnabled()) return null;
+    const jctx: CallContext = {
+      requestId: `req-search:${randomUUID()}`,
+      idempotencyKey: `search-index:${repoRoot}:${revision}`,
+      actor: caller?.actor ?? { principalId: "system", tenantId: "local", sessionId: "system" }, // a build job acts as the deployment, not a person
+      deadlineMs: Date.now() + 600_000, traceId: `trace-search:${randomUUID()}`,
+    };
+    return this.jobs.enqueue(jctx, {
+      kind: "search-index", priority, params: { repoPath: repoRoot },
+      run: async (jctx2) => {
+        try {
+          const r = await this.search.buildForRepository(repoRoot);
+          return ok(jctx2, r, { warnings: r.warnings, completeness: r.state === "SUPERSEDED" ? "PARTIAL" : "COMPLETE" });
+        } catch (e) { return fail(jctx2, storageFailure(e)); }
+      },
+    });
+  }
+  private async searchCall<T>(ctx: CallContext, fn: () => Promise<T | ApiFail> | T | ApiFail): Promise<ApiResult<T>> {
+    try {
+      const v = await fn();
+      if (v && (v as { ok?: boolean }).ok === false) return fail(ctx, (v as ApiFail).error);
+      return ok(ctx, v as T);
+    } catch (e) { return fail(ctx, storageFailure(e)); }
+  }
+  /** F01 gateway operations (§8). Only enqueueIndex mutates; the rest read revision-bound states. */
+  readonly searchOps: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>> | ApiResult<unknown>> = {
+    "C10/search": (c, b) => this.searchCall(c, () => this.search.search(c, b ?? {})),
+    "C04/listRepositories": (c, b) => ok(c, { repositories: this.search.listRepositories(c, b?.includeCoverage === true) }),
+    "C05/resolveDefinition": async (c, b) => {
+      const r = await this.searchCall(c, () => this.search.resolveDefinition(c, b ?? {}));
+      return r.ok ? ok(c, { ...r.value, gaps: (r.value?.gaps ?? []).map((g: string) => ({ code: "UNRESOLVED_REFERENCE", message: g, relatedEntityIds: [], retryable: false })), ...(r.value?.locations?.length ? { revision: r.value.locations[0].revision } : {}) }) : r;
+    },
+    "C09/findReferences": (c, b) => this.searchCall(c, () => this.search.findReferences(c, b ?? {})),
+    "C07/indexStatus": (c, b) => { const r = this.search.indexStatus(c, b ?? {}); return (r as { ok?: boolean }).ok === false ? (r as ApiResult<never>) : ok(c, r); },
+    "C07/enqueueIndex": async (c, b) => {
+      if (typeof b?.repositoryId !== "string" && typeof b?.repoPath !== "string") return fail(c, { code: "INVALID_SCHEMA", message: "give a repositoryId or a repoPath", retryable: false });
+      const root = typeof b.repositoryId === "string" ? this.search.rootOf(b.repositoryId) : b.repoPath;
+      if (!root) return fail(c, { code: "NOT_FOUND", message: "no such repository", retryable: false });
+      const revision = typeof b.revision === "string" ? b.revision : this.store.latestRevision(root)?.id;
+      if (!revision) return fail(c, { code: "NOT_FOUND", message: "this repository has no indexed revision; run C04/ingestRepository first", retryable: true });
+      const priority = ({ INTERACTIVE: 100, LIVE: 10, BACKFILL: 0 } as Record<string, number | undefined>)[b?.priority ?? "LIVE"] ?? 10;
+      const job = this.scheduleSearchIndex(root, revision, c, priority);
+      if (!job) return fail(c, { code: "PROVIDER_UNAVAILABLE", message: "search is disabled for this deployment (CIE_SEARCH=off or the search flag is off)", retryable: false });
+      if (b?.wait === false) return ok(c, job);
+      const done = await this.jobs.settled(job.id);
+      if (done.error) return fail(c, done.error);
+      return ok(c, { ...done, value: done.result?.value, warnings: done.result?.warnings ?? [] });
+    },
+  };
 
   // ---------------------------------------------------------------- C27 counterfactual scenarios
   /** Evaluate a typed what-if against a revision. Reads only. A scenario that cannot mean anything is refused with every reason. */
@@ -656,6 +760,166 @@ export class Service {
     "C30/listDeliveries": (c) => this.exportCall(c, () => this.notifications.deliveries().map((d) => ({ ...d, payload: undefined }))),
   };
 
+  // ---------------------------------------------------------------- F02 PR analysis and quality gates (§4–§12)
+  /** Map a forge "owner/repo" full name to a known repository root: the origin remote must match. */
+  private prRepoRootFor(fullName: string): string | null {
+    if (!fullName) return null;
+    const roots = (this.store.db.prepare("select distinct repo_root r from revisions").all() as { r: string }[]).map((x) => x.r);
+    for (const root of roots) {
+      const url = githubRemote(root);
+      if (url && `${url.owner}/${url.repo}` === fullName) return root;
+    }
+    return null;
+  }
+
+  /** Body-level validation + job enqueue for one PR (shared by the op and the webhook). */
+  private analyzePullRequestValidated(ctx: CallContext, b: { repoPath?: unknown; repositoryId?: unknown; forge?: unknown; prNumber?: unknown; headRef?: unknown; baseRef?: unknown; policyId?: unknown; headRepository?: unknown }): ApiResult<JobView & { deduped?: boolean }> {
+    if (!Number.isInteger(b.prNumber) || (b.prNumber as number) <= 0) return fail(ctx, { code: "INVALID_SCHEMA", message: "prNumber must be a positive integer", retryable: false });
+    let repoRoot: string | null = null;
+    if (typeof b.repositoryId === "string" && b.repositoryId) repoRoot = this.search.repositoryOfRoot(String(b.repositoryId))?.root ?? null;
+    if (!repoRoot && typeof b.repoPath === "string" && b.repoPath) repoRoot = resolve(String(b.repoPath));
+    if (!repoRoot) return fail(ctx, { code: "INVALID_SCHEMA", message: "give a repoPath (absolute) or a repositoryId", retryable: false });
+    if (!existsSync(repoRoot)) return fail(ctx, { code: "NOT_FOUND", message: "the repository folder does not exist on this machine", retryable: false });
+    const forge = typeof b.forge === "string" && b.forge ? b.forge : "github";
+    const ref: PrRef & { policyId?: string } = {
+      repoRoot, forge, prNumber: Number(b.prNumber),
+      ...(typeof b.headRef === "string" && b.headRef ? { headRef: b.headRef } : {}),
+      ...(typeof b.baseRef === "string" && b.baseRef ? { baseRef: b.baseRef } : {}),
+      ...(typeof b.headRepository === "string" && b.headRepository ? { headRepository: b.headRepository } : {}),
+      ...(typeof b.policyId === "string" && b.policyId ? { policyId: b.policyId } : {}),
+    };
+    // Eager identity resolution (git-only): the analysis row exists and a pending status can go out on receipt (§7.12).
+    try { resolvePr(repoRoot, ref); } catch (e) { const c = e as PrCheckError; return fail(ctx, { code: ((c.code ?? "NOT_FOUND") as ApiError["code"]), message: c.message, retryable: false }); }
+    const jctx: CallContext = { ...ctx, requestId: `req-pr:${randomUUID()}`, ...(ctx.idempotencyKey ? {} : { idempotencyKey: `pr:${repoRoot}:${ref.prNumber}:${typeof b.headRef === "string" && b.headRef ? b.headRef : "refs/pull"}` }) };
+    const job = this.jobs.enqueue(jctx, {
+      kind: "pr-analysis", priority: 10, params: { repoPath: repoRoot, prNumber: ref.prNumber, forge, headRef: ref.headRef, baseRef: ref.baseRef, policyId: ref.policyId },
+      run: async (jctx2, control) => {
+        try { const view = await this.pr.run({ actor: jctx2.actor.principalId }, control, ref); return ok(jctx2, view, { revision: view.headRevision }); }
+        catch (e) {
+          const c = e as PrCheckError;
+          if (c.name === "PrCheckError") return fail(jctx2, { code: (c.code ?? "STORAGE") as ApiError["code"], message: c.message, retryable: false });
+          return fail(jctx2, storageFailure(e));
+        }
+      },
+    });
+    const analysisId = this.prAnalysisCreatedSoon(repoRoot, ref.prNumber) ?? undefined;
+    return ok(ctx, { ...job, params: { ...job.params, analysisId } });
+  }
+  /** Newest analysis row for a PR within the queue window (best effort, for the op's response). */
+  private prAnalysisCreatedSoon(repoRoot: string, prNumber: number) { return this.pr.latestForPr(repoRoot, prNumber)?.id as string | undefined; }
+
+  readonly prOps: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>> | ApiResult<unknown>> = {
+    // ---- C23: analyse a pull request (one analysis per identity; the heavy work runs in a background job) ----
+    "C23/analyzePullRequest": (c, b) => this.analyzePullRequestValidated(c, b ?? {}),
+    "C23/getPrAnalysis": (c, b) => {
+      if (typeof b?.analysisId === "string" && b.analysisId) { try { return ok(c, this.pr.compileReviewView(b.analysisId)); } catch (e) { const r = e as PrCheckError; return fail(c, { code: (r.code ?? "NOT_FOUND"), message: r.message, retryable: false }); } }
+      const root = typeof b?.repoPath === "string" ? resolve(b.repoPath) : typeof b?.repositoryId === "string" ? this.search.repositoryOfRoot(b.repositoryId)?.root : null;
+      if (!root || !Number.isInteger(b?.prNumber)) return fail(c, { code: "INVALID_SCHEMA", message: "give an analysisId, or a PR (repoPath/repositoryId + prNumber)", retryable: false });
+      const latest = this.pr.latestForPr(root, Number(b.prNumber));
+      if (!latest) return fail(c, { code: "NOT_FOUND", message: "no analysis for this pull request yet; run C23/analyzePullRequest", retryable: false });
+      return ok(c, { analysis: this.pr.compileReviewView(latest.id), history: this.pr.allForPr(root, Number(b.prNumber)).map((a) => ({ analysisId: a.id, headHash: a.head_hash, state: a.state, createdAt: a.created_at, supersededBy: a.superseded_by ?? undefined })) as never });
+    },
+    // ---- C16: policies, gate decisions ----
+    "C16/putPolicy": (c, b) => { const r = this.pr.putPolicy(b?.policy, c.actor.principalId); return r.ok ? ok(c, r) : fail(c, { code: "INVALID_SCHEMA", message: r.problems.join("; ").slice(0, 400), retryable: false }); },
+    "C16/listPolicies": (c, b) => ok(c, this.pr.listPolicies(typeof b?.policyId === "string" && b.policyId ? b.policyId : undefined).map((p) => ({ policyId: p.policyId, version: p.version, policyHash: p.policyHash, createdBy: p.createdBy, createdAt: p.createdAt }))),
+    "C16/getPolicy": (c, b) => { const p = typeof b?.policyId === "string" ? this.pr.getPolicy(b.policyId, Number.isInteger(b?.version) ? b.version : undefined) : null; return p ? ok(c, p) : fail(c, { code: "NOT_FOUND", message: "no such policy version", retryable: false }); },
+    "C16/setRepositoryPolicy": (c, b) => {
+      const root = typeof b?.repoPath === "string" ? resolve(b.repoPath) : typeof b?.repositoryId === "string" ? this.search.repositoryOfRoot(b.repositoryId)?.root : null;
+      if (!root) return fail(c, { code: "INVALID_SCHEMA", message: "give a repoPath (absolute) or a repositoryId", retryable: false });
+      const policyId = b?.policyId ?? null;
+      if (policyId !== null && !this.pr.getPolicy(String(policyId))) return fail(c, { code: "NOT_FOUND", message: `no policy ${policyId} in the store; put it with C16/putPolicy first`, retryable: false });
+      this.pr.setRepositoryPolicy(root, policyId === null ? null : String(policyId));
+      this.store.audit(actor(c), "policy.assign", root, { policyId });
+      return ok(c, { repoRoot: root, policyId });
+    },
+    "C16/evaluateQualityGate": (c, b) => {
+      if (typeof b?.analysisId !== "string") return fail(c, { code: "INVALID_SCHEMA", message: "give an analysisId", retryable: false });
+      try { return ok(c, this.pr.reEvaluate(b.analysisId), { revision: this.pr.row(b.analysisId)?.head_revision ?? undefined }); }
+      catch (e) { const r = e as PrCheckError; return r.name === "PrCheckError" ? fail(c, { code: (r.code ?? "NOT_FOUND") as ApiError["code"], message: r.message, retryable: false }) : fail(c, storageFailure(e)); }
+    },
+    "C16/verifyBinding": (c, b) => { if (typeof b?.decisionId !== "string") return fail(c, { code: "INVALID_SCHEMA", message: "give a decisionId", retryable: false }); return ok(c, this.pr.verifyBinding(b.decisionId)); },
+    "C16/invalidateDecision": (c, b) => {
+      if (typeof b?.decisionId !== "string" || typeof b?.reason !== "string") return fail(c, { code: "INVALID_SCHEMA", message: "give a decisionId and a reason", retryable: false });
+      try { this.pr.invalidateDecision(b.decisionId, b.reason); return ok(c, { decisionId: b.decisionId, invalidated: true }); } catch (e) { const r = e as PrCheckError; return r.name === "PrCheckError" ? fail(c, { code: (r.code ?? "NOT_FOUND") as ApiError["code"], message: r.message, retryable: false }) : fail(c, storageFailure(e)); }
+    },
+    // ---- C18: dispositions (a reviewer's answer to a finding) ----
+    "C18/recordDisposition": (c, b) => {
+      if (typeof b?.analysisId !== "string" || typeof b?.findingId !== "string" || !b?.disposition) return fail(c, { code: "INVALID_SCHEMA", message: "give analysisId, findingId and disposition", retryable: false });
+      const dispositions = ["OPEN", "WAIVED", "RESOLVED_BY_CHANGE", "DISMISSED_FALSE_POSITIVE"];
+      if (!dispositions.includes(b.disposition)) return fail(c, { code: "INVALID_SCHEMA", message: `disposition is one of ${dispositions.join(", ")}`, retryable: false });
+      const r = this.pr.recordDisposition({ analysisId: b.analysisId, findingId: b.findingId, disposition: b.disposition, rationale: b.rationale, actor: actor(c), ...(b.waiver ? { waiver: b.waiver } : {}) });
+      return r.ok ? ok(c, { finding: r.finding, decisionId: r.decisionId }, { revision: this.pr.row(b.analysisId)?.head_revision ?? undefined }) : fail(c, { code: "INVALID_SCHEMA", message: r.error, retryable: false });
+    },
+    // ---- C30: publish the gate result to the forge (grant-gated; nothing but ids, counts, paths, lines leaves) ----
+    "C30/publishCheck": async (c, b) => {
+      if (!b || typeof b.repositoryId !== "string" || !Number.isInteger(b.prNumber)) return fail(c, { code: "INVALID_SCHEMA", message: "give repositoryId and prNumber", retryable: false });
+      const decisionRow = b.decisionId ? this.pr.decisionRow(b.decisionId) : null;
+      const analysis = decisionRow ? this.pr.row(decisionRow.analysis_id) : (b.analysisId ? this.pr.row(b.analysisId) : this.pr.latestForPr(String(b.repositoryId), Number(b.prNumber)));
+      if (!analysis) return fail(c, { code: "NOT_FOUND", message: "no analysis for this pull request; run C23/analyzePullRequest first", retryable: false });
+      const grant = newGrant(this.store, { repositoryId: analysis.repository_id, headHash: analysis.head_hash, decisionId: b.decisionId ?? undefined, principalId: actor(c), ttlMs: 60_000 });
+      const receipt = await this.prPublisher.publish(grant.id, { repositoryId: analysis.repository_id, prNumber: Number(b.prNumber), analysisId: analysis.id, decisionId: b.decisionId ?? undefined, principalId: actor(c), kind: b.kind ?? "STATUS", alsoComment: !!b.alsoComment });
+      return ok(c, receipt, { completeness: receipt.state === "PUBLISHED" ? "COMPLETE" : "PARTIAL" });
+    },
+    // ---- C04: a forge webhook in (HMAC-verified, replay-safe; pull_request events only) ----
+    "C04/ingestWebhook": async (c, b) => { try { return ok(c, await this.ingestWebhook(b ?? {})); } catch (e) { const msg = String((e as Error).message ?? e).slice(0, 300); return fail(c, { code: (e as PrCheckError).code === "FORBIDDEN" ? "FORBIDDEN" as const : "INVALID_SCHEMA" as const, message: msg, retryable: false }); } },
+  };
+
+  /** GitHub webhook intake (§10.2): HMAC-verified, replay-safe, `pull_request` events opened/synchronize/reopened only.
+   *  Returns what it did and why, as data — the caller can always tell why nothing happened. */
+  async ingestWebhook(b: { headers?: Record<string, string>; rawBody?: string; secret?: string; repoOverride?: string; actor?: string }): Promise<{ ok: true; applied: boolean; replayed: boolean; reason?: string; job?: { id: string }; analysis?: { analysisId: string } }> {
+    const secret = b.secret ?? process.env.CIE_WEBHOOK_SECRET ?? "";
+    if (!secret) throw new PrCheckError("FORBIDDEN", "no webhook secret is configured; unsigned webhooks are refused");
+    const headers = Object.fromEntries(Object.entries(b.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
+    const body = b.rawBody ?? "";
+    const sig = String(headers["x-hub-signature-256"] ?? "");
+    const mac = createHmac("sha256", secret).update(body).digest("hex");
+    const ok160 = sig.startsWith("sha256=") && sig.length === 7 + mac.length;
+    if (!ok160 || !timingSafeEqual(Buffer.from(mac), Buffer.from(sig.slice(7)))) throw new PrCheckError("FORBIDDEN", "the webhook signature does not verify; nothing is applied from an unverified source");
+
+    const delivery = String(headers["x-github-delivery"] ?? "");
+    const event = String(headers["x-github-event"] ?? "");
+    let payload: any;
+    try { payload = JSON.parse(body); } catch { throw new PrCheckError("INVALID_SCHEMA", "the webhook body is not JSON"); }
+    const fullName = String(payload?.repository?.full_name ?? "");
+    const source = `webhook:${fullName || "unknown"}`;
+    if (delivery) {
+      const seen = this.store.db.prepare("select delivery_id from ext_deliveries where source = ? and delivery_id = ?").get(source, delivery);
+      if (seen) return { ok: true, applied: false, replayed: true, reason: "this delivery was already recorded; it is not applied twice" };
+    }
+    if (event !== "pull_request") {
+      this.recordDelivery(source, delivery, false);
+      return { ok: true, applied: false, replayed: false, reason: `the ${event || "untyped"} event is not handled; only pull_request events are` };
+    }
+    const action = String(payload?.action ?? "");
+    const prNumber = Number(payload?.number ?? payload?.pull_request?.number ?? 0);
+    if (!["opened", "synchronize", "reopened"].includes(action)) {
+      this.recordDelivery(source, delivery, false);
+      return { ok: true, applied: false, replayed: false, reason: `the action "${action}" does not change the head; nothing is analysed` };
+    }
+    if (!prNumber) throw new PrCheckError("INVALID_SCHEMA", "the pull_request event does not carry a number");
+    const repoRoot = b.repoOverride ? resolve(b.repoOverride) : this.prRepoRootFor(fullName);
+    if (!repoRoot) {
+      this.recordDelivery(source, delivery, false);
+      return { ok: true, applied: false, replayed: false, reason: `no local repository's origin matches ${fullName}; nothing is analysed` };
+    }
+    const ctxLike: CallContext = { requestId: `req-webhook:${randomUUID()}`, idempotencyKey: `webhook:${delivery}`, actor: { principalId: b.actor ?? "github", tenantId: "local", sessionId: "webhook" }, deadlineMs: Date.now() + 30_000, traceId: `trace-webhook:${randomUUID()}` };
+    const job = await this.analyzePullRequestValidated(ctxLike, {
+      repoPath: repoRoot, prNumber, forge: "github",
+      headRepository: String(payload?.pull_request?.head?.repo?.full_name ?? ""),
+    });
+    if (!job.ok) {
+      this.recordDelivery(source, delivery, false);
+      return { ok: true, applied: false, replayed: false, reason: `the analysis was not scheduled: ${job.error.message.slice(0, 200)}` };
+    }
+    this.recordDelivery(source, delivery, true);
+    const analysisId = (job.value.params as { analysisId?: string }).analysisId;
+    return { ok: true, applied: true, replayed: false, job: { id: job.value.id }, ...(analysisId ? { analysis: { analysisId } } : {}) };
+  }
+  private recordDelivery(source: string, delivery: string, applied: boolean) {
+    if (delivery) this.store.db.prepare("insert or ignore into ext_deliveries values (?,?,?,?)").run(source, delivery, Date.now(), applied ? 1 : 0);
+  }
+
+
   // ---------------------------------------------------------------- C31 storage and C32 operations
   /** Is it healthy? Answers even when parts are down, and says which. */
   async health(ctx: CallContext, _req: Record<string, never> = {}): Promise<ApiResult<Health>> {
@@ -693,7 +957,10 @@ export class Service {
   deleteRepository(ctx: CallContext, req: { repoRoot: string; confirm: string }): ApiResult<DeleteReport> {
     if (!req.repoRoot || req.confirm !== req.repoRoot) return fail(ctx, { code: "INVALID_SCHEMA", message: "to delete, repeat the repository path in `confirm`", retryable: false });
     if (!this.store.hasRepo(req.repoRoot)) return fail(ctx, { code: "NOT_FOUND", message: "unknown repository", retryable: false });
-    try { return ok(ctx, deleteRepo(this.store, req.repoRoot, actor(ctx))); } catch (e) { return fail(ctx, storageFailure(e)); }
+    try {
+      try { const rid = this.search.repositoryOfRoot(req.repoRoot)?.repositoryId; if (rid) this.search.purgeRepository(rid); } catch { /* purge failure never blocks deletion of the base data */ }
+      return ok(ctx, deleteRepo(this.store, req.repoRoot, actor(ctx)));
+    } catch (e) { return fail(ctx, storageFailure(e)); }
   }
 
   // ---------------------------------------------------------------- C07 jobs

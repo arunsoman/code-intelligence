@@ -119,6 +119,22 @@ export function deleteRepository(store: Store, repoRoot: string, actor = "local-
       dropRevision(store, id);
     }
     for (const t of ["concept_versions", "overrides", "repo_policy", "test_runs"]) store.db.prepare(`delete from ${t} where repo_root = ?`).run(repoRoot);
+    // F02: the pull-request analyses, their findings, decisions, publications, waivers and policy assignment are all
+    // derived from this repository's sources; nothing about it outlives the delete. Baselines are content-cache rows:
+    // a shared one whose other owner is gone simply re-analyses next time.
+    const mergeBases = q(store, "select distinct merge_base_hash m from pr_analyses where repo_root = ?", repoRoot).map((x) => x.m) as unknown as string[];
+    for (const a of q(store, "select id from pr_analyses where repo_root = ?", repoRoot)) {
+      for (const d of q(store, "select decision_id from gate_decisions where analysis_id = ?", a.id)) store.db.prepare("delete from gate_condition_results where decision_id = ?").run(d.decision_id);
+      store.db.prepare("delete from gate_decisions where analysis_id = ?").run(a.id);
+      for (const t of ["pr_changed_files", "pr_findings"]) store.db.prepare(`delete from ${t} where analysis_id = ?`).run(a.id);
+    }
+    // pr analyses and their publications key on repository_id; gate_waivers has no repo_root column, so the
+    // per-table columns differ (a wrong shared clause is "no such column" for every deletion).
+    for (const t of ["pr_analyses", "check_publications"]) store.db.prepare(`delete from ${t} where repository_id = ?`).run(repoRoot);
+    store.db.prepare("delete from gate_waivers where repository_id in (select repository_id from repositories where root = ?)").run(repoRoot);
+    store.db.prepare("delete from gate_repo_policy where repo_root = ?").run(repoRoot);
+    for (const id of revIds) store.db.prepare("delete from revision_test_runs where revision = ?").run(id);
+    for (const m of mergeBases) store.db.prepare("delete from pr_baselines where merge_base_hash = ?").run(m);
     store.db.prepare("delete from jobs where params like ?").run(`%${repoRoot.replace(/[%_]/g, "")}%`);
     // Investigations over it: their hypotheses, observations, plans and payloads are derived from it. What remains is a tombstone
     // (that one existed, and when it ended), never content.

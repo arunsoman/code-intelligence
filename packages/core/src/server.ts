@@ -104,7 +104,10 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
   for (const [key, run] of Object.entries(svc.registryOps)) ops[key] = { mutating: key === "C08/applyIdentityVerdict", run };
   for (const [key, run] of Object.entries(svc.workspaceOps)) ops[key] = { mutating: !["C13/resume", "C13/resurface"].includes(key), run };
   for (const [key, run] of Object.entries(svc.changeOps)) ops[key] = { mutating: !["C28/interpretDrag", "C28/get", "C28/list"].includes(key), run };
+  for (const [key, run] of Object.entries(svc.searchOps)) ops[key] = { mutating: key === "C07/enqueueIndex", run: run as any };
+  for (const [key, run] of Object.entries(svc.prOps)) ops[key] = { mutating: !["C23/getPrAnalysis", "C16/listPolicies", "C16/getPolicy", "C16/verifyBinding"].includes(key), run: run as any };
   for (const [key, run] of Object.entries(svc.defectOps)) ops[key] = { mutating: !["C26/listFindings", "C26/explainFinding", "C27/listCapabilities", "C27/getRunManifest"].includes(key), run };
+  for (const [key, run] of Object.entries(svc.profilingOps)) ops[key] = { mutating: key === "C04/ingestProfile", run: run as any };
   return ops;
   };
   const statusFor = (r: ApiResult<unknown>) => r.ok ? 200 : ({ INVALID_SCHEMA: 400, NOT_FOUND: 404, EVIDENCE_MISSING: 404, VERSION_CONFLICT: 409, UNAUTHORIZED: 401, FORBIDDEN: 403, BUDGET_EXCEEDED: 429, DEADLINE_EXCEEDED: 504, PROVIDER_UNAVAILABLE: 503 } as Record<string, number>)[r.error.code] ?? 500;

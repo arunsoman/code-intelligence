@@ -137,7 +137,8 @@ export interface ViewGroup { id: Id; label: string; parentGroupId?: Id; kind: "f
 export type FormId =
   | "SemanticMap" | "CausalGraph" | "HypothesisGraph"
   | "TransactionJourney" | "DataLineage" | "SemanticDiff" | "Archaeology" | "TrustBoundary" | "RuntimeOverlay"
-  | "RaceWindow" | "Counterfactual" | "TestConfidence" | "Ownership" | "ConceptAtlas" | "PolicyMap" | "ChangeRisk";
+  | "RaceWindow" | "Counterfactual" | "TestConfidence" | "Ownership" | "ConceptAtlas" | "PolicyMap" | "ChangeRisk"
+  | "TraceLinkedProfile";
 export interface TerrainCell {
   id: Id; label: string; file: string; factors: Record<string, number>; raw: Record<string, string>; evidenceIds: Id[]; area: number; entityIds: Id[]; note?: string;
 }
@@ -168,7 +169,8 @@ export interface ViewMatrix {
 }
 
 // ---- Jobs (C07): long work that runs in the background and can be cancelled ----
-export type JobKind = "index" | "concepts" | "investigate" | "defect-detect" | "defect-experiment";
+// "pr-analysis": F02 — a pull request's base and head are indexed, compared, analysed and gated in one background job.
+export type JobKind = "index" | "concepts" | "investigate" | "defect-detect" | "defect-experiment" | "pr-analysis" | "search-index" | "dependency-scan";
 export type JobState = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 export interface JobView {
   id: Id; kind: JobKind; state: JobState;
@@ -177,8 +179,10 @@ export interface JobView {
   /** Past the commit point: a cancel is refused, because stopping now would leave half a result. */
   committing: boolean;
   phase: string; message: string; done?: number; total?: number;
-  params: { repoPath?: string; revision?: string; investigationId?: string; defectRequestHash?: string; specId?: string };
+  params: { repoPath?: string; revision?: string; investigationId?: string; defectRequestHash?: string; specId?: string; prNumber?: number; policyId?: string; headHash?: string; headRef?: string; baseRef?: string; decisionId?: string; analysisId?: string; forge?: string; inventoryId?: string; snapshotId?: string; reportId?: string; findingId?: string; feedSource?: string };
   createdAt: string; startedAt?: string; finishedAt?: string;
+  /** F01 scheduling classes: INTERACTIVE (100) > LIVE (10) > BACKFILL (0). Higher runs first. */
+  priority?: number;
   /** What the same call would have returned when run directly (value and warnings), once SUCCEEDED. */
   result?: { value: unknown; warnings: string[] };
   error?: ApiError;
@@ -391,6 +395,106 @@ export interface ConceptStore {
   statedConfidence: { level: "high" | "medium" | "low"; cards: number; confirmed: number; refuted: number; unjudged: number; band: { lower: number; upper: number; n: number } | null; note: string }[];
 }
 
+// ---------------------------------------------------------------- F01: cross-repository search and precise navigation
+// Additive types over the existing envelope (contracts §1). Byte spans stay canonical (SourceSpan); a display {line, column}
+// is derived at query time. The resolution enum is NOT extended: a resolution `basis` is added instead, and the user-facing
+// tier is computed from it so a better future resolver upgrades results without a schema change.
+export type SearchTier = "PRECISE" | "RESOLVED" | "HEURISTIC" | "UNRESOLVED";
+export type SearchMatchKind = "SYMBOL_EXACT" | "SYMBOL_QUALIFIED" | "TEXT_LITERAL" | "TEXT_REGEX" | "STRING_OR_DOC";
+export type SearchIndexState = "NONE" | "PARTIAL" | "COMPLETE";
+export type SemanticIndexTier = "NONE" | "SYNTAX" | "COMPILER";
+/** Which repository a search scope covers, or which revision of it. */
+export type RepositorySelector =
+  | { kind: "ALL_VISIBLE" }
+  | { kind: "IDS"; repositoryIds: string[] }
+  | { kind: "DEPENDENTS_OF"; repositoryId: string; transitive?: boolean };
+export type RevisionSelector =
+  | { kind: "DEFAULT_BRANCH_HEAD" }
+  | { kind: "COMMIT"; repositoryId: string; commitHash: string }
+  | { kind: "REVISION"; revisionId: string };
+export interface SearchFilters {
+  languages?: string[]; pathGlobs?: string[]; excludePathGlobs?: string[];
+  symbolKinds?: string[]; includeTests?: boolean; includeGenerated?: boolean;
+}
+/** A repository revision as seen by F01, derived from a stored revision + the build state of its search index. */
+export interface SnapshotRef {
+  repositoryId: string; revision: string; commitHash: string | null; contentRootHash: string;
+  indexGeneration: number; analyzerVersion: string;
+  textState: SearchIndexState; symbolState: SearchIndexState; semanticTier: SemanticIndexTier;
+  filesTotal: number; filesIndexed: number;
+}
+export interface SearchHit {
+  hitId: string;
+  repositoryId: string; repositoryName: string; revision: string; path: string;
+  span: SourceSpan;
+  display: { line: number; column: number; endLine: number; endColumn: number; snippet: string[]; snippetStartLine: number };
+  matchKinds: SearchMatchKind[]; tier: SearchTier;
+  /** Set when the hit is a symbol (definition or reference); the identity is the symbol id used across the product. */
+  symbol?: { symbolId: string; name: string; kind: string };
+  inString: boolean;
+  /** Why this hit is here, in words, highest-scoring reason first. */
+  rationale: string[];
+  evidenceIds: string[];
+  /** Set on cross-repository hits: the package through which the consuming repository reaches the symbol. */
+  viaPackage?: string;
+  viaRepositoryId?: string;
+}
+export interface UnresolvedPackageEdge {
+  package: string; ecosystem: string;
+  reason: "PROVIDER_NOT_INDEXED" | "PROVIDER_NOT_VISIBLE_COUNTED_NOT_NAMED" | "VERSION_MISMATCH" | "AMBIGUOUS";
+  detail: string;
+}
+export interface SkippedCounts { generated: number; binary: number; too_large: number; unsupported_language: number; denied: number }
+export interface CoverageByRepository {
+  repositoryId: string; repositoryName: string; revision: string; indexGeneration: number;
+  textState: SearchIndexState; symbolState: SearchIndexState;
+  semanticTierByLanguage: Record<string, SemanticIndexTier>;
+  files: { total: number; indexed: number; skipped: SkippedCounts };
+  unresolvedPackageEdges: UnresolvedPackageEdge[];
+  stoppedBy: "NONE" | "LIMIT" | "BUDGET" | "DEADLINE";
+}
+export interface SearchDiagnostics { totals: { shown: number; matched: number | ["AT_LEAST", number] }; queryDiagnostics: Diagnostic[] }
+export interface SearchResponse {
+  mode: Exclude<SearchModes, undefined> | "AUTO";
+  hits: SearchHit[]; nextCursor?: string;
+  coverageByRepository: CoverageByRepository[];
+  notIndexed: { repositoryId: string; repositoryName: string; reason: string }[];
+  totals: { shown: number; matched: number | null; matchedAtLeast: number | null };
+  queryDiagnostics: Diagnostic[];
+}
+export type SearchModes = "LITERAL" | "REGEX" | "SYMBOL";
+export interface DefinitionLocation {
+  repositoryId: string; repositoryName: string; revision: string;
+  symbolId: string; name: string; qualified: string; kind: string;
+  path: string; span: SourceSpan;
+  display: { line: number; column: number; snippet: string };
+  tier: SearchTier; basis: string;
+}
+export interface ReferenceHit extends Omit<SearchHit, "symbol"> {
+  symbol: { symbolId: string; name: string; kind: string };
+  refKind: string; basis: string;
+  /** When the binding is ambiguous, every candidate is listed — never a silent pick. */
+  candidates?: { symbolId: string; name: string; path: string }[];
+}
+export interface ReferencesResponse {
+  references: ReferenceHit[]; nextCursor?: string;
+  groups: { repositoryId: string; repositoryName: string; revision: string; viaPackage?: string; count: number }[];
+  coverageByRepository: CoverageByRepository[];
+  unresolvedCallSites: { repositoryId: string; count: number; sampleHitIds: string[] }[];
+  reExportTruncated?: boolean;
+  gaps: string[];
+}
+export interface RepositoryView {
+  repositoryId: string; displayName: string; root: string | null; remoteUrl: string | null;
+  state: "ACTIVE" | "REVOKED" | "UNREACHABLE";
+  /** The latest indexed revision, if any. */
+  revision?: { id: string; gitHead: string | null; textState: SearchIndexState; symbolState: SearchIndexState; indexedAt: string; files: { total: number; indexed: number } };
+  /** With includeCoverage: the number of this repository's package dependencies that could not be bound (reasons via C10/search coverage). */
+  unresolvedPackageEdges?: number;
+  visibleToCaller: boolean;
+}
+export interface RepositoryIndexStatus extends SnapshotRef { repositoryId: string; skipped: SkippedCounts; indexedAt: string }
+
 // ---- Defect analysis (defect.v1, report-only Phase A) ----
 export type DefectKind = "DEADLOCK_CANDIDATE" | "MEMORY_RACE" | "LOGICAL_RACE" | "STARVATION"
   | "CONTENTION" | "CPU_HOTSPOT" | "ALLOCATION_HOTSPOT" | "IO_BOTTLENECK"
@@ -508,3 +612,478 @@ export const CausalClaimReferenceSchema = z.strictObject({
   populationSchemaId: c24Id, mechanismEvidenceIds: z.array(c24Id).max(64), experimentReportIds: z.array(c24Id).max(16),
   gateReportId: c24Id, state: z.enum(["CURRENT", "STALE", "RESTRICTED"]),
 });
+
+// ---------------------------------------------------------------- F02: PR analysis and quality gates
+// Additive wire types over the same envelope (contracts §1). A gate decision is a verdict computed from exact evidence,
+// bound to hashes, and honest about incompleteness: INCOMPLETE is not an error — absence of evidence never passes.
+export type GateDecisionStatus = "PASS" | "FAIL" | "INCOMPLETE";
+export type GateConditionOutcome = "PASSED" | "FAILED" | "INCOMPLETE" | "WAIVED" | "NOT_APPLICABLE";
+export type GateConditionType = "NEW_FINDINGS" | "REQUIRED_ANALYZERS" | "TESTS_NOT_LOST" | "COVERAGE_ON_CHANGED_LINES" | "ORACLE_PRESERVED" | "DEPENDENCY_POLICY" | "BLAST_RADIUS";
+export type MissingDataPolicy = "FAIL" | "INCOMPLETE" | "IGNORE_WITH_DISCLOSURE";
+export type PrFindingSeverity = "high" | "medium" | "low";
+export type FindingDisposition = "OPEN" | "WAIVED" | "RESOLVED_BY_CHANGE" | "DISMISSED_FALSE_POSITIVE";
+export type PrAnalysisState =
+  | "RECEIVED" | "FETCHING" | "INDEXING" | "ANALYZING" | "EVALUATING"
+  | "DECIDED" | "PUBLISHED" | "PUBLISH_FAILED" | "SUPERSEDED" | "FAILED" | "EXPIRED_WAIVER";
+export type AnalyzerState = "COMPLETE" | "PARTIAL" | "TIMED_OUT" | "UNAVAILABLE" | "FAILED";
+
+export interface PullRequestRef { repositoryId: string; forge: string; prNumber: number }
+
+export interface GatePolicyCondition {
+  id: string; type: GateConditionType;
+  /** NEW_FINDINGS: severities that count and rule selectors (a rule id, or "*" for every rule). */
+  severity?: PrFindingSeverity[]; ruleSelectors?: string[];
+  /** REQUIRED_ANALYZERS: analyzer ids with versions, e.g. "security-rules@1". */
+  analyzers?: string[];
+  /** COVERAGE_ON_CHANGED_LINES. */
+  minimumPercent?: number; minimumExecutableLines?: number;
+  /** ORACLE_PRESERVED: what an un-reviewed candidate means. */
+  onUnreviewed?: "FAILED" | "INCOMPLETE";
+  /** DEPENDENCY_POLICY: the licence policy artifact to evaluate against. */
+  ref?: string;
+  /** BLAST_RADIUS: informational when the dependent count exceeds this. */
+  informationalAboveDependents?: number;
+  /** Absent means blocking (fail closed). */
+  blocking?: boolean;
+  onMissing?: MissingDataPolicy;
+}
+export interface GatePolicyBody {
+  policyId: string; version: number;
+  conditions: GatePolicyCondition[];
+  baseline?: { mode: "REANALYZE_BASE_WITH_SAME_RULES" | "REUSE_MATCHING_ANALYSIS" };
+  exceptions?: { maxDurationDays: number; requireApprovalFrom: string[] };
+  missingDataDefault?: MissingDataPolicy;
+}
+export interface GatePolicyRecord { policyId: string; version: number; policyHash: string; body: GatePolicyBody; createdBy: string; createdAt: string }
+
+export interface AnalyzerCoverage { analyzedFiles: number; skippedFiles: number; reason?: string }
+export interface AnalyzerRecord { id: string; version: string; state: AnalyzerState; coverage: AnalyzerCoverage; reason?: string; wallMs?: number }
+
+export interface ChangedFile { path: string; status: "added" | "modified" | "removed" | "renamed"; oldPath?: string; additions?: number; deletions?: number; generated: boolean }
+
+export interface PrFinding {
+  findingId: string; fingerprint: string;
+  introduced: boolean;
+  baselineFindingId?: string | null;
+  ruleId: string; ruleVersion: number; severity: PrFindingSeverity;
+  path: string; line: number | null; entityId: string | null;
+  disposition: FindingDisposition;
+  title: string; summary: string; evidenceIds: string[]; counterArgument: string; claimId?: string;
+  /** A detector candidate (e.g. an oracle-preservation candidate), not a security rule. */
+  kind?: "SECURITY" | "ORACLE_CANDIDATE" | "DEFECT";
+}
+
+export interface CoverageEvidence {
+  source: "CI" | "REPOSITORY" | "LOCAL_RUN";
+  /** The commit the artifact was produced for; CI artifacts from another commit are rejected (EVIDENCE_STALE). */
+  artifactHead?: string; ciRunId?: string; artifactHash?: string;
+  executableChangedLines: number; covered: number; percent: number | null;
+  /** "supplied by the PR itself": artifacts committed in the head are accepted only with this disclosure. */
+  disclosure?: string;
+}
+export interface OracleEvidence { candidates: number; reviewed: number; headChangesTests: boolean }
+export interface WaiverRecord {
+  id: string; scopeKind: "FINDING_FINGERPRINT" | "RULE_IN_PATH" | "CONDITION_ONCE";
+  scope: { fingerprint?: string; ruleId?: string; path?: string; decisionId?: string };
+  actor: string; approver?: string; rationale: string;
+  createdAt: string; expiresAt: string; revokedAt?: string | null;
+}
+
+/** The evidence a decision is computed from. Whatever is absent is stated, never assumed. */
+export interface GateEvidence {
+  findings?: PrFinding[];
+  testImpact?: { lost: string[]; gained: number; unchanged: number } | null;
+  analyzers: AnalyzerRecord[];
+  coverage?: CoverageEvidence | null;
+  testsRun?: { source: "CI" | "REPOSITORY"; headHash: string; failedTests: number } | null;
+  oracle?: OracleEvidence | null;
+  dependencies?: { policyRef: string; violations: string[] } | null;
+  blastRadius?: { dependents: number } | null;
+  waivers?: WaiverRecord[];
+}
+
+export interface GateConditionResult {
+  id: string; type: GateConditionType; blocking: boolean;
+  outcome: GateConditionOutcome; reason: string;
+  /** Evidence ids (artifact hashes, analyzer ids, finding fingerprints) the outcome rests on; never empty for a shown outcome. */
+  evidenceIds: string[]; waiverId?: string;
+}
+
+export interface GateDecisionView {
+  decisionId: string; status: GateDecisionStatus; bindingHash: string;
+  policy: { policyId: string; version: number; policyHash: string };
+  evaluatedAt: string; validUntil?: string; superseded: boolean; revokedReason?: string;
+  exceptionsUsed?: string[];
+  conditions: GateConditionResult[];
+  analysisId: string;
+}
+
+export interface PrAnalysisView {
+  analysisId: string; pr: PullRequestRef;
+  repoRoot: string; baseHash: string; headHash: string; mergeBaseHash: string; headRepository?: string;
+  baseRevision?: string; headRevision?: string;
+  policyId: string; policyHash: string; analyzerSetHash: string;
+  state: PrAnalysisState; supersededBy?: string;
+  job?: { id: string; kind: string; state: string; phase: string; message: string };
+  changes: { files: ChangedFile[]; consequences: { id: string; text: string; kind: string }[]; blastRadius: { entityId: string; dependents: number; files: string[] }[]; testImpact: { entityId: string; lost: string[]; gained: string[]; unchanged: string[] }[]; gaps: string[] };
+  findings: { introduced: PrFinding[]; existing: PrFinding[]; resolvedByChange: PrFinding[]; detectorCandidates?: PrFinding[] };
+  analyzers: AnalyzerRecord[];
+  baseline: { mode: "REUSED" | "REANALYZED"; analyzerSetHash: string };
+  tests: { summary: TestSummaryInfo | null; coverage: CoverageEvidence | null; source: string } | null;
+  waivers: WaiverRecord[];
+  unresolved?: { dynamicCalls: number; runtimeData: boolean };
+  disclosure: string[];
+  decision?: GateDecisionView;
+}
+
+export type CheckKind = "STATUS" | "CHECK_RUN" | "COMMENT";
+export interface PublicationReceipt {
+  publicationId: string; forge: string; repositoryId: string; headHash: string;
+  kind: CheckKind; externalId?: string; url?: string;
+  state: "PREPARED" | "PUBLISHING" | "PUBLISHED" | "FAILED" | "SUPERSEDED";
+  idempotencyKey: string;
+  lastError?: string;
+}
+
+/** Validation of a policy document (§7.1). A policy that names an unknown condition type is rejected here, never at evaluation time. */
+export const GatePolicySchema = z.strictObject({
+  policyId: z.string().min(1).max(80).regex(/^[a-z0-9][a-z0-9-]*$/, "policyId is a lower-case slug"),
+  version: z.number().int().positive(),
+  conditions: z.array(z.strictObject({
+    id: z.string().min(1).max(80),
+    type: z.enum(["NEW_FINDINGS", "REQUIRED_ANALYZERS", "TESTS_NOT_LOST", "COVERAGE_ON_CHANGED_LINES", "ORACLE_PRESERVED", "DEPENDENCY_POLICY", "BLAST_RADIUS"]),
+    severity: z.array(z.enum(["high", "medium", "low"])).max(3).optional(),
+    ruleSelectors: z.array(z.string().min(1).max(120)).max(50).optional(),
+    analyzers: z.array(z.string().min(3).max(120)).max(20).optional(),
+    minimumPercent: z.number().min(0).max(100).optional(),
+    minimumExecutableLines: z.number().int().min(0).max(1e6).optional(),
+    onUnreviewed: z.enum(["FAILED", "INCOMPLETE"]).optional(),
+    ref: z.string().min(3).max(120).optional(),
+    informationalAboveDependents: z.number().int().min(0).max(1e6).optional(),
+    blocking: z.boolean().optional(),
+    onMissing: z.enum(["FAIL", "INCOMPLETE", "IGNORE_WITH_DISCLOSURE"]).optional(),
+  })).min(1).max(20),
+  baseline: z.strictObject({ mode: z.enum(["REANALYZE_BASE_WITH_SAME_RULES", "REUSE_MATCHING_ANALYSIS"]) }).optional(),
+  exceptions: z.strictObject({ maxDurationDays: z.number().int().min(1).max(365).optional(), requireApprovalFrom: z.array(z.string().max(60)).max(10).optional() }).optional(),
+  missingDataDefault: z.enum(["FAIL", "INCOMPLETE", "IGNORE_WITH_DISCLOSURE"]).optional(),
+});
+
+// ---------------------------------------------------------------- F04: dependency vulnerability and licence scanning
+// Additive wire types over the same envelope (contracts §1, F04 spec §8). Severity on a finding is as *reported* by the
+// advisory feed — never recomputed; applicability and reachability are separate statements, none implying another.
+export type DepEcosystem = "npm" | "cargo" | "golang" | "pypi" | "maven";
+/** What the inventory rests on (F04 §7.1): a parseable lockfile, manifests only, or a tool run in isolation. */
+export type InventoryTier = "LOCKFILE" | "DECLARED_ONLY" | "TOOL_RESOLVED";
+/** Labelled evidence level (F04 §7.6); NOT_ASSESSED is the default and is displayed, not hidden. */
+export type Reachability = "NOT_ASSESSED" | "NOT_IMPORTED" | "PACKAGE_IMPORTED" | "SYMBOL_REFERENCED";
+export type DepFindingState = "OPEN" | "FIXED" | "WAIVED" | "WITHDRAWN";
+export type DepScope = "PROD" | "DEV" | "OPTIONAL" | "PEER" | "BUILD";
+export type DriftKind = "MISSING_IN_LOCK" | "EXTRA_IN_LOCK" | "RANGE_VIOLATION" | "INTEGRITY_MISSING" | "STALE_LOCK_FORMAT";
+export type LicenceOutcome = "ALLOWED" | "DENIED" | "NEEDS_REVIEW" | "EXCEPTION";
+export type FeedSource = { kind: "OSV_MIRROR"; url?: string } | { kind: string; url?: string };
+
+/** One manifest↔lockfile disagreement (F04 §7.3, F04-A2). */
+export interface DriftItem {
+  kind: DriftKind;
+  packageName: string;
+  workspacePath: string;
+  declaredRange?: string;
+  lockedVersion?: string;
+  message: string;
+}
+export interface DependencyScanRequest {
+  repositoryId: string; revision: string;
+  workspacePaths?: string[];
+  feed?: { snapshotId?: string };
+  licencePolicy?: { policyId: string; version?: number };
+  resolution?: "LOCKFILE_ONLY" | "ALLOW_ISOLATED_TOOL";
+}
+/** One introduction path from a workspace root to a package (F04 §7.5). */
+export interface DepPath {
+  /** Purls from the direct dependency to the target (the workspace root itself is implied). */
+  nodes: string[];
+  /** Scope of every edge on this path; a path is DEV-exposure only when all edges are DEV. */
+  edgeScopes: DepScope[];
+  scope: "PROD" | "DEV";
+  /** The direct dependency through which the target is reached — the candidate fix location. */
+  directDependency: string;
+}
+/** A remediation option (F04 §7.7); producing the patch for one is C28's proposeDependencyUpgrade. */
+export interface FixOption {
+  kind: "DIRECT_BUMP" | "ANCESTOR_BUMP" | "OVERRIDE" | "REMOVE" | "ACCEPT" | "NO_FIX";
+  /** Plain statement of the risk, e.g. an override is temporary: it forces a version the ancestor was not tested with. */
+  risk: string;
+  targetVersion?: string;
+}
+export type FixOptionRef = { kind: FixOption["kind"]; targetVersion?: string };
+export interface FeedSnapshotView {
+  snapshotId: string; feed: string; fetchedAt: string; upstreamModified?: string;
+  contentHash: string; advisories: number; licenceNotice: string;
+}
+export interface LicenceItem {
+  purl: string; name: string; version: string;
+  /** The SPDX expression as declared, or null when absent/unparseable (NEEDS_REVIEW, never silently accepted). */
+  expression: string | null;
+  outcome: LicenceOutcome;
+  /** Where the licence string came from: lockfile field, manifest metadata, vendored file, registry. */
+  source: string;
+  reason: string;
+}
+export interface DepFindingView {
+  findingId: string; purl: string; advisoryId: string; aliases: string[];
+  installedVersion: string; fixedIn: string[];
+  /** As reported by the feed — the feed's claim, labelled with its source. */
+  severity: { source: string; label?: string; cvss?: string };
+  applicability: { applies: boolean | "UNKNOWN"; matchedRange?: string; reason: string };
+  reachability: Reachability;
+  reachabilityEvidenceIds: string[];
+  exposure: { prodPaths: number; devOnlyPaths: number; exact: boolean };
+  /** Previous assessments under earlier feed snapshots (append-only; F04-A4). */
+  previous?: { snapshotId: string; applies: boolean | "UNKNOWN"; at: string }[];
+  state: DepFindingState;
+}
+export interface DependencyInventorySummary {
+  inventoryId: string; workspacePath: string; ecosystem: string; tier: InventoryTier;
+  inventoryHash: string; packageCount: number; drift: DriftItem[];
+}
+export interface DependencyReport {
+  reportId: string; repositoryId: string; revision: string;
+  inventories: DependencyInventorySummary[];
+  feed: { snapshotId: string; fetchedAt: string; ageHours: number; stale: boolean };
+  findings: DepFindingView[];
+  licences: { policyHash: string; counts: Record<LicenceOutcome, number>; items: LicenceItem[] };
+  coverage: {
+    ecosystemsSupported: string[]; ecosystemsPresentButUnsupported: string[];
+    privatePackagesExcluded: number; unmappedReachability: string[];
+  };
+}
+
+// ---- F05 — Trace-linked continuous profiling ----
+
+export type SampleKind = "CPU" | "WALL" | "ALLOC_SPACE" | "ALLOC_OBJECTS" | "INUSE_SPACE" | "INUSE_OBJECTS" | "LOCK_CONTENTION" | "OTHER";
+
+export interface SampleTypeView {
+  ordinal: number;
+  kind: SampleKind;
+  unit: string;
+  rawType: string;
+  rawUnit: string;
+}
+
+export interface ProfileMappingView {
+  mappingId: number;
+  buildId?: string;
+  file?: string;
+  hasFunctions: boolean;
+  hasFilenames: boolean;
+  hasLineNumbers: boolean;
+  hasInlineFrames: boolean;
+  revision?: string;
+  revisionState: "MATCHED" | "MISMATCH" | "UNKNOWN";
+}
+
+export interface ProfileDiagnostic {
+  code: string;
+  message: string;
+}
+
+export type DroppedSamples = number | "NOT_REPORTED";
+
+export interface IngestProfileResponse {
+  artifactHash: string;
+  format: string;
+  sampleTypes: SampleTypeView[];
+  periodNs?: number;
+  mappings: ProfileMappingView[];
+  diagnostics: ProfileDiagnostic[];
+  droppedSamples: DroppedSamples;
+}
+
+export type CorrelationGrade = "SPAN_LABELLED" | "ENDPOINT_LABELLED" | "WINDOW_OVERLAP" | "NONE";
+
+export interface CorrelationLink {
+  traceId?: string;
+  spanId?: string;
+  grade: CorrelationGrade;
+  overlapMs?: number;
+  reason: string;
+}
+
+export interface BuildResolution {
+  buildId?: string;
+  revision?: string;
+  state: "MATCHED" | "MISMATCH" | "UNKNOWN";
+  evidenceIds: string[];
+}
+
+export interface ProfileCorrelation {
+  correlationId: string;
+  links: CorrelationLink[];
+  build: BuildResolution;
+  populationHash: string;
+}
+
+export interface HotspotRow {
+  rank: number;
+  functionKey: string;
+  name: string;
+  file: string;
+  line: number;
+  selfValue: number;
+  totalValue: number;
+  selfShare: number;
+  totalShare: number;
+  sampleCount: number;
+  uncertaintyLow: number;
+  uncertaintyHigh: number;
+  entityId?: string;
+  attributionMethod: string;
+}
+
+export interface ProfileCoverage {
+  collectionRatio?: number;
+  droppedSamples: DroppedSamples;
+  truncatedStacks: number;
+  unattributedShare: number;
+  prunedShare: number;
+}
+
+export interface ProfileUncertainty {
+  method: string;
+  minSamplesForRanking: number;
+  tooFewSamples: boolean;
+}
+
+export interface HotspotResult {
+  rows: HotspotRow[];
+  unit: string;
+  sampleCount: number;
+  populationValue: number;
+  coverage: ProfileCoverage;
+  uncertainty: ProfileUncertainty;
+  basis: "MEASURED_PROFILE";
+  grade: CorrelationGrade;
+  populationHash: string;
+}
+
+export interface FlameNode {
+  functionKey: string;
+  name: string;
+  file: string;
+  line: number;
+  selfValue: number;
+  totalValue: number;
+  children: FlameNode[];
+  otherValue: number;
+}
+
+export interface FlameTreeResult {
+  tree: FlameNode;
+  nodeCount: number;
+  prunedValue: number;
+  prunedShare: number;
+  unit: string;
+  populationValue: number;
+}
+
+export interface ProfilePopulation {
+  populationHash: string;
+  service: string;
+  windowFromNs: number;
+  windowToNs: number;
+  revision?: string;
+  sampleTypeKind: SampleKind;
+  chunkIds: string[];
+  sampleCount: number;
+  expectedSamples?: number;
+  collectionRatio?: number;
+  requestCount?: number;
+  errorCount?: number;
+}
+
+export interface DeltaRow {
+  functionKey: string;
+  name: string;
+  file: string;
+  line: number;
+  baselineValue: number;
+  candidateValue: number;
+  deltaPerRequest: number;
+  baselineShare: number;
+  candidateShare: number;
+  shareChange: number;
+}
+
+export interface PopulationCompare {
+  baseline: ProfilePopulation;
+  candidate: ProfilePopulation;
+}
+
+export type CompareVerdict = "DIFFERENCE_OBSERVED" | "NO_MATERIAL_DIFFERENCE" | "NOT_COMPARABLE" | "INCONCLUSIVE";
+
+export interface CompareProfilesResult {
+  verdict: CompareVerdict;
+  reasons: string[];
+  rows: DeltaRow[];
+  populations: PopulationCompare;
+  limitations: string[];
+}
+
+// ---- F05 presentation binding (guide §15 minimum path) ----
+
+/** How strong a wording template may claim to be; a template moves classes only by becoming a new version. */
+export type MetricClaimClass = "MEASURED_PROFILE" | "POPULATION_OVERLAP" | "OBSERVED_TRACE" | "MODELED" | "ESTIMATED";
+
+/** One renderable metric fact, bound to its template, population, window, unit and basis. */
+export interface MetricItem {
+  itemId: string;
+  locator: string;
+  claimId: string | null;
+  templateId: string;
+  templateVersion: number;
+  certificateId: string | null;
+  value: number;
+  unit: string;
+  basis: MetricClaimClass;
+  populationHash: string;
+  window: { fromNs: number; toNs: number };
+  sampleCount: number;
+  populationValue: number | null;
+  artifactHash: string | null;
+  uncertainty?: { lower: number; upper: number } | null;
+  caveatIds: string[];
+}
+
+export interface PresentationCheckItem {
+  itemId: string;
+  verdict: "VERIFIED" | "REJECTED";
+  reasons: string[];
+}
+
+export interface PresentationManifest {
+  manifestHash: string;
+  items: MetricItem[];
+  checks: PresentationCheckItem[];
+}
+
+/** Form V17's compiled views. One view at a time; kinds are never mixed (F05-A3). */
+export interface ProfileViewSpec {
+  kind: "HOTSPOT_TABLE" | "METRIC_TABLE" | "WATERFALL" | "TIMELINE" | "FLAMEGRAPH";
+  title: string;
+  captions: string[];
+  artifactHash?: string;
+  revision?: string;
+  revisionState?: "MATCHED" | "MISMATCH" | "UNKNOWN";
+  populationHash?: string;
+  kindOfMetric?: SampleKind;
+  grade?: CorrelationGrade;
+  buildWarning?: string;
+  rows?: HotspotRow[];
+  metrics?: { ordinal: number; kind: SampleKind; unit: string; rawType: string; rawUnit: string; populationValue: number; sampleCount: number; present: true }[];
+  kindsPresent?: SampleKind[];
+  waterfall?: { traceId: string; spans: { spanId: string; parentId: string | null; name: string; startMs: number; durationMs: number; exclusiveMs: number; category: "CPU" | "IO" | "LOCK" | "POOL" | "QUEUE" | "OTHER"; onCriticalPath: boolean; errors: number }[]; criticalPath: string[]; criticalPathDurationMs: number; waitingNarrative: string | null };
+  timeline?: { chunks: { artifactHash: string; startNs: number; endNs: number; format: string; sampleCount: number; service: string | null }[]; brushNote: string };
+  flame?: FlameTreeResult;
+  outline?: { depth: number; name: string; file: string; share: number; id: string }[];
+  unverified?: { locator: string; reasons: string[] }[];
+}

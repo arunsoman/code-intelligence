@@ -27,7 +27,7 @@ export interface JobControl {
 }
 
 export type JobBody = (ctx: CallContext, control: JobControl) => Promise<ApiResult<unknown>>;
-export interface JobSpec { kind: JobKind; params: JobView["params"]; run: JobBody }
+export interface JobSpec { kind: JobKind; params: JobView["params"]; run: JobBody; priority?: number }
 
 interface Live { control: JobControl; requestCancel: () => boolean }
 
@@ -53,6 +53,7 @@ export class JobRunner {
     const job: JobView = {
       id: `job:${randomUUID()}`, kind: spec.kind, state: "QUEUED", cancelRequested: false, committing: false,
       phase: "queued", message: "Waiting for its turn.", params: spec.params, createdAt: new Date().toISOString(),
+      priority: spec.priority ?? 0,
     };
     this.store.putJob(job, ctx.idempotencyKey || null);
     this.store.pruneJobs();
@@ -97,8 +98,20 @@ export class JobRunner {
   }
 
   private async pump() {
+    try { await this.pumpInner(); } catch (e) {
+      // The database may already be closed (process teardown, a closed tenant's store): a job scheduled
+      // for a closed store reports nothing anywhere, and it does not crash the process either.
+      if (/database is not open|not open/i.test((e as Error).message ?? "")) return;
+      throw e;
+    }
+  }
+
+  private async pumpInner() {
     if (this.running) return;
-    const next = this.store.activeJobs().find((j) => j.state === "QUEUED" && this.bodies.has(j.id));
+    // Highest priority first (F01: INTERACTIVE > LIVE > BACKFILL); equal priority keeps first-in order.
+    const queued = this.store.activeJobs().filter((j) => j.state === "QUEUED" && this.bodies.has(j.id))
+      .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0) || a.createdAt.localeCompare(b.createdAt));
+    const next = queued[0];
     if (!next) return;
     this.running = true;
     const spec = this.bodies.get(next.id)!;
@@ -134,7 +147,17 @@ export class JobRunner {
       else finish({ state: "FAILED", phase: "failed", message: r.error.message, error: r.error });
     } catch (e) {
       if (e instanceof Cancelled) finish({ state: "CANCELLED", phase: "cancelled", message: "Cancelled. Nothing was saved." });
-      else finish({ state: "FAILED", phase: "failed", message: (e as Error).message, error: { code: "STORAGE_FAILURE", message: (e as Error).message, retryable: true } });
+      else {
+        if (/database is not open/i.test((e as Error).message ?? "")) {
+          // the process is tearing down; a late job may not write anything anymore — report nothing aloud
+          this.live.delete(next.id);
+          this.running = false;
+          for (const w of this.waiters.splice(0)) w();
+          queueMicrotask(() => void this.pump());
+          return;
+        }
+        finish({ state: "FAILED", phase: "failed", message: (e as Error).message, error: { code: "STORAGE_FAILURE", message: (e as Error).message, retryable: true } });
+      }
     } finally {
       this.live.delete(next.id);
       this.running = false;

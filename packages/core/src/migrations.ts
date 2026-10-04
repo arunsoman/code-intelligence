@@ -205,8 +205,328 @@ export const MIGRATIONS: Migration[] = [
       delete from rev_files;`),
     down: (db) => db.exec("alter table facts drop column ev; alter table relationships drop column ev;"),
   },
+  {
+    // F01: cross-repository search and navigation. Repository registry, per-revision build state, content-addressed blobs
+    // with a per-blob trigram text index (unchanged files cost nothing on re-index), symbol definitions and references with
+    // a resolution *basis* (the tier is derived at query time), package identity shared with the F04 inventory, and derived
+    // cross-repository edges. Each table is its own migration in practice; this slice ships as one orderable step.
+    version: 24, name: "cross-repo-search",
+    up: (db) => db.exec(`
+      create table repositories(
+        repository_id text primary key,
+        display_name text not null,
+        root text,
+        remote_url text,
+        default_branch text,
+        authz_scope_id text not null,
+        state text not null,
+        added_at text not null);
+      create table repo_revision_state(
+        repository_id text not null, revision text not null,
+        commit_hash text, content_root_hash text not null,
+        index_generation integer not null, analyzer_version text not null,
+        text_state text not null, symbol_state text not null, semantic_tier text not null,
+        files_total integer not null, files_indexed integer not null,
+        skipped_json text not null, indexed_at text not null,
+        primary key(repository_id, revision));
+      create table blobs(
+        blob_hash text primary key, size integer not null,
+        language text, is_binary integer not null, is_generated integer not null,
+        skip_reason text);
+      create table blob_data(blob_hash text primary key, body blob not null);
+      create table tree_entries(
+        repository_id text not null, revision text not null,
+        path text not null, blob_hash text not null,
+        primary key(repository_id, revision, path));
+      create index tree_entries_blob on tree_entries(blob_hash);
+      create virtual table blob_text using fts5(body, tokenize='trigram');
+      create table blob_text_map(blob_hash text primary key, rowid integer unique);
+      create table symbol_defs(
+        repository_id text not null, revision text not null, symbol_id text not null,
+        canonical_id text, name text not null, qualified text not null, kind text not null,
+        path text not null, start_byte integer not null, end_byte integer not null,
+        exported integer not null, basis text not null,
+        primary key(repository_id, revision, symbol_id));
+      create index symbol_defs_name on symbol_defs(repository_id, revision, name);
+      create table symbol_refs(
+        repository_id text not null, revision text not null, ref_id text not null,
+        target_symbol text, target_name text not null,
+        path text not null, start_byte integer not null, end_byte integer not null,
+        ref_kind text not null, resolution text not null, basis text not null,
+        candidates_json text,
+        primary key(repository_id, revision, ref_id));
+      create index symbol_refs_target on symbol_refs(repository_id, revision, target_symbol);
+      create index symbol_refs_name on symbol_refs(repository_id, revision, target_name);
+      create table package_provides(
+        repository_id text not null, revision text not null,
+        ecosystem text not null, package_name text not null, version text,
+        manifest_path text not null,
+        primary key(repository_id, revision, ecosystem, package_name, manifest_path));
+      create table package_requires(
+        repository_id text not null, revision text not null,
+        ecosystem text not null, package_name text not null, version text,
+        source text not null,
+        primary key(repository_id, revision, ecosystem, package_name, source));
+      create table package_exports(
+        repository_id text not null, revision text not null,
+        ecosystem text not null, package_name text not null,
+        exported_name text not null, symbol_id text not null,
+        primary key(repository_id, revision, ecosystem, package_name, exported_name));
+      create table cross_repo_edges(
+        from_repository text not null, from_revision text not null,
+        to_repository text not null, to_revision text not null,
+        via_ecosystem text not null, via_package text not null,
+        kind text not null, evidence_id text not null,
+        ambiguous integer not null default 0, version_mismatch text,
+        primary key(from_repository, from_revision, to_repository, via_package, kind));
+      create table search_flags(id integer primary key check (id = 1), enabled integer not null);
+      create table cursor_keys(id text primary key, key text not null);`),
+    down: (db) => db.exec(`
+      drop table if exists cursor_keys; drop table if exists search_flags; drop table if exists cross_repo_edges; drop table if exists package_exports;
+      drop table if exists package_requires; drop table if exists package_provides;
+      drop index if exists symbol_refs_name; drop index if exists symbol_refs_target; drop table if exists symbol_refs;
+      drop index if exists symbol_defs_name; drop table if exists symbol_defs;
+      drop table if exists blob_text_map; drop table if exists blob_text; drop index if exists tree_entries_blob;
+      drop table if exists tree_entries; drop table if exists blob_data; drop table if exists blobs;
+      drop table if exists repo_revision_state; drop table if exists repositories;`),
+  },
+  {
+    // F02: PR analysis and quality gates. Analyses are content-addressed by identity (§6.1); per-condition results keep every
+    // shown line linked to its policy condition; waivers carry scope and expiry; publications are idempotent per key;
+    // test evidence is per *revision* (the per-repository test_runs table is untouched).
+    version: 25, name: "pr-quality-gates",
+    up: (db) => db.exec(`
+      create table if not exists pr_analyses(
+        id text primary key,
+        repository_id text not null, forge text not null, pr_number integer not null,
+        repo_root text not null,
+        base_hash text not null, head_hash text not null, merge_base_hash text not null,
+        head_repository text,
+        base_revision text, head_revision text,
+        policy_id text not null, policy_hash text not null, analyzer_set_hash text not null,
+        state text not null,
+        job_id text,
+        generation integer not null default 1,
+        superseded_by text,
+        created_at text not null, updated_at text not null);
+      create index if not exists pr_analyses_pr on pr_analyses(repository_id, forge, pr_number, created_at);
+      create unique index if not exists pr_analyses_identity on pr_analyses(repository_id, pr_number, base_hash, head_hash, policy_hash, analyzer_set_hash);
+      create table if not exists pr_changed_files(
+        analysis_id text not null, path text not null, status text not null,
+        old_path text, additions integer, deletions integer, generated integer not null,
+        primary key(analysis_id, path));
+      create table if not exists pr_findings(
+        analysis_id text not null, finding_id text not null,
+        fingerprint text not null, introduced integer not null,
+        baseline_finding_id text,
+        rule_id text not null, rule_version integer not null, severity text not null,
+        path text not null, line integer, entity_id text,
+        kind text not null default 'SECURITY',
+        disposition text not null,
+        json text not null default '{}',
+        primary key(analysis_id, finding_id));
+      create index if not exists pr_findings_analysis on pr_findings(analysis_id, introduced, disposition);
+      create table if not exists gate_policies(
+        policy_id text not null, version integer not null, policy_hash text not null,
+        body text not null,
+        created_by text not null, created_at text not null,
+        primary key(policy_id, version));
+      create table if not exists gate_repo_policy(
+        repo_root text primary key, policy_id text not null, updated_at text not null);
+      create table if not exists gate_decisions(
+        decision_id text primary key, analysis_id text not null,
+        status text not null,
+        binding_hash text not null, evaluated_at text not null, valid_until text,
+        superseded integer not null default 0, revoked_reason text,
+        json text not null);
+      create index if not exists gate_decisions_analysis on gate_decisions(analysis_id, superseded);
+      create table if not exists gate_condition_results(
+        decision_id text not null, condition_id text not null,
+        outcome text not null,
+        reason text not null, evidence_ids text not null,
+        waiver_id text,
+        primary key(decision_id, condition_id));
+      create table if not exists gate_waivers(
+        id text primary key, repository_id text not null,
+        scope_kind text not null,
+        scope_json text not null,
+        actor text not null, approver text, rationale text not null,
+        created_at text not null, expires_at text not null, revoked_at text);
+      create index if not exists gate_waivers_repo on gate_waivers(repository_id, expires_at);
+      create table if not exists check_publications(
+        id text primary key, decision_id text not null, repository_id text not null,
+        forge text not null, head_hash text not null, idempotency_key text not null unique,
+        kind text not null,
+        external_id text, url text, state text not null,
+        attempts integer not null default 0, last_error text, updated_at text not null);
+      create index if not exists check_publications_head on check_publications(repository_id, head_hash, kind);
+      create table if not exists revision_test_runs(
+        revision text primary key, json text not null, source_hash text not null, ingested_at text not null);
+      create table if not exists pr_baselines(
+        merge_base_hash text not null, analyzer_set_hash text not null,
+        revision text not null, findings_json text not null, created_at text not null,
+        primary key(merge_base_hash, analyzer_set_hash));
+      create table if not exists pr_grants(
+        id text primary key, repository_id text not null, head_hash text not null,
+        decision_id text, pending integer not null default 0,
+        principal_id text not null, operation text not null, expires_at integer not null,
+        revoked integer not null default 0, created_at text not null);`),
+    down: (db) => db.exec(`
+      drop table if exists pr_grants; drop table if exists pr_baselines; drop table if exists revision_test_runs;
+      drop index if exists check_publications_head; drop table if exists check_publications;
+      drop index if exists gate_waivers_repo; drop table if exists gate_waivers;
+      drop table if exists gate_condition_results; drop table if exists gate_decisions;
+      drop table if exists gate_repo_policy; drop table if exists gate_policies;
+      drop index if exists pr_findings_analysis; drop table if exists pr_findings;
+      drop table if exists pr_changed_files;
+      drop index if exists pr_analyses_identity; drop index if exists pr_analyses_pr; drop table if exists pr_analyses;`),
+  },
+  {
+    // F05: trace-linked continuous profiling. Artifacts declare their sample types, units, sampling metadata and build
+    // identity; only aggregates (per function, and one pruned tree) are persisted — raw samples stay in the artifact store
+    // by reference. `dropped_samples` is nullable on purpose: NULL means "not reported" (F05-A4), 0 means "reported none".
+    // The sample_type_ordinal everywhere is the ordinal inside the artifact's own declared sample types.
+    version: 27, name: "trace-linked-profiles",
+    up: (db) => db.exec(`
+      create table if not exists profile_artifacts(
+        artifact_hash text primary key,
+        format text not null, format_version text,
+        profiler text, profiler_version text,
+        service text, instance text, runtime_name text,
+        start_ns integer not null, end_ns integer not null,
+        period_ns integer,
+        sampling_rate_hz real, declared_overhead_percent real,
+        dropped_samples integer,
+        truncated integer not null default 0,
+        stored_ref text not null,
+        bytes integer not null,
+        ingest_state text not null,             -- RECEIVED | PARSED | NORMALISED | AGGREGATED | LINKED | REJECTED | PARTIAL
+        diagnostics_json text not null default '[]',
+        labels_dropped integer not null default 0,
+        ingested_at text not null);
+      create index if not exists profile_artifacts_service on profile_artifacts(service, start_ns);
+      create table if not exists profile_sample_types(
+        artifact_hash text not null, ordinal integer not null,
+        kind text not null, unit text not null, raw_type text not null, raw_unit text not null,
+        primary key(artifact_hash, ordinal));
+      create table if not exists profile_mappings(
+        artifact_hash text not null, mapping_id integer not null,
+        build_id text, file text,
+        has_functions integer not null, has_filenames integer not null, has_line_numbers integer not null, has_inline_frames integer not null,
+        revision text, revision_state text not null,   -- MATCHED | MISMATCH | UNKNOWN
+        primary key(artifact_hash, mapping_id));
+      create table if not exists profile_labels(
+        artifact_hash text not null, label text not null, value text not null, sample_count integer not null,
+        primary key(artifact_hash, label, value));
+      create table if not exists profile_function_agg(
+        artifact_hash text not null, sample_type_ordinal integer not null,
+        function_key text not null,
+        name text not null, file text, line integer,
+        self_value real not null, total_value real not null, sample_count integer not null,
+        entity_id text, attribution_method text not null,
+        primary key(artifact_hash, sample_type_ordinal, function_key));
+      create index if not exists profile_function_agg_ord on profile_function_agg(artifact_hash, sample_type_ordinal, self_value);
+      create table if not exists profile_tree(
+        artifact_hash text not null, sample_type_ordinal integer not null,
+        tree_json text not null, node_count integer not null, pruned_value real not null,
+        primary key(artifact_hash, sample_type_ordinal));
+      create table if not exists profile_trace_links(
+        link_id text primary key, artifact_hash text not null, chunk_index integer,
+        trace_source text not null, trace_id text, span_id text,
+        grade text not null,
+        overlap_ms integer,
+        reason text not null, created_at text not null);
+      create index if not exists profile_trace_links_artifact on profile_trace_links(artifact_hash, trace_source);
+      create table if not exists profile_populations(
+        population_hash text primary key, service text not null,
+        window_from_ns integer not null, window_to_ns integer not null,
+        revision text, sample_type_kind text not null,
+        chunk_ids_json text not null,
+        sample_count integer not null, expected_samples integer, collection_ratio real,
+        request_count integer, error_count integer, created_at text not null);
+      create table if not exists profile_flags(id integer primary key check (id = 1), import integer not null, correlate integer not null, compare integer not null);`),
+    down: (db) => db.exec(`
+      drop table if exists profile_flags; drop table if exists profile_populations;
+      drop index if exists profile_trace_links_artifact; drop table if exists profile_trace_links;
+      drop table if exists profile_tree;
+      drop index if exists profile_function_agg_ord; drop table if exists profile_function_agg;
+      drop table if exists profile_labels; drop table if exists profile_mappings; drop table if exists profile_sample_types;
+      drop index if exists profile_artifacts_service; drop table if exists profile_artifacts;`),
+  },
+  {
+    // F04: dependency vulnerability and licence scanning (WP-01/WP-02). Lockfile inventories with package identities as
+    // purls, versioned advisory-feed snapshots, package-level findings with append-only assessments, licence outcomes
+    // and versioned licence policies. Assessments are append-only (F04-A4): a feed change writes a new row, never an update.
+    version: 26, name: "dependency-inventory",
+    up: (db) => db.exec(`
+      create table if not exists dependency_inventories(
+        inventory_id text primary key, repository_id text not null, revision text not null,
+        workspace_path text not null,
+        ecosystem text not null, tier text not null,
+        inventory_hash text not null, logical_hash text not null, source_hashes_json text not null,
+        drift_json text not null,
+        partial integer not null default 0, parse_errors_json text not null default '[]',
+        json text not null,
+        created_at text not null);
+      create table if not exists dep_packages(
+        inventory_id text not null, purl text not null, name text not null, version text not null,
+        integrity text,
+        registry text,
+        scope text not null default 'PROD',
+        is_private integer not null,
+        licence_declared text,
+        json text not null,
+        primary key(inventory_id, purl));
+      create table if not exists dep_edges(
+        inventory_id text not null, from_purl text not null, to_purl text not null,
+        range text,
+        scope text not null,
+        json text not null,
+        primary key(inventory_id, from_purl, to_purl, scope));
+      create table if not exists dep_roots(inventory_id text not null, purl text not null, scope text not null, primary key(inventory_id, purl, scope));
+      create table if not exists feed_snapshots(
+        snapshot_id text primary key, feed text not null, fetched_at text not null,
+        upstream_modified text, content_hash text not null, advisories integer not null,
+        licence_notice text not null,
+        json text not null);
+      create table if not exists advisories(
+        snapshot_id text not null, advisory_id text not null, aliases_json text not null,
+        ecosystem text not null, package_name text not null,
+        summary text, details text, severity_json text,
+        published text, modified text, withdrawn text,
+        affected_json text not null,
+        ecosystem_specific_json text,
+        json text not null,
+        primary key(snapshot_id, advisory_id, ecosystem, package_name));
+      create index if not exists advisories_pkg on advisories(snapshot_id, ecosystem, package_name);
+      create table if not exists dep_findings(
+        finding_id text primary key, repository_id text not null, purl text not null, advisory_id text not null,
+        introduced_in_revision text not null, last_seen_revision text not null, state text not null,
+        json text not null,
+        unique(repository_id, purl, advisory_id));
+      create table if not exists dep_assessments(
+        assessment_id text primary key, finding_id text not null,
+        snapshot_id text not null, inventory_id text not null,
+        applies integer not null, applicability_reason text not null,
+        severity_reported text, reachability text not null,
+        evidence_json text not null, assessed_at text not null);
+      create table if not exists dep_licence_findings(
+        inventory_id text not null, purl text not null, policy_hash text not null,
+        outcome text not null,
+        expression text, reason text not null, evidence_json text not null,
+        json text not null,
+        primary key(inventory_id, purl, policy_hash));
+      create table if not exists licence_policies(
+        policy_id text not null, version integer not null, policy_hash text not null, body text not null,
+        json text not null,
+        primary key(policy_id, version));`),
+    down: (db) => db.exec(`
+      drop table if exists licence_policies; drop table if exists dep_licence_findings; drop table if exists dep_assessments;
+      drop table if exists dep_findings; drop index if exists advisories_pkg; drop table if exists advisories;
+      drop table if exists feed_snapshots; drop table if exists dep_roots; drop table if exists dep_edges;
+      drop table if exists dep_packages; drop table if exists dependency_inventories;`),
+  },
 ];
-
 export function currentVersion(db: DatabaseSync): number {
   db.exec("create table if not exists schema_version(version integer not null, name text not null, applied_at text not null)");
   return (db.prepare("select coalesce(max(version), 0) v from schema_version").get() as { v: number }).v;

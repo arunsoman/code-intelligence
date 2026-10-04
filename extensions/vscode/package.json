@@ -6,19 +6,45 @@
   "publisher": "cie",
   "private": true,
   "type": "module",
-  "engines": { "vscode": "^1.90.0" },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
   "main": "./out/extension.js",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "configuration": {
       "title": "Code Intelligence",
       "properties": {
-        "cie.serverUrl": { "type": "string", "default": "http://127.0.0.1:4317", "description": "Local Code Intelligence server. Only loopback addresses are accepted." },
-        "cie.enabled": { "type": "boolean", "default": true, "description": "Send editor context (file path and line numbers only; never file contents)." }
+        "cie.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:4317",
+          "description": "Local Code Intelligence server. Only loopback addresses are accepted."
+        },
+        "cie.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Send editor context (file path and line numbers only; never file contents)."
+        }
       }
     },
-    "commands": [{ "command": "cie.toggle", "title": "Code Intelligence: Toggle editor context sharing" }]
+    "commands": [
+      {
+        "command": "cie.toggle",
+        "title": "Code Intelligence: Toggle editor context sharing"
+      },
+      {
+        "command": "cie.findReferences",
+        "title": "Code Intelligence: Find references in CIE"
+      }
+    ]
   },
-  "scripts": { "build": "tsc -p tsconfig.json" },
-  "devDependencies": { "@types/vscode": "^1.90.0", "typescript": "^5.9" }
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.9"
+  }
 }
