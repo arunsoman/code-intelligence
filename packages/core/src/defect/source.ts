@@ -54,7 +54,16 @@ export function blank(src: string, lang: Lang = "ts", keepStrings = false): stri
   return out.join("");
 }
 
-const lineAt = (src: string, at: number) => { let n = 1; for (let i = 0; i < at && i < src.length; i++) if (src[i] === "\n") n++; return n; };
+/** A binary-search line lookup: precompute line starts once so offset→line is O(log lines), not a rescan. */
+function lineIndex(src: string): (at: number) => number {
+  const starts = [0];
+  for (let i = 0; i < src.length; i++) if (src[i] === "\n") starts.push(i + 1);
+  return (at: number) => {
+    let lo = 0, hi = starts.length - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (starts[mid] <= at) lo = mid; else hi = mid - 1; }
+    return lo + 1;
+  };
+}
 function balanced(s: string, open: number): number {
   const o = s[open], c = o === "(" ? ")" : o === "[" ? "]" : "}";
   let d = 0;
@@ -72,6 +81,7 @@ const norm = (e: string) => e.replace(/\s+/g, "").replace(/^(?:await)/, "").repl
 /** Scan one function body (the text of the function, braces included). Offsets are relative to the start of `src`. */
 export function scanFunction(src: string, lang: Lang = "ts", knownLocks: Set<string> = new Set()): Scan {
   if (lang === "python") return scanPython(src, knownLocks);
+  const lineAt = lineIndex(src);
   const s0 = blank(src, lang);
   // `rw.readLock().lock()`: the lock is `rw.readLock`; the empty call parentheses are blanked (same length) so the chain reads as one expression.
   const s = lang === "java" ? s0.replace(/\.(readLock|writeLock)(\s*)\(\s*\)/g, (m, n: string, sp: string) => "." + n + sp + " ".repeat(m.length - 1 - n.length - sp.length)) : s0;
@@ -98,17 +108,17 @@ export function scanFunction(src: string, lang: Lang = "ts", knownLocks: Set<str
     if (s[p] === "{") bodyEnd = braces.get(p) ?? s.length;
     else { const semi = s.indexOf(";", p); bodyEnd = semi < 0 ? s.length : semi + 1; }
     const iterable = kind === "for" ? (/(?:\b(?:of|in|range)\s+|\s:(?!=)\s*)([^)]+)$/.exec(header)?.[1] ?? undefined) : undefined;
-    res.loops.push({ id: res.loops.length, kind, header: header.trim(), at: m.index, line: lineAt(src, m.index), headerEnd, bodyStart, bodyEnd, held: [], iterable: iterable?.trim() });
+    res.loops.push({ id: res.loops.length, kind, header: header.trim(), at: m.index, line: lineAt(m.index), headerEnd, bodyStart, bodyEnd, held: [], iterable: iterable?.trim() });
   }
   if (lang === "go") {
     // Go has no parentheses around the condition: `if x := f(); x > 0 {`.
-    for (const g of s.matchAll(/\bif\s+([^{};]*?(?:;[^{};]*?)?)\s*\{/g)) { const open = g.index! + g[0].length - 1; res.ifs.push({ at: g.index!, line: lineAt(src, g.index!), cond: g[1], bodyStart: open, bodyEnd: braces.get(open) ?? s.length }); }
+    for (const g of s.matchAll(/\bif\s+([^{};]*?(?:;[^{};]*?)?)\s*\{/g)) { const open = g.index! + g[0].length - 1; res.ifs.push({ at: g.index!, line: lineAt(g.index!), cond: g[1], bodyStart: open, bodyEnd: braces.get(open) ?? s.length }); }
   }
   const ifRe = /\bif\s*(?:let\s+[^=]+=\s*)?\(/g;
   while ((m = ifRe.exec(s))) {
     const open = m.index + m[0].length - 1; const close = balanced(s, open); if (close < 0) continue;
     let p = close + 1; while (/\s/.test(s[p] ?? "")) p++;
-    if (s[p] === "{") res.ifs.push({ at: m.index, line: lineAt(src, m.index), cond: s.slice(open + 1, close), bodyStart: p, bodyEnd: braces.get(p) ?? s.length });
+    if (s[p] === "{") res.ifs.push({ at: m.index, line: lineAt(m.index), cond: s.slice(open + 1, close), bodyStart: p, bodyEnd: braces.get(p) ?? s.length });
   }
 
   // Pass 2: in textual order, locks (held set), awaits and calls.
@@ -132,8 +142,8 @@ export function scanFunction(src: string, lang: Lang = "ts", knownLocks: Set<str
       for (let k = held.length - 1; k >= 0; k--) if ((held[k].scoped || held[k].raii) && held[k].depth >= depth) held.splice(k, 1);
       depth--; continue;
     }
-    if (m[4]) { res.awaits.push({ at: m.index, line: lineAt(src, m.index), held: snapshot() }); continue; }
-    if (m[1]) res.awaits.push({ at: m.index, line: lineAt(src, m.index), held: snapshot() });
+    if (m[4]) { res.awaits.push({ at: m.index, line: lineAt(m.index), held: snapshot() }); continue; }
+    if (m[1]) res.awaits.push({ at: m.index, line: lineAt(m.index), held: snapshot() });
     const chain = m[2].replace(/\s+/g, "").replace(/\?\./g, "."); const at = m.index; const open = m.index + m[0].length - 1;
     const cut = Math.max(chain.lastIndexOf("."), chain.lastIndexOf("::")); const method = cut >= 0 ? chain.slice(cut + (chain[cut] === ":" ? 2 : 1)) : chain; const receiver = cut >= 0 ? chain.slice(0, cut) : undefined;
     const close = balanced(s, open); const args = close < 0 ? "" : s.slice(open + 1, close);
@@ -154,7 +164,7 @@ export function scanFunction(src: string, lang: Lang = "ts", knownLocks: Set<str
       const lock = norm(receiver);
       const aliasUncertain = params.includes(lock.split(/[.[]/)[0]) || /[[(]/.test(receiver);
       const reentrant = held.some((h) => h.lock === lock);
-      res.acquisitions.push({ lock, raw: receiver, kind, at, line: lineAt(src, at), heldBefore: snapshot(), guard: binding, aliasUncertain, reentrant });
+      res.acquisitions.push({ lock, raw: receiver, kind, at, line: lineAt(at), heldBefore: snapshot(), guard: binding, aliasUncertain, reentrant });
       // Rust: `let g = x.lock().unwrap()` holds for the block; a temporary holds for the statement (ignored here).
       if (!isTry || binding) held.push({ lock, kind, guard: binding, depth, scoped: false, raii: lang === "rust" && !!binding });
       else if (isTry) held.push({ lock, kind, guard: binding, depth, scoped: false, raii: false });
@@ -175,7 +185,7 @@ export function scanFunction(src: string, lang: Lang = "ts", knownLocks: Set<str
     }
     if (lang === "java" && chain === "synchronized") {
       const lock = norm(args.trim());
-      res.acquisitions.push({ lock, raw: args.trim(), kind: "scoped", at, line: lineAt(src, at), heldBefore: snapshot(), aliasUncertain: params.includes(lock.split(/[.[]/)[0]), reentrant: held.some((h) => h.lock === lock) });
+      res.acquisitions.push({ lock, raw: args.trim(), kind: "scoped", at, line: lineAt(at), heldBefore: snapshot(), aliasUncertain: params.includes(lock.split(/[.[]/)[0]), reentrant: held.some((h) => h.lock === lock) });
       pendingScoped.push({ lock, kind: "scoped" });
       callRe.lastIndex = open + 1; continue;
     }
@@ -186,7 +196,7 @@ export function scanFunction(src: string, lang: Lang = "ts", knownLocks: Set<str
       if (brace >= 0 && brace < argsEnd) {
         // The callback body is a block inside the arguments; the lock is held for exactly that block.
         const bodyOpen = brace;
-        res.acquisitions.push({ lock, raw: receiver ?? args, kind: "scoped", at, line: lineAt(src, at), heldBefore: snapshot(), aliasUncertain: params.includes(lock.split(/[.[]/)[0]), reentrant: held.some((h) => h.lock === lock) });
+        res.acquisitions.push({ lock, raw: receiver ?? args, kind: "scoped", at, line: lineAt(at), heldBefore: snapshot(), aliasUncertain: params.includes(lock.split(/[.[]/)[0]), reentrant: held.some((h) => h.lock === lock) });
         pendingScoped.push({ lock, kind: "scoped" });
         void bodyOpen;
       }
@@ -194,10 +204,10 @@ export function scanFunction(src: string, lang: Lang = "ts", knownLocks: Set<str
     }
     if (ITER.has(method) && receiver) {
       const bodyStart = open + 1; const bodyEnd = close < 0 ? s.length : close;
-      if (/=>|function/.test(args)) res.loops.push({ id: res.loops.length, kind: "iter", header: `${receiver}.${method}`, at, line: lineAt(src, at), headerEnd: bodyStart, bodyStart, bodyEnd, held: snapshot(), iterable: receiver });
+      if (/=>|function/.test(args)) res.loops.push({ id: res.loops.length, kind: "iter", header: `${receiver}.${method}`, at, line: lineAt(at), headerEnd: bodyStart, bodyStart, bodyEnd, held: snapshot(), iterable: receiver });
     }
     if (NOISE.has(method) && !receiver) { callRe.lastIndex = open + 1; continue; }
-    res.calls.push({ name: method, receiver, method, at, line: lineAt(src, at), held: snapshot(), loops: inLoops(at), awaited, binding, args, text: s.slice(at, close < 0 ? open + 1 : close + 1) });
+    res.calls.push({ name: method, receiver, method, at, line: lineAt(at), held: snapshot(), loops: inLoops(at), awaited, binding, args, text: s.slice(at, close < 0 ? open + 1 : close + 1) });
     callRe.lastIndex = open + 1;
     last = open;
   }
