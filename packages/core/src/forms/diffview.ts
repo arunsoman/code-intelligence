@@ -11,6 +11,22 @@ const SYMBOLS = new Set(["function", "method", "class"]);
 const BEHAVIOR = new Set(["throws", "writes", "uses_transaction", "publishes", "subscribes"]);
 const fkey = (f: Fact) => `${f.subject}|${f.predicate}|${JSON.stringify((f.object as { value?: unknown }).value)}`;
 
+/**
+ * A symbol's observable signature: every fact the index records on it (throws, writes, reads,
+ * transactions, locks, visibility, unresolved calls…) plus its outgoing calls and how many call
+ * sites each has. It is read from the store for both revisions, so it needs no source text, and a
+ * pure local-variable rename leaves it identical while a change to calls, writes, throws or
+ * transactions changes it.
+ */
+function signatureIndex(store: Store, revision: string): (id: string) => string {
+  const byId = new Map<string, string[]>();
+  const add = (id: string, s: string) => { const list = byId.get(id); if (list) list.push(s); else byId.set(id, [s]); };
+  for (const r of store.allRelationships(revision)) if (r.kind === "calls") add(r.from, `->${r.to}#${r.evidence.length}`);
+  for (const f of store.allFacts(revision)) add(f.subject, `${f.predicate}=${JSON.stringify((f.object as { value?: unknown }).value)}`);
+  for (const [k, list] of byId) byId.set(k, list.sort());
+  return (id) => (byId.get(id) ?? []).join("|");
+}
+
 export function buildDiff(store: Store, rev: RevisionRow, question: string, subject?: string) {
   const o = { rev, form: "SemanticDiff" as const, question, kind: "diff", caption: "", reason: "You asked what changed, so this compares two indexed revisions: the before and after side by side, and what the change means." };
   const before = (subject && store.revision(subject)) || store.previousRevision(rev.id);
@@ -20,7 +36,10 @@ export function buildDiff(store: Store, rev: RevisionRow, question: string, subj
   const ents = (id: string) => new Map(store.entities(id).filter((e) => SYMBOLS.has(e.kind)).map((e) => [e.entityId, e]));
   const A = ents(before.id), B = ents(rev.id);
   const added = [...B.keys()].filter((id) => !A.has(id)), removed = [...A.keys()].filter((id) => !B.has(id));
-  const changed = [...B.keys()].filter((id) => A.has(id) && A.get(id)!.symbolHash !== B.get(id)!.symbolHash);
+  const sigA = signatureIndex(store, before.id), sigB = signatureIndex(store, rev.id);
+  // A symbol is changed only when its text AND its observable signature changed: a pure local-variable
+  // rename (or a formatting-only edit) changes the text hash but no recorded fact and no call edge.
+  const changed = [...B.keys()].filter((id) => A.has(id) && A.get(id)!.symbolHash !== B.get(id)!.symbolHash && sigA(id) !== sigB(id));
 
   // Rename and move understanding (post-MVP): an entity id is `kind:file#name`, so a disappearance
   // paired with an appearance elsewhere maps onto the pair when the symbol text (name-base +
@@ -127,6 +146,6 @@ export function buildDiff(store: Store, rev: RevisionRow, question: string, subj
   v.params = { subject: before.id };
   if (kindOf.size) v.gaps.push("Renames and moves are understood when the symbol text is identical and only the name or file changed; a rename bundled with an edit still counts as a change.");
   if (touched.length > shown.length) v.gaps.push(`${touched.length - shown.length} more changed symbol(s) are not drawn; the consequences above still count them.`);
-  v.gaps.push("Changes are detected per symbol by comparing the text of each symbol, and behavioural facts per asserted fact; matching relies on indexed symbol text, so restructuring an expression counts as a change.");
+  v.gaps.push("A symbol counts as changed when both its text and its observable signature (its recorded facts and outgoing calls) differ. A rename or formatting edit of locals is therefore not a change; a change that alters only control flow but records no new call, write, throw, read, lock or transaction is not distinguished from a rename here.");
   return { view: v, claims };
 }
