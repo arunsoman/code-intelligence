@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Claim, ViewNode, ViewSpec } from "@cie/schema";
-import { basePositions, effectiveView, nextLevel, render, selectedAggregates } from "../src/graph.ts";
+import { basePositions, effectiveView, render, selectedAggregates } from "../src/graph.ts";
 
 const node = (id: string, file: string, over: Partial<ViewNode> = {}): ViewNode => ({ id, entityRefs: [id.slice(2)], label: id.slice(2), kind: "function", file, claimIds: [], evidenceIds: ["e"], tier: "RELEVANT", displayMode: "FACT", unresolvedCalls: 0, role: "symbol", ...over });
 const view: ViewSpec = {
@@ -20,23 +22,6 @@ const view: ViewSpec = {
     { id: "g:concept:Data", label: "Data", kind: "concept", childNodeIds: ["n:c", "n:d"], level: 4, evidenceIds: [], displayMode: "INFERENCE" },
   ],
 };
-
-test("hysteresis: entering a level needs more zoom than staying in it", () => {
-  assert.equal(nextLevel(5, 1.0), 5, "fit-to-screen is level 5");
-  assert.equal(nextLevel(5, 1.6), 6, "enter L6 at 1.6");
-  assert.equal(nextLevel(6, 1.5), 6, "stay in L6 between 1.45 and 1.6");
-  assert.equal(nextLevel(6, 1.4), 5, "leave below 1.45");
-  assert.equal(nextLevel(5, 0.95), 5, "stay in L5 above 0.9");
-  assert.equal(nextLevel(4, 0.95), 4, "but do not enter L5 until 0.97");
-  assert.equal(nextLevel(4, 1.0), 5);
-  assert.equal(nextLevel(2, 0.05), 0, "far out is the whole system");
-  assert.equal(nextLevel(0, 0.13), 0, "stay in L0 until 0.14");
-  assert.equal(nextLevel(0, 0.2), 1);
-  assert.equal(nextLevel(0, 10), 6);
-  let l = 4; const seen: number[] = [];
-  for (const z of [0.96, 0.98, 0.96, 0.98, 0.93, 0.95, 0.91]) { l = nextLevel(l, z); seen.push(l); }
-  assert.deepEqual(seen, [4, 5, 5, 5, 5, 5, 5], "jitter around a boundary never flips the level back and forth");
-});
 
 test("level 5 shows every symbol with compound groups; identities are the node ids", () => {
   const r = render(view, 5, basePositions(view));
@@ -268,4 +253,11 @@ test("identity-preserving zoom: element ids, evidence and selection survive goin
   assert.deepEqual([...selectedAggregates(again, ["n:a"])], ["n:a"], "the same selection finds the same element after zooming back in");
   for (const n of out.nodes) assert.ok(n.members.every((m) => view.nodes.some((x) => x.id === m)), "aggregates are made of real elements");
   assert.equal(view.nodes[0].id, "n:a", "the view itself is not rewritten by zooming");
+});
+
+test("levels are driven by legibility, not by a relative zoom table", () => {
+  const src = readFileSync(join(import.meta.dirname, "../src/graph.ts"), "utf8");
+  assert.doesNotMatch(src, /export function nextLevel|export const zoomForLevel/, "the relative-zoom level mechanism is gone");
+  const canvas = readFileSync(join(import.meta.dirname, "../src/Canvas.tsx"), "utf8");
+  assert.match(canvas, /levelMove\(/, "the canvas asks the legibility rule which way the level moves");
 });

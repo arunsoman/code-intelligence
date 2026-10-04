@@ -14,19 +14,9 @@ export const LEVELS = [
 export const MAX_LEVEL = 6;
 export const DEFAULT_LEVEL = 5;
 
-// Relative zoom (current / zoom-at-fit); fit-to-screen is 1.0 = level 5. ENTER[i] is the zoom needed to move up
-// into level i+1 from below, LEAVE[i] the zoom below which level i+1 is left. LEAVE < ENTER, so the view never
-// oscillates around a boundary.
-const ENTER = [0.14, 0.26, 0.4, 0.62, 0.97, 1.6];
-const LEAVE = [0.12, 0.23, 0.36, 0.56, 0.9, 1.45];
-export function nextLevel(current: number, rel: number): number {
-  let l = current;
-  while (l < MAX_LEVEL && rel >= ENTER[l]) l++;
-  while (l > 0 && rel < LEAVE[l - 1]) l--;
-  return l;
-}
-/** A representative relative zoom for a level, used when a level is chosen explicitly. */
-export const zoomForLevel = (level: number) => [0.08, 0.2, 0.32, 0.5, 0.8, 1.0, 2.0][level];
+// Level changes are driven by label legibility in legibility.ts (on-screen px of an essential label), not by
+// relative zoom; the old relative-threshold table was removed in #48 so it cannot come back. `levelMove` is the
+// one place that decides, and Canvas.tsx calls it.
 
 const SYNTHETIC = new Set(["failure-site", "symptom", "state"]);
 
