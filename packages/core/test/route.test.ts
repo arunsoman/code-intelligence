@@ -2,8 +2,11 @@
 // How accurate a real model is on unseen questions is measured elsewhere (scripts/eval-tiny-models.ts, route-live.test.ts); these tests pin the contract around it.
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
-import { OllamaRouter, buildRequest, candidateLabels, nearest, readText, routerFromEnv, routerArg, chooseRouter } from "../src/llm-router.ts";
+import { OllamaRouter, buildRequest, candidateLabels, nearest, readText, routerFromEnv, routerArg, chooseRouter, scriptRouterFromEnv } from "../src/llm-router.ts";
 import { EXEMPLARS, INTENT_EXEMPLARS } from "../src/route-exemplars.ts";
 import { ctx, setup } from "./helpers.ts";
 import { DEV, HELD_OUT, HELD_OUT_V2, HELD_OUT_V3 } from "./route-sets.ts";
@@ -117,6 +120,24 @@ test("through the service: the model's reading builds the view, an explicit choi
 test("CIE_ROUTER=off disables the router", () => {
   assert.equal(routerFromEnv({ CIE_ROUTER: "off" }), null);
   assert.equal(routerFromEnv({ CIE_ROUTER_MODEL: "smollm2:360m" })?.name, "smollm2:360m");
+});
+
+test("CIE_ROUTER_SCRIPT makes the router deterministic for tests and demos", async () => {
+  assert.equal(scriptRouterFromEnv({}), null);
+  const dir = mkdtempSync(join(tmpdir(), "cie-router-"));
+  const file = join(dir, "script.json");
+  writeFileSync(file, JSON.stringify({ "how are these connected?": "connected", "pin charge": { label: "pin", target: "charge" } }));
+  const env = { CIE_ROUTER_SCRIPT: file };
+  const r = scriptRouterFromEnv(env);
+  assert.equal(r?.name, "scripted");
+  assert.deepEqual(await r!.choose(buildRequest("how are these connected?", ["connected", "SemanticMap"])), { label: "connected", target: "" });
+  assert.deepEqual(await r!.choose(buildRequest("pin charge", ["pin", "SemanticMap"])), { label: "pin", target: "charge" });
+  assert.equal(await r!.choose(buildRequest("something else", ["connected", "SemanticMap"])), null, "an unlisted question gets no answer, so the caller falls back");
+  assert.equal(await r!.choose(buildRequest("how are these connected?", ["SemanticMap"])), null, "a label that is not on offer is refused");
+  assert.equal(routerFromEnv(env)?.name, "scripted", "the script takes precedence over the model");
+  const chosen = await chooseRouter([], env);
+  assert.equal(chosen.router?.name, "scripted");
+  assert.match(chosen.note ?? "", /scripted from/);
 });
 
 test("the router model comes from the command line, else CIE_ROUTER_MODEL, else the default; a model that is missing or hosted falls back to the default and says so", async () => {

@@ -50,7 +50,7 @@ test("keyboard-only complete investigation: index, ask, navigate, select, ask ab
     assert.ok(await b.eval(`!!document.querySelector('[role=group][aria-label^="Selected elements"]')`), "the selection is a named group next to the message box");
     await b.type("how are these connected?");
     await b.key("Enter");
-    await b.waitFor(() => `document.querySelectorAll('.drawer article.claim').length > 0`, 30_000, "the explanation");
+    await b.waitFor(() => `document.querySelector('.drawer h2')?.textContent === 'Explanation' && document.querySelectorAll('.drawer article.claim').length > 0`, 30_000, "the explanation");
     assert.ok(await b.eval(`/Explanation/.test(document.querySelector('.drawer h2').textContent)`));
     assert.ok(await b.eval(`document.querySelector('.drawer article.claim .badge').textContent !== 'Fact'`), "a model claim is not shown as fact");
     // 6. Confirm the first claim: Tab to Confirm, Enter, type why, Enter.

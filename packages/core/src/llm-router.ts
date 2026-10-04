@@ -6,6 +6,7 @@
 // What this costs and buys is measured, not assumed: scripts/eval-tiny-models.ts (docs/eval-tiny-models.json). Without a model the router says so and the
 // caller falls back to the general map; nothing is guessed in its place.
 import type { FormId, ViewRoute } from "@cie/schema";
+import { readFileSync } from "node:fs";
 import { HashEmbedder, cosine } from "./embeddings.ts";
 import { EXEMPLARS, INTENT_EXEMPLARS } from "./route-exemplars.ts";
 import { VISUALS } from "./visuals.ts";
@@ -117,8 +118,40 @@ export class OllamaRouter implements RouterModel {
   }
 }
 export const DEFAULT_ROUTER_MODEL = "qwen3:0.6b";
-/** CIE_ROUTER=off turns the model router off (the general map is used); CIE_ROUTER_MODEL names another local model. */
+
+/**
+ * A router that is not a model: an exact question → label map read from the JSON file named by `CIE_ROUTER_SCRIPT`.
+ * It exists so a browser test's view or intent does not depend on a 0.6B model's answer; it is for tests and demos,
+ * not a user feature. A question that is not in the file gets no answer, and the caller falls back exactly as it
+ * does when the model is unavailable. The value for a question is a label string, or `{ label, target }` to name
+ * something ("pin charge").
+ */
+export class ScriptRouter implements RouterModel {
+  readonly name = "scripted";
+  private script: Record<string, RouterAnswer>;
+  constructor(script: Record<string, string | RouterAnswer>) {
+    this.script = Object.fromEntries(Object.entries(script).map(([q, v]) => [q, typeof v === "string" ? { label: v, target: "" } : v]));
+  }
+  async choose(req: RouterRequest): Promise<RouterAnswer | null> {
+    const q = req.user.replace(/^Q: /, "").replace(/\nA:$/, "").trim();
+    const hit = this.script[q] ?? this.script[q.toLowerCase()] ?? this.script[q.replace(/\?+$/, "").toLowerCase()];
+    if (!hit || !req.labels.includes(hit.label)) return null;
+    return { label: hit.label, target: hit.target.slice(0, 120) };
+  }
+}
+
+/** A `ScriptRouter` when `CIE_ROUTER_SCRIPT` names a readable JSON file, else null. */
+export function scriptRouterFromEnv(env: Record<string, string | undefined> = process.env): ScriptRouter | null {
+  if (!env.CIE_ROUTER_SCRIPT) return null;
+  const raw = JSON.parse(readFileSync(env.CIE_ROUTER_SCRIPT, "utf8")) as Record<string, string | RouterAnswer>;
+  return new ScriptRouter(raw);
+}
+
+/** CIE_ROUTER=off turns the model router off (the general map is used); CIE_ROUTER_MODEL names another local model;
+ * CIE_ROUTER_SCRIPT makes it deterministic for tests and demos. */
 export function routerFromEnv(env: Record<string, string | undefined> = process.env): RouterModel | null {
+  const scripted = scriptRouterFromEnv(env);
+  if (scripted) return scripted;
   return env.CIE_ROUTER === "off" ? null : new OllamaRouter({ model: env.CIE_ROUTER_MODEL, baseUrl: env.CIE_OLLAMA_URL });
 }
 
@@ -142,6 +175,8 @@ const has = (names: string[], want: string) => names.includes(want) || names.inc
  */
 export async function chooseRouter(argv: string[] = process.argv.slice(2), env: Record<string, string | undefined> = process.env): Promise<{ router: RouterModel | null; note?: string }> {
   const asked = routerArg(argv) ?? env.CIE_ROUTER_MODEL;
+  const scripted = scriptRouterFromEnv(env);
+  if (scripted) return { router: scripted, note: `router scripted from ${env.CIE_ROUTER_SCRIPT}: questions get exactly the labels in that file.` };
   if (asked === "off" || env.CIE_ROUTER === "off") return { router: null, note: "router model off: questions get the general map" };
   const baseUrl = env.CIE_OLLAMA_URL;
   const base = baseUrl ?? "http://127.0.0.1:11434";
