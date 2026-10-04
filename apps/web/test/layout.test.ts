@@ -152,3 +152,11 @@ test("every form at every level: no node overlaps and no edge through an unrelat
   assert.equal(views.length, 15, "all fifteen canvas forms were checked (the terrain view is not a node-link drawing)");
   worker.close();
 });
+
+test("forceLayout: nodes with no links stay near the rest instead of drifting away", () => {
+  const items = [...Array.from({ length: 6 }, (_, i) => item(`c${i}`, i * 40, (i % 2) * 40)), ...Array.from({ length: 6 }, (_, i) => item(`lone${i}`, i * 10, 5))];
+  const links = Array.from({ length: 5 }, (_, i) => ({ from: `c${i}`, to: `c${i + 1}` }));
+  forceLayout(items, links);
+  const w = Math.max(...items.map((i) => i.x)) - Math.min(...items.map((i) => i.x)), h = Math.max(...items.map((i) => i.y)) - Math.min(...items.map((i) => i.y));
+  assert.ok(w < 2000 && h < 2000, `layout spans ${Math.round(w)} x ${Math.round(h)}`);
+});

@@ -40,6 +40,8 @@ export function separate(items: Item[], gap = 14, maxIter = 400): void {
 }
 
 // ------------------------------------------------------------------ force-directed (Fruchterman–Reingold)
+/** Pull towards the centroid, as a fraction of the ideal edge length per unit of distance. */
+const GRAVITY = 0.005;
 export function forceLayout(items: Item[], links: Link[], iterations = 220): void {
   const n = items.length;
   if (n < 2) return;
@@ -70,6 +72,11 @@ export function forceLayout(items: Item[], links: Link[], iterations = 220): voi
       dx.set(a.id, dx.get(a.id)! - ex * f); dy.set(a.id, dy.get(a.id)! - ey * f);
       dx.set(b.id, dx.get(b.id)! + ex * f); dy.set(b.id, dy.get(b.id)! + ey * f);
     }
+    // Gravity: without it nothing holds a node with few or no links, and disconnected nodes drift thousands of units away, so a fit leaves every node a few pixels wide.
+    let cx = 0, cy = 0;
+    for (const i of items) { cx += i.x; cy += i.y; }
+    cx /= n; cy /= n;
+    for (const i of items) { dx.set(i.id, dx.get(i.id)! - (i.x - cx) * GRAVITY * k); dy.set(i.id, dy.get(i.id)! - (i.y - cy) * GRAVITY * k); }
     for (const i of items) {
       const vx = dx.get(i.id)!, vy = dy.get(i.id)!, d = Math.max(Math.hypot(vx, vy), 0.01);
       const m = Math.min(d, t);
