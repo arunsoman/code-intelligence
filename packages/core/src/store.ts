@@ -384,6 +384,10 @@ export class Store {
     return new Map((this.db.prepare("select entity_id, mode from overrides where repo_root = ?").all(repoRoot) as any[]).map((r) => [r.entity_id, r.mode]));
   }
 
+  /** Point a revision at the git HEAD it now reflects. The content-addressed graph is shared; only the
+   *  history attached to it changes when commits arrive that leave the files' bytes as they were. */
+  setGitHead(rev: string, head: string) { this.db.prepare("update revisions set git_head = ? where id = ?").run(head, rev); }
+
   // ---- extra facts for a revision (test artifacts); replaced wholesale per source ----
   replaceFactsBySource(rev: string, idPrefix: string, facts: Fact[]) {
     this.tx(() => {

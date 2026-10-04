@@ -8,7 +8,7 @@ import { BudgetController, runModel, StubProvider, type GatewayFailure, type Gat
 import type {
   AnalysisBatch, ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptStore, ConceptsOutput, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceRef, ExplainResult, ExplanationOutput,
   HypothesesOutput, ModelProvider, ModelRequest, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec, SourceSpan,
-  DefectDetectionInput, DetectorFinding, BenchmarkPolicy, BenchmarkResult,
+  DefectDetectionInput, DetectorFinding, BenchmarkPolicy, BenchmarkResult, Fact,
 } from "@cie/schema";
 import { SCHEMA_CHALLENGE, SCHEMA_CONCEPTS, SCHEMA_EXPLANATION, SCHEMA_HYPOTHESES, SCHEMA_REPRESENTATION } from "@cie/schema";
 import { applyVerdict, gateClaim, modelText, wilson, withChallenge } from "./claims.ts";
@@ -44,7 +44,7 @@ import { DeltaBaseError, type RevisionRow, type Store } from "./store.ts";
 import { entityAt, fingerprint, locateFrames, looksLikeTrace, parseTrace } from "./trace.ts";
 import { compileView } from "./viewspec.ts";
 import { catalog, ensureEdgeClaims, visualByForm, type CatalogEntry } from "./visuals.ts";
-import { isGitRepo } from "./gitinfo.ts";
+import { fileHistory, headOf, isGitRepo } from "./gitinfo.ts";
 import { ensureGhForgeConnector } from "./gh.ts";
 import { backup as backupStore, deleteRepository as deleteRepo, gc as gcStore, type DeleteReport, type GcReport } from "./storage.ts";
 import { API_VERSION, MIN_EXTENSION, health as healthOf, restoreDrill, type Health, type RestoreDrill } from "./ops.ts";
@@ -660,6 +660,7 @@ export class Service {
       const delta = { mode: batch.mode ?? "full", changed: batch.changedFiles?.length ?? row.fileCount, removed: batch.removedFiles?.length ?? 0, of: row.fileCount };
       this.store.audit(actor(ctx), "repo.ingest", row.repoRoot, { revision: row.id, files: row.fileCount, mode: delta.mode, changedFiles: delta.changed, removedFiles: delta.removed, reusedParses: unchanged ? "all (worktree is the previous revision)" : reused?.message ?? "none (full parse)", phasesMs: phases });
       const tests = lap("testArtifacts", () => ingestTestArtifacts(this.store, row));
+      lap("historyRefresh", () => this.refreshHistoryFacts(row));
       const warnings = batch.diagnostics.filter((d) => d.code !== "REUSED_CACHED_PARSES").map((d) => d.message);
       const spans = lap("traceExports", () => ingestTraceExports(this.store, row));
       if (spans) warnings.push(`Loaded trace exports (${spans.found.join(", ")}): ${spans.spans} span(s), ${spans.errors} error span(s)${spans.p95 !== null ? `, p95 ${spans.p95} ms` : ""}.`, ...spans.staleness.map((x) => `Trace data may be out of date: ${x}`));
@@ -677,6 +678,34 @@ export class Service {
       if (e instanceof Cancelled || (control && e instanceof WorkerError && e.api.code === "CANCELLED")) throw new Cancelled();
       return fail(ctx, e instanceof WorkerError ? e.api : storageFailure(e));
     }
+  }
+
+  /**
+   * History facts record the git chronology of the files at index time, but a content-addressed revision is
+   * reused whenever the files' bytes are unchanged — even though HEAD may have advanced since (a
+   * revert-and-reapply, a merge that yields identical files, an amended author or message, an empty commit).
+   * When HEAD differs from the one the revision was indexed at, recompute just the history facts and point the
+   * revision at the new HEAD: the graph itself is shared and untouched.
+   */
+  private refreshHistoryFacts(row: RevisionRow): void {
+    const root = row.repoRoot;
+    if (!isGitRepo(root)) return;
+    const head = headOf(root);
+    if (!head || head === row.gitHead) return;
+    const files = new Set(Object.keys(this.store.revisionFiles(row.id)));
+    const facts: Fact[] = [];
+    for (const [rel, h] of fileHistory(root, 500)) {
+      if (!files.has(rel)) continue;
+      const eid = `ev:${createHash("sha256").update(`history:${rel}:${h.lastCommit}`).digest("hex").slice(0, 16)}`;
+      facts.push({
+        id: `fact:history:${rel}`, subject: `file:${rel}`, predicate: "history", resolution: "OBSERVED",
+        object: { kind: "ScalarValue", value: { commits: h.commits, lastCommit: h.lastCommit, lastAuthor: h.lastAuthor, lastDate: h.lastDate, lastSubject: h.lastSubject, authors: h.authors } },
+        evidence: [{ id: eid, sourceId: rel, class: "HISTORY", observedAt: h.lastDate, accessScopeId: "local", state: "CURRENT", location: { kind: "DocumentLocation", documentId: h.lastCommit, version: h.lastDate, locator: `${rel}: ${h.commits} commit(s); last by ${h.lastAuthor} — ${h.lastSubject}` } }],
+      });
+    }
+    this.store.replaceFactsBySource(row.id, "fact:history:", facts);
+    this.store.setGitHead(row.id, head);
+    row.gitHead = head;
   }
 
   // ---------------------------------------------------------------- C22 hypothesis and agentic investigation

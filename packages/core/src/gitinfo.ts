@@ -12,6 +12,9 @@ export interface Commit { hash: string; author: string; email: string; date: str
 
 export function isGitRepo(root: string): boolean { return git(root, ["rev-parse", "--is-inside-work-tree"])?.trim() === "true"; }
 
+/** The repository's current HEAD commit (full hash); null when it is not a git work tree or has no commits. */
+export function headOf(root: string): string | null { return git(root, ["rev-parse", "HEAD"])?.trim() || null; }
+
 // ------------------------------------------------------------------ repository-wide history index
 // One `git log --name-only` pass groups every commit by the files it touched, so history-based forms
 // (change risk, ownership, archaeology fallbacks) read the whole repository with a bounded number of
@@ -53,6 +56,21 @@ export function fileLog(root: string, rel: string, limit = 40): Commit[] {
   const out = git(root, ["log", `-n${limit}`, "--no-renames", "--pretty=format:%H%x1f%an%x1f%ae%x1f%aI%x1f%s", "--", rel]);
   if (!out) return [];
   return out.split("\n").filter(Boolean).map((l) => { const [hash, author, email, date, subject] = l.split("\x1f"); return { hash, author, email, date, subject }; });
+}
+
+/** Per-file history summaries, keyed by repository-relative path. The shape and the 500-commit cap
+ *  match the worker's index-time history, so a refresh replaces the facts with like for like. */
+export interface FileHistory { commits: number; lastCommit: string; lastAuthor: string; lastDate: string; lastSubject: string; authors: number }
+export function fileHistory(root: string, limit = 500): Map<string, FileHistory> {
+  const out = new Map<string, FileHistory>();
+  const index = repoHistory(root, limit);
+  if (!index) return out;
+  for (const [rel, commits] of index.byFile) {
+    if (!commits.length) continue;
+    const last = commits[0];
+    out.set(rel, { commits: commits.length, lastCommit: last.hash, lastAuthor: last.author, lastDate: last.date, lastSubject: last.subject, authors: new Set(commits.map((c) => c.author)).size });
+  }
+  return out;
 }
 
 /** Per-author commit counts for a file (de facto ownership), most active first. */
