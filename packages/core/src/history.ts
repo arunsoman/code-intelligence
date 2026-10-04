@@ -62,17 +62,25 @@ export class History {
     const canonA = new Map([...A.keys()].map((id) => [id, this.registry.canonOf(base, id)])), canonB = new Map([...B.keys()].map((id) => [id, this.registry.canonOf(head, id)]));
     const headByCanon = new Map<string, string>(); for (const [id, c] of canonB) if (c) headByCanon.set(c, id);
     const used = new Set<string>(), out: EntityChange[] = [];
+    const same = (id: string, h: string, e: Entity, c: string | null): EntityChange => {
+      const he = B.get(h)!;
+      used.add(h);
+      const change = h === id ? (he.symbolHash === e.symbolHash ? "UNCHANGED" : "MODIFIED") : he.file !== e.file ? "MOVED" : "RENAMED";
+      return { canonId: c, base: id, head: h, change };
+    };
     for (const [id, e] of A) {
       const c = canonA.get(id) ?? null;
-      const h = c ? headByCanon.get(c) : B.has(id) ? id : undefined;
-      if (!h) { out.push({ canonId: c, base: id, head: null, change: "REMOVED" }); continue; }
-      used.add(h);
-      const he = B.get(h)!;
-      const change = h === id ? (he.symbolHash === e.symbolHash ? "UNCHANGED" : "MODIFIED") : he.file !== e.file ? "MOVED" : "RENAMED";
-      out.push({ canonId: c, base: id, head: h, change });
+      // The same id is the same symbol; canonical identity only helps where the id changed (a rename or a move). An
+      // exact id always wins, and canon is only a fallback: preferring a canonical lookup that misses would report two
+      // revisions whose identities were registered separately as an almost total replacement, not a small change (#53).
+      if (B.has(id) && !used.has(id)) { out.push(same(id, id, e, c)); continue; }
+      const byCanon = c ? headByCanon.get(c) : undefined;
+      if (byCanon && !used.has(byCanon)) { out.push(same(id, byCanon, e, c)); continue; }
+      out.push({ canonId: c, base: id, head: null, change: "REMOVED" });
     }
-    for (const [id] of B) if (!used.has(id)) out.push({ canonId: canonB.get(id) ?? null, base: null, head: id, change: "ADDED" });
-    return out;
+    const added: EntityChange[] = [];
+    for (const [id] of B) if (!used.has(id)) added.push({ canonId: canonB.get(id) ?? null, base: null, head: id, change: "ADDED" });
+    return [...out, ...added];
   }
 
   compare(base: string, head: string): ChangeSet {
