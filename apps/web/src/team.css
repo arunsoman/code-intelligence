@@ -1,0 +1,12 @@
+/* The Team tab's own layout: labelled fields, a switch, and inline input+button groups. Kept in its own file so the
+   panel reads consistently with the card-based tabs without editing the shared stylesheet. */
+.team-panel .field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
+.team-panel .field > label { font-size: 12px; color: var(--muted); }
+.team-panel .field select { max-width: 380px; }
+.team-panel .inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.team-panel .inline input:not([type=checkbox]) { flex: 1 1 220px; width: auto; min-width: 180px; }
+.team-panel .inline > button { flex: 0 0 auto; }
+.team-panel button.switch { flex: 0 0 auto; align-self: flex-start; padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--ink); }
+.team-panel button.switch[aria-checked="true"] { border-color: var(--ok); color: var(--ok); }
+.team-panel button.switch::before { content: "○"; margin-right: 7px; }
+.team-panel button.switch[aria-checked="true"]::before { content: "●"; }

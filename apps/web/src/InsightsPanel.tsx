@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { JobView, ResolvedEvidence, ViewSpec } from "@cie/schema";
 import { call } from "./api.ts";
+import "./team.css";
 import { cumulative, plural, relative, truncateMiddle, windowByOffsets, windowOf } from "./defect-list.ts";
 
 type Tab = "security" | "config" | "identity" | "changes" | "runtime" | "sources" | "team" | "evaluation";
@@ -734,17 +735,37 @@ function Team({ revision, view }: { revision: string; view: ViewSpec | null }) {
   const handover = async () => { const cur = await call<any>("C29", "read", { workspaceId: sel }); if (!cur.ok) { setMsg(cur.error.message); return; } const r = await call<any>("C29", "handover", { workspaceId: sel, principalId: who, expectedVersion: cur.value.workspace.version }, key()); setMsg(r.ok ? `Handed over to ${who}. ${r.value.recipient.gaps.items ? `${r.value.recipient.gaps.items} item(s) are about code they cannot read and were not shown to them.` : "They can read everything in it."}` : r.error.message); await refresh(); await shares.run("C29", "shares", { workspaceId: sel }); };
   const confirm = async (c: any, verdict: "CONFIRM" | "REFUTE") => { const r = await call<any>("C29", "confirmSharedConcept", { conceptId: c.id, verdict, explanation: verdict === "CONFIRM" ? "confirmed by the team" : "corrected by the team", expectedVersion: 0 }, key()); if (!r.ok && r.error.code === "VERSION_CONFLICT") { const cv = (r.error as any).currentVersion; const r2 = await call<any>("C29", "confirmSharedConcept", { conceptId: c.id, verdict, explanation: verdict === "CONFIRM" ? "confirmed by the team" : "corrected by the team", expectedVersion: cv }, key()); setMsg(r2.ok ? `Concept ${r2.value.state.toLowerCase()}.` : r2.error.message); } else setMsg(r.ok ? `Concept ${r.value.state.toLowerCase()}.` : r.error.message); await concepts.run("C29", "conceptsFor", { revision }); };
   const peopleOther = (people.data ?? []).filter((p) => p !== me.data?.principal);
-  return <>
+  // "Team features are on for me" means my principal has been registered, not merely that I have a session.
+  const teamOn = !!me.data?.principal && (people.data ?? []).includes(me.data.principal);
+  return <div className="team-panel">
     <p className="notice">Sharing never grants access to code. Someone can be given an investigation only if they can already read what it is about, and they see it cut down to what they may read. You are <strong>{me.data?.principal ?? "…"}</strong>{me.data ? ` in ${me.data.tenant}` : ""}.</p>
     <Status error={me.error ?? people.error ?? ws.error ?? shares.error ?? read.error} busy={me.busy || people.busy} />
     {msg && <p role="status" className="small">{msg}</p>}
     <section><h3>People and access</h3>
-      <div className="row"><button onClick={() => void enable()} className="secondary">Turn on team features for me</button><label htmlFor="pname" className="sr">New person</label><input id="pname" value={name} onChange={(e) => setName(e.target.value)} /><button onClick={() => void addPerson()} className="secondary">Add person</button><label htmlFor="deny" className="sr">Folders to hide, comma separated</label><input id="deny" value={deny} onChange={(e) => setDeny(e.target.value)} placeholder="folders to hide, e.g. src/ledger" /></div>
-      <ul>{(people.data ?? []).map((p) => <li key={p}>{p}{p !== me.data?.principal && <span className="row"> <button className="secondary small" onClick={() => void grant(p, true)}>Can read this repository</button><button className="secondary small" onClick={() => void grant(p, true, deny.split(",").map((x) => x.trim()).filter(Boolean))} disabled={!deny.trim()}>Can read, except the folders on the right</button><button className="secondary small" onClick={() => void grant(p, false)}>No access</button></span>}</li>)}</ul>
+      <div className="field">
+        <button type="button" role="switch" aria-checked={teamOn} disabled={teamOn} className={`switch ${teamOn ? "on" : ""}`} onClick={() => void enable()}>{teamOn ? "Team features are on" : "Turn on team features for me"}</button>
+      </div>
+      <div className="field">
+        <label htmlFor="pname">New person</label>
+        <div className="inline">
+          <input id="pname" value={name} onChange={(e) => setName(e.target.value)} />
+          <button onClick={() => void addPerson()} className="secondary">Add person</button>
+        </div>
+      </div>
+      <div className="field">
+        <label htmlFor="deny">Folders to hide, comma separated</label>
+        <input id="deny" value={deny} onChange={(e) => setDeny(e.target.value)} placeholder="e.g. src/ledger" />
+      </div>
+      <ul>{(people.data ?? []).map((p) => <li key={p}>{p}{p !== me.data?.principal && <span className="row wrap"> <button className="secondary small" onClick={() => void grant(p, true)}>Can read this repository</button><button className="secondary small" onClick={() => void grant(p, true, deny.split(",").map((x) => x.trim()).filter(Boolean))} disabled={!deny.trim()}>Can read, except the folders above</button><button className="secondary small" onClick={() => void grant(p, false)}>No access</button></span>}</li>)}</ul>
     </section>
     <section><h3>Shared investigations</h3>
-      <div className="row"><button onClick={() => void makeShared()} disabled={!view}>Share the current map as a new investigation</button><label htmlFor="wssel" className="sr">Investigation</label>
-        <select id="wssel" value={sel} onChange={(e) => setSel(e.target.value)}><option value="">choose…</option>{(ws.data ?? []).map((w) => <option key={w.id} value={w.id}>{w.name} ({w.role})</option>)}</select></div>
+      <div className="field">
+        <label htmlFor="wssel">Investigation to share</label>
+        <select id="wssel" value={sel} onChange={(e) => setSel(e.target.value)}><option value="">choose…</option>{(ws.data ?? []).map((w) => <option key={w.id} value={w.id}>{w.name} ({w.role})</option>)}</select>
+      </div>
+      <div className="inline">
+        <button onClick={() => void makeShared()} disabled={!view}>Share the current map as a new investigation</button>
+      </div>
       {sel && <>
         <div className="row"><label htmlFor="who">With</label><select id="who" value={who} onChange={(e) => setWho(e.target.value)}><option value="">choose…</option>{peopleOther.map((p) => <option key={p}>{p}</option>)}</select>
           <label htmlFor="role">as</label><select id="role" value={role} onChange={(e) => setRole(e.target.value)}><option>viewer</option><option>editor</option></select>
@@ -759,7 +780,7 @@ function Team({ revision, view }: { revision: string; view: ViewSpec | null }) {
         {(c.confirmedBy.length > 0 || c.refutedBy.length > 0) && <p className="muted small">{c.confirmedBy.length ? `Confirmed by ${c.confirmedBy.join(", ")}. ` : ""}{c.refutedBy.length ? `Corrected by ${c.refutedBy.join(", ")}.` : ""}</p>}
         <div className="row"><button className="secondary small" onClick={() => void confirm(c, "CONFIRM")}>Confirm</button><button className="secondary small" onClick={() => void confirm(c, "REFUTE")}>Correct</button></div></li>)}</ul>
     </section>
-  </>;
+  </div>;
 }
 
 // ---------------------------------------------------------------- C17

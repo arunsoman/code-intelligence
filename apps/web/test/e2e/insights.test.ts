@@ -62,6 +62,8 @@ test("insights screens: security, configuration, identity, changes, runtime, sou
     await b.waitFor(() => `/Sharing never grants access to code/.test(document.querySelector('[role=tabpanel]').innerText)`, 5000);
     await press(b, "Turn on team features for me");
     await b.waitFor(() => `/Team features are on for you/.test(document.querySelector('[role=tabpanel]').innerText)`, 8000);
+    // The controls are laid out and labelled: a switch, and a visible label for every field (not placeholder-only).
+    assert.ok(await b.eval(`(() => { const panel = document.querySelector('[role=tabpanel]'); const labelled = (id) => { const el = panel.querySelector('label[for="' + id + '"]'); return !!el && el.textContent.trim().length > 0 && !el.classList.contains('sr'); }; return !!panel.querySelector('[role=switch]') && labelled('pname') && labelled('deny') && labelled('wssel'); })()`), "team panel: a switch and visible labels for each field");
     await b.tabTo(`el.id === 'pname'`); await b.eval(`document.getElementById('pname').select()`); await b.type("bea");
     await press(b, "Add person");
     await b.waitFor(() => `/bea added\\. They have no access/.test(document.querySelector('[role=tabpanel]').innerText)`, 8000);
