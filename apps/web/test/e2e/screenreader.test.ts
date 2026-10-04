@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
 import { Browser, CHROME } from "./cdp.ts";
+import { toSymbolLevel } from "./levels.ts";
 import { REPO, startServer } from "./harness.ts";
 
 test("screen-reader summaries: the map has a name and a description, every control has an accessible name, changes are announced in a live region, and the whole map can be read as a list with each element's state in words", { skip: !existsSync(CHROME), timeout: 120_000 }, async () => {
@@ -16,7 +17,7 @@ test("screen-reader summaries: the map has a name and a description, every contr
     await b.waitFor(() => `/rev \\S+ · \\d+ files/.test(document.querySelector('header').innerText)`, 60_000);
     await b.tabTo(`el.id === 'chat-input'`); await b.type("show me how authentication works"); await b.key("Enter");
     await b.waitFor(() => `document.querySelectorAll('.elements li').length > 2`, 30_000);
-    await b.tabTo(`el.getAttribute('role') === 'application'`);
+    await toSymbolLevel(b);
     await b.key("ArrowRight");
 
     const { nodes } = await b.send("Accessibility.getFullAXTree");

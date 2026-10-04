@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { test } from "node:test";
 import { Browser, CHROME } from "./cdp.ts";
+import { toSymbolLevel } from "./levels.ts";
 import { POINTER_GUARD, REPO, startServer } from "./harness.ts";
 
 test("keyboard-only complete investigation: index, ask, navigate, select, ask about the selection, read the evidence, confirm, save and read the map as text, without one pointer event", { skip: !existsSync(CHROME), timeout: 120_000 }, async () => {
@@ -25,8 +26,8 @@ test("keyboard-only complete investigation: index, ask, navigate, select, ask ab
     await b.waitFor(() => `document.querySelector('[role=application]')?.getAttribute('aria-label')?.length > 20 && document.querySelectorAll('.elements li').length > 2`, 30_000, "the map to be composed");
     const caption = await b.eval(`document.querySelector('[role=application]').getAttribute('aria-label')`);
     assert.match(caption, /^Map\. .{10,}/);
-    // 3. Move around the map with the arrow keys; Enter opens an element and its evidence.
-    await b.tabTo(`el.getAttribute('role') === 'application'`);
+    // 3. Move around the map with the arrow keys; Enter opens an element and its evidence (individual symbols: step down to that level first).
+    await toSymbolLevel(b);
     await b.key("ArrowRight");
     await b.waitFor(() => `/Focused|focus|fact|inference|hypothesis|fog/i.test(document.querySelector('[role=status]').textContent)`, 5000, "the first focused element to be announced");
     const first = await b.eval(`document.querySelector('[role=status]').textContent`);

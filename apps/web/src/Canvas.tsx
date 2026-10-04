@@ -1,6 +1,8 @@
 import cytoscape from "cytoscape";
-import { useEffect, useRef } from "react";
-import { describeNode, nextByDirection, nextLevel, viaToSegments, zoomForLevel, type Dir, type RenderEdge, type RenderNode, type Rendered } from "./graph.ts";
+import { useEffect, useRef, useState } from "react";
+import { describeNode, MAX_LEVEL, nextByDirection, viaToSegments, type Dir, type RenderEdge, type RenderNode, type Rendered } from "./graph.ts";
+import { POLICY, fontPx, levelMove, panFor, pullInside, resolveAnchor, visibility, zoomAfterSwitch, type AnchorNode, type Move } from "./legibility.ts";
+import "./zoom.css";
 
 interface Props {
   rendered: Rendered;
@@ -21,18 +23,20 @@ interface Props {
   fitTick: number;
   onToggleNode: (n: RenderNode) => void;
   onStepLevel: (delta: number) => void;
+  /** True for forms whose levels change the content (the semantic map); the others keep one drawing and only hide labels that are too small to read. */
+  semanticLevels: boolean;
   onClear: () => void;
   onOpenOutline: () => void;
   announce: (text: string) => void;
 }
 
-const DWELL_MS = 250;
+const DWELL_MS = 120; // short: labels must not stay unreadable while a switch waits (below the hard minimum it is immediate)
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
 function style(): cytoscape.StylesheetJson {
   const heatCool = css("--heat-cool"), heatHot = css("--heat-hot"), fact = css("--fact"), inf = css("--inference"), fog = css("--fog"), hyp = css("--hyp"), warn = css("--warn"), ok = css("--ok"), ink = css("--ink"), muted = css("--muted"), panel = css("--panel"), accent = css("--accent");
   return [
-    { selector: "node", style: { label: "data(label)", "font-size": 11, color: ink, "text-valign": "center", "text-halign": "center", "text-wrap": "ellipsis", "text-max-width": "136px", width: 150, height: 28, shape: "round-rectangle", "background-color": panel, "border-width": 2, "border-color": fact } },
+    { selector: "node", style: { label: "data(label)", "min-zoomed-font-size": POLICY.hardMinPx, "font-size": 11, color: ink, "text-valign": "center", "text-halign": "center", "text-wrap": "ellipsis", "text-max-width": "136px", width: 150, height: 28, shape: "round-rectangle", "background-color": panel, "border-width": 2, "border-color": fact } },
     { selector: "node[tier = 'CRITICAL']", style: { "border-width": 3, "font-weight": 700 } },
     { selector: "node[tier = 'CONTEXT']", style: { opacity: 0.8, "border-width": 1 } },
     { selector: "node[display = 'INFERENCE']", style: { "border-style": "dashed", "border-color": inf } },
@@ -67,7 +71,7 @@ function style(): cytoscape.StylesheetJson {
     { selector: "node.stale", style: { opacity: 0.45, "border-style": "dotted", "border-color": muted } },
     { selector: ":parent", style: { "text-valign": "top", "text-halign": "center", "background-opacity": 0.06, "background-color": ink, "border-width": 1, "border-style": "solid", "border-color": muted, "font-size": 11, color: muted, padding: "14px", shape: "round-rectangle", "font-weight": 400 } },
     { selector: "node[group = 'concept']", style: { "border-style": "dashed", "border-color": inf, "background-color": inf, "background-opacity": 0.06, "font-size": 12 } },
-    { selector: "edge", style: { width: 2, "line-color": fact, "target-arrow-color": fact, "target-arrow-shape": "triangle", "curve-style": "bezier", "arrow-scale": 0.9, label: "data(label)", "font-size": 9, color: muted, "text-background-color": panel, "text-background-opacity": 1, "text-background-padding": "2px" } },
+    { selector: "edge", style: { "min-zoomed-font-size": POLICY.hardMinPx, width: 2, "line-color": fact, "target-arrow-color": fact, "target-arrow-shape": "triangle", "curve-style": "bezier", "arrow-scale": 0.9, label: "data(label)", "font-size": 9, color: muted, "text-background-color": panel, "text-background-opacity": 1, "text-background-padding": "2px" } },
     { selector: "edge[display = 'INFERENCE']", style: { "line-style": "dashed", "line-color": inf, "target-arrow-color": inf, color: inf } },
     { selector: "edge[display = 'HYPOTHESIS']", style: { "line-style": "dotted", width: 3, "line-color": hyp, "target-arrow-color": hyp, color: hyp } },
     { selector: "edge[display = 'FOG']", style: { "line-style": "dotted", "line-color": fog, "target-arrow-color": fog } },
@@ -94,16 +98,47 @@ function focusEdges(c: cytoscape.Core, focusId: string | null) {
   });
 }
 
-/** Fit the whole map, but never smaller than readable: a very wide layout starts at a legible zoom at its left edge and is panned from there. */
-const MIN_READABLE = 0.5;
+/**
+ * Fit the whole map, never larger than 1.4. It is never cropped: when the fit leaves labels too small to read, the caller moves to a coarser level
+ * (new views), and below the hard minimum the labels are simply not drawn (Cytoscape `min-zoomed-font-size`), so the drawing is whole and honest.
+ */
 function fitReadable(c: cytoscape.Core) {
   c.resize(); c.fit(undefined, 40);
   if (c.zoom() > 1.4) { c.zoom(1.4); c.center(); }
-  else if (c.zoom() < MIN_READABLE) {
-    const bb = c.elements().boundingBox();
-    c.zoom(MIN_READABLE);
-    c.pan({ x: 40 - bb.x1 * MIN_READABLE, y: Math.max(40, (c.height() - (bb.y2 - bb.y1) * MIN_READABLE) / 2) - bb.y1 * MIN_READABLE });
+}
+const reduceMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/** What the camera was looking at when a level change was proposed, and what the change is. */
+interface Pending { kind: "switch" | "fit"; move: Exclude<Move, "none">; ids: string[]; screen: { x: number; y: number } | null }
+
+/** The thing the person was looking at: what is under the pointer (or near it), else the selection, else what is nearest the middle of the view. */
+function captureAnchor(c: cytoscape.Core, rendered: Rendered, selected: Set<string>, pointer: { x: number; y: number } | null, focusId: string | null): { ids: string[]; screen: { x: number; y: number } } {
+  const w = c.width(), h = c.height(), centre = { x: w / 2, y: h / 2 };
+  const byId = new Map(rendered.nodes.map((n) => [n.id, n]));
+  const nearest = (pt: { x: number; y: number }) => {
+    let best: cytoscape.NodeSingular | null = null, dist = Infinity;
+    c.nodes().forEach((n) => {
+      if (n.isParent()) return;
+      const b = n.renderedBoundingBox(), inside = pt.x >= b.x1 && pt.x <= b.x2 && pt.y >= b.y1 && pt.y <= b.y2;
+      const d = inside ? 0 : Math.hypot(pt.x - (b.x1 + b.x2) / 2, pt.y - (b.y1 + b.y2) / 2);
+      if (d < dist) { dist = d; best = n; }
+    });
+    return { node: best as cytoscape.NodeSingular | null, dist };
+  };
+  const preferred = [...(focusId ? [focusId] : []), ...selected].flatMap((id) => byId.get(id)?.members ?? []);
+  const pt = pointer ?? centre;
+  const under = nearest(pt);
+  if (under.node && (pointer ? under.dist <= 80 : true) && byId.get(under.node.id())) {
+    const ms = byId.get(under.node.id())!.members;
+    return { ids: [...ms.filter((m) => preferred.includes(m)), ...ms.filter((m) => !preferred.includes(m))], screen: pt };
   }
+  if (preferred.length) {
+    const first = [...(focusId ? [focusId] : []), ...selected].map((id) => c.getElementById(id)).find((e) => !e.empty());
+    const b = first?.renderedBoundingBox();
+    return { ids: preferred, screen: b ? { x: (b.x1 + b.x2) / 2, y: (b.y1 + b.y2) / 2 } : pt };
+  }
+  const mid = nearest(centre);
+  return { ids: mid.node ? byId.get(mid.node.id())?.members ?? [] : [], screen: centre };
 }
 
 export function Canvas(p: Props) {
@@ -112,12 +147,18 @@ export function Canvas(p: Props) {
   const cb = useRef(p);
   cb.current = p;
   const syncing = useRef(false);
-  const baseZoom = useRef(1);
   const levelRef = useRef(p.level);
+  const pending = useRef<Pending | null>(null);
+  const animating = useRef(false);
+  const programmatic = useRef(false); // true while the app itself moves the camera (a fit): those zoom events are not the person zooming
+  const lastZoom = useRef(1);
+  const pointer = useRef<{ x: number; y: number } | null>(null);
+  const [hint, setHint] = useState<{ off: number; total: number; labelsHidden: boolean }>({ off: 0, total: 0, labelsHidden: false });
   const lockZoom = useRef<number | null>(null);
   const timer = useRef<number | null>(null);
   const lastViewKey = useRef("");
   const focusId = useRef<string | null>(null);
+  const refreshRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     if (!host.current) return;
@@ -130,31 +171,88 @@ export function Canvas(p: Props) {
     c.on("tap", "node", (e) => { if (e.target.isParent()) return; const n = cb.current.rendered.nodes.find((x) => x.id === e.target.id()); if (n) cb.current.onTapNode(n); });
     c.on("dbltap", "node", (e) => { const n = cb.current.rendered.nodes.find((x) => x.id === e.target.id()); if (n) cb.current.onExpand(n); });
     c.on("tap", "edge", (e) => { const ed = cb.current.rendered.edges.find((x) => x.id === e.target.id()); if (ed) cb.current.onTapEdge(ed); });
-    // Semantic zoom: propose a level from the relative zoom, report it only once the zoom has settled.
+    // What the person can see: how many elements are outside the viewport, and whether labels are too small to be drawn.
+    let raf = 0;
+    const refresh = () => {
+      raf = 0;
+      const boxes = c.nodes().filter((n) => !n.isParent()).map((n) => n.renderedBoundingBox());
+      const v = visibility(boxes, c.width(), c.height());
+      const labelsHidden = boxes.length > 0 && fontPx(c.zoom()) < POLICY.hardMinPx;
+      setHint((h) => (h.off === v.offscreen && h.total === v.total && h.labelsHidden === labelsHidden ? h : { off: v.offscreen, total: v.total, labelsHidden }));
+    };
+    const schedule = () => { if (!raf) raf = requestAnimationFrame(refresh); };
+    c.on("pan zoom resize", schedule);
+    refreshRef.current = refresh;
+    host.current.addEventListener("wheel", (e) => { const r = host.current!.getBoundingClientRect(); pointer.current = { x: e.clientX - r.left, y: e.clientY - r.top }; }, { passive: true, capture: true });
+    // Semantic zoom: the level changes when labels become unreadable (zooming out) or large (zooming in), not at a fixed relative zoom.
+    // Zoom lock: a level chosen explicitly (stepper, fit) is not undone by the next stray zoom event.
+    lastZoom.current = c.zoom();
     c.on("zoom", () => {
+      const z = c.zoom(), moving = z < lastZoom.current ? "out" : "in";
+      lastZoom.current = z;
+      if (animating.current || programmatic.current || !cb.current.semanticLevels) return;
       if (lockZoom.current !== null) {
-        if (Math.abs(c.zoom() - lockZoom.current) / lockZoom.current < 0.02) return;
+        if (Math.abs(z - lockZoom.current) / lockZoom.current < 0.02) return;
         lockZoom.current = null; // the user moved the camera again; zoom drives the level once more
       }
-      const rel = c.zoom() / baseZoom.current;
-      const proposal = nextLevel(levelRef.current, rel);
       if (timer.current) window.clearTimeout(timer.current);
-      if (proposal === levelRef.current) return;
-      timer.current = window.setTimeout(() => {
-        const again = nextLevel(levelRef.current, c.zoom() / baseZoom.current);
-        if (again !== levelRef.current) { levelRef.current = again; cb.current.onZoomLevel(again); }
-      }, DWELL_MS);
+      const move = levelMove(z, moving, levelRef.current, MAX_LEVEL);
+      if (move === "none") return;
+      const go = () => {
+        const again = levelMove(c.zoom(), moving, levelRef.current, MAX_LEVEL);
+        if (again === "none") return;
+        pending.current = { kind: "switch", move: again, ...captureAnchor(c, cb.current.rendered, cb.current.selected, pointer.current, focusId.current) };
+        levelRef.current += again === "coarser" ? -1 : 1;
+        cb.current.onZoomLevel(levelRef.current);
+      };
+      if (move === "coarser" && fontPx(z) < POLICY.hardMinPx) go(); else timer.current = window.setTimeout(go, DWELL_MS);
     });
     // The stage can be resized after mount (caption wraps, panels resize); keep cytoscape's measurements current.
     const ro = new ResizeObserver(() => c.resize());
     ro.observe(host.current);
-    return () => { ro.disconnect(); if (timer.current) window.clearTimeout(timer.current); c.destroy(); cy.current = null; };
+    return () => { ro.disconnect(); if (timer.current) window.clearTimeout(timer.current); if (raf) cancelAnimationFrame(raf); c.destroy(); cy.current = null; };
   }, []);
 
   // A level chosen explicitly (stepper, chat) must not be undone by the next stray zoom event.
   useEffect(() => {
     if (levelRef.current !== p.level) { levelRef.current = p.level; if (cy.current) lockZoom.current = cy.current.zoom(); }
   }, [p.level]);
+
+  /** Move the camera from code. The zoom events this causes are ignored by the level logic, so a fit cannot undo a level that was just chosen. */
+  const quietly = (c: cytoscape.Core, fn: () => void) => {
+    programmatic.current = true;
+    try { fn(); } finally { lastZoom.current = c.zoom(); requestAnimationFrame(() => { programmatic.current = false; lastZoom.current = c.zoom(); }); }
+  };
+
+  /**
+   * The elements have just been replaced by another level. Put the camera where the person was looking: the node that now stands for what was under
+   * the pointer goes back to the same place on screen, at a zoom where labels are readable, and a drawing that fits is pulled fully into view.
+   */
+  const settleLevelChange = (c: cytoscape.Core, rendered: Rendered, pend: Pending) => {
+    const w = c.width(), h = c.height(), pad = 40;
+    const bb = c.elements().boundingBox();
+    const zFit = bb.w > 0 && bb.h > 0 ? Math.min((w - 2 * pad) / bb.w, (h - 2 * pad) / bb.h) : 1;
+    const z = zoomAfterSwitch(pend.move, zFit);
+    const nodes: AnchorNode[] = rendered.nodes.map((n) => { const q = c.getElementById(n.id).position(); return { id: n.id, members: n.members, x: q.x, y: q.y }; });
+    const anchor = resolveAnchor(pend.ids, nodes);
+    const model = anchor ? { x: anchor.x, y: anchor.y } : { x: (bb.x1 + bb.x2) / 2, y: (bb.y1 + bb.y2) / 2 };
+    const screen = anchor && pend.screen ? pend.screen : { x: w / 2, y: h / 2 };
+    let pan = panFor(model, screen, z);
+    if (pend.move === "coarser") pan = pullInside(pan, bb, z, w, h);
+    lockZoom.current = null;
+    if (reduceMotion()) { quietly(c, () => c.viewport({ zoom: z, pan })); return; }
+    animating.current = true;
+    c.animate({ zoom: z, pan }, { duration: 160, complete: () => { animating.current = false; lastZoom.current = c.zoom(); refreshRef.current(); } });
+  };
+
+  /** "Bring into view": fit everything; labels that would be too small to read are then not drawn, and the outline keeps the names. */
+  const bringIntoView = () => {
+    const c = cy.current; if (!c) return;
+    lockZoom.current = null;
+    if (reduceMotion()) { quietly(c, () => fitReadable(c)); refreshRef.current(); return; }
+    animating.current = true;
+    c.animate({ fit: { eles: c.elements(), padding: 40 }, duration: 180, complete: () => { if (c.zoom() > 1.4) c.zoom(1.4); animating.current = false; lastZoom.current = c.zoom(); refreshRef.current(); } });
+  };
 
   // Rebuild elements when the rendering changes. The camera moves only for a new view; level changes and
   // verdicts keep it exactly where the user left it (cameraPolicy PRESERVE).
@@ -181,16 +279,27 @@ export function Canvas(p: Props) {
       }),
     ];
     c.add(els);
-    if (p.viewKey !== lastViewKey.current) {
+    const pend = pending.current;
+    if (pend && pend.kind === "switch") {
+      pending.current = null;
+      settleLevelChange(c, rendered, pend);
+    } else if (p.viewKey !== lastViewKey.current || pend?.kind === "fit") {
       lastViewKey.current = p.viewKey;
-      fitReadable(c);
-      baseZoom.current = c.zoom();
+      pending.current = null;
+      quietly(c, () => fitReadable(c));
       lockZoom.current = null;
+      // A new view starts at the finest level that fits with readable labels: if these are too small, try the next coarser level (the effect runs again).
+      if (cb.current.semanticLevels && fontPx(c.zoom()) < POLICY.aggregateBelowPx && p.level > 0) {
+        pending.current = { kind: "fit", move: "coarser", ids: [], screen: null };
+        levelRef.current = p.level - 1;
+        window.setTimeout(() => cb.current.onZoomLevel(p.level - 1), 0);
+      }
     }
     // Reapply selection to the fresh elements.
     c.batch(() => { for (const id of p.selected) c.getElementById(id).select(); });
     focusEdges(c, focusId.current);
     syncing.current = false;
+    refreshRef.current();
   }, [p.rendered, p.viewKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Replay decorates existing elements without moving the camera or changing provenance styles.
@@ -223,9 +332,9 @@ export function Canvas(p: Props) {
     const c = cy.current;
     if (!c || p.fitTick === lastFit.current) return;
     lastFit.current = p.fitTick;
-    fitReadable(c);
+    quietly(c, () => fitReadable(c));
     lockZoom.current = c.zoom();
-    baseZoom.current = c.zoom() / zoomForLevel(p.level);
+    refreshRef.current();
   }, [p.fitTick, p.rendered]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -280,7 +389,15 @@ export function Canvas(p: Props) {
   useEffect(() => { if (focusId.current) setFocus(focusId.current, false); }, [p.rendered]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
+    <>
     <div className="canvas" ref={host} tabIndex={0} role="application" aria-label={`Map. ${p.caption || "Empty."}`} aria-describedby="canvas-help" onKeyDown={onKeyDown}
       onFocus={() => { if (!focusId.current && cb.current.rendered.nodes.length) { const c = cy.current!; const first = [...cb.current.rendered.nodes].sort((a, b) => { const qa = c.getElementById(a.id).position(), qb = c.getElementById(b.id).position(); return qa.x - qb.x || qa.y - qb.y; })[0]; setFocus(first.id); } }} />
+    {(hint.off > 0 || hint.labelsHidden) && (
+      <div className="canvas-hint" role="status">
+        {hint.off > 0 && <span>{hint.off} of {hint.total} element{hint.total === 1 ? "" : "s"} off-screen <button type="button" className="tool" onClick={bringIntoView}>Bring into view</button></span>}
+        {hint.labelsHidden && <span>Labels are hidden at this zoom: zoom in, or open the text outline (O).</span>}
+      </div>
+    )}
+    </>
   );
 }

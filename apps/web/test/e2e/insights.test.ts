@@ -71,7 +71,7 @@ test("insights screens: security, configuration, identity, changes, runtime, sou
     // Arrow keys move between tabs, Escape closes.
     await b.tabTo(`el.getAttribute('role') === 'tab' && el.getAttribute('aria-selected') === 'true'`);
     await b.key("ArrowLeft");
-    assert.equal(await b.eval(`document.activeElement.id`), "tab-team");
+    await b.waitFor(() => `document.activeElement.id === 'tab-team'`, 3000, "focus to move to the Team tab");
     await b.key("Escape");
     await b.waitFor(() => `!document.querySelector('[role=dialog][aria-label=Insights]')`, 3000);
     assert.deepEqual(b.console.filter((l) => /^exception|^error/.test(l)), []);
