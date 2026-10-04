@@ -1,0 +1,67 @@
+{
+  "id": "RC07",
+  "title": "Context link without semantics",
+  "class": "positive",
+  "derivation": {
+    "method": "hand",
+    "rule": "§5/§6: a span link is not assumed to mean waiting or data dependence; kept in CONTEXT layer outside ordering closure"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:cs",
+        "kind": "SEND",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      },
+      {
+        "id": "e:cr",
+        "kind": "RECEIVE",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      }
+    ],
+    "certificates": [],
+    "proposedEdges": [
+      {
+        "id": "ed ctx",
+        "from": "e:cs",
+        "to": "e:cr",
+        "kind": "CONTEXT_ASSOCIATION"
+      }
+    ]
+  },
+  "expected": {
+    "acceptedEdges": [
+      "ed ctx"
+    ],
+    "layers": {
+      "ed ctx": "CONTEXT"
+    },
+    "notInOrderingClosure": [
+      "ed ctx"
+    ]
+  }
+}

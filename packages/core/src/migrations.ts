@@ -143,6 +143,30 @@ export const MIGRATIONS: Migration[] = [
     down: (db) => db.exec("drop table if exists eval_studies; drop table if exists eval_labels; drop table if exists eval_runs;"),
   },
   {
+    version: 20, name: "c24-causality",
+    up: (db) => db.exec(`
+      create table if not exists c24_runtime_sources(id text primary key, version integer not null, trust text not null, schema_digest text not null, watermark json, revoked integer not null default 0, json text not null);
+      create table if not exists c24_event_refs(id text primary key, version integer not null, tenant text not null, source text not null, source_epoch text not null, dedup_hash text not null, kind text not null, clock_domain text not null, clock_epoch text not null, trace_id text, operation_id text, attempt_id text, at_ms integer, json text not null, unique(source, source_epoch, dedup_hash));
+      create index if not exists c24_event_refs_trace on c24_event_refs(trace_id);
+      create table if not exists c24_edge_versions(id text not null, version integer not null, snapshot_id text not null, from_event text not null, to_event text not null, kind text not null, layer text not null, state text not null, json text not null, primary key(id, version));
+      create index if not exists c24_edge_versions_ends on c24_edge_versions(from_event, to_event);
+      create table if not exists c24_attribution(event_id text not null, version integer not null, revision text not null, exact integer not null, json text not null, primary key(event_id, version));
+      create table if not exists c24_coverage(id text primary key, source text not null, source_epoch text not null, win_from integer not null, win_to integer not null, predicate_schema text not null, query_hash text not null, exhaustive integer not null, json text not null);
+      create table if not exists c24_snapshots(id text primary key, version integer not null, generation integer not null, scope_hash text not null, event_seq integer not null, json text not null);
+      create table if not exists c24_derivations(source_key text not null, derived text not null, derived_version integer not null, kind text not null, json text not null, primary key(source_key, derived, derived_version));
+      create table if not exists c24_updates(snapshot_id text not null, seq integer not null, event text not null, json text not null, primary key(snapshot_id, seq));`),
+    down: (db) => db.exec("drop table if exists c24_updates; drop table if exists c24_derivations; drop table if exists c24_snapshots; drop table if exists c24_coverage; drop table if exists c24_attribution; drop table if exists c24_edge_versions; drop table if exists c24_event_refs; drop table if exists c24_runtime_sources;"),
+  },
+  {
+    version: 21, name: "c24-causality-phase1",
+    up: (db) => db.exec(`
+      create table if not exists c24_wait_relations(id text primary key, snapshot_id text not null, task text not null, resource text not null, json text not null);
+      create table if not exists c24_relation_certs(id text primary key, adapter text not null, kind text not null, json text not null);
+      create table if not exists c24_artifacts(id text primary key, version integer not null, revision text not null, json text not null);
+      create table if not exists c24_experiment_reports(id text primary key, version integer not null, json text not null);`),
+    down: (db) => db.exec("drop table if exists c24_experiment_reports; drop table if exists c24_artifacts; drop table if exists c24_relation_certs; drop table if exists c24_wait_relations;"),
+  },
+  {
     version: 3, name: "c22-investigations",
     up: (db) => db.exec(`
       create table if not exists c22_investigations(id text primary key, workspace_id text not null, state text not null, version integer not null, generation integer not null, event_seq integer not null, deleted integer not null default 0, json text not null);

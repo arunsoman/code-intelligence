@@ -55,6 +55,15 @@ Claim: ${JSON.stringify(req.claim?.assertion ?? "")}
 Cited evidenceIds: ${JSON.stringify(req.claim?.evidenceIds ?? [])}
 Look for: dynamic dispatch or unresolved calls (facts with predicate "calls"), asynchronous hand-offs, missing tests, alternative paths that bypass the claim. Return objections (each with the evidenceIds that support the objection; use [] only if it rests on absence). Return an empty list if you find none.`;
   }
+  if (req.purpose === "HYPOTHESIZE") {
+    return `Seed competing candidate explanations for this question about a failing system.
+Question: ${JSON.stringify(req.question)}
+- Propose 2-5 hypotheses that genuinely compete: different mechanisms, not paraphrases of one idea.
+- mechanism: up to 4 links between exact entityId strings from the bundle (relation CAUSES_CANDIDATE for a hypothesis about its own subject, or CALLS / WAITS_FOR / PRECEDES / CONTRIBUTES_TO). evidenceIds must be copied from relationships[].evidenceIds or the evidence of facts with predicates throws/writes/uses_transaction; never invent ids.
+- assumptions: conditions the hypothesis needs in order to be true.
+- predictions: 1-3 per hypothesis. tool must be exactly one of: graph.dependents {entityId, depth?, minCount?}, graph.paths {from, to, maxDepth?}, source.entity {entityId, predicate: one of throws | writes | uses_transaction | unresolved_calls}, retrieve.evidence {query, limit?}, runtime.window {signature}. payload values are strings/numbers/booleans only. outcomeIfTrue/outcomeIfFalse use tags: PRESENT, ABSENT_WITH_COVERAGE (only when absence is certified: no sampling, no truncation), MATCH, MISMATCH. Mark essential true for the prediction whose contradiction would refute the hypothesis.
+- Do not claim a mechanism is proven; these are candidates and stay labelled as hypotheses in the UI.`;
+  }
   return `Question: ${JSON.stringify(req.question)}
 Selected entityIds: ${JSON.stringify(req.selected ?? [])}
 Explain how the selected elements are related using only the relationships given. Return a short summary and one claim per distinct relationship; each claim cites evidenceIds of the relationships it relies on (claimClass "structural-path") and gives pathEntityIds, the ordered entityIds of the chain it asserts. If they are not connected in the bundle, say so with zero claims.`;

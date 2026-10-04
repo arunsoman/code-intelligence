@@ -1,0 +1,60 @@
+{
+  "id": "RC04",
+  "title": "Missing path under sampled trace",
+  "class": "missing-data",
+  "derivation": {
+    "method": "oracle",
+    "rule": "§2/§6: no path in an incomplete graph means UNKNOWN; concurrency needs a completeness certificate",
+    "oracle": "orderRelation returns UNKNOWN without certificate; CONCURRENT_CERTIFIED only when valid+covering"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:p",
+        "kind": "OP_START",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      },
+      {
+        "id": "e:q",
+        "kind": "OP_END",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      }
+    ],
+    "certificates": [],
+    "proposedEdges": [],
+    "sampling": "HEAD"
+  },
+  "expected": {
+    "orderDecision": {
+      "relation": "UNKNOWN"
+    },
+    "gapNodes": [
+      "SAMPLED_REGION"
+    ],
+    "noConcurrencyAssertion": true
+  }
+}

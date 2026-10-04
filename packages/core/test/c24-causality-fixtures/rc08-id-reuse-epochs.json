@@ -1,0 +1,70 @@
+{
+  "id": "RC08",
+  "title": "PID/task/lock/trace ID reuse",
+  "class": "negative-control",
+  "derivation": {
+    "method": "hand",
+    "rule": "§6: process epoch prevents PID/task/lock reuse from merging unrelated executions"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:x1",
+        "kind": "LOCK_ACQUIRE",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": "t:lock",
+        "attempt": null,
+        "processEpoch": "ep1",
+        "deploymentId": null,
+        "attributes": {
+          "lock": "lock:L"
+        }
+      },
+      {
+        "id": "e:x2",
+        "kind": "LOCK_RELEASE",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": "t:lock2",
+        "attempt": null,
+        "processEpoch": "ep2",
+        "deploymentId": null,
+        "attributes": {
+          "lock": "lock:L"
+        }
+      }
+    ],
+    "certificates": [
+      {
+        "id": "cert:lock-1",
+        "adapterId": "adapter:lock",
+        "kind": "RELEASE_ACQUIRE",
+        "matchesEventIds": [
+          "e:x1",
+          "e:x2"
+        ]
+      }
+    ],
+    "proposedEdges": []
+  },
+  "expected": {
+    "quarantinedEdges": [
+      "ed reuse"
+    ],
+    "identityNote": "different process epochs; the same pid number is not one execution",
+    "noMergedIdentity": true
+  }
+}

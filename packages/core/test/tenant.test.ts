@@ -1,5 +1,6 @@
 // C03: tenants cannot see each other through retrieval, embeddings or caches; egress fails closed; withdrawing a source's
 // permission makes everything derived from it unreachable at once and then deletes it.
+import { ScriptedRouter } from "./scripted-router.ts";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -60,7 +61,7 @@ test("C03: cross-tenant retrieval: a tenant cannot index, find, cite, explain or
 });
 
 test("C03: cross-tenant embeddings and caches: the same revision id in two tenants never shares vectors, history facts, overrides or concept cards", async () => {
-  const host = new TenantHost(tmp());
+  const host = new TenantHost(tmp(), { router: new ScriptedRouter() });
   const repo = demoRepo();
   host.register("alpha", { members: [], allowedRoots: [repo] });
   host.register("beta", { members: [], allowedRoots: [repo] });

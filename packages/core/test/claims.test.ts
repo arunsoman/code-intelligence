@@ -7,7 +7,8 @@ import { StubProvider } from "@cie/model";
 import type { Claim, ModelProvider, ModelRequest } from "@cie/schema";
 import { CALIBRATION_MIN_LABELS, applyVerdict, gateClaim, wilson } from "../src/claims.ts";
 import { retrieveAround } from "../src/retrieval.ts";
-import { routeIntent, matchName, chooseForm } from "../src/router.ts";
+import { matchName, readText } from "../src/llm-router.ts";
+import { ScriptedRouter } from "./scripted-router.ts";
 import { ctx, demoRepo, setup } from "./helpers.ts";
 
 const login = "method:src/auth/service.ts#AuthService.login", sign = "function:src/auth/token.ts#signToken", users = "function:src/db/users.ts#findByEmail";
@@ -181,23 +182,27 @@ test("egress: hosted models are blocked until the repo is opted in; secrets are 
   worker.close();
 });
 
-test("router: intents and form selection are explicit and predictable", () => {
-  const c = (o: Partial<Parameters<typeof routeIntent>[1]> = {}) => ({ hasView: true, selectionCount: 0, looksLikeTrace: false, ...o });
-  assert.equal(chooseForm("show me everything that could cause a payment to fail").kind, "failure");
-  assert.equal(chooseForm("why could this balance become incorrect?").kind, "invariant");
-  assert.equal(chooseForm("show me how authentication works").form, "SemanticMap");
-  assert.deepEqual(routeIntent("continue the payment investigation", c({ hasView: false })), { type: "resume", name: "payment" });
-  assert.equal(routeIntent("x", c({ looksLikeTrace: true })).type, "investigate");
-  assert.deepEqual(routeIntent("ignore checkFraud", c({ viewForm: "HypothesisGraph" })), { type: "ignore", target: "checkFraud" });
-  assert.equal(routeIntent("ignore checkFraud", c({ viewForm: "SemanticMap" })).type, "ask");
-  assert.deepEqual(routeIntent("why do you suspect charge?", c({ viewForm: "HypothesisGraph" })), { type: "whySuspect", target: "charge" });
-  assert.equal(routeIntent("why are you showing this?", c({ selectionCount: 1 })).type, "whyShown");
-  assert.deepEqual(routeIntent("why isn't handleRefund shown?", c()), { type: "whyHidden", target: "handleRefund" });
-  assert.equal(routeIntent("why are these connected?", c({ selectionCount: 2 })).type, "connected");
-  assert.equal(routeIntent("why are these connected?", c({ selectionCount: 0 })).type, "ask");
-  assert.deepEqual(routeIntent("zoom out", c()), { type: "zoom", direction: "out" });
-  assert.deepEqual(routeIntent("give me the overview", c()), { type: "zoom", direction: "overview" });
-  assert.equal(routeIntent("how does login work", c()).type, "ask");
+test("router: a model's label becomes an intent, restricted by what is on screen; names are matched to saved investigations", async () => {
+  const c = (o: Partial<Parameters<typeof readText>[2]> = {}) => ({ hasView: true, selectionCount: 0, looksLikeTrace: false, ...o });
+  const m = new ScriptedRouter({
+    "continue the payment investigation": { label: "resume", target: "payment" }, "ignore checkFraud": { label: "ignore", target: "checkFraud" },
+    "why do you suspect charge?": { label: "whySuspect", target: "charge" }, "why are you showing this?": { label: "whyShown", target: "" },
+    "why isn't handleRefund shown?": { label: "whyHidden", target: "handleRefund" }, "why are these connected?": { label: "connected", target: "" },
+    "zoom out": { label: "zoomOut", target: "" }, "give me the overview": { label: "overview", target: "" },
+  });
+  const intent = async (t: string, o = {}) => (await readText(m, t, c(o))).intent;
+  assert.deepEqual(await intent("continue the payment investigation", { hasView: false }), { type: "resume", name: "payment" });
+  assert.equal((await intent("x", { looksLikeTrace: true })).type, "investigate");
+  assert.deepEqual(await intent("ignore checkFraud", { viewForm: "HypothesisGraph" }), { type: "ignore", target: "checkFraud" });
+  assert.equal((await intent("ignore checkFraud", { viewForm: "SemanticMap" })).type, "ask", "'ignore' is not offered outside a hypothesis graph");
+  assert.deepEqual(await intent("why do you suspect charge?", { viewForm: "HypothesisGraph" }), { type: "whySuspect", target: "charge" });
+  assert.equal((await intent("why are you showing this?", { selectionCount: 1 })).type, "whyShown");
+  assert.deepEqual(await intent("why isn't handleRefund shown?"), { type: "whyHidden", target: "handleRefund" });
+  assert.equal((await intent("why are these connected?", { selectionCount: 2 })).type, "connected");
+  assert.equal((await intent("why are these connected?", { selectionCount: 0 })).type, "ask", "nothing selected: not offered");
+  assert.deepEqual(await intent("zoom out"), { type: "zoom", direction: "out" });
+  assert.equal((await intent("zoom out", { hasView: false })).type, "ask", "no map, nothing to zoom");
+  assert.equal((await intent("give me the overview", { hasView: false })).type, "overview");
   assert.equal(matchName("payment", [{ name: "Auth Understanding" }, { name: "Payment failure investigation" }])!.name, "Payment failure investigation");
   assert.equal(matchName("billing", [{ name: "Auth Understanding" }]), null);
 });
@@ -206,6 +211,11 @@ test("converse: question → view, trace → investigation, steering, why-shown/
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
   const trace = (await import("./helpers.ts")).traceFor(repo);
+  svc.router = new ScriptedRouter({
+    "ignore checkFraud": { label: "ignore", target: "checkFraud" }, "why do you suspect charge?": { label: "whySuspect", target: "charge" }, "why are you showing this?": { label: "whyShown", target: "" },
+    "why isn't handleRefund shown?": { label: "whyHidden", target: "handleRefund" }, "why isn't frobnicate shown?": { label: "whyHidden", target: "frobnicate" },
+    "continue the billing investigation": { label: "resume", target: "billing" }, "continue the payment investigation": { label: "resume", target: "payment" }, "zoom out": { label: "zoomOut", target: "" },
+  });
   const q = await svc.converse(ctx(), { text: "Show me everything that could cause a payment to fail", revision });
   assert.ok(q.ok && q.value.kind === "view" && q.value.view.formId === "CausalGraph");
   assert.match(q.value.message, /failure/i);
@@ -276,11 +286,7 @@ test("CONSISTENCY accepts containment hops, so a claim routed through a file is 
 test("'give me the project overview' builds a zoomed-out map of the project; zoom commands need a map", async () => {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
-  for (const text of ["give me the project overview", "overview of the codebase", "what does this project do", "architecture overview", "could u show the flow  diagram for the whole project?", "map the entire codebase", "show an architecture diagram of this project"]) {
-    assert.equal(routeIntent(text, { hasView: false, selectionCount: 0, looksLikeTrace: false }).type, "overview", text);
-  }
-  assert.equal(routeIntent("overview", { hasView: true, selectionCount: 0, looksLikeTrace: false }).type, "zoom", "bare 'overview' with a map still means zoom out");
-  assert.equal(routeIntent("zoom out", { hasView: false, selectionCount: 0, looksLikeTrace: false }).type, "ask", "no map, nothing to zoom");
+  svc.router = new ScriptedRouter({ "give me the project overview": { label: "overview", target: "" } });
   const r = await svc.converse(ctx(), { text: "give me the project overview", view: null, revision });
   assert.ok(r.ok && r.value.kind === "view", "it produces a map, not a bare message");
   const v = r.value.view;

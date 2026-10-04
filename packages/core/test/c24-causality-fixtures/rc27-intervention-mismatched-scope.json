@@ -1,0 +1,60 @@
+{
+  "id": "RC27",
+  "title": "Intervention mismatched workload/revision",
+  "class": "negative-control",
+  "derivation": {
+    "method": "hand+oracle",
+    "rule": "§10/§12: linkInterventionEvidence verifies matching scope; a label cannot declare any experiment causal unconditionally",
+    "oracle": "phase-0 claim-gates test: experiment-less intervention assertions never reach intervention-grade display"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:w1",
+        "kind": "LOCK_WAIT",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": 5,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": "t1",
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      }
+    ],
+    "experiment": {
+      "reportId": "c27:report:1",
+      "workload": "burst",
+      "revision": "rev-a"
+    },
+    "targetScope": {
+      "workload": "steady",
+      "revision": "rev-b"
+    },
+    "waitRelations": [
+      {
+        "id": "wr:1",
+        "task": "t1",
+        "resource": "r1",
+        "owners": [
+          "t2"
+        ],
+        "escape": [
+          "owner may release"
+        ]
+      }
+    ],
+    "certificates": [],
+    "proposedEdges": []
+  },
+  "expected": {
+    "scopeGatePreventsPromotion": true,
+    "noInterventionSupportsInTargetScope": true,
+    "disclosedMismatch": true
+  }
+}

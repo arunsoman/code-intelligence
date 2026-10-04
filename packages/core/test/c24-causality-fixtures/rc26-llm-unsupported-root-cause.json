@@ -1,0 +1,24 @@
+{
+  "id": "RC26",
+  "title": "LLM proposes unsupported root cause",
+  "class": "negative-control",
+  "derivation": {
+    "method": "hand+oracle",
+    "rule": "§12/§19: buildMechanismEvidence assembles paths for C22/C26, never an accepted root-cause finding; C16/C18 gates block display",
+    "oracle": "phase-0 claim-gates test shows non-grounded/model-authored causal claims never display as FACT and relation claims stay relation-level"
+  },
+  "input": {
+    "events": [],
+    "llmProposal": {
+      "assertion": "the payment service caused the outage",
+      "evidence": []
+    },
+    "certificates": [],
+    "proposedEdges": []
+  },
+  "expected": {
+    "hypothesisOnly": true,
+    "gatesBlockDisplay": true,
+    "noAutomaticAcceptedRootCause": true
+  }
+}

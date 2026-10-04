@@ -4,6 +4,7 @@ import { describeNode, nextByDirection, nextLevel, viaToSegments, zoomForLevel, 
 
 interface Props {
   rendered: Rendered;
+  replayNodes?: Map<string, boolean>;
   /** Changes when a new view (or new view version) replaces the old one; only then is the camera fitted. */
   viewKey: string;
   level: number;
@@ -77,6 +78,8 @@ function style(): cytoscape.StylesheetJson {
     { selector: "edge[ambient = 1]", style: { opacity: 0.14, width: 1, "target-arrow-shape": "none", label: "" } },
     { selector: "edge.focus", style: { opacity: 1, width: 2, "target-arrow-shape": "triangle" } },
     { selector: "node.kbfocus", style: { "overlay-color": accent, "overlay-opacity": 0.28, "overlay-padding": 9, "border-width": 4, "border-color": accent } },
+    { selector: "node.replay-observed", style: { "underlay-color": accent, "underlay-opacity": 0.3, "underlay-padding": 10 } },
+    { selector: "node.replay-error", style: { "underlay-color": warn, "underlay-opacity": 0.45, "underlay-padding": 12 } },
     { selector: ":selected", style: { "overlay-color": accent, "overlay-opacity": 0.25, "overlay-padding": 6 } },
   ] as cytoscape.StylesheetJson;
 }
@@ -189,6 +192,28 @@ export function Canvas(p: Props) {
     focusEdges(c, focusId.current);
     syncing.current = false;
   }, [p.rendered, p.viewKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Replay decorates existing elements without moving the camera or changing provenance styles.
+  useEffect(() => {
+    const c = cy.current;
+    if (!c) return;
+    c.batch(() => {
+      c.nodes().removeClass("replay-observed replay-error");
+      for (const n of p.rendered.nodes) {
+        const hits = n.members.filter((id) => p.replayNodes?.has(id));
+        if (hits.length) c.getElementById(n.id).addClass(hits.some((id) => p.replayNodes?.get(id)) ? "replay-observed replay-error" : "replay-observed");
+      }
+    });
+  }, [p.replayNodes, p.rendered]);
+
+  useEffect(() => {
+    const refreshStyle = () => { cy.current?.style(style()); };
+    const observer = new MutationObserver(refreshStyle);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-contrast"] });
+    const theme = matchMedia("(prefers-color-scheme: dark)");
+    theme.addEventListener("change", refreshStyle);
+    return () => { observer.disconnect(); theme.removeEventListener("change", refreshStyle); };
+  }, []);
 
   useEffect(() => { cy.current?.userPanningEnabled(!p.boxSelect); }, [p.boxSelect]);
 

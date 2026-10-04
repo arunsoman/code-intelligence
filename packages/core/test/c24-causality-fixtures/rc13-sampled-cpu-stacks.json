@@ -1,0 +1,63 @@
+{
+  "id": "RC13",
+  "title": "Sampled CPU stacks",
+  "class": "positive",
+  "derivation": {
+    "method": "hand",
+    "rule": "§5/§9: CPU samples are attribution, not elapsed-time measurements; no fabricated task ordering"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:s1",
+        "kind": "SAMPLE",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": {
+          "stackTop": "hot-loop",
+          "task": "t9"
+        }
+      },
+      {
+        "id": "e:s2",
+        "kind": "SAMPLE",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": {
+          "stackTop": "hot-loop",
+          "task": "t9"
+        }
+      }
+    ],
+    "certificates": [],
+    "proposedEdges": []
+  },
+  "expected": {
+    "cpuAttributionOnly": true,
+    "noFabricatedOrdering": true,
+    "notInOrderingClosure": [
+      "e:s1",
+      "e:s2"
+    ]
+  }
+}

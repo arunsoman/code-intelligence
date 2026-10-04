@@ -15,6 +15,15 @@ const HEAD = /^\s*(?:Uncaught\s+(?:\(in promise\)\s+)?)?(?:\w+:\s+)?((?:[A-Za-z_
 const V8 = /^\s*at\s+(?:(.+?)\s+\()?(.+?):(\d+):(\d+)\)?\s*$/;
 // Firefox / Safari:  "fn@file:1:2" or "@file:1:2".
 const GECKO = /^\s*([^@\s][^@]*)?@(.+?):(\d+):(\d+)\s*$/;
+// Java / Kotlin:  "at com.acme.Foo.bar(Foo.java:12)"; the package gives the directory, since the frame names only the file.
+const JAVA = /^\s*at\s+((?:[\w$]+\.)+[\w$<>]+)\(([\w$]+\.(?:java|kt|scala)):(\d+)\)\s*$/;
+const JAVA_HEAD = /^\s*(?:Exception in thread "[^"]*"\s+|Caused by:\s+)?((?:[a-z][\w]*\.)+[A-Z][\w$]*)(?::\s*(.*))?$/;
+// Python:  '  File "/x/app.py", line 14, in charge'; the error is the last unindented "Name: message" line after the frames.
+const PY_FRAME = /^\s*File "(.+?)", line (\d+)(?:, in (.+?))?\s*$/;
+const PY_HEAD = /^([A-Za-z_][\w.]*)(?::\s*(.*))?$/;
+// Go:  "panic: msg", then "main.(*Ledger).Reserve(0xc0000, 0x5)" and, tab-indented, "/x/ledger.go:15 +0x3d".
+const GO_FILE = /^\s+(\/?[^\s:()]+\.go):(\d+)(?:\s+\+0x[0-9a-f]+)?\s*$/;
+const GO_HEAD = /^(?:panic|fatal error):\s*(.*)$/;
 
 /** Reduce the many ways a runtime names a source file to a bare path: schemes, hosts, query strings, bundler prefixes. */
 export function normalizeFramePath(raw: string): string {
@@ -28,18 +37,61 @@ export function normalizeFramePath(raw: string): string {
   return f;
 }
 
+/**
+ * Which repository file a frame names. An exact path or a path under the repository wins; a frame that names only the tail of a path (Java's
+ * package directories, a relative Python path) matches the one file that ends that way; a trace from a deployed copy (/srv/app/api.py) matches
+ * the file sharing the longest tail of at least two segments. A tie is never guessed between.
+ */
+export function matchFrameFile(files: string[], frameFile: string): string | undefined {
+  const exact = files.find((r) => frameFile === r || frameFile.endsWith("/" + r)); if (exact) return exact;
+  if (!frameFile.startsWith("/")) { const tail = files.filter((r) => r.endsWith("/" + frameFile)); return tail.length === 1 ? tail[0] : undefined; }
+  const fs = frameFile.split("/"); let best = 0, hit: string[] = [];
+  for (const r of files) { const rs = r.split("/"); let k = 0; while (k < rs.length && k < fs.length && rs[rs.length - 1 - k] === fs[fs.length - 1 - k]) k++; if (k > best) { best = k; hit = [r]; } else if (k === best && k > 0) hit.push(r); }
+  return best >= 2 && hit.length === 1 ? hit[0] : undefined;
+}
+
 export function parseTrace(text: string): ParsedTrace {
   const lines = text.split(/\r?\n/);
   let errorClass: string | null = null, message = "";
   const frames: Frame[] = [];
+  let pyFrames = 0, prev = "";
   for (const line of lines) {
     const v = V8.exec(line);
-    if (v) { frames.push({ fn: cleanFn(v[1]), file: normalizeFramePath(v[2]), line: +v[3], col: +v[4], raw: line.trim() }); continue; }
+    if (v) { frames.push({ fn: cleanFn(v[1]), file: normalizeFramePath(v[2]), line: +v[3], col: +v[4], raw: line.trim() }); prev = line; continue; }
     const g = GECKO.exec(line);
-    if (g && !/^\s*at\s/.test(line)) { frames.push({ fn: cleanFn(g[1]), file: normalizeFramePath(g[2]), line: +g[3], col: +g[4], raw: line.trim() }); continue; }
-    if (!errorClass) { const h = HEAD.exec(line); if (h) { errorClass = h[1]; message = h[2].trim(); } }
+    if (g && !/^\s*at\s/.test(line)) { frames.push({ fn: cleanFn(g[1]), file: normalizeFramePath(g[2]), line: +g[3], col: +g[4], raw: line.trim() }); prev = line; continue; }
+    const j = JAVA.exec(line);
+    if (j) {
+      const parts = j[1].split("."); const method = parts.pop()!, cls = parts.pop()!.replace(/\$.*$/, ""), pkg = parts.join("/");
+      frames.push({ fn: `${cls}.${method}`, file: `${pkg ? pkg + "/" : ""}${j[2]}`, line: +j[3], col: 1, raw: line.trim() }); prev = line; continue;
+    }
+    const p = PY_FRAME.exec(line);
+    if (p) { frames.push({ fn: p[3] && p[3] !== "<module>" ? p[3] : undefined, file: normalizeFramePath(p[1]), line: +p[2], col: 1, raw: line.trim() }); pyFrames++; prev = line; continue; }
+    const go = GO_FILE.exec(line);
+    if (go) { frames.push({ fn: goFn(prev), file: normalizeFramePath(go[1]), line: +go[2], col: 1, raw: line.trim() }); prev = line; continue; }
+    prev = line;
+    if (!errorClass) {
+      const gh = GO_HEAD.exec(line); if (gh) { errorClass = "panic"; message = gh[1].trim(); continue; }
+      const jh = JAVA_HEAD.exec(line); if (jh && !/^\s*at\s/.test(line)) { errorClass = jh[1].split(".").pop()!; message = (jh[2] ?? "").trim(); continue; }
+      const h = HEAD.exec(line); if (h) { errorClass = h[1]; message = h[2].trim(); }
+    }
+  }
+  // Python prints the error after the frames, and a custom exception need not end in "Error".
+  if (pyFrames) {
+    const last = [...lines].reverse().find((l) => l && !/^\s/.test(l) && !/^Traceback\b/.test(l) && PY_HEAD.test(l));
+    const m = last ? PY_HEAD.exec(last) : null;
+    if (m) { errorClass = m[1].split(".").pop()!; message = (m[2] ?? "").trim(); }
   }
   return { errorClass, message, frames };
+}
+
+/** "example.com/app/ledger.(*Ledger).Reserve(0xc0000, 0x5)" → "Ledger.Reserve";  "main.run(...)" → "run". */
+function goFn(line: string): string | undefined {
+  const t = line.trim().replace(/^created by\s+/, ""); const open = t.lastIndexOf("(");
+  if (open <= 0 || !t.endsWith(")")) return undefined;
+  const q = t.slice(0, open).replace(/^.*\//, "").replace(/\(\*?(\w+)\)/g, "$1"); // drop the package path and the pointer syntax
+  const segs = q.split("."); const name = segs.pop(); const recv = segs.pop();
+  return name ? (recv && /^[A-Z]/.test(recv) ? `${recv}.${name}` : name) : undefined;
 }
 
 /** "async Foo.bar [as baz]" → "Foo.bar";  "new Foo" → "Foo";  "Object.<anonymous>" → undefined. */
@@ -98,7 +150,7 @@ export function locateFrames(store: Store, rev: RevisionRow, parsed: ParsedTrace
     return bufs.get(rel)!;
   };
   return parsed.frames.map((frame) => {
-    const rel = files.find((r) => frame.file === r || frame.file.endsWith("/" + r));
+    const rel = matchFrameFile(files, frame.file);
     if (!rel) return { frame, entityId: null, file: null };
     let entityId: string | null = null;
     const buf = read(rel);
@@ -133,7 +185,7 @@ export function mapTrace(store: Store, rev: RevisionRow, text: string): MappedTr
 
   parsed.frames.forEach((fr, i) => {
     const norm = fr.file;
-    const rel = rels.find((r) => norm === r || norm.endsWith("/" + r));
+    const rel = matchFrameFile(rels, norm);
     if (!rel) { unmatched.push(fr); return; }
     let entityId: string | undefined;
     try {

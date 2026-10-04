@@ -93,7 +93,7 @@ export class Runtime {
    * revision (by its own field or a deployment marker), and the span carries a code location inside the entity. Anything else is
    * labelled with why, and what cannot be tied to code is counted as fog.
    */
-  attribute(envelopeId: string, revisionId: string, opts: { cursorMs?: number } = {}): RuntimeAttribution | Fail {
+  attribute(envelopeId: string, revisionId: string, opts: { cursorMs?: number; fromMs?: number } = {}): RuntimeAttribution | Fail {
     const env = this.envelope(envelopeId);
     const rev = this.store.revision(revisionId);
     if (!env) return { ok: false, error: { code: "NOT_FOUND", message: "no such envelope", retryable: false } };
@@ -102,7 +102,7 @@ export class Runtime {
     const marker = env.deployment ? this.store.db.prepare("select revision from rt_markers where source = ? and deployment = ?").get(env.source, env.deployment) as any : null;
     const ranRevision: string | null = marker?.revision ?? env.revision ?? null;
     const sampled = Number((quality.find((q) => q.startsWith("SAMPLED:")) ?? "").split(":")[1]) || null;
-    const spans = (this.store.db.prepare("select * from rt_spans where envelope = ? order by start_ms, seq").all(envelopeId) as any[]).filter((s) => !String(s.flags).includes("TIMESTAMP_IMPOSSIBLE") && (opts.cursorMs === undefined || s.start_ms <= opts.cursorMs));
+    const spans = (this.store.db.prepare("select * from rt_spans where envelope = ? order by start_ms, seq").all(envelopeId) as any[]).filter((s) => !String(s.flags).includes("TIMESTAMP_IMPOSSIBLE") && (opts.cursorMs === undefined || s.start_ms <= opts.cursorMs) && (opts.fromMs === undefined || s.start_ms >= opts.fromMs));
     const counted = { valid: spans.length, invalid: Number((this.store.db.prepare("select count(*) as n from rt_spans where envelope = ? and flags like '%TIMESTAMP_IMPOSSIBLE%'").get(envelopeId) as any).n), late: spans.filter((s) => String(s.flags).includes("OUTSIDE_WINDOW")).length };
     const reasons = new Set<string>();
     if (!ranRevision) reasons.add("no deployment marker or revision on the signal, so which code ran is not known");
@@ -135,10 +135,10 @@ export class Runtime {
     }
     for (const r of fogReasons) reasons.add(r);
     const perEntity = [...byEntity].map(([entityId, b]) => ({ entityId, spans: b.spans, errors: b.errors, estimatedSpans: sampled ? Math.round(b.spans / sampled) : null, p95Ms: pctile(b.durs, 95), exact: b.exact && !sampled, method: b.method })).sort((a, b) => b.spans - a.spans || a.entityId.localeCompare(b.entityId));
-    const evidenceIds = perEntity.map((p) => observation(this.store, revisionId, `rt:${envelopeId}:${p.entityId}:${opts.cursorMs ?? "all"}`, "RUNTIME", rev.repoRoot, `${p.spans} span(s) (${p.errors} error(s)) from ${env.source} in ${new Date(env.win_from).toISOString()}–${new Date(env.win_to).toISOString()} attributed by ${p.method}${sampled ? ` (sampled at ${sampled})` : ""}`, new Date(this.now()).toISOString(), "RuntimeLocation").id);
+    const evidenceIds = perEntity.map((p) => observation(this.store, revisionId, `rt:${envelopeId}:${p.entityId}:${opts.cursorMs ?? "all"}${opts.fromMs === undefined ? "" : `:from:${opts.fromMs}`}`, "RUNTIME", rev.repoRoot, `${p.spans} span(s) (${p.errors} error(s)) from ${env.source} in ${new Date(opts.fromMs ?? env.win_from).toISOString()}–${new Date(opts.cursorMs ?? env.win_to).toISOString()} attributed by ${p.method}${sampled ? ` (sampled at ${sampled})` : ""}`, new Date(this.now()).toISOString(), "RuntimeLocation").id);
     const exactAll = perEntity.length > 0 && perEntity.every((p) => p.exact) && fog === 0 && reasons.size === 0;
     const method: RuntimeAttribution["method"] = !perEntity.length ? "UNATTRIBUTED" : perEntity.every((p) => p.method === "CODE_LOCATION_EXACT") ? "CODE_LOCATION_EXACT" : perEntity.some((p) => p.method === "CODE_LOCATION_OTHER_REVISION") ? "CODE_LOCATION_OTHER_REVISION" : "FUNCTION_NAME";
-    return { id: "att:" + sha(envelopeId + revisionId + (opts.cursorMs ?? "")), runtimeId: envelopeId, entityRefs: perEntity.map((p) => p.entityId), evidenceIds, method, exact: exactAll, uncertaintyReason: reasons.size ? [...reasons].join("; ") : null, perEntity, fog: { spans: fog, reasons: [...fogReasons] }, quality, samplingRate: sampled, counted };
+    return { id: "att:" + sha(envelopeId + revisionId + (opts.cursorMs ?? "") + (opts.fromMs === undefined ? "" : `:from:${opts.fromMs}`)), runtimeId: envelopeId, entityRefs: perEntity.map((p) => p.entityId), evidenceIds, method, exact: exactAll, uncertaintyReason: reasons.size ? [...reasons].join("; ") : null, perEntity, fog: { spans: fog, reasons: [...fogReasons] }, quality, samplingRate: sampled, counted };
   }
 
   private byName(revision: string, fn: string, file?: string | null): string | null {
@@ -150,16 +150,17 @@ export class Runtime {
   /** Everything attributed in a window, across envelopes, for the roots asked about (or all). */
   queryWindow(revision: string, window: { from: number; to: number }, roots?: string[]) {
     const ids = (this.store.db.prepare("select id from rt_envelopes where win_to >= ? and win_from <= ? and rejected = 0 order by win_from, id").all(window.from, window.to) as any[]).map((r) => r.id as string);
-    return ids.flatMap((id) => { const a = this.attribute(id, revision); if ("ok" in a) return []; const p = a.perEntity.filter((x) => !roots?.length || roots.includes(x.entityId)); return p.length || !roots?.length ? [{ ...a, perEntity: p }] : []; });
+    return ids.flatMap((id) => { const a = this.attribute(id, revision, { fromMs: window.from, cursorMs: window.to }); if ("ok" in a) return []; const p = a.perEntity.filter((x) => !roots?.length || roots.includes(x.entityId)); return p.length || !roots?.length ? [{ ...a, perEntity: p }] : []; });
   }
 
   /** Scrub to a time: the same envelopes seen as of `cursorMs`. Deterministic, so replaying twice gives the same picture. */
   replay(revision: string, window: { from: number; to: number }, cursorMs: number) {
+    cursorMs = Math.max(window.from, Math.min(cursorMs, window.to));
     const ids = (this.store.db.prepare("select id from rt_envelopes where win_to >= ? and win_from <= ? and rejected = 0 order by win_from, id").all(window.from, window.to) as any[]).map((r) => r.id as string);
-    const frames = ids.flatMap((id) => { const a = this.attribute(id, revision, { cursorMs: Math.min(cursorMs, window.to) }); return "ok" in a ? [] : [a]; });
+    const frames = ids.flatMap((id) => { const a = this.attribute(id, revision, { cursorMs, fromMs: window.from }); return "ok" in a ? [] : [a]; });
     const totals = new Map<string, { spans: number; errors: number }>();
     for (const a of frames) for (const p of a.perEntity) { const t = totals.get(p.entityId) ?? { spans: 0, errors: 0 }; t.spans += p.spans; t.errors += p.errors; totals.set(p.entityId, t); }
-    return { cursorMs, window, envelopes: ids, entities: [...totals].map(([entityId, t]) => ({ entityId, ...t })).sort((a, b) => a.entityId.localeCompare(b.entityId)), fogSpans: frames.reduce((n, f) => n + f.fog.spans, 0) };
+    return { cursorMs, window, envelopes: ids, entities: [...totals].map(([entityId, t]) => ({ entityId, ...t })).sort((a, b) => a.entityId.localeCompare(b.entityId)), fogSpans: frames.reduce((n, f) => n + f.fog.spans, 0), warnings: [...new Set(frames.flatMap((f) => [...f.quality, ...(f.uncertaintyReason ? [f.uncertaintyReason] : [])]))] };
   }
 
   /**

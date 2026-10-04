@@ -1,0 +1,44 @@
+{
+  "id": "RC16",
+  "title": "Tail-sampled failures versus control",
+  "class": "missing-data",
+  "derivation": {
+    "method": "hand",
+    "rule": "§9/§16: selection bias disclosed; absence of errors in a control cohort is not evidence of equivalence; no automatic causal effect"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:f1",
+        "kind": "EXCEPTION",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": {
+          "cohort": "tail-kept"
+        }
+      }
+    ],
+    "sampling": "TAIL",
+    "controlCohort": {
+      "sampled": true,
+      "errorsObserved": 0
+    },
+    "certificates": [],
+    "proposedEdges": []
+  },
+  "expected": {
+    "selectionBiasDisclosed": true,
+    "noAutomaticCausalEffect": true,
+    "controlNotEquivalent": true
+  }
+}

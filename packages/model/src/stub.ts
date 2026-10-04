@@ -1,6 +1,6 @@
 // Deterministic offline provider. It only reasons over the bundle it is given, so it works as a
 // reference for what a real provider may cite: evidence ids that exist in `bundle.evidence`.
-import type { ChallengeOutput, ConceptsOutput, EvidenceBundle, ExplanationOutput, ModelProvider, ModelRequest, RepresentationOutput, Relationship } from "@cie/schema";
+import type { ChallengeOutput, ConceptsOutput, EvidenceBundle, ExplanationOutput, HypothesesOutput, ModelProvider, ModelRequest, RepresentationOutput, Relationship } from "@cie/schema";
 
 const dirOf = (file: string) => {
   const parts = file.split("/");
@@ -177,6 +177,109 @@ function extract(req: ModelRequest): ConceptsOutput {
   return { cards: cards.slice(0, 40) };
 }
 
+/** Offline hypothesis seeding from structure: genuinely competing candidate explanations, each grounded in
+ *  bundle facts/relationships, each with at least one prediction a registered read tool can settle. Every
+ *  entity id and evidence id is copied from the bundle; a real gateway's output is validated the same way. */
+function hypothesize(req: ModelRequest): HypothesesOutput {
+  const { bundle, question } = req;
+  const nameOf = new Map(bundle.entities.map((e) => [e.entityId, e.name]));
+  const containsEv = new Map<string, string[]>();
+  for (const r of bundle.relationships) if (r.kind === "contains") containsEv.set(r.to, evIds(r));
+  const evOf = (id: string) => containsEv.get(id) ?? [];
+  const out: HypothesesOutput["hypotheses"] = [];
+
+  // H_a: the failure is an unhandled throw at a named site — the strongest kind of competing candidate.
+  const throwsFacts = bundle.facts.filter((f) => f.predicate === "throws");
+  for (const f of throwsFacts.slice(0, 2)) {
+    out.push({
+      statement: `${nameOf.get(f.subject) ?? f.subject} throws ${factValue(f) || "an error"}, and nothing in the visible call structure shows the caller handling it`,
+      mechanism: [{ from: f.subject, to: f.subject, relation: "CAUSES_CANDIDATE", evidenceIds: [...evOf(f.subject), ...f.evidence.map((e) => e.id)].slice(0, 10) }],
+      assumptions: ["the throw fires on the path the symptom travelled", "a caller of this code would surface the error"],
+      predictions: [{
+        description: `${nameOf.get(f.subject) ?? f.subject} has a throw statement`, tool: "source.entity", payload: { entityId: f.subject, predicate: "throws" },
+        outcomeIfTrue: ["PRESENT"], outcomeIfFalse: ["ABSENT_WITH_COVERAGE"], essential: true,
+      }],
+      basisEvidenceIds: [...new Set([...evOf(f.subject), ...f.evidence.map((e) => e.id)])].slice(0, 10),
+    });
+  }
+
+  // H_b: state is changed outside a transaction, so a failure part-way corrupts what the operation reads.
+  const txWriters = new Set(bundle.facts.filter((f) => f.predicate === "uses_transaction").map((f) => f.subject));
+  const bareWriter = bundle.facts.find((f) => f.predicate === "writes" && !txWriters.has(f.subject));
+  if (bareWriter) {
+    out.push({
+      statement: `${nameOf.get(bareWriter.subject) ?? bareWriter.subject} changes ${factValue(bareWriter) || "state"} outside any transaction`,
+      mechanism: [{ from: bareWriter.subject, to: bareWriter.subject, relation: "CONTRIBUTES_TO", evidenceIds: [...evOf(bareWriter.subject), ...bareWriter.evidence.map((e) => e.id)].slice(0, 10) }],
+      assumptions: ["the failing operation reads the state this code writes"],
+      predictions: [{
+        description: `${nameOf.get(bareWriter.subject) ?? bareWriter.subject} uses no transaction`, tool: "source.entity", payload: { entityId: bareWriter.subject, predicate: "uses_transaction" },
+        outcomeIfTrue: ["ABSENT_WITH_COVERAGE"], outcomeIfFalse: ["PRESENT"], essential: true,
+      }, {
+        description: `${nameOf.get(bareWriter.subject) ?? bareWriter.subject} writes state`, tool: "source.entity", payload: { entityId: bareWriter.subject, predicate: "writes" },
+        outcomeIfTrue: ["PRESENT"], outcomeIfFalse: ["ABSENT_WITH_COVERAGE"], essential: false,
+      }],
+      basisEvidenceIds: [...new Set([...evOf(bareWriter.subject), ...bareWriter.evidence.map((e) => e.id)])].slice(0, 10),
+    });
+  }
+
+  // H_c: a dynamic call hides where it really fails, so static analysis cannot see the faulty callee.
+  const fog = bundle.facts.find((f) => f.resolution === "UNRESOLVED" && f.predicate === "calls");
+  if (fog) {
+    out.push({
+      statement: `a dynamic call in ${nameOf.get(fog.subject) ?? fog.subject} reaches code static analysis cannot see`,
+      mechanism: [{ from: fog.subject, to: fog.subject, relation: "CONTRIBUTES_TO", evidenceIds: [...evOf(fog.subject), ...fog.evidence.map((e) => e.id)].slice(0, 10) }],
+      assumptions: ["the dynamic call executes during the incident"],
+      predictions: [{
+        description: `${nameOf.get(fog.subject) ?? fog.subject} has calls analysis could not resolve`, tool: "source.entity", payload: { entityId: fog.subject, predicate: "unresolved_calls" },
+        outcomeIfTrue: ["PRESENT"], outcomeIfFalse: ["ABSENT_WITH_COVERAGE"], essential: true,
+      }],
+      basisEvidenceIds: [...new Set([...evOf(fog.subject), ...fog.evidence.map((e) => e.id)])].slice(0, 10),
+    });
+  }
+
+  // H_d: an asynchronous hand-off swallows the failure; the original caller never sees it.
+  const flow = bundle.relationships.find((r) => r.kind === "async-flow");
+  if (flow) {
+    out.push({
+      statement: `the failure is swallowed by an asynchronous hand-off from ${nameOf.get(flow.from) ?? flow.from} to ${nameOf.get(flow.to) ?? flow.to}`,
+      mechanism: [{ from: flow.from, to: flow.to, relation: "PRECEDES", evidenceIds: evIds(flow).slice(0, 10) }],
+      assumptions: ["the hand-off is on the path the symptom travelled"],
+      predictions: [{
+        description: "an asynchronous call path exists between the two", tool: "graph.paths", payload: { from: flow.from, to: flow.to, maxDepth: 4 },
+        outcomeIfTrue: ["PRESENT"], outcomeIfFalse: ["ABSENT_WITH_COVERAGE"], essential: true,
+      }],
+      basisEvidenceIds: evIds(flow).slice(0, 10),
+    });
+  }
+
+  // Always at least one draft, grounded on whatever the bundle says about the question words, so the seed never arrives empty.
+  if (!out.length) {
+    const words = question.toLowerCase().match(/[a-z][a-z0-9_]{3,}/g) ?? [];
+    const anchor = bundle.entities.find((e) => e.kind !== "file" && words.some((w) => e.name.toLowerCase().includes(w)) && evOf(e.entityId).length);
+    if (anchor) {
+      out.push({
+        statement: `the answer lies in how ${anchor.name} is organized; its callers and callees decide where the question resolves`,
+        mechanism: [{ from: anchor.entityId, to: anchor.entityId, relation: "CONTRIBUTES_TO", evidenceIds: evOf(anchor.entityId).slice(0, 10) }],
+        assumptions: ["the indexed relationships around this code are complete enough"],
+        predictions: [{
+          description: `${anchor.name} has at least one caller`, tool: "graph.dependents", payload: { entityId: anchor.entityId, depth: 2, minCount: 1 },
+          outcomeIfTrue: ["PRESENT"], outcomeIfFalse: ["ABSENT_WITH_COVERAGE"], essential: false,
+        }],
+        basisEvidenceIds: evOf(anchor.entityId).slice(0, 10),
+      });
+    } else {
+      const q = words.slice(0, 3).join(" ") || question.slice(0, 20);
+      out.push({
+        statement: `the answer lies in how code matching "${q}" is organized; retrieval can narrow it down`,
+        mechanism: [], assumptions: ["the indexed relationships are complete enough to retrieve the relevant code"],
+        predictions: [{ description: "retrieval finds entities matching the question", tool: "retrieve.evidence", payload: { query: q }, outcomeIfTrue: ["PRESENT"], outcomeIfFalse: [], essential: false }],
+        basisEvidenceIds: [],
+      });
+    }
+  }
+  return { hypotheses: out.slice(0, 8) };
+}
+
 export class StubProvider implements ModelProvider {
   readonly name = "stub";
   readonly model = "deterministic-graph-v1";
@@ -188,6 +291,7 @@ export class StubProvider implements ModelProvider {
       case "EXTRACT": return extract(req);
       // The deterministic adversarial checks run in core; the stub has no judgment of its own to add.
       case "CHALLENGE": return { objections: [] } satisfies ChallengeOutput;
+      case "HYPOTHESIZE": return hypothesize(req);
       // Routing by judgment needs a language model; offline, the rule and similarity layers have already answered.
       case "ROUTE": return { form: null, confidence: 0, reason: "the offline model does not route" };
     }

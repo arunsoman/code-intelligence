@@ -5,6 +5,7 @@
 import type { Claim, ViewNode } from "@cie/schema";
 import type { RevisionRow, Store } from "../store.ts";
 import { locateFrames, parseTrace } from "../trace.ts";
+import { Runtime } from "../runtime.ts";
 import { autoLayout, baseView, claimOf, containsEvidence, emptyForm, flowGraph, fogCount, observation, short } from "./common.ts";
 
 const WINDOWS: Record<string, number> = { "24h": 86_400_000, "7d": 7 * 86_400_000, all: Infinity };
@@ -48,9 +49,18 @@ export function buildRuntime(store: Store, rev: RevisionRow, question: string, s
     for (const to of calls.get(f.subject) ?? []) bump(to, 0.55, `Failing test “${name}” calls this`, f.evidence[0].id, 1);
   }
   for (const [id, s] of spans) bump(id, 0.5 + (s.errors ? 0.2 : 0) + Math.min(0.2, (s.p95 ?? 0) / 5000), s.errors ? `${s.op}: ${s.count} span(s), ${s.errors} error span(s)` : `${s.op}: ${s.count} span(s), p95 ${s.p95} ms`, s.evidenceIds[0], s.count);
-  if (heat.size === 0) return emptyForm(o, exs.length === 0 && tests.length === 0
+  const recorded = new Runtime(store).queryWindow(rev.id, { from: Math.max(0, now - WINDOWS[win]), to: now });
+  const runtimeWarnings = [...new Set(recorded.flatMap((a) => [...a.quality, ...(a.uncertaintyReason ? [a.uncertaintyReason] : [])]))];
+  for (const a of recorded) for (const [i, p] of a.perEntity.entries()) {
+    bump(p.entityId, p.errors ? 0.8 : 0.5, `Recorded runtime: ${p.spans} span(s), ${p.errors} error(s); ${p.exact ? "exact attribution" : "inexact attribution"}${p.p95Ms === null ? "" : `; p95 ${p.p95Ms} ms`}`, a.evidenceIds[i], p.spans);
+  }
+  if (heat.size === 0) {
+    const empty = emptyForm(o, exs.length === 0 && tests.length === 0
     ? `Nothing has been reported in the ${win === "all" ? "available data" : "last " + win}. Apps can send exceptions here with @cie/reporter, or paste a stack trace.`
     : `${outside} reported exception(s) came from outside this repository, so there is nothing to draw on this structure.`);
+    empty.view.gaps.push(...runtimeWarnings);
+    return empty;
+  }
 
   const v = baseView({ ...o, caption: "" });
   const claims: Claim[] = [];
@@ -65,7 +75,7 @@ export function buildRuntime(store: Store, rev: RevisionRow, question: string, s
     const spanNote = span ? `Trace export: ${span.count} span(s) of ${span.op}${span.errors ? `, ${span.errors} error span(s)` : ""}${span.p50 !== null ? `, p50 ${span.p50} ms / p95 ${span.p95} ms` : ""}.` : null;
     const node: ViewNode = { id: `n:${id}`, entityRefs: [id], label: e.name, kind: e.kind, file: e.file, claimIds: [], evidenceIds: h ? [...new Set(h.ev)] : containsEvidence(store, rev.id, id), tier: h ? "CRITICAL" : "CONTEXT", displayMode: fogCount(store, rev.id, id) ? "FOG" : "FACT", unresolvedCalls: fogCount(store, rev.id, id), role: h ? "hot" : "structure", heat: h ? { value: h.value, label: `${h.count} report(s)/failure(s)` } : undefined, notes: h ? h.notes.slice(0, 4) : ["No reported problem here; shown for context."] };
     if (h) {
-      const c = claimOf(store, rev.id, { assertion: `${e.name} is where reported problems concentrate: ${h.notes[0]}.`, claimClass: "runtime-hotspot", evidenceIds: [...new Set(h.ev)], subjects: [id], rationaleSummary: span ? "Built from an ingested trace export, which is a sample of the runs the project recorded, not live telemetry." : "Built from reported exceptions and recorded test failures, which are a sample, not full telemetry." });
+      const c = claimOf(store, rev.id, { assertion: `${e.name} has recorded runtime or test observations: ${h.notes[0]}.`, claimClass: "runtime-hotspot", evidenceIds: [...new Set(h.ev)], subjects: [id], rationaleSummary: "Built from recorded exceptions, tests or trace samples, not live telemetry; attribution uncertainty is retained in the view gaps." });
       claims.push(c); node.claimIds = [c.draft.id]; node.ownClaimId = c.draft.id; node.displayMode = c.displayMode === "HIDDEN" ? "HYPOTHESIS" : "INFERENCE";
       if (spanNote && node.notes) node.notes.push(spanNote);
     }
@@ -78,6 +88,7 @@ export function buildRuntime(store: Store, rev: RevisionRow, question: string, s
   v.meta = { kind: "runtime", subject: win };
   v.params = { subject: win };
   if (outside) v.gaps.push(`${outside} reported exception(s) came from frames outside this repository and are not drawn: uninstrumented code is fog, not a line.`);
-  v.gaps.push(spans.size ? "Trace spans come from exports the project's own tooling wrote earlier (a recorded sample); there is no live connection, no queue depth, and the window buttons are the only time control." : "This is reported data, not live telemetry: there are no latencies, error rates, queue depths or sampling information, and no time scrubber beyond the window. Drop an OpenTelemetry JSON export at traces/otlp.json and re-index to add measured latency.");
+  if (spans.size) v.gaps.push("Trace spans come from exports the project's own tooling wrote earlier (a recorded sample), not live telemetry.");
+  v.gaps.push("This is recorded data, not live telemetry. Replay uses ingested runtime envelopes; indexed trace-export summaries and pasted exceptions are not replayable. Replay highlights cumulative observations without changing the map's baseline heat.", ...runtimeWarnings);
   return { view: v, claims };
 }

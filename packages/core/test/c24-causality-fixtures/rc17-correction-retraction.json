@@ -1,0 +1,68 @@
+{
+  "id": "RC17",
+  "title": "Source event correction/retraction",
+  "class": "positive",
+  "derivation": {
+    "method": "hand",
+    "rule": "§15: persist correction and invalidation atomically; dependent edges/claims/views are stale before asynchronous refresh; readers enforce freshness"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:orig",
+        "kind": "SEND",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      },
+      {
+        "id": "e:fixed",
+        "kind": "SEND",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      }
+    ],
+    "correctionOf": {
+      "e:fixed": "e:orig"
+    },
+    "derivedEdges": [
+      "ed:from-orig"
+    ],
+    "derivedClaims": [
+      "claim:from-orig"
+    ],
+    "certificates": [],
+    "proposedEdges": []
+  },
+  "expected": {
+    "dependentEdgesInvalidated": [
+      "ed:from-orig"
+    ],
+    "dependentClaimsStale": [
+      "claim:from-orig"
+    ],
+    "atomic": true,
+    "staleBeforeRefresh": true
+  }
+}

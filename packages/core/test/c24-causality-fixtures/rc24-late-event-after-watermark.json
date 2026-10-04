@@ -1,0 +1,42 @@
+{
+  "id": "RC24",
+  "title": "Late event after finalized watermark",
+  "class": "missing-data",
+  "derivation": {
+    "method": "hand",
+    "rule": "§15: beyond-watermark corrections remain possible and produce invalidation; versioned correction, not silent ignore"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:late",
+        "kind": "RECEIVE",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": 50,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      }
+    ],
+    "watermark": {
+      "sourceSequence": "s42",
+      "eventTimeWatermark": 40,
+      "finalForWindow": true
+    },
+    "certificates": [],
+    "proposedEdges": []
+  },
+  "expected": {
+    "newSnapshotVersion": true,
+    "affectedEdgesInvalidated": true,
+    "notSilentlyIgnored": true
+  }
+}

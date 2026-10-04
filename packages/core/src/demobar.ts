@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { createProvider, StubProvider } from "@cie/model";
 import type { CallContext, Claim, ModelProvider, ViewSpec } from "@cie/schema";
+import { chooseRouter, type RouterModel } from "./llm-router.ts";
 import { Service } from "./service.ts";
 import { Store } from "./store.ts";
 import { WorkerClient } from "./worker.ts";
@@ -84,7 +85,7 @@ function need(cond: unknown, msg: string): asserts cond { if (!cond) throw new E
 
 async function timed<T>(fn: () => Promise<T>): Promise<[T, number]> { const t = performance.now(); const r = await fn(); return [r, Math.round(performance.now() - t)]; }
 
-export async function runDemoBar(opts: { provider?: ModelProvider; dir?: string } = {}): Promise<DemoBarReport> {
+export async function runDemoBar(opts: { provider?: ModelProvider; dir?: string; router?: RouterModel | null } = {}): Promise<DemoBarReport> {
   const provider = opts.provider ?? new StubProvider();
   const work = opts.dir ?? mkdtempSync(join(tmpdir(), "cie-demobar-"));
   if (!opts.dir) process.once("exit", () => { try { rmSync(work, { recursive: true, force: true }); } catch { /* best effort */ } });
@@ -98,6 +99,7 @@ export async function runDemoBar(opts: { provider?: ModelProvider; dir?: string 
 
   const w1 = new WorkerClient();
   const svc = new Service(new Store(dbPath), w1, provider);
+  svc.router = opts.router ?? null;
   const run = async (id: number, name: string, fn: () => Promise<string>) => {
     const t = performance.now();
     try { const detail = await fn(); steps.push({ id, name, pass: true, detail, ms: Math.round(performance.now() - t) }); }
@@ -113,6 +115,7 @@ export async function runDemoBar(opts: { provider?: ModelProvider; dir?: string 
 
     // The auth map is shown on the small auth fixture so step 1 can be compared with the payments views.
     const authSvc = new Service(new Store(":memory:"), new WorkerClient(), provider);
+    authSvc.router = opts.router ?? null;
     const authRepo = join(ROOT, "fixtures/sample-repo");
     await authSvc.ingestRepository(ctx(), { repoPath: authRepo });
     if (provider.hosted) authSvc.setEgress(ctx(), { repoRoot: authRepo, allow: true });
@@ -206,6 +209,7 @@ export async function runDemoBar(opts: { provider?: ModelProvider; dir?: string 
       const w2 = new WorkerClient();
       try {
         const svc2 = new Service(new Store(dbPath), w2, provider);
+        svc2.router = opts.router ?? null;
         const c = await svc2.converse(ctx(), { text: "continue the payment investigation", view: null });
         need(c.ok && c.value.kind === "resume", "did not resume the investigation");
         const id = c.ok && c.value.kind === "resume" ? c.value.workspaceId : "";
@@ -239,7 +243,9 @@ export function formatReport(r: DemoBarReport): string {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const { provider, note } = await createProvider();
   if (note) console.warn(note);
-  const report = await runDemoBar({ provider });
+  const { router, note: routerNote } = await chooseRouter();
+  if (routerNote) console.warn(routerNote);
+  const report = await runDemoBar({ provider, router });
   console.log(formatReport(report));
   process.exit(report.passed ? 0 : 1);
 }

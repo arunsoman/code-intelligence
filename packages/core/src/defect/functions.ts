@@ -13,22 +13,44 @@ export interface FindingSpan { file: string; startByte: number; endByte: number;
 export interface Fn { entity: Entity; file: string; lang: Lang; src: string; start: number; end: number; scan: Scan; fileHash: string }
 const hash = (s: string | Buffer) => createHash("sha256").update(s).digest("hex");
 
+/** Which scanner reads a file: TypeScript, Rust, Java, Go and Python are scanned; anything else is not. */
+export const langOf = (file: string): Lang | null => /\.(ts|tsx|mts|cts)$/.test(file) ? "ts" : /\.(rs|nir)$/.test(file) ? "rust" : file.endsWith(".java") ? "java" : file.endsWith(".go") ? "go" : file.endsWith(".py") ? "python" : null;
+
+/**
+ * Lock identity is the written expression, which is only meaningful inside one scope: a Java class, a Go package (directory), a Python module.
+ * Without a scope, `accounts` in one class and `accounts` in another language's module would be one lock. TypeScript and Rust keep the written
+ * expression, as before (their locks are often shared through imports).
+ */
+function scopeLocks(scan: Scan, tag: string) {
+  const q = (l: string) => `${l}@${tag}`; const qs = (a: string[]) => a.map(q);
+  for (const a of scan.acquisitions) { a.lock = q(a.lock); a.heldBefore = qs(a.heldBefore); }
+  for (const c of scan.calls) c.held = qs(c.held);
+  for (const l of scan.loops) l.held = qs(l.held);
+  for (const a of scan.awaits) a.held = qs(a.held);
+  for (const r of scan.releases) r.lock = q(r.lock);
+  scan.locksHeldAtEnd = qs(scan.locksHeldAtEnd);
+}
+
 export function loadFunctions(store: Store, rev: RevisionRow, only?: Set<string>): Map<string, Fn> {
   const access = policyFor(store, rev.repoRoot);
-  const out = new Map<string, Fn>(); const cache = new Map<string, Buffer | null>();
+  const out = new Map<string, Fn>(); const cache = new Map<string, Buffer | null>(); const pyLocks = new Map<string, Set<string>>();
   for (const e of store.entities(rev.id)) {
     if (e.kind !== "function" && e.kind !== "method") continue;
     if (only && !only.has(e.entityId)) continue;
     if (access.denied(e.file)) continue;
-    // The detectors read TypeScript and Rust source. Java, Go and Python are indexed, but these detectors do not read them yet.
-    if (!/\.(ts|tsx|mts|cts|rs|nir)$/.test(e.file)) continue;
+    const lang = langOf(e.file); if (!lang) continue;
+    // Test code is not what these detectors are about: a test that takes a lock or loops over a query is not a defect in the product.
+    if ((lang === "java" || lang === "go" || lang === "python") && (/(^|\/)(tests?|__tests__)\//.test(e.file) || /(_test\.go|Test\.java|Tests\.java|IT\.java|test_\w+\.py|_test\.py)$/.test(e.file))) continue;
     const span = e.spans[0]; if (!span) continue;
     let buf = cache.get(e.file);
     if (buf === undefined) { try { buf = readFileSync(resolve(rev.repoRoot, e.file)); } catch { buf = null; } cache.set(e.file, buf); }
     if (!buf) continue;
     const src = buf.subarray(span.startByte, span.endByteExclusive).toString("utf8");
-    const lang: Lang = e.file.endsWith(".rs") ? "rust" : "ts";
-    out.set(e.entityId, { entity: e, file: e.file, lang, src, start: span.startByte, end: span.endByteExclusive, scan: scanFunction(src, lang), fileHash: hash(buf) });
+    let locks = pyLocks.get(e.file);
+    if (locks === undefined) { locks = new Set(); if (lang === "python") for (const m of buf.toString("utf8").matchAll(/\b(?:self\.)?(\w+)\s*(?::[^=\n]+)?=\s*(?:\w+\.)*(?:R?Lock|Semaphore|BoundedSemaphore|Condition|Event)\s*\(/g)) locks.add(m[1]); pyLocks.set(e.file, locks); }
+    out.set(e.entityId, { entity: e, file: e.file, lang, src, start: span.startByte, end: span.endByteExclusive, scan: scanFunction(src, lang, locks), fileHash: hash(buf) });
+    if (lang === "java" || lang === "python") scopeLocks(out.get(e.entityId)!.scan, e.file.split("/").pop()!);
+    else if (lang === "go") scopeLocks(out.get(e.entityId)!.scan, e.file.split("/").slice(-2, -1)[0] ?? "main");
   }
   return out;
 }

@@ -12,6 +12,15 @@ export type EvidenceState = "CURRENT" | "STALE" | "UNAVAILABLE" | "ACCESS_REVOKE
 export type ResolutionKind = "PARSED" | "RESOLVED" | "OBSERVED" | "UNRESOLVED";
 export type DisplayMode = "FACT" | "INFERENCE" | "HYPOTHESIS" | "FOG" | "HIDDEN";
 
+export interface MapOverlayEntity {
+  entityId: string; label: string;
+  tests: { state: "FAILING" | "MEASURED" | "LINKED" | "UNKNOWN"; coveragePercent: number | null; reachingTests: number; failedTests: number; evidenceIds: string[]; notes: string[] };
+  runtime: { spans: number; errors: number; exact: boolean; evidenceIds: string[]; notes: string[] };
+}
+export interface MapOverlays {
+  revision: string; window: { from: number; to: number }; entities: MapOverlayEntity[]; withheld: number; gaps: string[];
+}
+
 export interface SourceSpan {
   sourceId: Id; contentHash: string; revision: RevisionId; startByte: number; endByteExclusive: number;
 }
@@ -207,6 +216,7 @@ export const SCHEMA_EXPLANATION = "explanation.v1";
 export const SCHEMA_CONCEPTS = "concepts.v1";
 export const SCHEMA_CHALLENGE = "challenge.v1";
 export const SCHEMA_ROUTE = "route.v1";
+export const SCHEMA_HYPOTHESES = "hypotheses.v1";
 
 export const RepresentationOutput = z.object({
   caption: z.string().max(400),
@@ -223,6 +233,30 @@ export const RepresentationOutput = z.object({
   })).max(100),
 }).strict();
 export type RepresentationOutput = z.infer<typeof RepresentationOutput>;
+
+// C22 seeding: bounded competing candidate explanations with checkable predictions. The tools in `tool` are the
+// registered read tools of C22's broker; payloads are flat string/number/boolean records — never anything executed.
+export const HypothesesOutput = z.object({
+  hypotheses: z.array(z.object({
+    statement: z.string().min(8).max(300),
+    mechanism: z.array(z.object({
+      from: z.string().max(120), to: z.string().max(120),
+      relation: z.enum(["CALLS", "WAITS_FOR", "PRECEDES", "CONTRIBUTES_TO", "CAUSES_CANDIDATE"]),
+      evidenceIds: z.array(z.string()).max(10),
+    })).max(4),
+    assumptions: z.array(z.string().max(200)).max(4),
+    predictions: z.array(z.object({
+      description: z.string().min(4).max(200),
+      tool: z.enum(["graph.dependents", "graph.paths", "source.entity", "retrieve.evidence", "runtime.window"]),
+      payload: z.record(z.string(), z.union([z.string().max(300), z.number(), z.boolean()])),
+      outcomeIfTrue: z.array(z.enum(["PRESENT", "ABSENT_WITH_COVERAGE", "MATCH", "MISMATCH"])).max(3),
+      outcomeIfFalse: z.array(z.enum(["PRESENT", "ABSENT_WITH_COVERAGE", "MATCH", "MISMATCH"])).max(3),
+      essential: z.boolean(),
+    })).max(6),
+    basisEvidenceIds: z.array(z.string()).max(10),
+  })).min(1).max(8),
+}).strict();
+export type HypothesesOutput = z.infer<typeof HypothesesOutput>;
 
 export const ExplanationOutput = z.object({
   summary: z.string().max(1000),
@@ -269,11 +303,12 @@ export const OUTPUT_SCHEMAS = {
   [SCHEMA_CONCEPTS]: ConceptsOutput,
   [SCHEMA_CHALLENGE]: ChallengeOutput,
   [SCHEMA_ROUTE]: RouteOutput,
+  [SCHEMA_HYPOTHESES]: HypothesesOutput,
 } as const;
 
 // ---- Model gateway interface ----
 export interface ModelRequest {
-  purpose: "REPRESENT" | "EXPLAIN" | "EXTRACT" | "CHALLENGE" | "ROUTE"; schemaId: keyof typeof OUTPUT_SCHEMAS;
+  purpose: "REPRESENT" | "EXPLAIN" | "EXTRACT" | "CHALLENGE" | "ROUTE" | "HYPOTHESIZE"; schemaId: keyof typeof OUTPUT_SCHEMAS;
   question: string; bundle: EvidenceBundle; selected?: Id[];
   /** For CHALLENGE: the claim being attacked. */
   claim?: { assertion: string; evidenceIds: Id[] };
@@ -381,3 +416,87 @@ export interface DefectDetectionInput {
 export type ComparisonVerdict = "IMPROVED" | "REGRESSED" | "NO_MATERIAL_CHANGE" | "INCONCLUSIVE";
 export interface BenchmarkPolicy { minimumImprovement: number; maximumRegression: number; minimumSamples: number }
 export interface BenchmarkResult { effectEstimate: number | null; verdict: ComparisonVerdict; limitations: string[] }
+
+// ---------------------------------------------------------------- C24 causality v2 (phase-0 contract closure; C24_Runtime_Causality_Detailed_Design.md §11)
+// Frozen wire contract for the proposed causality extension. Every DTO and enum below is taken from design §11 verbatim;
+// changes to any of these require a new registered schema version, not a silent edit (§20 freeze list).
+export type EventKind = "OP_START" | "OP_END" | "SEND" | "RECEIVE" | "ENQUEUE" | "DEQUEUE"
+  | "SPAWN" | "JOIN" | "TASK_RESUME" | "TASK_SUSPEND" | "TASK_COMPLETE"
+  | "LOCK_ACQUIRE" | "LOCK_RELEASE" | "LOCK_WAIT" | "READ_VERSION" | "WRITE_VERSION" | "TX_COMMIT" | "EXCEPTION" | "DEADLINE" | "CANCEL_REQUEST" | "SAMPLE" | "DEPLOYMENT_MARKER";
+export type EdgeKind = "PROGRAM_ORDER" | "SPAWN" | "SEND_RECEIVE" | "COMPLETE_JOIN" | "RELEASE_ACQUIRE" | "READS_FROM"
+  | "REQUEST_RESPONSE" | "CONTEXT_ASSOCIATION" | "WAITS_FOR" | "CORRELATES_WITH" | "CAUSE_CANDIDATE" | "INTERVENTION_SUPPORTS";
+export type GraphLayer = "EXECUTION_ORDER" | "CONTEXT" | "WAIT" | "ASSOCIATION" | "EXPLANATION";
+export type EdgeState = "ACCEPTED" | "CANDIDATE" | "QUARANTINED" | "INVALIDATED";
+export type TimeQuality = "BOUNDED" | "LOCAL_MONOTONIC_ONLY" | "UNKNOWN" | "CONTRADICTORY";
+export type SourceTrust = "AUTHENTICATED_ADAPTER" | "IMPORTED_UNVERIFIED" | "UNTRUSTED_CONTEXT";
+export type SamplingState = "NONE" | "HEAD" | "TAIL" | "MIXED" | "UNKNOWN";
+export type GapKind = "MISSING_EVENT" | "SAMPLED_REGION" | "UNATTRIBUTED_CODE" | "CLOCK_UNKNOWN" | "ACCESS_RESTRICTED" | "ADAPTER_UNSUPPORTED" | "RETENTION_EXPIRED";
+export type CertificateState = "ACTIVE" | "INVALIDATED" | "REJECTED";
+export type GraphConsistency = "CONSISTENT" | "PARTIAL" | "CONTRADICTORY";
+export type OrderRelation = "HAPPENS_BEFORE" | "HAPPENS_AFTER" | "CONCURRENT_CERTIFIED" | "UNKNOWN";
+export type MechanismKind = "LOCK_WAIT" | "POOL_WAIT" | "DOWNSTREAM_WAIT" | "QUEUE_DELAY" | "DATA_DEPENDENCY" | "RETRY_AMPLIFICATION" | "SCHEDULER_DELAY" | "UNKNOWN";
+export type SegmentKind = "EXECUTING" | "WAITING" | "RUNNABLE" | "DOWNSTREAM" | "UNEXPLAINED";
+export type CausalClaimLevel = "EXECUTION_RELATION" | "MECHANISM_CANDIDATE" | "MECHANISM_SUPPORTED" | "INTERVENTION_SUPPORTED";
+export type ClaimFreshness = "CURRENT" | "STALE" | "RESTRICTED";
+
+const c24Id = z.string().min(1).max(200);
+const c24Hash = z.string().min(8).max(128);
+/** Registered bounded attribute values: a schema id pins the shape; values stay small. */
+const RegisteredAttributesZ = z.strictObject({ schemaId: c24Id, version: z.number().int().nonnegative(), values: z.record(z.string(), z.union([z.string().max(500), z.number(), z.boolean(), z.null()])).refine((v) => Object.keys(v).length <= 32, "at most 32 attribute keys") });
+export const RegisteredAttributesSchema = RegisteredAttributesZ;
+
+export const EventKindZ = z.enum(["OP_START", "OP_END", "SEND", "RECEIVE", "ENQUEUE", "DEQUEUE", "SPAWN", "JOIN", "TASK_RESUME", "TASK_SUSPEND", "TASK_COMPLETE", "LOCK_ACQUIRE", "LOCK_RELEASE", "LOCK_WAIT", "READ_VERSION", "WRITE_VERSION", "TX_COMMIT", "EXCEPTION", "DEADLINE", "CANCEL_REQUEST", "SAMPLE", "DEPLOYMENT_MARKER"] as const satisfies [EventKind, ...EventKind[]]);
+export const EdgeKindZ = z.enum(["PROGRAM_ORDER", "SPAWN", "SEND_RECEIVE", "COMPLETE_JOIN", "RELEASE_ACQUIRE", "READS_FROM", "REQUEST_RESPONSE", "CONTEXT_ASSOCIATION", "WAITS_FOR", "CORRELATES_WITH", "CAUSE_CANDIDATE", "INTERVENTION_SUPPORTS"] as const satisfies [EdgeKind, ...EdgeKind[]]);
+export const GraphLayerZ = z.enum(["EXECUTION_ORDER", "CONTEXT", "WAIT", "ASSOCIATION", "EXPLANATION"] as const satisfies [GraphLayer, ...GraphLayer[]]);
+
+export const RuntimeEventSchema = z.strictObject({
+  id: c24Id, version: z.number().int().nonnegative(), tenantId: c24Id, sourceId: c24Id, sourceEpoch: c24Id,
+  sourceSequence: z.string().max(120).nullable(), processEpoch: c24Id.nullable(),
+  taskId: c24Id.nullable(), threadId: c24Id.nullable(), operationId: c24Id.nullable(),
+  attemptId: c24Id.nullable(), traceId: c24Id.nullable(), spanId: c24Id.nullable(),
+  kind: EventKindZ, time: z.strictObject({
+    observedWallTime: z.number().nullable(), earliestWallTime: z.number().nullable(), latestWallTime: z.number().nullable(),
+    clockDomainId: c24Id, clockEpoch: c24Id, monotonicTicks: z.string().max(80).nullable(), tickUnit: z.string().max(24).nullable(),
+    logicalClock: z.strictObject({ schemaId: c24Id, valueHandle: c24Id, semanticsCertificateId: c24Id }).nullable(),
+    quality: z.enum(["BOUNDED", "LOCAL_MONOTONIC_ONLY", "UNKNOWN", "CONTRADICTORY"]),
+  }),
+  deploymentId: c24Id.nullable(), buildId: c24Id.nullable(),
+  attributes: RegisteredAttributesZ.nullable(), evidenceRefs: z.array(c24Id).max(64),
+  quality: z.strictObject({
+    sourceTrust: z.enum(["AUTHENTICATED_ADAPTER", "IMPORTED_UNVERIFIED", "UNTRUSTED_CONTEXT"]),
+    sampling: z.enum(["NONE", "HEAD", "TAIL", "MIXED", "UNKNOWN"]),
+    droppedEventCount: z.number().int().nonnegative().nullable(), completeness: z.string().max(40), ingestionTime: z.number(), correctionOfEventId: c24Id.nullable(),
+  }),
+});
+
+export const RuntimeEdgeSchema = z.strictObject({
+  id: c24Id, version: z.number().int().nonnegative(), fromEventId: c24Id, toEventId: c24Id,
+  kind: EdgeKindZ, layer: GraphLayerZ, state: z.enum(["ACCEPTED", "CANDIDATE", "QUARANTINED", "INVALIDATED"]),
+  ruleId: c24Id, ruleVersion: z.number().int().nonnegative(), evidenceIds: z.array(c24Id).max(64),
+  relationCertificateId: c24Id.nullable(), scopeHash: c24Hash, claimId: c24Id.nullable(), limitations: z.array(z.string().max(200)).max(12),
+});
+
+export const WaitRelationSchema = z.strictObject({
+  id: c24Id, snapshotId: c24Id, taskId: c24Id, processEpoch: c24Id, resourceId: c24Id, resourceEpoch: c24Id,
+  ownerTaskIds: z.array(c24Id).max(128), observationEventIds: z.array(c24Id).max(128), evidenceIds: z.array(c24Id).max(64),
+  escapeConditions: z.array(z.string().max(200)).max(12), completeness: z.string().max(40),
+});
+
+export const CoverageCertificateSchema = z.strictObject({
+  id: c24Id, sourceId: c24Id, sourceEpoch: c24Id, window: z.strictObject({ from: z.number(), to: z.number() }),
+  predicateSchemaId: c24Id, queryHash: c24Hash, retentionPolicyVersion: z.number().int().nonnegative(),
+  exhaustiveForPredicate: z.boolean(), sampling: z.enum(["NONE", "HEAD", "TAIL", "MIXED", "UNKNOWN"]),
+  adapterId: c24Id, adapterVersion: z.string().max(64), exclusions: z.array(z.string().max(200)).max(32),
+});
+
+export const GapNodeSchema = z.strictObject({
+  id: c24Id, kind: z.enum(["MISSING_EVENT", "SAMPLED_REGION", "UNATTRIBUTED_CODE", "CLOCK_UNKNOWN", "ACCESS_RESTRICTED", "ADAPTER_UNSUPPORTED", "RETENTION_EXPIRED"]),
+  scopeHash: c24Hash, adjacentEventIds: z.array(c24Id).max(256), missingPredicate: z.string().max(300), material: z.boolean(), safeExplanation: z.string().max(400),
+});
+
+export const CausalClaimReferenceSchema = z.strictObject({
+  claimId: c24Id, snapshotId: c24Id, snapshotVersion: z.number().int().nonnegative(),
+  level: z.enum(["EXECUTION_RELATION", "MECHANISM_CANDIDATE", "MECHANISM_SUPPORTED", "INTERVENTION_SUPPORTED"]),
+  populationSchemaId: c24Id, mechanismEvidenceIds: z.array(c24Id).max(64), experimentReportIds: z.array(c24Id).max(16),
+  gateReportId: c24Id, state: z.enum(["CURRENT", "STALE", "RESTRICTED"]),
+});

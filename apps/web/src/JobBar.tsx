@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { JobView } from "@cie/schema";
 
-const LABEL = { index: "Indexing", concepts: "Extracting concepts" } as const;
+const LABEL: Record<JobView["kind"], string> = { index: "Indexing", concepts: "Extracting concepts", investigate: "Investigating", "defect-detect": "Detecting defects", "defect-experiment": "Running defect experiment" };
 
 /** The running (or waiting) background job: what it is doing, how far along, and a Cancel that says what it will keep. */
 export function JobBar({ jobs, onCancel }: { jobs: JobView[]; onCancel: (j: JobView) => void }) {

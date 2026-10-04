@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { createProvider } from "@cie/model";
 import type { ApiResult, CallContext } from "@cie/schema";
 import { Interactions } from "./interactions.ts";
+import { chooseRouter } from "./llm-router.ts";
 import { Service } from "./service.ts";
 import { TenantHost } from "./tenants.ts";
 import { Store } from "./store.ts";
@@ -67,6 +68,7 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
     "C11/listConcepts": { mutating: false, run: (c, b) => svc.listConcepts(c, b) },
     "C11/conceptStore": { mutating: false, run: (c, b) => svc.conceptStore(c, b) },
     "C19/refresh": { mutating: false, run: (c, b) => svc.refreshView(c, b) },
+    "C19/overlays": { mutating: false, run: (c, b) => svc.overlays(c, b) },
     "C19/setOverride": { mutating: true, run: (c, b) => svc.setOverride(c, b) },
     "C19/listOverrides": { mutating: false, run: (c, b) => svc.listOverrides(c, b) },
     "C19/visuals": { mutating: false, run: (c, b) => svc.visuals(c, b) },
@@ -131,17 +133,19 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
       return r.ok ? { svc: r.value } : { failure: r as ApiResult<never> };
     };
     // C22's v2 catalogue lives at /api/v2/components/C22/{operation}; the five original operations stay on v1.
-    const v2 = url.pathname.match(/^\/api\/v2\/components\/C22\/([A-Za-z0-9]+)$/);
+    const v2 = url.pathname.match(/^\/api\/v2\/components\/(C22|C24)\/([A-Za-z0-9]+)$/);
     if (v2) {
       const c0 = mk(""); const sv0 = serviceFor(c0);
       if ("failure" in sv0) return send(res, statusFor(sv0.failure), sv0.failure);
-      const fn = Object.hasOwn(sv0.svc.c22v2, v2[1]) ? sv0.svc.c22v2[v2[1]] : undefined;
+      const catalogue = v2[1] === "C22" ? sv0.svc.c22v2 : sv0.svc.c24v2;
+      const op = v2[2];
+      const fn = Object.hasOwn(catalogue, op) ? (catalogue as Record<string, (c: CallContext, b: any) => Promise<ApiResult<unknown>>>)[op] : undefined;
       if (!fn || req.method !== "POST") return send(res, fn ? 405 : 404, { ok: false, error: { code: "NOT_FOUND", message: "unknown operation", retryable: false } });
       if (!(req.headers["content-type"] ?? "").startsWith("application/json")) return send(res, 415, { ok: false, error: { code: "INVALID_SCHEMA", message: "content-type must be application/json", retryable: false } });
       let body: any;
       try { body = JSON.parse((await readBody(req)) || "{}"); } catch { return send(res, 400, { ok: false, error: { code: "INVALID_SCHEMA", message: "invalid JSON body", retryable: false } }); }
       const idem = String(req.headers["idempotency-key"] ?? "");
-      const mutating = !["get", "list", "getCompletion", "getBoard", "readEvents"].includes(v2[1]);
+      const mutating = !(v2[1] === "C22" ? ["get", "list", "getCompletion", "getBoard", "getDetails", "readEvents"] : ["getSnapshot", "readUpdates", "querySlice", "traceAncestors", "checkOrder", "explainRelation", "criticalPath", "getCoverage", "replayPlayback"]).includes(op);
       if (mutating && !idem) return send(res, 400, { ok: false, error: { code: "INVALID_SCHEMA", message: "Idempotency-Key header required", retryable: false } });
       const result = await fn(mk(idem), body);
       return send(res, statusFor(result), result);
@@ -197,7 +201,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const { provider, note } = await createProvider();
   if (note) console.warn(note);
   const svc = new Service(new Store(), new WorkerClient(), provider);
+  const { router, note: routerNote } = await chooseRouter();
+  if (routerNote) console.warn(routerNote);
+  svc.router = router;
   // Durable events become notifications, and due webhooks are sent. A crash between the two loses neither: both are stored first.
   setInterval(() => { try { svc.bus.dispatchPending(); void svc.notifications.dispatch().catch(() => {}); } catch { /* the next tick tries again */ } }, 2000).unref();
-  createServer(buildHandler(svc)).listen(PORT, HOST, () => console.log(`cie listening on http://${HOST}:${PORT} (model: ${provider.name}/${provider.model})`));
+  createServer(buildHandler(svc)).listen(PORT, HOST, () => console.log(`cie listening on http://${HOST}:${PORT} (model: ${provider.name}/${provider.model}; router: ${router?.name ?? "off"})`));
 }

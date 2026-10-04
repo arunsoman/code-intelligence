@@ -1,0 +1,63 @@
+{
+  "id": "RC03",
+  "title": "Smaller Lamport stamp without path",
+  "class": "positive",
+  "derivation": {
+    "method": "oracle",
+    "rule": "§2: a smaller Lamport timestamp does not imply happens-before; no path ⇒ UNKNOWN",
+    "oracle": "phase-0 orderRelation + Floyd–Warshall closure agree"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:l1",
+        "kind": "OP_START",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "LOCAL_MONOTONIC_ONLY"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      },
+      {
+        "id": "e:l2",
+        "kind": "OP_START",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "LOCAL_MONOTONIC_ONLY"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      }
+    ],
+    "attributes": {
+      "logicalStamps": {
+        "e:l1": 1,
+        "e:l2": 2
+      }
+    },
+    "certificates": [],
+    "proposedEdges": []
+  },
+  "expected": {
+    "orderDecision": {
+      "relation": "UNKNOWN"
+    },
+    "noHappensBefore": true,
+    "noConcurrencyAssertion": true
+  }
+}

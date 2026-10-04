@@ -638,11 +638,14 @@ export class InvestigationEngine {
     return this.store.tx(() => {
       const cur = this.load(s.id);
       const registered: string[] = [];
-      for (const { d, origin } of drafts) {
+      for (const { d: base, origin } of drafts) {
         if (this.hypothesesOf(cur).length >= cur.policy.maxActiveHypotheses) break;
-        const problems = this.validateCandidate(cur, d);
-        if (problems.length) { rejected.push({ statement: String(d.statement ?? "").slice(0, 80), problems: problems.slice(0, 3) }); continue; }
-        if (this.hypothesis("hyp:" + hash(cur.id, d.statement.toLowerCase().replace(/\s+/g, " ").trim()))) continue;
+        const problems = this.validateCandidate(cur, base);
+        if (problems.length) { rejected.push({ statement: String(base.statement ?? "").slice(0, 80), problems: problems.slice(0, 3) }); continue; }
+        if (this.hypothesis("hyp:" + hash(cur.id, base.statement.toLowerCase().replace(/\s+/g, " ").trim()))) continue;
+        // A near-duplicate of an already-registered seed candidate refines it, as proposals do; it keeps its own predictions and provenance until a person reviews it.
+        const twin = registered.map((id) => this.hypothesis(id)).find((h) => h && this.similarity(h, base) >= 0.8);
+        const d = twin ? { ...base, alternativeRelations: [...base.alternativeRelations, { otherId: twin.id, kind: "REFINES" as const }] } : base;
         registered.push(this.register(cur, d, origin, cmd).id);
       }
       // Hypotheses compete unless something says they can coexist; mutual exclusion is a claim and is never assumed.
@@ -1167,6 +1170,19 @@ export class InvestigationEngine {
   issueGrant(scope: string): string { const id = "grant:" + randomUUID(); this.db.prepare("insert into c22_grants values (?,?,?)").run(id, scope, iso(this.now())); return id; }
 
   // ------------------------------------------------------------------ board and events
+  /** One consistent read for the investigation screen, including the evidence comparison matrix. */
+  getDetails(investigationId: string) {
+    const snapshot = this.get(investigationId);
+    if (!this.authorized(snapshot)) throw new C22Error("FORBIDDEN", "access to this investigation was withdrawn");
+    const hypotheses = this.hypothesesOf(snapshot);
+    return {
+      snapshot, hypotheses,
+      observations: this.observationsOf(snapshot.id),
+      assessments: hypotheses.flatMap((h) => this.assessmentsOf(h.id).filter((a) => a.hypothesisVersion === h.version)),
+      checks: this.checksOf(snapshot.id), steps: this.stepsOf(snapshot.id),
+    };
+  }
+
   private boardOf(s: InvestigationSnapshot, restrictedOverride?: boolean): BoardSnapshot {
     const restricted = restrictedOverride ?? !this.authorized(s);
     const base = { investigationId: s.id, investigationVersion: s.version, sequence: s.eventSequence, generation: s.generation, scopeHash: s.scope.scopeHash, execution: s.execution, disposition: s.disposition };

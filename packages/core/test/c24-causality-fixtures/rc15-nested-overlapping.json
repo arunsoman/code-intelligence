@@ -1,0 +1,36 @@
+{
+  "id": "RC15",
+  "title": "Nested/overlapping operations",
+  "class": "positive",
+  "derivation": {
+    "method": "oracle",
+    "rule": "§9: nested/overlapping durations are not summed; exclusive time is unattributed until stronger evidence",
+    "oracle": "accountDurations union verified against integer-grid scan; re-segmentation invariant"
+  },
+  "input": {
+    "events": [],
+    "segments": [
+      {
+        "fromMs": 0,
+        "toMs": 100,
+        "covered": true
+      },
+      {
+        "fromMs": 10,
+        "toMs": 20,
+        "covered": true
+      }
+    ],
+    "observation": {
+      "fromMs": 0,
+      "toMs": 100
+    },
+    "certificates": [],
+    "proposedEdges": []
+  },
+  "expected": {
+    "coveredMs": 100,
+    "unresolvedMs": 0,
+    "noDoubleCounting": true
+  }
+}

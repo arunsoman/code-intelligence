@@ -1,0 +1,58 @@
+{
+  "id": "RC02",
+  "title": "Earlier timestamp without relation evidence",
+  "class": "positive",
+  "derivation": {
+    "method": "hand",
+    "rule": "§2/§7: temporal precedence is supported only as a time statement, never as an execution edge"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:a",
+        "kind": "OP_START",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": 90,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      },
+      {
+        "id": "e:b",
+        "kind": "OP_START",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": 100,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      }
+    ],
+    "certificates": [],
+    "proposedEdges": []
+  },
+  "expected": {
+    "acceptedEdges": [],
+    "quarantinedEdges": [],
+    "orderDecision": {
+      "relation": "UNKNOWN",
+      "note": "temporal order may be displayed as time evidence only"
+    },
+    "noExecutionEdge": true
+  }
+}

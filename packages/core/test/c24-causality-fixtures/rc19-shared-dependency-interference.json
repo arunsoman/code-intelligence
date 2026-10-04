@@ -1,0 +1,61 @@
+{
+  "id": "RC19",
+  "title": "Shared dependency interference",
+  "class": "negative-control",
+  "derivation": {
+    "method": "hand",
+    "rule": "§10: do not assume request-level independence; experiments may need whole-instance allocation; report tested population and spillover scope"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:w1",
+        "kind": "LOCK_WAIT",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": 5,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": "t1",
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": {
+          "resource": "r1"
+        }
+      }
+    ],
+    "experiment": {
+      "design": "request-level-randomized",
+      "sharedDependencies": [
+        "db:pool",
+        "queue:checkout"
+      ]
+    },
+    "waitRelations": [
+      {
+        "id": "wr:1",
+        "task": "t1",
+        "resource": "r1",
+        "owners": [
+          "t2"
+        ],
+        "escape": [
+          "owner may release",
+          "acquire may time out"
+        ]
+      }
+    ],
+    "certificates": [],
+    "proposedEdges": []
+  },
+  "expected": {
+    "populationLimitsRetained": true,
+    "spilloverScopeRecorded": true,
+    "noRequestIndependenceAssumption": true,
+    "wholeInstanceAllocationMayBeRequired": true
+  }
+}

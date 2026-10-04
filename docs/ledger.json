@@ -1017,7 +1017,8 @@
    {
     "item": "Missing marker",
     "tests": [
-     "missing marker: with no deployment marker"
+     "missing marker: with no deployment marker",
+     "a pasted Java, Python or Go trace becomes a ranked suspect list"
     ],
     "state": "done"
    },
@@ -1056,6 +1057,65 @@
      "runtime signals matching what the person is looking at"
     ],
     "state": "done"
+   },
+   {
+    "item": "Phase 0 (causality v2 extension): scope register with corrected baseline",
+    "tests": [
+     "RC11 property: reconciling the same proposal set under 120 permutations yields the identical outcome, and every quarantined edge retains its conflict report",
+     "RC11 oracle: quarantined membership agrees with an independent Floyd\u2013Warshall cycle computation",
+     "RC03: a smaller Lamport stamp and an earlier wall clock imply nothing without a path \u2014 UNKNOWN, and never certified concurrent",
+     "RC04: no path in a sampled region is UNKNOWN, never CONCURRENT_CERTIFIED; a valid certificate covering both endpoints is required",
+     "RC15: nested and overlapping durations are not summed; uncovered time stays unexplained",
+     "RC15 oracle: covered totals agree with an independent integer-grid scan across re-segmentations",
+     "checker mutation: removing the cycle-quarantine gate is caught (the mutated reconciler accepts a cycle)",
+     "checker mutation: removing the certificate gate on CONCURRENT_CERTIFIED is caught",
+     "checker mutation: summing instead of unioning is caught by the no-double-count property",
+     "permitted: an execution-relation claim with trusted adapter evidence grounds and stays a relation-level claim",
+     "prohibited (RC26): a relation-level assertion must not display as fact, and a model-authored one never becomes FACT",
+     "prohibited (RC27/RC28): execution evidence alone must never reach INTERVENTION_SUPPORTED \u2014 no experiment ids, scope-mismatched one blocks",
+     "permitted: an intervention claim wired to a real experiment report id grounds (through the gates) and is scoped in its assertion",
+     "prohibited (RC28): a confounded before/after comparison stays observational",
+     "corpus: all 28 acceptance ids present, exactly once, with class and derivation recorded",
+     "corpus: negative controls name a rule a first implementation could violate, and RC20's forged context is rejected",
+     "corpus: RC11's recorded expected result is reproduced by the independent quarantine oracle",
+     "corpus: RC03/RC04 record UNKNOWN (never happens-before or concurrency) and the oracle agrees",
+     "corpus: RC15's recorded covered/unresolved totals agree with the independent union oracle",
+     "corpus: RC01 (trusted relation retained over skew) is machine-checkable now and the oracle holds it"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "Runtime causality v2 phase-0 (contract closure, algorithms, fixture corpus)",
+    "tests": [
+     "RC11 property: reconciling the same proposal set under 120 permutations yields the identical outcome, and every quarantined edge retains its conflict report"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "Runtime causality v2 phase-1 (engine + gateway, observed fixture behavior)",
+    "tests": [
+     "RC01: exact RPC send/receive with skewed clocks \u2014 trusted relation retained, contradiction disclosed",
+     "RC06: retry/redelivery/batch \u2014 attempt-aware lineage, batch is many-to-one, no exactly-once claim",
+     "RC08: PID/task/lock/trace reuse across process epochs is quarantined with a reason, not merged",
+     "RC10: unknown clock bounds \u2014 no precise cross-host latency claim",
+     "RC12: a legitimate wait-cycle is analyzed in the wait layer with escape conditions, never quarantined as ordering",
+     "RC13: sampled CPU stacks are attribution only; no task ordering is fabricated from samples",
+     "RC14: missing spans/retention/drop \u2014 material gaps; absence-based exoneration is blocked",
+     "RC15: nested/overlapping operations are unioned, never summed (engine-level path accounting)",
+     "RC17: a source correction invalidates dependent edges and marks claims stale before refresh",
+     "RC22: crash between source cursor, projection and outbox \u2014 dedup and durable replay; no mixed snapshot",
+     "RC23: revoked source / deleted raw handle \u2014 restricted reports, no historic payload recovery",
+     "RC24: a late event after a finalized watermark produces a versioned correction, never silent folding",
+     "contract: stale expectedSourceVersion is refused as a version conflict, marked retryable",
+     "contract: the v1 C24 catalogue surfaces unchanged attributes beside the v2 catalogue (v1 preserved, \u00a712)"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "Runtime causality v2 \u2014 independent fixture review + real-adapter evidence",
+    "tests": [],
+    "state": "blocked",
+    "needs": "independent human review (or independent authorship) of the 28-fixture corpus; real-adapter coverage (OTLP collector/broker/scheduler/pool/lock/profiler/deployment pipeline) deferred per D1 default; full-suite evidence re-taken after the concurrent router refactor lands"
    }
   ]
  },
@@ -1065,7 +1125,8 @@
    {
     "item": "Seeded leak/authz gaps",
     "tests": [
-     "seeded leak and authorisation gaps"
+     "seeded leak and authorisation gaps",
+     "security rules in Java, Go and Python"
     ],
     "state": "done"
    },
@@ -1111,7 +1172,9 @@
      "DP09: lock-per-iteration",
      "DP10: static candidates",
      "DP04: real TypeScript functions lose",
-     "C05/C26: actual indexed code"
+     "C05/C26: actual indexed code",
+     "lock-order inversions are found in Java",
+     "performance candidates: one query per element in Java, Go and Python"
     ],
     "state": "done"
    },
@@ -1126,7 +1189,8 @@
    {
     "item": "lifecycle leak",
     "tests": [
-     "C26 lifecycle:"
+     "C26 lifecycle:",
+     "resource lifecycle: unclosed streams, files, response bodies"
     ],
     "state": "done"
    },
@@ -1134,7 +1198,11 @@
     "item": "controlled stress experiment and false-positive controls",
     "tests": [
      "DP12/20: stress on real code",
-     "DP06: ThreadSanitizer"
+     "DP06: ThreadSanitizer",
+     "Go race detector: a planted data race",
+     "JVM deadlock probe: opposite lock orders",
+     "Python hang watchdog: a lock-order hang",
+     "the Python and brace-language scanners read what the detectors need"
     ],
     "state": "done"
    }

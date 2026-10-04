@@ -7,6 +7,7 @@ import type { CallContext, ModelProvider } from "@cie/schema";
 import { Service } from "../src/service.ts";
 import { Store } from "../src/store.ts";
 import { WorkerClient } from "../src/worker.ts";
+import { ScriptedRouter } from "./scripted-router.ts";
 
 // Every temp directory a test creates lives under one per-run directory that is removed on exit, so test runs
 // never accumulate copies of fixtures and git repositories in the system temp directory.
@@ -30,6 +31,7 @@ export function copyFixture(): string {
 export async function setup(model: ModelProvider = new StubProvider(), repo = FIXTURE) {
   const worker = new WorkerClient();
   const svc = new Service(new Store(":memory:"), worker, model);
+  svc.router = new ScriptedRouter();
   const r = await svc.ingestRepository(ctx(), { repoPath: repo });
   if (!r.ok) throw new Error(r.error.message);
   return { svc, worker, revision: r.value.id };

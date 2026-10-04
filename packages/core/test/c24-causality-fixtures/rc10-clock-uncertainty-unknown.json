@@ -1,0 +1,58 @@
+{
+  "id": "RC10",
+  "title": "Clock uncertainty unknown",
+  "class": "missing-data",
+  "derivation": {
+    "method": "hand",
+    "rule": "§7: if uncertainty bounds are unknown, cross-host temporal comparison is UNKNOWN"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:h1",
+        "kind": "OP_END",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "UNKNOWN"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": {
+          "op": "op:x"
+        }
+      },
+      {
+        "id": "e:h2",
+        "kind": "OP_START",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "UNKNOWN"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": {
+          "op": "op:x"
+        }
+      }
+    ],
+    "certificates": [],
+    "proposedEdges": []
+  },
+  "expected": {
+    "noPreciseCrossHostLatency": true,
+    "timeQuality": "UNKNOWN",
+    "noInventedBounds": true
+  }
+}

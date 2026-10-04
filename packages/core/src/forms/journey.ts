@@ -1,5 +1,6 @@
 // V4 Transaction Journey: a business operation as a swim-lane sequence. Lanes are modules, steps follow call order,
 // decision diamonds are the places it can refuse or fail, and asynchronous hand-offs are marked as such.
+import { loadFunctions } from "../defect/functions.ts";
 import type { Claim, ViewEdge, ViewGroup, ViewNode } from "@cie/schema";
 import type { RevisionRow, Store } from "../store.ts";
 import { queryTerms } from "../retrieval.ts";
@@ -17,6 +18,25 @@ export function pickOperation(flow: Flow, question: string, subject?: string): s
   const pool = named.length ? named : subject ? [] : entries;
   const size = (id: string) => { const seen = new Set([id]); const q = [id]; while (q.length) for (const r of flow.out.get(q.shift()!) ?? []) if (!seen.has(r.to)) { seen.add(r.to); q.push(r.to); } return seen.size; };
   return pool.sort((a, b) => size(b.id) - size(a.id) || a.id.localeCompare(b.id))[0]?.id ?? null;
+}
+
+
+/** How a call sits inside its caller: under a condition, in an else branch, once per element of a loop, or in a retry loop. Read from the source's structure. */
+interface Context { kind: "if" | "else" | "loop" | "retry"; text: string }
+const RETRY = /\b(?:retry|retries|attempt|attempts|backoff|tries|try_count|max_?retries)\b/i;
+function contextOf(fn: ReturnType<typeof loadFunctions> extends Map<string, infer F> ? F : never, absByte: number): Context[] {
+  const rel = Buffer.from(fn.src, "utf8").subarray(0, Math.max(0, absByte - fn.start)).toString("utf8").length;
+  const out: Context[] = [];
+  for (const l of fn.scan.loops) if (rel >= l.bodyStart && rel < l.bodyEnd) {
+    const body = fn.src.slice(l.bodyStart, l.bodyEnd);
+    const retry = RETRY.test(l.header) || RETRY.test(body.slice(0, 400)) || /\b(?:catch|except)\b/.test(body);
+    out.push({ kind: retry ? "retry" : "loop", text: retry ? `${l.kind === "while" ? "while " : ""}${l.header || "loop"}`.trim() : l.iterable ? `each of ${l.iterable}` : l.header || l.kind });
+  }
+  for (const b of fn.scan.ifs) {
+    if (rel >= b.bodyStart && rel < b.bodyEnd) out.push({ kind: "if", text: b.cond.trim().replace(/\s+/g, " ").slice(0, 80) });
+    else if (fn.lang !== "python") { const after = fn.src.slice(b.bodyEnd + 1); const m = /^\s*else\b\s*(?!if\b)\{/.exec(after); if (m) { const open = b.bodyEnd + 1 + m[0].length - 1; let d = 0, close = open; for (; close < fn.src.length; close++) { if (fn.src[close] === "{") d++; else if (fn.src[close] === "}" && --d === 0) break; } if (rel > open && rel < close) out.push({ kind: "else", text: `not (${b.cond.trim().replace(/\s+/g, " ").slice(0, 70)})` }); } }
+  }
+  return out;
 }
 
 export function buildJourney(store: Store, rev: RevisionRow, question: string, subject?: string): { view: ReturnType<typeof baseView>; claims: Claim[] } {
@@ -37,6 +57,11 @@ export function buildJourney(store: Store, rev: RevisionRow, question: string, s
   const throwsAt = new Map<string, { cls: string; ev: string[] }[]>();
   for (const f of store.factsByPredicate(rev.id, "throws")) if (seen.has(f.subject)) throwsAt.set(f.subject, [...(throwsAt.get(f.subject) ?? []), { cls: String((f.object as { value?: unknown }).value), ev: f.evidence.map((x) => x.id) }]);
 
+  // Control-flow context of each step, from where its call sits in the caller's source.
+  const fns = loadFunctions(store, rev, new Set(order));
+  const contextOfStep = new Map<string, Context[]>();
+  for (const id of order) { const r = parentRel.get(id); const caller = r ? fns.get(r.from) : undefined; if (r && caller && r.kind === "calls") contextOfStep.set(id, contextOf(caller, callPos(r))); }
+
   const lanes: string[] = [];
   for (const id of order) { const l = laneOf(flow.entities.get(id)!.file); if (!lanes.includes(l)) lanes.push(l); }
   const afterAsync = new Set<string>(); // steps that only run after an async hand-off
@@ -53,6 +78,9 @@ export function buildJourney(store: Store, rev: RevisionRow, question: string, s
       notes: [`Step ${i + 1} of ${order.length}, in the “${lane}” lane.`],
     };
     const r = parentRel.get(id);
+    const ctxs = contextOfStep.get(id) ?? [];
+    for (const c of ctxs) node.notes!.push({ if: `Runs only if ${c.text}.`, else: `Runs only in the other branch: ${c.text}.`, loop: `Runs once per element: ${c.text}, so it can run many times.`, retry: `Inside a retry or error-handling loop (${c.text}): it may run several times, or again after a failure.` }[c.kind]);
+    if (ctxs.length) node.badge = ctxs.some((c) => c.kind === "retry") ? "retry" : ctxs.some((c) => c.kind === "loop") ? "loop" : "conditional";
     if (afterAsync.has(id)) {
       const c = claimOf(store, rev.id, {
         assertion: `${e.name} runs after an asynchronous hand-off, so the caller does not observe its outcome.`, claimClass: "journey-async", evidenceIds: [...(r?.evidence.map((x) => x.id) ?? [])],
@@ -82,6 +110,6 @@ export function buildJourney(store: Store, rev: RevisionRow, question: string, s
   if (order.length >= 40) v.gaps.push("The journey is long; only the first 40 steps are shown.");
   const fog = order.reduce((n, id) => n + fogCount(store, rev.id, id), 0);
   if (fog) v.gaps.push(`${fog} call(s) on this journey could not be statically resolved; steps may be missing.`);
-  v.gaps.push("Order follows where each call appears in its caller's source; loops, branches and retries are not modelled.");
+  v.gaps.push("Order follows where each call appears in its caller's source. Conditions, loops and retry loops are read from the source's structure and marked on the step; whether a branch is taken, or how often a loop runs, is not known.");
   return { view: v, claims };
 }

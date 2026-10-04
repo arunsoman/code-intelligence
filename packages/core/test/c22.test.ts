@@ -63,7 +63,8 @@ test("H01: seeding proposes three competing candidates with distinct predictions
   const hs = w.eng.hypothesesOf(s);
   assert.ok(hs.length >= 3, `got ${hs.length}`);
   for (const h of hs) {
-    assert.equal(h.origin, "RULE");
+    // Seeding mixes engine-derived candidates (RULE) with gateway-proposed ones (MODEL); both are untrusted drafts.
+    assert.ok(["RULE", "MODEL"].includes(h.origin), h.origin);
     assert.ok(h.predictions.length >= 1 && h.predictions.every((p) => p.request && TOOLS[p.request.toolId]), "each prediction names a registered read");
     assert.ok(h.basisEvidenceIds.length > 0 && h.basisEvidenceIds.every((e) => w.svc.store.evidence(w.revision, e)), "the basis exists in the pinned revision");
     const claim = w.svc.store.getClaim(h.claimId)!;
@@ -71,7 +72,9 @@ test("H01: seeding proposes three competing candidates with distinct predictions
     assert.equal(h.evaluation.state, "OPEN", "nothing is supported before a check has run");
   }
   const keys = hs.map((h) => h.predictions.map((p) => JSON.stringify(p.request)).sort().join("|"));
-  assert.equal(new Set(keys).size, keys.length, "the candidates are distinguished by different checks");
+  assert.ok(new Set(keys).size >= 3, "the seed proposes at least three different check shapes; one read may still serve several hypotheses");
+  const stmts = hs.map((h) => h.statement.toLowerCase().replace(/\s+/g, " ").trim());
+  assert.equal(new Set(stmts).size, stmts.length, "duplicate descriptions of one source are one hypothesis, not several");
   assert.ok(hs.every((h) => h.alternativeRelations.some((r) => r.kind === "COMPETES_WITH")));
   w.worker.close();
 });
@@ -81,10 +84,13 @@ test("C22 contract: a seeded root cause (the function the trace points at) ends 
   const done = await wave(w);
   assert.equal(done.execution, "FINISHED");
   const hs = w.eng.hypothesesOf(done);
-  const rc = hs.find((h) => h.mechanism.some((m) => m.to.kind === "entity" && m.to.ref === FRAUD));
-  assert.ok(rc, "a hypothesis names checkFraud");
+  // The trace-grounded candidate connects the symptom's code to the throw site; model variants of the same source may
+  // also compete, but the trace-rooted mechanism is the one this contract checks, and it must not hide the variant.
+  const rc = hs.find((h) => h.mechanism.some((m) => m.to.kind === "entity" && m.to.ref === FRAUD) && h.mechanism.some((m) => m.from.kind === "entity" && m.from.ref === CREATE));
+  assert.ok(rc, "a hypothesis names checkFraud from the symptom's code");
   assert.equal(rc!.evaluation.state, "SUPPORTED");
   assert.equal(rc!.evaluation.freshness, "CURRENT");
+  assert.ok(hs.some((h) => h.origin === "MODEL" && h.mechanism.some((m) => m.to.kind === "entity" && m.to.ref === FRAUD)), "the model's variant of the same source still competes visibly (nothing hidden behind the preferred one)");
   const claims = rc!.evaluation.supportingAssessmentIds.map((id) => w.svc.store.getClaim(id.startsWith("clm") ? id : (w.eng as any).assessmentsOf(rc!.id).find((a: any) => a.id === id).claimId)!);
   assert.ok(claims.length >= 1 && claims.every((c) => c.draft.evidenceIds.length > 0), "support cites evidence");
   const throwEvidence = w.svc.store.factsFor(w.revision, FRAUD).filter((f) => f.predicate === "throws").flatMap((f) => f.evidence.map((e) => e.id));
@@ -414,6 +420,7 @@ test("H14: revoking access mid-run stops dispatch, stops publication, and saniti
   assert.equal(w.eng.hypothesesOf(s).flatMap((h) => (w.eng as any).assessmentsOf(h.id)).length, 0, "nothing was published after the revocation");
   const board = w.eng.getBoard(w.id);
   assert.ok(board.kind === "full" && board.snapshot.restricted && board.snapshot.hypotheses.length === 0 && board.snapshot.evidenceIds.length === 0);
+  assert.throws(() => w.eng.getDetails(w.id), (e: unknown) => e instanceof C22Error && e.code === "FORBIDDEN", "the detailed matrix must not bypass revocation");
   const events = w.eng.readEvents(w.id, 0);
   assert.ok(events.items.length >= seq && events.items.every((e) => e.redacted && Object.keys(e.payload).length === 0), "history is placeholders: sequence kept, content hidden");
   assert.deepEqual(events.items.map((e) => e.sequence), events.items.map((_, i) => i + 1), "sequence is still monotonic");
@@ -802,6 +809,16 @@ test("C22: the v2 gateway routes expose the catalogue, require an idempotency ke
     const board = await post("/api/v2/components/C22/getBoard", { investigationId: id });
     assert.equal(board.body.value.kind, "full");
     assert.ok(board.body.value.snapshot.hypotheses.length >= 3);
+    const details = await post("/api/v2/components/C22/getDetails", { investigationId: id });
+    assert.equal(details.status, 200, "the detail read does not require an idempotency key");
+    assert.equal(details.body.value.snapshot.version, board.body.value.snapshot.investigationVersion);
+    assert.ok(details.body.value.observations.length > 0);
+    assert.ok(details.body.value.assessments.length > 0);
+    assert.ok(details.body.value.steps.some((s: any) => s.state === "SUCCEEDED"));
+    for (const a of details.body.value.assessments) {
+      assert.ok(details.body.value.hypotheses.some((h: any) => h.id === a.hypothesisId && h.version === a.hypothesisVersion));
+      assert.ok(details.body.value.observations.some((o: any) => o.id === a.observationId));
+    }
     const delta = await post("/api/v2/components/C22/getBoard", { investigationId: id, knownVersion: c.body.value.version });
     assert.ok(delta.body.value.kind === "changed" || delta.body.value.kind === "full");
     const ev = await post("/api/v2/components/C22/readEvents", { investigationId: id, afterSequence: 0 });

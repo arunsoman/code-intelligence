@@ -1,0 +1,52 @@
+{
+  "id": "RC14",
+  "title": "Missing spans/retention/drop",
+  "class": "missing-data",
+  "derivation": {
+    "method": "hand",
+    "rule": "§7: material gap nodes; absence-based exoneration blocked without an exhaustive coverage certificate"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:seen",
+        "kind": "OP_START",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      }
+    ],
+    "certificates": [
+      {
+        "id": "cert:cov1",
+        "exhaustiveForPredicate": false,
+        "predicate": "all service-x events",
+        "window": {
+          "from": 0,
+          "to": 1000
+        }
+      }
+    ],
+    "proposedEdges": [],
+    "queriedAbsentService": "service-x"
+  },
+  "expected": {
+    "gapNodes": [
+      "MISSING_EVENT",
+      "RETENTION_EXPIRED"
+    ],
+    "material": true,
+    "noExoneration": true,
+    "absenceIsNotProofOfAbsence": true
+  }
+}

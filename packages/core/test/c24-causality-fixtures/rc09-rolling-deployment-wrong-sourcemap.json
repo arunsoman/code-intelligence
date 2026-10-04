@@ -1,0 +1,68 @@
+{
+  "id": "RC09",
+  "title": "Rolling deployment and wrong source map",
+  "class": "positive",
+  "derivation": {
+    "method": "hand",
+    "rule": "§8: resolve event→deployment→build→revision; query the deployment revision set, never the current checkout; wrong/missing artifacts stay candidate or fog"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:w1",
+        "kind": "OP_START",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": "dep:checkout",
+        "attributes": {
+          "revision": "rev-a",
+          "build": "b:rev-a",
+          "file": "src/checkout.ts",
+          "line": 10
+        }
+      }
+    ],
+    "deploymentRevisionSet": [
+      "rev-a",
+      "rev-b"
+    ],
+    "deploymentMarker": {
+      "sourceId": "src:otel",
+      "deploymentId": "dep:checkout",
+      "revision": "rev-a"
+    },
+    "sourceMaps": {
+      "b:rev-a": {
+        "mappings": [
+          {
+            "file": "src/checkout.ts",
+            "line": 10,
+            "entityId": "function:src/checkout.ts#charge"
+          }
+        ]
+      }
+    },
+    "revisionUnderAnalysis": "rev-b",
+    "certificates": [],
+    "proposedEdges": []
+  },
+  "expected": {
+    "attribution": {
+      "e:w1": {
+        "revision": "rev-a",
+        "exact": true
+      }
+    },
+    "notForcedToCurrentRevision": true,
+    "alternativesAllowed": true
+  }
+}

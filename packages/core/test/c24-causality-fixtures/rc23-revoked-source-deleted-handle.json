@@ -1,0 +1,46 @@
+{
+  "id": "RC23",
+  "title": "Revoked source/deleted raw handle",
+  "class": "negative-control",
+  "derivation": {
+    "method": "hand",
+    "rule": "§15/§16: governance deletes raw/derived payload handles; views show restricted/unavailable rather than stale trusted conclusions; no historic payload recovery"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:r1",
+        "kind": "OP_START",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      }
+    ],
+    "sourceMappingURL": {
+      "e:r1": "src:sensitive"
+    },
+    "revokedSourceIds": [
+      "src:sensitive"
+    ],
+    "certificates": [],
+    "proposedEdges": [],
+    "deletedHandles": [
+      "raw:blob-77"
+    ]
+  },
+  "expected": {
+    "stateAfterRevocation": "RESTRICTED",
+    "noHistoricPayloadRecovery": true,
+    "noStaleTrustedConclusion": true
+  }
+}

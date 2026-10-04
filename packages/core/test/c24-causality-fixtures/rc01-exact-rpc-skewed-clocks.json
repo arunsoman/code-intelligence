@@ -1,0 +1,77 @@
+{
+  "id": "RC01",
+  "title": "Exact RPC send/receive with skewed clocks",
+  "class": "positive",
+  "derivation": {
+    "method": "hand",
+    "rule": "§6 SEND_RECEIVE: authenticated matching with destination/broker/context agreement; §7: trusted relation retained, clock contradiction flagged instead of repairing chronology"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:send",
+        "kind": "SEND",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": 100,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      },
+      {
+        "id": "e:recv",
+        "kind": "RECEIVE",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": 91,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      }
+    ],
+    "certificates": [
+      {
+        "id": "cert:rpc-1",
+        "kind": "SEND_RECEIVE",
+        "matchesIds": [
+          "e:send",
+          "e:recv"
+        ],
+        "valid": true
+      }
+    ],
+    "proposedEdges": [
+      {
+        "id": "ed rpc-1",
+        "from": "e:send",
+        "to": "e:recv",
+        "kind": "SEND_RECEIVE",
+        "certificate": "cert:rpc-1"
+      }
+    ]
+  },
+  "expected": {
+    "acceptedEdges": [
+      "ed rpc-1"
+    ],
+    "quarantinedEdges": [],
+    "disclosed": [
+      "CLOCK_CONTRADICTION"
+    ],
+    "noEdgeDropped": true
+  }
+}

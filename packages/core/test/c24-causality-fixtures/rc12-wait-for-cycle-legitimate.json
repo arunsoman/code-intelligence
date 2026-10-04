@@ -1,0 +1,86 @@
+{
+  "id": "RC12",
+  "title": "Legitimate wait-for cycle",
+  "class": "positive",
+  "derivation": {
+    "method": "hand",
+    "rule": "§6: wait-for graphs may contain cycles; analyzed separately for deadlock/liveness with escape conditions; never quarantined as an execution cycle"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:wa",
+        "kind": "LOCK_WAIT",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": "t1",
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": {
+          "resource": "r1"
+        }
+      },
+      {
+        "id": "e:wb",
+        "kind": "LOCK_WAIT",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": "t2",
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": {
+          "resource": "r2"
+        }
+      }
+    ],
+    "waitRelations": [
+      {
+        "id": "wr:1",
+        "task": "t1",
+        "resource": "r1",
+        "owners": [
+          "t2"
+        ],
+        "escape": [
+          "owner may release; timeouts unknown"
+        ]
+      },
+      {
+        "id": "wr:2",
+        "task": "t2",
+        "resource": "r2",
+        "owners": [
+          "t1"
+        ],
+        "escape": [
+          "acquire is try-lock in fixture"
+        ]
+      }
+    ],
+    "certificates": [],
+    "proposedEdges": []
+  },
+  "expected": {
+    "waitLayerCycle": [
+      "wr:1",
+      "wr:2"
+    ],
+    "notQuarantined": true,
+    "deadlockAnalysable": true,
+    "escapeConditionsPresent": true
+  }
+}

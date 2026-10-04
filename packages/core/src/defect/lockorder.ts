@@ -25,10 +25,13 @@ export function reentrantLocks(rev: RevisionRow): Set<string> {
       if (n === "node_modules" || n === "target" || n.startsWith(".")) continue;
       const p = join(dir, n); let st; try { st = statSync(p); } catch { continue; }
       if (st.isDirectory()) walk(p, depth + 1);
-      else if (/\.(ts|tsx|js|rs)$/.test(n) && st.size < 400_000) {
+      else if (/\.(ts|tsx|js|rs|java|py)$/.test(n) && st.size < 400_000) {
         const text = readFileSync(p, "utf8");
         for (const m of text.matchAll(/(?:const|let|var|static|readonly)\s+(\w+)\s*(?::[^=]+)?=\s*(?:new\s+)?(\w*(?:Reentrant|Recursive|RLock)\w*)/gi)) out.add(m[1]);
         for (const m of text.matchAll(/(\w+)\s*:\s*[\w:]*ReentrantMutex/g)) out.add(m[1]);
+        // Java: `ReentrantLock lock = new ReentrantLock()`; Python: `lock = threading.RLock()`. Go's sync.Mutex is not reentrant, so nothing is added for it.
+        for (const m of text.matchAll(/\bReentrant\w*\s+(\w+)\s*(?:=|;)/g)) out.add(m[1]);
+        for (const m of text.matchAll(/\b(\w+)\s*=\s*(?:threading\.)?RLock\s*\(/g)) out.add(m[1]);
       }
     }
   };

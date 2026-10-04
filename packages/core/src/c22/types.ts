@@ -177,6 +177,10 @@ export interface BoardSnapshot {
   execution: ExecutionState; disposition: Disposition;
   hypotheses: { id: string; version: number; statement: string; state: EvaluationState; freshness: Freshness; claimId: string; priority: number; disputed: boolean; independentSupportGroups: number; reasonCodes: EvaluationReason[] }[];
 }
+export interface InvestigationDetails {
+  snapshot: InvestigationSnapshot; hypotheses: HypothesisRecord[]; observations: Observation[];
+  assessments: EvidenceAssessment[]; checks: DiscriminatingCheck[]; steps: StepRecord[];
+}
 export interface BoardDelta {
   investigationId: string; baseVersion: number; newVersion: number; fromSequence: number; toSequence: number; generation: number;
   changedHypothesisIds: string[]; removedHypothesisIds: string[]; changedClaimIds: string[]; addedEvidenceIds: string[]; requiresRecompile: boolean;

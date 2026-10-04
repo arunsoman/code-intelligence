@@ -7,6 +7,13 @@
   :root { --bg: #0f1319; --panel: #171c24; --ink: #e8ecf2; --muted: #98a2b3; --line: #2a3140; --fact: #5aa2ff; --inference: #f5a24b; --fog: #b794f6; --hyp: #ff7aa8; --accent: #5aa2ff; --on-accent: #0b1220; --heat-cool: #171c24; --heat-hot: #8a4b1f; --warn: #ff8a80; --ok: #56d364; }
 }
 * { box-sizing: border-box; }
+:root[data-contrast="high"] {
+  --bg: #ffffff; --panel: #ffffff; --ink: #000000; --muted: #303030; --line: #595959;
+  --fact: #0046ad; --inference: #743700; --fog: #562099; --hyp: #900039;
+  --accent: #0046ad; --on-accent: #ffffff; --heat-cool: #ffffff; --heat-hot: #e9b880; --warn: #990000; --ok: #005c20;
+  color-scheme: light;
+}
+:root[data-contrast="high"] :focus-visible { outline-width: 3px; }
 html, body, #root { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
@@ -188,3 +195,24 @@ ul.gallery li { border: 1px solid var(--line); border-radius: 8px; padding: 10px
 .card { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
 .narr { white-space: pre-wrap; max-height: 260px; overflow: auto; border: 1px solid var(--line); padding: 8px; }
 [role=tabpanel] { overflow: auto; max-height: 68vh; padding-top: 6px; }
+
+.epistemic-summary { margin-bottom: 6px; }
+.epistemic-summary ul { display: inline-flex; flex-wrap: wrap; gap: 4px 12px; list-style: none; padding: 0; margin: 0 0 0 10px; }
+.runtime-replay { padding: 6px 16px; border-bottom: 1px solid var(--line); max-height: 35vh; overflow: auto; }
+.runtime-replay summary { cursor: pointer; }
+.replay-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.replay-controls label { flex: 1; min-width: 180px; }
+.replay-result ul { max-height: 100px; overflow: auto; overflow-wrap: anywhere; }
+.runtime-replay input[type=range] { padding: 0; accent-color: var(--accent); }
+
+.investigation-panel { width: min(1200px, 96vw); max-height: 92vh; overflow: auto; }
+.investigation-panel select { max-width: 100%; margin: 4px 8px 12px 0; padding: 6px; background: var(--panel); color: var(--ink); border: 1px solid var(--line); }
+.investigation-panel form { display: grid; gap: 8px; margin: 10px 0; }
+.investigation-panel textarea { width: 100%; background: var(--panel); color: var(--ink); border: 1px solid var(--line); }
+.investigation-hypotheses { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.investigation-hypotheses button { text-align: left; }
+.investigation-table { overflow: auto; max-height: 360px; margin: 12px 0; }
+.investigation-table th, .investigation-table td { min-width: 190px; max-width: 360px; vertical-align: top; overflow-wrap: anywhere; }
+.investigation-table .discriminating { background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.investigation-panel .evidence pre { max-height: 250px; overflow: auto; }
+header { flex-wrap: wrap; }

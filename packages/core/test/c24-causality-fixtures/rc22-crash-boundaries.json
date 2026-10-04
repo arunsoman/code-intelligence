@@ -1,0 +1,59 @@
+{
+  "id": "RC22",
+  "title": "Crash between source cursor/projection/outbox",
+  "class": "negative-control",
+  "derivation": {
+    "method": "hand",
+    "rule": "§15: on crash reconcile accepted source cursors and outbox checkpoints; dedup and payload hashes prevent duplicate authoritative events; no mixed snapshot (existing failpoint harness replays this)"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:k1",
+        "kind": "OP_START",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      },
+      {
+        "id": "e:k2",
+        "kind": "SEND",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      }
+    ],
+    "failpoints": [
+      "after-cursor-accept",
+      "before-projection-commit",
+      "after-outbox-append"
+    ],
+    "certificates": [],
+    "proposedEdges": []
+  },
+  "expected": {
+    "noDuplicateAuthoritativeResult": true,
+    "noMixedSnapshot": true,
+    "durableReplay": true
+  }
+}

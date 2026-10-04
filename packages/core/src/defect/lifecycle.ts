@@ -6,17 +6,35 @@
 import { createHash } from "node:crypto";
 import type { DetectorFinding, SafetyObligation, SourceSpan } from "@cie/schema";
 import type { RevisionRow, Store } from "../store.ts";
-import { blank, LIMITS } from "./source.ts";
+import { blank, LIMITS, type Lang } from "./source.ts";
 import { fileLine, loadFunctions, spanEvidence, spanOf, type Fn } from "./functions.ts";
 
 const h = (...p: unknown[]) => createHash("sha256").update(JSON.stringify(p)).digest("hex").slice(0, 16);
-interface Kind { id: string; open: RegExp; close: (name: string, ev?: string) => RegExp; noun: string; needsHandle: boolean }
+interface Kind { id: string; langs: Lang[]; open: RegExp; close: (name: string, ev?: string) => RegExp; noun: string; needsHandle: boolean }
+const TSR: Lang[] = ["ts", "rust"];
+const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const KINDS: Kind[] = [
-  { id: "timer", noun: "timer", needsHandle: true, open: /\b(?:const|let|var)\s+(\w+)\s*=\s*(?:global\.|window\.)?setInterval\s*\(/g, close: (n) => new RegExp(`clearInterval\\s*\\(\\s*${n}\\s*\\)`) },
-  { id: "file", noun: "file handle", needsHandle: true, open: /\b(?:const|let|var)\s+(\w+)\s*=\s*(?:await\s+)?(?:fs\.|fsp\.)?(?:openSync|open|createReadStream|createWriteStream)\s*\(/g, close: (n) => new RegExp(`(?:closeSync|close)\\s*\\(\\s*${n}\\s*\\)|\\b${n}\\.(?:close|destroy|end)\\s*\\(`) },
-  { id: "connection", noun: "pooled connection", needsHandle: true, open: /\b(?:const|let|var)\s+(\w+)\s*=\s*await\s+[\w.]+\.(?:connect|getConnection|checkout)\s*\(/g, close: (n) => new RegExp(`\\b${n}\\.(?:release|end|close|destroy)\\s*\\(`) },
-  { id: "transaction", noun: "transaction", needsHandle: false, open: /\b([\w.]*?)\.?(?:begin|startTransaction|beginTransaction)\s*\(\s*\)/g, close: () => /\.(?:commit|rollback)\s*\(/ },
-  { id: "listener", noun: "event listener", needsHandle: false, open: /\b([\w.]+)\.(?:addEventListener|addListener)\s*\(\s*['"`]?(\w+)/g, close: (_n, ev) => new RegExp(`\\.(?:removeEventListener|removeListener|off)\\s*\\(\\s*['"\`]?${ev ?? "\\w+"}`) },
+  { id: "timer", langs: TSR, noun: "timer", needsHandle: true, open: /\b(?:const|let|var)\s+(\w+)\s*=\s*(?:global\.|window\.)?setInterval\s*\(/g, close: (n) => new RegExp(`clearInterval\\s*\\(\\s*${n}\\s*\\)`) },
+  { id: "file", langs: TSR, noun: "file handle", needsHandle: true, open: /\b(?:const|let|var)\s+(\w+)\s*=\s*(?:await\s+)?(?:fs\.|fsp\.)?(?:openSync|open|createReadStream|createWriteStream)\s*\(/g, close: (n) => new RegExp(`(?:closeSync|close)\\s*\\(\\s*${n}\\s*\\)|\\b${n}\\.(?:close|destroy|end)\\s*\\(`) },
+  { id: "connection", langs: TSR, noun: "pooled connection", needsHandle: true, open: /\b(?:const|let|var)\s+(\w+)\s*=\s*await\s+[\w.]+\.(?:connect|getConnection|checkout)\s*\(/g, close: (n) => new RegExp(`\\b${n}\\.(?:release|end|close|destroy)\\s*\\(`) },
+  { id: "transaction", langs: TSR, noun: "transaction", needsHandle: false, open: /\b([\w.]*?)\.?(?:begin|startTransaction|beginTransaction)\s*\(\s*\)/g, close: () => /\.(?:commit|rollback)\s*\(/ },
+  { id: "listener", langs: TSR, noun: "event listener", needsHandle: false, open: /\b([\w.]+)\.(?:addEventListener|addListener)\s*\(\s*['"`]?(\w+)/g, close: (_n, ev) => new RegExp(`\\.(?:removeEventListener|removeListener|off)\\s*\\(\\s*['"\`]?${ev ?? "\\w+"}`) },
+  // ---- Java
+  { id: "file", langs: ["java"], noun: "stream or reader", needsHandle: true, open: /\b\w+(?:<[^>]*>)?\s+(\w+)\s*=\s*new\s+(?:File(?:Input|Output)Stream|FileReader|FileWriter|BufferedReader|BufferedWriter|Scanner|RandomAccessFile|Socket|ServerSocket|ObjectInputStream|ObjectOutputStream)\s*\(/g, close: (n) => new RegExp(`\\b${esc(n)}\\.close\\s*\\(`) },
+  { id: "connection", langs: ["java"], noun: "database connection", needsHandle: true, open: /\bConnection\s+(\w+)\s*=\s*[\w.()]*?getConnection\s*\(/g, close: (n) => new RegExp(`\\b${esc(n)}\\.close\\s*\\(`) },
+  { id: "executor", langs: ["java"], noun: "thread pool", needsHandle: true, open: /\b(?:ExecutorService|ScheduledExecutorService|ThreadPoolExecutor)\s+(\w+)\s*=\s*Executors\.new\w+\s*\(/g, close: (n) => new RegExp(`\\b${esc(n)}\\.(?:shutdown|shutdownNow|close)\\s*\\(`) },
+  { id: "lock", langs: ["java"], noun: "lock", needsHandle: true, open: /\b([\w.]+)\.(?:lock|lockInterruptibly)\s*\(\s*\)/g, close: (n) => new RegExp(`\\b${esc(n)}\\.unlock\\s*\\(`) },
+  // ---- Go
+  { id: "file", langs: ["go"], noun: "file", needsHandle: true, open: /\b(\w+)(?:\s*,\s*\w+)?\s*:?=\s*os\.(?:Open|Create|OpenFile)\s*\(/g, close: (n) => new RegExp(`\\b${esc(n)}\\.Close\\s*\\(`) },
+  { id: "rows", langs: ["go"], noun: "query result set", needsHandle: true, open: /\b(\w+)(?:\s*,\s*\w+)?\s*:?=\s*[\w.]+\.(?:Query|QueryContext)\s*\(/g, close: (n) => new RegExp(`\\b${esc(n)}\\.Close\\s*\\(`) },
+  { id: "response", langs: ["go"], noun: "HTTP response body", needsHandle: true, open: /\b(\w+)(?:\s*,\s*\w+)?\s*:?=\s*http\.(?:Get|Post|Head|PostForm)\s*\(|\b(\w+)(?:\s*,\s*\w+)?\s*:?=\s*[\w.]+\.Do\s*\(/g, close: (n) => new RegExp(`\\b${esc(n)}\\.Body\\.Close\\s*\\(`) },
+  { id: "ticker", langs: ["go"], noun: "ticker", needsHandle: true, open: /\b(\w+)\s*:?=\s*time\.NewTicker\s*\(/g, close: (n) => new RegExp(`\\b${esc(n)}\\.Stop\\s*\\(`) },
+  { id: "context", langs: ["go"], noun: "cancellable context", needsHandle: true, open: /\b\w+\s*,\s*(\w+)\s*:?=\s*context\.With(?:Cancel|Timeout|Deadline)\s*\(/g, close: (n) => new RegExp(`\\b${esc(n)}\\s*\\(\\s*\\)`) },
+  { id: "lock", langs: ["go"], noun: "mutex", needsHandle: true, open: /\b([\w.]+)\.(?:Lock|RLock)\s*\(\s*\)/g, close: (n) => new RegExp(`\\b${esc(n)}\\.(?:Unlock|RUnlock)\\s*\\(`) },
+  // ---- Python
+  { id: "file", langs: ["python"], noun: "file", needsHandle: true, open: /(?<![\w.])(\w+)\s*=\s*(?:io\.|codecs\.)?open\s*\(/g, close: (n) => new RegExp(`\\b${esc(n)}\\.close\\s*\\(`) },
+  { id: "connection", langs: ["python"], noun: "connection", needsHandle: true, open: /(?<![\w.])(\w+)\s*=\s*(?:await\s+)?[\w.]*\.?(?:connect|create_connection|get_connection)\s*\(/g, close: (n) => new RegExp(`\\b${esc(n)}\\.(?:close|disconnect)\\s*\\(`) },
+  { id: "lock", langs: ["python"], noun: "lock", needsHandle: true, open: /\b([\w.]+)\.acquire\s*\(/g, close: (n) => new RegExp(`\\b${esc(n)}\\.release\\s*\\(`) },
 ];
 
 export function detectLifecycle(store: Store, rev: RevisionRow, opts: { entityIds?: string[] } = {}): DetectorFinding[] {
@@ -25,12 +43,21 @@ export function detectLifecycle(store: Store, rev: RevisionRow, opts: { entityId
     if (opts.entityIds?.length && !opts.entityIds.includes(f.entity.entityId)) continue;
     const s = blank(f.src, f.lang, true);
     const finallyRanges: [number, number][] = [];
+    // Go's `defer` runs when the function returns, whatever path it took: the equivalent of a finally block. Python's `finally:` is an indented block.
+    if (f.lang === "go") for (const m of s.matchAll(/^[ \t]*defer\b[^\n]*/gm)) finallyRanges.push([m.index!, m.index! + m[0].length]);
+    if (f.lang === "python") {
+      const ls = s.split("\n"); let off = 0;
+      for (let i = 0; i < ls.length; i++) { const t = ls[i]; if (/^\s*finally\s*:/.test(t)) { const ind = t.length - t.trimStart().length; let end = off + t.length; for (let j = i + 1; j < ls.length; j++) { if (ls[j].trim() === "") { end += ls[j].length + 1; continue; } if (ls[j].length - ls[j].trimStart().length <= ind) break; end += ls[j].length + 1; } finallyRanges.push([off, end]); } off += t.length + 1; }
+    }
     for (const m of s.matchAll(/\bfinally\s*\{/g)) { const open = m.index! + m[0].length - 1; let d = 0, i = open; for (; i < s.length; i++) { if (s[i] === "{") d++; else if (s[i] === "}" && --d === 0) break; } finallyRanges.push([open, i]); }
     const inFinally = (at: number) => finallyRanges.some(([a, b]) => at > a && at < b);
     for (const k of KINDS) {
+      if (!k.langs.includes(f.lang)) continue;
       for (const m of s.matchAll(k.open)) {
-        const name = k.needsHandle ? m[1] : (m[1] || "(resource)"); const ev = k.id === "listener" ? m[2] : undefined;
+        const name = k.needsHandle ? (m[1] ?? m[2]) : (m[1] || "(resource)"); const ev = k.id === "listener" ? m[2] : undefined;
         const at = m.index!;
+        // Java try-with-resources closes what it opens: `try (Reader r = new ...)` is not a leak.
+        if (f.lang === "java" && /\btry\s*\([^)]*$/.test(s.slice(Math.max(0, at - 200), at))) continue;
         const rest = s.slice(at + m[0].length);
         const closeM = k.close(name, ev).exec(rest);
         const closeAt = closeM ? at + m[0].length + closeM.index : -1;
@@ -40,7 +67,7 @@ export function detectLifecycle(store: Store, rev: RevisionRow, opts: { entityId
         const escapes = k.needsHandle && (new RegExp(`\\breturn\\s+(?:${name}\\b\\s*(?:;|$|\\})|[\\[{][^;]*\\b${name}\\b)`, "m").test(rest) || new RegExp(`(?:this|\\w+)\\.\\w+\\s*=\\s*${name}\\b|\\.(?:push|set|add)\\s*\\([^)]*\\b${name}\\b|\\bnew\\s+\\w+\\s*\\([^)]*\\b${name}\\b|\\b(?:register|own|track|store|adopt|manage|attach|keep|hold)\\w*\\s*\\([^)]*\\b${name}\\b`).test(rest));
         const returnsCleanup = k.id === "listener" && /return\s+(?:\(\)|[\w]+\s*=>|\(\)\s*=>)/.test(rest);
         const between = closeAt >= 0 ? s.slice(at, closeAt) : rest;
-        const mayFailBetween = /\bawait\b|\bthrow\b|\w\s*\(/.test(between.slice(m[0].length));
+        const mayFailBetween = (f.lang === "go" ? /\breturn\b|\bpanic\s*\(/ : f.lang === "python" ? /\braise\b|\w\s*\(/ : /\bawait\b|\bthrow\b|\w\s*\(/).test(between.slice(m[0].length));
         const timeline = [{ event: "opened", line: fileLine(store, rev, f, at) }, ...(closeAt >= 0 ? [{ event: inFinally(closeAt) ? "closed in finally" : "closed", line: fileLine(store, rev, f, closeAt) }] : []), ...(escapes ? [{ event: "handed to the caller or stored" }] : [])];
         let problem: string | null = null, severity: DetectorFinding["severity"] = "MEDIUM";
         if (closeAt < 0 && !escapes && !returnsCleanup) { problem = `${/^[aeiou]/.test(k.noun) ? "An" : "A"} ${k.noun}${k.needsHandle ? ` (${name})` : ""} is opened and not closed in this function, and it is not handed to anyone else.`; severity = k.id === "listener" ? "LOW" : "MEDIUM"; }

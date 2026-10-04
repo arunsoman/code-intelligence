@@ -1,6 +1,6 @@
+import { ScriptedRouter } from "./scripted-router.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { routeIntent } from "../src/router.ts";
 import { ctx, demoRepo, setup, traceFor } from "./helpers.ts";
 
 const hotness = (v: any, name: string) => v.nodes.find((n: any) => n.label === name)?.factors?.find((f: any) => f.factor === "RUNTIME_HOTNESS");
@@ -95,6 +95,7 @@ test("overrides persist per repository: pin forces CRITICAL and presence, boost 
 test("chat commands: pin / boost / demote / reset by name; a similarly-worded question is still a question", async () => {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
+  svc.router = new ScriptedRouter({ "pin checkFraud": { label: "pin", target: "checkFraud" }, "reset checkFraud": { label: "unpin", target: "checkFraud" }, "reset password flow": { label: "unpin", target: "password flow" }, demote: { label: "demote", target: "" }, "how do refunds work": { label: "SemanticMap", target: "" } });
   const q = await svc.converse(ctx(), { text: "how do refunds work", revision });
   assert.ok(q.ok && q.value.kind === "view");
   const v0 = q.value.view;
@@ -107,7 +108,5 @@ test("chat commands: pin / boost / demote / reset by name; a similarly-worded qu
   assert.ok(asQuestion.ok && asQuestion.value.kind === "view", "no element called that, so it is answered as a question");
   const sel = await svc.converse(ctx(), { text: "demote", view: v0, selection: [v0.nodes[0].id] });
   assert.ok(sel.ok && sel.value.kind === "view" && /Demoted/.test(sel.value.message), "with a selection and no name, the selection is the target");
-  assert.deepEqual(routeIntent("boost charge", { hasView: true, selectionCount: 0, looksLikeTrace: false }), { type: "boost", target: "charge" });
-  assert.deepEqual(routeIntent("unpin charge", { hasView: true, selectionCount: 0, looksLikeTrace: false }), { type: "unpin", target: "charge" });
   worker.close();
 });

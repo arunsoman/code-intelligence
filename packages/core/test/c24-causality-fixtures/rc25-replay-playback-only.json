@@ -1,0 +1,22 @@
+{
+  "id": "RC25",
+  "title": "Telemetry replay requested",
+  "class": "positive",
+  "derivation": {
+    "method": "hand",
+    "rule": "§3/§17: C24 replay is evidence/timeline playback; executable replay belongs to C27 with its own coverage manifest"
+  },
+  "input": {
+    "events": [],
+    "certificates": [],
+    "proposedEdges": [],
+    "requestedReplay": {
+      "kind": "telemetry",
+      "cursorMs": 120
+    }
+  },
+  "expected": {
+    "playbackLabel": true,
+    "noExecutableReplayPromise": true
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "id": "RC20",
+  "title": "Unauthorized forged trace context",
+  "class": "negative-control",
+  "derivation": {
+    "method": "hand",
+    "rule": "§5/§16: client-provided trace IDs are not identity/authorization tokens; collection identity is authenticated; no authority grant, no private topology disclosure"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:forge",
+        "kind": "OP_START",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": {
+          "traceparent": "00-forged...",
+          "claimed": "tenant:other"
+        }
+      }
+    ],
+    "collectorIdentity": {
+      "authenticated": false
+    },
+    "certificates": [],
+    "proposedEdges": [],
+    "grantsIssued": []
+  },
+  "expected": {
+    "sourceTrust": "UNTRUSTED_CONTEXT",
+    "noAuthorityGrant": true,
+    "noPrivateTopologyDisclosure": true,
+    "rejected": true
+  }
+}

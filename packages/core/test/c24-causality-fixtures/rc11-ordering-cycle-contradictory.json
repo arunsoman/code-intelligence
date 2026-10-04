@@ -1,0 +1,75 @@
+{
+  "id": "RC11",
+  "title": "Ordering cycle with contradictory sources",
+  "class": "negative-control",
+  "derivation": {
+    "method": "oracle",
+    "rule": "§13: quarantine the affected component with provenance; no first-edge-wins; deterministic regardless of ingest order",
+    "oracle": "phase-0 reconcileProposedOrdering verified permutation-invariant over 120 shuffles and against Floyd–Warshall SCC computation"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:cyc1",
+        "kind": "SEND",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      },
+      {
+        "id": "e:cyc2",
+        "kind": "RECEIVE",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      }
+    ],
+    "certificates": [],
+    "proposedEdges": [
+      {
+        "id": "ed o1",
+        "from": "e:cyc1",
+        "to": "e:cyc2",
+        "kind": "SEND_RECEIVE"
+      },
+      {
+        "id": "ed o2",
+        "from": "e:cyc2",
+        "to": "e:cyc1",
+        "kind": "PROGRAM_ORDER"
+      }
+    ]
+  },
+  "expected": {
+    "quarantinedEdges": [
+      "ed o1",
+      "ed o2"
+    ],
+    "conflictReportRetains": [
+      "ed o1",
+      "ed o2"
+    ],
+    "permutationInvariant": true,
+    "acceptedEdges": []
+  }
+}

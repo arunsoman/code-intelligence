@@ -97,7 +97,8 @@ test("DP05: Loom checks a bounded model: it finds the lost update, completes the
   assert.ok(caps.some((c) => c.id === "rust.loom.local" && c.supportsReplay && c.modelsWeakMemory && c.knownExclusions.some((x) => /bounded model/.test(x))));
   // What cannot run here is listed with its reason, and cannot be prepared.
   const none = w.wf.listCapabilities("java");
-  assert.ok(!none.some((c) => c.languageIds.includes("java")), "no JVM adapter is offered");
+  assert.deepEqual(none.map((c) => c.id).filter((id) => /^jvm\./.test(id)), w.wf.listCapabilities("java").some((c) => c.id === "jvm.deadlock-probe.local") ? ["jvm.deadlock-probe.local"] : [], "only the deadlock probe is offered for Java; the schedule-search tools are not");
+  assert.ok(!none.some((c) => c.id === "jvm.lincheck" || c.id === "jvm.jcstress"));
   const why = w.wf.listUnavailable("java");
   assert.ok(why.some((u) => u.id === "jvm.lincheck" && /Lincheck/.test(u.reason)) && why.some((u) => u.id === "jvm.jcstress"));
   assert.ok(w.wf.listUnavailable().some((u) => u.id === "system.antithesis" && /account|cost/.test(u.reason)));

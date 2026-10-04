@@ -1,0 +1,57 @@
+{
+  "id": "RC18",
+  "title": "Cancellation requested but child completes",
+  "class": "positive",
+  "derivation": {
+    "method": "hand",
+    "rule": "§7: requesting cancellation does not prove the child stopped or rolled back its effect; facts retained separately"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:cancel",
+        "kind": "CANCEL_REQUEST",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": "tX",
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      },
+      {
+        "id": "e:done",
+        "kind": "TASK_COMPLETE",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": "tX",
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      }
+    ],
+    "certificates": [],
+    "proposedEdges": []
+  },
+  "expected": {
+    "noRollbackAssertion": true,
+    "factsRetained": [
+      "CANCEL_REQUEST delivered",
+      "TASK_COMPLETE observed"
+    ],
+    "noFictitiousCancelEdge": true
+  }
+}

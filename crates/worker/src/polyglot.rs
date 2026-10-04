@@ -31,7 +31,7 @@ fn parse(src: &str, rel: &str, lang: Lang) -> RawFile {
         Lang::Python => { let n = rel.rsplit('/').next().unwrap_or(rel); n.starts_with("test_") || n.ends_with("_test.py") || rel.contains("/tests/") }
         Lang::Java => rel.contains("/test/") || rel.ends_with("Test.java") || rel.ends_with("Tests.java"),
     };
-    let mut w = Poly { lang, src: src.as_bytes(), out: &mut out, test_file, fields: HashMap::new(), locals: HashMap::new(), struct_fields: HashMap::new(), class_tx: false };
+    let mut w = Poly { lang, src: src.as_bytes(), out: &mut out, test_file, fields: HashMap::new(), locals: HashMap::new(), struct_fields: HashMap::new(), class_tx: false, globals: HashMap::new() };
     if lang == Lang::Go { w.collect_go_structs(tree.root_node()); }
     w.visit(tree.root_node(), None, None);
     out
@@ -49,6 +49,8 @@ struct Poly<'a> {
     /// Go: struct name → field name → type.
     struct_fields: HashMap<String, HashMap<String, String>>,
     class_tx: bool,
+    /// Package-level (Go) and module-level (Python) variables whose type is stated or evident from their initialiser.
+    globals: HashMap<String, String>,
 }
 
 /// Go keeps the package qualifier (`ledger.Ledger`), because the type may live in an imported package.
@@ -257,6 +259,17 @@ impl<'a> Poly<'a> {
     fn collect_go_structs(&mut self, root: Node) {
         let mut stack = vec![root];
         while let Some(x) = stack.pop() {
+            if x.kind() == "var_spec" && x.parent().map_or(false, |p| matches!(p.kind(), "var_declaration" | "var_spec_list")) {
+                // `var store = &Store{}` / `var store Store` / `var store *Store` at package level.
+                if let Some(nm) = x.child_by_field_name("name") {
+                    let ty = x.child_by_field_name("type").map(|t| qual_type(&self.text(t))).or_else(|| {
+                        let v = x.child_by_field_name("value")?.named_child(0)?;
+                        let lit = if v.kind() == "unary_expression" { v.named_child(0)? } else { v };
+                        if lit.kind() == "composite_literal" { lit.child_by_field_name("type").map(|t| qual_type(&self.text(t))) } else { None }
+                    });
+                    if let Some(ty) = ty { self.globals.insert(self.text(nm), ty); }
+                }
+            }
             if x.kind() == "type_spec" {
                 if let (Some(nm), Some(t)) = (x.child_by_field_name("name"), x.child_by_field_name("type")) {
                     if t.kind() == "struct_type" {
@@ -344,7 +357,7 @@ impl<'a> Poly<'a> {
                         let ty = operand.as_deref().and_then(|o| {
                             let mut parts = o.split('.');
                             let first = parts.next()?;
-                            let mut t = self.locals.get(first)?.clone();
+                            let mut t = self.locals.get(first).or_else(|| self.globals.get(first))?.clone();
                             for fld in parts { t = self.struct_fields.get(simple_type(&t).as_str())?.get(fld)?.clone(); }
                             Some(t)
                         });
@@ -427,7 +440,7 @@ impl<'a> Poly<'a> {
                     "attribute" => {
                         let callee = f.child_by_field_name("attribute").map(|x| self.text(x)).unwrap_or_default();
                         let obj = f.child_by_field_name("object").map(|o| self.text(o));
-                        let ty = obj.as_deref().and_then(|o| self.locals.get(o).cloned().or_else(|| o.strip_prefix("self.").and_then(|a| self.fields.get(a).cloned())));
+                        let ty = obj.as_deref().and_then(|o| self.locals.get(o).cloned().or_else(|| self.globals.get(o).cloned()).or_else(|| o.strip_prefix("self.").and_then(|a| self.fields.get(a).cloned())));
                         self.call_common(n, enc, callee, obj, ty);
                     }
                     _ => self.call_common(n, enc, "<computed>".into(), None, None),
@@ -441,6 +454,17 @@ impl<'a> Poly<'a> {
                 false
             }
             "assignment" | "augmented_assignment" => {
+                // A module-level `db = Db()` gives `db` its class from here on.
+                if enc.is_none() && owner.is_none() {
+                    if let (Some(l), Some(r)) = (n.child_by_field_name("left"), n.child_by_field_name("right")) {
+                        if l.kind() == "identifier" && r.kind() == "call" {
+                            if let Some(f) = r.child_by_field_name("function").filter(|f| f.kind() == "identifier") {
+                                let t = self.text(f);
+                                if t.chars().next().map_or(false, |c| c.is_uppercase()) { self.globals.insert(self.text(l), t); }
+                            }
+                        }
+                    }
+                }
                 // `self.ledger = ledger` where `ledger` is an annotated parameter: the attribute has that type.
                 if let (Some(l), Some(r)) = (n.child_by_field_name("left"), n.child_by_field_name("right")) {
                     if l.kind() == "attribute" && l.child_by_field_name("object").map_or(false, |o| self.text(o) == "self") && r.kind() == "identifier" {

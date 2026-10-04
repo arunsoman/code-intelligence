@@ -7,10 +7,10 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { BudgetController, runModel, StubProvider, type GatewayFailure, type GatewayResult } from "@cie/model";
 import type {
   ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptStore, ConceptsOutput, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceRef, ExplainResult, ExplanationOutput,
-  ModelProvider, ModelRequest, RepresentationOutput, ResolvedEvidence, JobView, RouteOutput, SavedState, VerdictKind, ViewRoute, ViewSpec,
+  HypothesesOutput, ModelProvider, ModelRequest, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec,
   DefectDetectionInput, DetectorFinding, BenchmarkPolicy, BenchmarkResult,
 } from "@cie/schema";
-import { ROUTE_FORMS, SCHEMA_CHALLENGE, SCHEMA_CONCEPTS, SCHEMA_EXPLANATION, SCHEMA_REPRESENTATION, SCHEMA_ROUTE } from "@cie/schema";
+import { SCHEMA_CHALLENGE, SCHEMA_CONCEPTS, SCHEMA_EXPLANATION, SCHEMA_HYPOTHESES, SCHEMA_REPRESENTATION } from "@cie/schema";
 import { applyVerdict, gateClaim, modelText, wilson, withChallenge } from "./claims.ts";
 import { claimOf } from "./forms/common.ts";
 import { cardsFromOutput, chunkSymbols, mergeCards } from "./concepts.ts";
@@ -23,20 +23,21 @@ import { Evaluator, PLANTED_SECURITY, SEEDED_CONCEPTS } from "./evaluation.ts";
 import { Indexer } from "./indexer.ts";
 import { History } from "./history.ts";
 import { Runtime } from "./runtime.ts";
+import { mapOverlays } from "./overlays.ts";
 import { Security } from "./security.ts";
+import { projectProfile } from "./profile.ts";
 import { Registry } from "./registry.ts";
 import { WorkspaceLog } from "./workspaces.ts";
 import { Journal, type CommitReceipt } from "./journal.ts";
 import { Cancelled, JobRunner, type JobControl } from "./jobs.ts";
 import { EGRESS_FIELDS, payloadHash, scrubBundle } from "./policy.ts";
 import { bundleFor, retrieveAround, retrieveForQuestion } from "./retrieval.ts";
-import { matchName, routeIntent } from "./router.ts";
-import { routeQuestion } from "./route.ts";
+import { matchName, readText, type RouterModel } from "./llm-router.ts";
 import { revisionIndex, scoreEntity, WEIGHTS } from "./salience.ts";
 import type { RevisionRow, Store } from "./store.ts";
 import { entityAt, fingerprint, locateFrames, looksLikeTrace, parseTrace } from "./trace.ts";
 import { compileView } from "./viewspec.ts";
-import { catalog, ensureEdgeClaims, matchVisual, visualByForm, type CatalogEntry } from "./visuals.ts";
+import { catalog, ensureEdgeClaims, visualByForm, type CatalogEntry } from "./visuals.ts";
 import { isGitRepo } from "./gitinfo.ts";
 import { backup as backupStore, deleteRepository as deleteRepo, gc as gcStore, type DeleteReport, type GcReport } from "./storage.ts";
 import { API_VERSION, MIN_EXTENSION, health as healthOf, restoreDrill, type Health, type RestoreDrill } from "./ops.ts";
@@ -48,8 +49,10 @@ import { policyFor } from "./access.ts";
 import { redactBuilt } from "./redact.ts";
 import { HashEmbedder, semanticScores, type Embedder } from "./embeddings.ts";
 import { InvestigationEngine, type EngineOptions } from "./c22/engine.ts";
-import { C22Error } from "./c22/types.ts";
+import { C22Error, type HypothesisDraft } from "./c22/types.ts";
+import { seedContext, toDrafts } from "./c22/proposer.ts";
 import { toPlan } from "./c22/compat.ts";
+import { CausalityEngine, type CausalityScopeInput, type MechanismEvidenceRecord, type CauseClaimRecord, type Snapshot as C24Snapshot } from "./c24/causality.ts";
 import { ingestTestArtifacts, loadTestSummary, type TestSummary } from "./testartifacts.ts";
 import { ingestTraceExports } from "./traceexport.ts";
 import type { WorkerClient } from "./worker.ts";
@@ -112,12 +115,16 @@ export class Service {
   readonly jobs: JobRunner;
   readonly bus: EventBus;
   readonly c22: InvestigationEngine;
+  /** C24 causality v2: execution-reconstruction engine. */
+  readonly c24: CausalityEngine;
   readonly changes: ChangeEngine;
   readonly notifications: Notifications;
   private readonly exportStore: ExportStore;
   readonly defects: DefectWorkflow;
   /** What turns text into vectors for semantic retrieval. The default is local and deterministic; see embeddings.ts. */
   embedder: Embedder = new HashEmbedder();
+  /** Reads what a question wants (which view, or which conversational request). Null: nothing configured, and the general map is used. */
+  router: RouterModel | null = null;
   private worker: WorkerClient;
   private model: ModelProvider;
   private offline: ModelProvider;
@@ -194,7 +201,11 @@ export class Service {
     "C24/ingest": (c, b) => { const r = this.runtime.ingest(b.envelope); return r.ok ? ok(c, r) : fail(c, r.error); },
     "C24/attribute": (c, b) => { const r = this.runtime.attribute(b.envelopeId, b.revision); return "ok" in r ? fail(c, r.error) : ok(c, r, { revision: b.revision, completeness: r.exact ? "COMPLETE" : "PARTIAL", warnings: r.uncertaintyReason ? [r.uncertaintyReason] : [] }); },
     "C24/queryWindow": (c, b) => ok(c, this.runtime.queryWindow(b.revision, b.window, b.roots), { revision: b.revision }),
-    "C24/replay": (c, b) => ok(c, this.runtime.replay(b.revision, b.window, b.cursor), { revision: b.revision }),
+    "C24/replay": (c, b) => {
+      if (!b?.window || !Number.isFinite(b.window.from) || !Number.isFinite(b.window.to) || b.window.from < 0 || b.window.to <= b.window.from || b.window.to > 8.64e15 || !Number.isFinite(b.cursor)) return fail(c, { code: "INVALID_SCHEMA", message: "replay needs a valid time window and finite cursor", retryable: false });
+      if (typeof b.revision !== "string" || !this.store.revision(b.revision)) return fail(c, { code: "NOT_FOUND", message: "unknown revision", retryable: false });
+      return ok(c, this.runtime.replay(b.revision, b.window, b.cursor), { revision: b.revision });
+    },
   };
   /** C23 gateway operations. */
   readonly historyOps: Record<string, (ctx: CallContext, b: any) => ApiResult<unknown>> = {
@@ -238,8 +249,13 @@ export class Service {
     this.journal = new Journal(store);
     this.jobs = new JobRunner(store);
     this.bus = new EventBus(store);
-    this.c22 = new InvestigationEngine(store);
-    this.changes = new ChangeEngine(store);
+    // Model-backed seeding (design §20 step 3): hypothesis drafts come from the model gateway through the same
+    // egress, scrubbing and budget path as every other model call. The proposers' output is registry-validated
+    // and then re-checked by the engine against the pinned scope; nothing it returns is executed or trusted.
+    this.c22 = new InvestigationEngine(store, { proposer: (input) => this.c22Proposer(input) });
+    // C24 causality v2 (phase 1): scoped, bounded execution-reconstruction. Privileged intake/correction/revocation are
+    // engine methods, never on the public catalogue (design §12); queries are tenant-scoped, versioned and bounded.
+    this.c24 = new CausalityEngine(store);    this.changes = new ChangeEngine(store);
     this.notifications = new Notifications(store);
     this.exportStore = new ExportStore(store);
     // Durable events become notifications through the same outbox as everything else, so a crash between the two loses neither.
@@ -430,6 +446,23 @@ export class Service {
   }
 
   // ---------------------------------------------------------------- C22 hypothesis and agentic investigation
+  /** Model-backed candidate generation (design §20 step 3): retrieval builds a scoped bundle, the gateway returns
+   *  registry-validated draft hypotheses. Throwing is safe: the engine records the proposer's failure in the seed
+   *  step's rejected list with a safe reason, and the deterministic candidates still stand. */
+  private async c22Proposer(input: { question: string; roots: string[]; revision: string }): Promise<HypothesisDraft[]> {
+    const rev = this.store.revision(input.revision);
+    if (!rev) return [];
+    const { bundle } = retrieveForQuestion(this.store, rev.id, input.question, { extraSeeds: input.roots, access: policyFor(this.store, rev.repoRoot), tokenBudget: chunkTokenBudget() });
+    const { result, note } = await this.callModel<HypothesesOutput>(seedContext(), rev, { purpose: "HYPOTHESIZE", schemaId: SCHEMA_HYPOTHESES, question: input.question, bundle });
+    if (!result.ok) {
+      const why = note ? ` ${note}` : "";
+      throw new Error(result.error.code === "INVALID_SCHEMA"
+        ? `the model's candidates did not match the registered schema (${result.error.message})${why}`
+        : `no model candidates: ${result.error.message}${why}`);
+    }
+    return toDrafts(result.value, bundle);
+  }
+
   /** Run an engine call as an API call: typed errors become typed failures, never exceptions across the boundary. */
   async c22Call<T>(ctx: CallContext, fn: () => T | Promise<T>): Promise<ApiResult<T>> {
     try { return ok(ctx, await fn()); }
@@ -476,6 +509,7 @@ export class Service {
     reopen: (c, b) => this.c22Call(c, () => { this.c22.reopen(c, b); return this.c22.load(b.investigationId); }),
     proposeExperiment: (c, b) => this.c22Call(c, () => this.c22.proposeExperiment(c, b).value),
     getBoard: (c, b) => this.c22Call(c, () => this.c22.getBoard(b.investigationId, b.knownVersion)),
+    getDetails: (c, b) => this.c22Call(c, () => this.c22.getDetails(b.investigationId)),
     readEvents: (c, b) => this.c22Call(c, () => this.c22.readEvents(b.investigationId, Number(b.afterSequence) || 0, b.limit)),
   };
 
@@ -488,6 +522,30 @@ export class Service {
     // A summary read: it does not close or finalize anything.
     conclude: (c, b) => this.c22Call(c, () => this.c22.getCompletion(b.planId).findings),
   };
+
+  /** C24 causality v2 public catalogue: scoped reads and gated delegations only. registerAdapter/ingestEvents/
+   *  applyCorrection/invalidateSource stay privileged engine operations (design §12) and are deliberately absent. */
+  readonly c24v2: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>>> = {
+    reconstruct: (c, b) => this.okCall(c, () => this.c24.reconstruct(b.scope as CausalityScopeInput, { maxEvents: b.maxEvents })),
+    querySlice: (c, b) => this.okCall(c, () => this.c24.querySlice(b.snapshotId, b)),
+    traceAncestors: (c, b) => this.okCall(c, () => this.c24.traceAncestors(b.snapshotId, b.eventId, b.maxEvents)),
+    checkOrder: (c, b) => this.okCall(c, () => this.c24.checkOrder(b.snapshotId, b.fromEventId, b.toEventId)),
+    explainRelation: (c, b) => this.okCall(c, () => this.c24.explainRelation(b.snapshotId, b.edgeId)),
+    criticalPath: (c, b) => this.okCall(c, () => this.c24.criticalPath(b.snapshotId, b.operationId)),
+    getCoverage: (c, b) => this.okCall(c, () => this.c24.getCoverage(b.snapshotId)),
+    getSnapshot: (c, b) => this.okCall(c, () => { const s = this.c24.snapshot(b.snapshotId); if (!s) return { ok: false as const, error: { code: "NOT_FOUND", message: "no such snapshot", retryable: false } }; return { ok: true as const, value: s }; }),
+    readUpdates: (c, b) => this.okCall(c, () => this.c24.readUpdates(b.snapshotId, Number(b.afterSequence) || 0, b.limit)),
+    buildMechanismEvidence: (c, b) => this.okCall(c, () => { const r = this.c24.buildMechanismEvidence(b.snapshotId, b.symptomEventIds ?? [], b.mechanismKinds); if (!r.ok) return r as any; this.c24.keepMechanisms(r.value); return r as any; }),
+    proposeCausalClaim: (c, b) => this.okCall(c, () => this.c24.proposeCausalClaim(b.snapshotId, b)),
+    linkInterventionEvidence: (c, b) => this.okCall(c, () => this.c24.linkInterventionEvidence(b)),
+    replayPlayback: (c, b) => this.okCall(c, () => this.c24.replayPlayback(b.snapshotId, b.cursorMs)),
+  };
+
+  /** Typed engine results flow through as ApiResult; unexpected throws become storage failures, never raw errors. */
+  private async okCall<T>(ctx: CallContext, fn: () => { ok: true; value: T } | { ok: false; error: ApiError }): Promise<ApiResult<T>> {
+    try { const r = fn(); return r.ok ? ok(ctx, r.value) : fail(ctx, r.error); }
+    catch (e) { return fail(ctx, storageFailure(e)); }
+  }
 
   // ---------------------------------------------------------------- C03 source permission
   /**
@@ -891,30 +949,19 @@ export class Service {
     return { source: "chosen", confidence: "high", form: f, ...(f === "CausalGraph" ? { kind: kind ?? "failure" } : {}), name: f === "CausalGraph" ? (kind === "invariant" ? "Wrong-value map" : "Failure-space map") : v?.name ?? f, because: "You chose this view.", alternatives: [] };
   }
 
-  /** Rules, then similarity (both offline). When both are unsure, a model may name a form: a form name only, never evidence. */
-  private async readQuestion(ctx: CallContext, rev: RevisionRow, question: string): Promise<ViewRoute> {
-    const route = routeQuestion(question);
-    if (route.confidence !== "low") return route;
-    const empty = { id: "route", revision: rev.id, evidence: [], entities: [], relationships: [], facts: [], coverage: [], unresolved: [], tokenEstimate: Math.ceil(question.length / 4) };
-    const { result, provider } = await this.callModel<RouteOutput>(ctx, rev, { purpose: "ROUTE", schemaId: SCHEMA_ROUTE, question, bundle: empty });
-    if (!result.ok || !result.value.form || result.value.confidence < 0.6 || !ROUTE_FORMS.includes(result.value.form)) return route;
-    const { form, kind } = result.value;
-    const name = form === "CausalGraph" ? (kind === "invariant" ? "Wrong-value map" : "Failure-space map") : visualByForm(form)?.name ?? form;
-    const former = { form: route.form, ...(route.kind ? { kind: route.kind } : {}), name: route.name };
-    return {
-      source: "model", confidence: "medium", form, ...(form === "CausalGraph" ? { kind: kind ?? "failure" } : {}), name,
-      because: `The wording did not settle it, so ${provider.name}/${provider.model} chose this (its own confidence ${Math.round(result.value.confidence * 100)}%, not calibrated): ${result.value.reason}`,
-      alternatives: [former, ...route.alternatives].filter((a) => a.form !== form || (a.kind ?? "") !== (kind ?? "")).slice(0, 3),
-    };
+  /** What kind of view the question wants, from the router model; without one, the general map, said plainly. */
+  private async readQuestion(question: string): Promise<ViewRoute> {
+    const { intent } = await readText(this.router, question, { hasView: false, selectionCount: 0, looksLikeTrace: false }, true);
+    return (intent as { type: "ask"; route: ViewRoute }).route; // with forms only, the reading is always a view
   }
 
-  async ask(ctx: CallContext, req: { question: string; revision?: string; pins?: string[]; seeds?: string[]; level?: number; form?: string; kind?: "failure" | "invariant"; subject?: string; lens?: string }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
+  async ask(ctx: CallContext, req: { question: string; route?: ViewRoute; revision?: string; pins?: string[]; seeds?: string[]; level?: number; form?: string; kind?: "failure" | "invariant"; subject?: string; lens?: string }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
     const question = (req.question ?? "").trim();
     if (!question || question.length > 1000) return fail(ctx, { code: "INVALID_SCHEMA", message: "question must be 1–1000 characters", retryable: false });
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; ingest a repository first", retryable: false });
     // The form is named explicitly (gallery, or a chip for another reading) or read from the question.
-    const route = req.form ? this.chosenRoute(req.form, req.kind) : await this.readQuestion(ctx, rev, question);
+    const route = req.form ? this.chosenRoute(req.form, req.kind) : req.route ?? await this.readQuestion(question);
     const visual = route.source === "chosen" && route.form === "SemanticMap" ? null : visualByForm(route.form);
     if (visual?.build) {
       this.store.audit(actor(ctx), "ask", rev.id, { form: visual.formId, chars: question.length, route: route.source });
@@ -952,7 +999,7 @@ export class Service {
     const { view, claims } = compileView({ question, bundle, tiers, scored, representation, run, diagnostics, store: this.store, systemName: rev.repoRoot.split("/").filter(Boolean).pop() });
     // "The question is about how something works" is only true when the wording said so. A default or a guess is described
     // by the reading itself (route.because), so the two never disagree.
-    view.formReason = route.source === "rule" || route.source === "chosen" ? choice.reason : undefined;
+    view.formReason = route.source !== "default" ? choice.reason : undefined;
     view.route = route;
     if (req.level !== undefined) view.level = req.level;
     view.hidden = hidden;
@@ -1122,6 +1169,12 @@ export class Service {
     const ev = rev && this.store.evidence(rev.id, req.evidenceId);
     if (!rev || !ev) return fail(ctx, { code: "EVIDENCE_MISSING", message: "no such evidence in this revision", retryable: false });
     return ok(ctx, this.resolveEvidence(rev, ev), { revision: rev.id });
+  }
+
+  overlays(ctx: CallContext, req: { revision: string; entityIds: string[]; window: { from: number; to: number } }) {
+    if (!req || typeof req.revision !== "string" || !Array.isArray(req.entityIds) || req.entityIds.length > 2000 || req.entityIds.some((id) => typeof id !== "string") || !req.window || !Number.isFinite(req.window.from) || !Number.isFinite(req.window.to) || req.window.from < 0 || req.window.to <= req.window.from || req.window.to > 8.64e15) return fail(ctx, { code: "INVALID_SCHEMA", message: "overlays require a revision, at most 2000 entity IDs and a valid time window", retryable: false });
+    if (!this.store.revision(req.revision)) return fail(ctx, { code: "NOT_FOUND", message: "unknown revision", retryable: false });
+    return ok(ctx, mapOverlays(this.store, req.revision, req.entityIds, req.window), { revision: req.revision });
   }
 
   /** Read a span from the repo root of `rev`, refusing paths outside it and hashing to detect drift. */
@@ -1315,7 +1368,8 @@ export class Service {
     const nodeById = new Map((view?.nodes ?? []).map((n) => [n.id, n]));
     const selected = (req.selection ?? []).map((id) => nodeById.get(id)).filter((n): n is NonNullable<typeof n> => !!n);
     const referentCount = selected.length || (req.pins?.length ?? 0);
-    const intent = routeIntent(text, { hasView: !!view || referentCount >= 2, viewForm: view?.formId, selectionCount: referentCount, looksLikeTrace: looksLikeTrace(text) });
+    const reading = await readText(this.router, text, { hasView: !!view || referentCount >= 1, viewForm: view?.formId, selectionCount: referentCount, looksLikeTrace: looksLikeTrace(text) });
+    const intent = reading.intent;
     const entityIds = selected.flatMap((n) => n.entityRefs);
     const revision = view?.revision ?? req.revision;
     // A steering turn adjusts the current view, so it does not repeat why that kind of view was chosen.
@@ -1325,9 +1379,7 @@ export class Service {
       r.ok ? ok(ctx, { kind: "explanation", explanation: r.value, message: `${lead}${r.value.summary}`.trim() }, r.metadata) : (r as ApiResult<never>);
     const needsView = () => fail<ConverseResult>(ctx, { code: "INVALID_SCHEMA", message: "Ask a question first, then I can talk about what's on the map.", retryable: false });
 
-    switch (intent.type) {
-      case "investigate": return asView(await this.investigate(ctx, { trace: text, revision }), "Investigating the exception you pasted.");
-      case "overview": {
+    const overview = async (lead: string): Promise<ApiResult<ConverseResult>> => {
         const rev = revision ? this.store.revision(revision) : this.store.latestRevision();
         if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index a repository first", retryable: false });
         // The most connected code is what a newcomer should see first; the map starts zoomed out to the domains.
@@ -1335,10 +1387,19 @@ export class Service {
         const kinds = new Set(["function", "method", "class"]);
         const seeds = this.store.entities(rev.id).filter((e) => kinds.has(e.kind)).sort((a, b) => (idx.degree.get(b.entityId) ?? 0) - (idx.degree.get(a.entityId) ?? 0) || a.entityId.localeCompare(b.entityId)).slice(0, 30).map((e) => e.entityId);
         const r = await this.ask(ctx, { question: "Give me an overview of the whole project", revision: rev.id, seeds, level: 1 });
-        if (r.ok) r.value.view.formReason = "You asked for the project overview, so this shows the most connected code in the repository, grouped by responsibility. Zoom in for detail.";
+        const profile = projectProfile(this.store, rev.id);
+        if (r.ok) { r.value.view.formReason = "The most connected code in the repository, grouped by responsibility. Zoom in for detail."; r.value.view.gaps.unshift(profile.text); }
+        return asView(r, `${lead} ${profile.text}`);
+    };
+    switch (intent.type) {
+      case "investigate": return asView(await this.investigate(ctx, { trace: text, revision }), "Investigating the exception you pasted.");
+      case "overview": return overview("You asked about the project as a whole.");
+      case "ask": {
+        const r = await this.ask(ctx, { question: text, revision, pins: req.pins, route: intent.route });
+        // Nothing matched any word in the question: say so, and show the project instead of an empty map.
+        if (r.ok && r.value.view.nodes.length === 0 && !(req.pins?.length)) return overview("No element of the code matches those words, so here is the project as a whole instead. Name a feature, module or function for something specific.");
         return asView(r, "");
       }
-      case "ask": return asView(await this.ask(ctx, { question: text, revision, pins: req.pins }), "");
       case "resume": {
         const list = this.listWorkspaces(ctx);
         const hit = list.ok ? matchName(intent.name, list.value) : null;

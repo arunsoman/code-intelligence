@@ -1,3 +1,6 @@
+import { cpSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 // C10 hybrid retrieval: judged on labelled questions (lexical only vs hybrid), on a repository built to mislead it, on whether
 // the evidence it selects contains the evidence an answer needs, and on what it refuses to show or must admit to cutting.
 import assert from "node:assert/strict";
@@ -10,7 +13,8 @@ import { HashEmbedder, OllamaEmbedder, ensureIndex, semanticScores, type Embedde
 import { retrieveForQuestion } from "../src/retrieval.ts";
 import { ctx, demoRepo, setup } from "./helpers.ts";
 
-const DISTRACTORS = resolve(import.meta.dirname, "../../../fixtures/distractor-repo");
+// Copied out of the project's own git work tree: history would add a recency signal that has nothing to do with what this test measures.
+const DISTRACTORS = (() => { const d = mkdtempSync(join(tmpdir(), "cie-distract-")); cpSync(resolve(import.meta.dirname, "../../../fixtures/distractor-repo"), d, { recursive: true }); return d; })();
 const name = (id: string) => id.replace(/^.*#/, "");
 
 interface Gold { q: string; primary: string; expect: string[] }

@@ -26,9 +26,10 @@ test("a11y audit: rendered markup keeps structure, accessible names, labels and 
   assert.equal(run.markupFindings?.length ?? 1, 0, `markup findings:\n${(run.markupFindings ?? []).map((f) => `${f.kind}: ${f.detail}`).join("\n")}`);
 });
 
-test("a11y audit: WCAG contrast of every text and display-mode colour pair, in both themes", () => {
+test("a11y audit: WCAG contrast of every text and display-mode colour pair in light, dark and high contrast", () => {
   const audit = run.contrastFindings ?? {};
-  assert.ok(audit.textPairs >= 18 && audit.uiPairs >= 8, `both themes scored in full (text ${audit.textPairs}, ui ${audit.uiPairs})`);
+  assert.deepEqual(audit.themes, ["light", "dark", "high contrast"]);
+  assert.ok(audit.textPairs >= 27 && audit.uiPairs >= 12, `all themes scored in full (text ${audit.textPairs}, ui ${audit.uiPairs})`);
   assert.equal(audit.findings?.length ?? 1, 0, `contrast findings:\n${(audit.findings ?? []).map((f) => f.detail).join("\n")}`);
 });
 

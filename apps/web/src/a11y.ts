@@ -101,8 +101,11 @@ export function auditContrast(css: string): AuditResult {
   const lightStart = css.indexOf(":root {"), lightEnd = css.indexOf("}", lightStart);
   if (lightStart !== -1) for (const m of css.slice(lightStart, lightEnd).matchAll(/--([a-z-]+):\s*(#[0-9a-fA-F]{6})/g)) light[m[1]] = m[2];
   const darkStart = css.indexOf("prefers-color-scheme: dark");
-  const darkBlock = darkStart === -1 ? "" : css.slice(darkStart); // only the dark theme declares tokens after this point
+  const darkBlock = darkStart === -1 ? "" : css.slice(darkStart, css.indexOf("}", darkStart));
   for (const m of darkBlock.matchAll(/--([a-z-]+):\s*(#[0-9a-fA-F]{6})/g)) dark[m[1]] = m[2];
+  const high: Record<string, string> = {};
+  const highStart = css.indexOf(':root[data-contrast="high"]');
+  if (highStart !== -1) for (const m of css.slice(highStart, css.indexOf("}", highStart)).matchAll(/--([a-z-]+):\s*(#[0-9a-fA-F]{6})/g)) high[m[1]] = m[2];
 
   const findings: A11yFinding[] = [];
   let textPairs = 0, uiPairs = 0;
@@ -112,7 +115,7 @@ export function auditContrast(css: string): AuditResult {
     if (ratio < min) findings.push({ kind: "contrast", detail: `${theme}: ${role} — ${ratio.toFixed(2)}:1 (needs ${min}:1)` });
     if (min >= 4.5) textPairs++; else uiPairs++;
   };
-  for (const [theme, v] of [["light", light], ["dark", dark]] as const) {
+  for (const [theme, v] of [["light", light], ["dark", dark], ["high contrast", high]] as const) {
     if (!Object.keys(v).length) { findings.push({ kind: "contrast-theme", detail: `${theme} theme tokens not found in styles.css` }); continue; }
     for (const p of PAIRS_PER_THEME) check(theme, v, p.fg, p.bg, p.role, p.min);
     check(theme, v, "on-accent", "accent", "selected-tool text on accent", 4.5);
@@ -123,7 +126,7 @@ export function auditContrast(css: string): AuditResult {
       if (ratio < 4.5) findings.push({ kind: "contrast", detail: `${theme}: ${p.role} — ${ratio.toFixed(2)}:1 (needs 4.5:1)` });
     }
   }
-  return { findings, textPairs, uiPairs, themes: [Object.keys(light).length && "light", Object.keys(dark).length && "dark"].filter(Boolean) as string[], light, dark };
+  return { findings, textPairs, uiPairs, themes: [Object.keys(light).length && "light", Object.keys(dark).length && "dark", Object.keys(high).length && "high contrast"].filter(Boolean) as string[], light, dark };
 }
 
 export const renderApp = (App: any): string => renderToStaticMarkup(createElement(App));

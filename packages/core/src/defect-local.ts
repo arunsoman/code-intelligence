@@ -173,8 +173,138 @@ export const stressAdapter: LocalAdapter = {
   },
 };
 
+// ------------------------------------------------------------------------------------------------------------------ Go race detector
+const goEnv = (extra: Record<string, string> = {}) => cleanEnv({ GOFLAGS: "-mod=mod", GOTOOLCHAIN: "local", GOCACHE: join(tmpdir(), "cie-go-cache"), GOPATH: join(tmpdir(), "cie-go-path"), GOPROXY: "off", CGO_ENABLED: "1", PATH: `${process.env.PATH ?? "/usr/bin:/bin"}`, ...extra });
+export function parseGoRaces(output: string, scrub: (p: string) => string): { reports: { access: string; location: string | null; goroutines: number }[]; failed: boolean } {
+  const reports: { access: string; location: string | null; goroutines: number }[] = [];
+  for (const block of output.split("WARNING: DATA RACE").slice(1)) {
+    const text = block.split(/={10,}/)[0];
+    const access = /^\s*(Read|Write|Atomic read|Atomic write) at /m.exec(text)?.[1] ?? "access";
+    const loc = /\n\s+([^\s]+\.go:\d+)/.exec(text)?.[1] ?? null;
+    reports.push({ access, location: loc ? scrub(loc) : null, goroutines: new Set([...text.matchAll(/goroutine (\d+)/g)].map((m) => m[1])).size });
+  }
+  return { reports, failed: /^--- FAIL|^FAIL\b/m.test(output) };
+}
+export const goRaceAdapter: LocalAdapter = {
+  id: "go.race-detector.local", version: "go test -race", classes: ["RACE_INSTRUMENTATION"], languageIds: ["go"], platformIds: [`${process.platform}-${process.arch}`],
+  knownExclusions: ["Only the code a test exercises is instrumented: no report is not a proof of no race.", "Detects unsynchronised memory accesses that actually happened in the run; a race that did not happen in this execution is not seen.", "Instrumented timing is not production timing."],
+  maximumBounds: {}, supportsReplay: true, modelsWeakMemory: false,
+  probe() {
+    const go = which("go"); if (!go) return { available: false, reason: "go is not installed" };
+    const dir = mkdtempSync(join(tmpdir(), "cie-go-probe-"));
+    try {
+      writeFileSync(join(dir, "go.mod"), "module probe\n\ngo 1.22\n"); writeFileSync(join(dir, "p_test.go"), 'package probe\nimport "testing"\nfunc TestP(t *testing.T) {}\n');
+      const r = spawnSync(go, ["test", "-race", "-count=1", "./..."], { cwd: dir, env: goEnv(), encoding: "utf8" });
+      return r.status === 0 ? { available: true, toolVersion: version(go, ["version"]) } : { available: false, reason: "this Go toolchain cannot build with -race here (it needs cgo and a C compiler)" };
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  },
+  async run(h, budget, signal) {
+    const { root, file, sourceHash } = resolveHarness(h, true);
+    if (basename(file) !== "go.mod") throw new Error("The Go race adapter runs a reviewed module; the harness path must be its go.mod");
+    const test = h.args[0]; if (!test || !/^[A-Za-z_]\w*$/.test(test)) throw new Error("Name one test to run");
+    const pkg = h.args[1] ?? "./..."; if (!/^(\.\/\.\.\.|\.\/[\w./-]+)$/.test(pkg) || pkg.includes("..") && pkg !== "./...") throw new Error("The package must be ./... or a relative path inside the module");
+    const modDir = resolve(root, relative(root, resolve(file, "..")));
+    const run = await execute("go", ["test", "-race", "-run", `^${test}$`, "-count=1", pkg], { cwd: modDir, env: goEnv(), budget: { ...budget, wallMs: Math.max(budget.wallMs, 90_000) }, signal });
+    const out = run.stdout + run.stderr;
+    const scrub = (p: string) => p.split(modDir + "/").join("");
+    const parsed = parseGoRaces(out, scrub);
+    const compileFailed = /\[build failed\]|cannot find|undefined:|syntax error/.test(out) && !/^(ok|FAIL)\s/m.test(out);
+    const raced = parsed.reports.length > 0;
+    const status: RunStatus = run.stopped ?? (raced ? "PROPERTY_FAILED" : /^ok\s/m.test(out) ? "SUCCEEDED" : "INFRA_FAILED");
+    return {
+      status: compileFailed && !raced ? "INFRA_FAILED" : status, exitCode: run.code, stdout: scrub(run.stdout), stderr: scrub(run.stderr), sourceHash, buildHash: sha(readFileSync(file) + sha(test) + sha(pkg)),
+      observations: { test, reports: parsed.reports, raceReports: parsed.reports.length },
+      evidenceLevel: raced ? "DETECTOR_REPORT" : "NONE",
+      exclusions: [...goRaceAdapter.knownExclusions, "No address-space or CPU limit is enforced by the local runner; wall-clock and output limits are.", ...(raced ? [] : ["No race was reported in this execution; that does not show the code is race-free."])], seed: null,
+      replay: [`cd ${relative(root, modDir) || "."} && go test -race -run '^${test}$' -count=1 ${pkg}`],
+    };
+  },
+};
+
+// ------------------------------------------------------------------------------------------------------------------ JVM deadlock probe
+export function parseJvmDeadlock(dump: string): { deadlocks: number; threads: string[]; locks: string[] } {
+  // The JDK says "Found one Java-level deadlock:" and ends with "Found N deadlock(s)."
+  const count = /Found (\d+) deadlocks?\./.exec(dump)?.[1];
+  const found = /Found (?:one|\d+) Java-level deadlock/.test(dump);
+  const section = dump.split(/Found (?:one|\d+) Java-level deadlock/)[1]?.split(/Found \d+ deadlocks?\./)[0] ?? "";
+  return { deadlocks: count ? Number(count) : found ? 1 : 0, threads: [...new Set([...section.matchAll(/^"([^"]+)":/gm)].map((m) => m[1]))], locks: [...new Set([...section.matchAll(/waiting to lock monitor [\w]+ \(object [\w]+, a ([\w.$]+)\)|waiting for ownable synchronizer [\w]+, \(a ([\w.$]+)\)/g)].map((m) => m[1] ?? m[2]))] };
+}
+export const jvmDeadlockAdapter: LocalAdapter = {
+  id: "jvm.deadlock-probe.local", version: "jcmd Thread.print", classes: ["STRESS"], languageIds: ["java"], platformIds: [`${process.platform}-${process.arch}`],
+  knownExclusions: ["Runs a reviewed single-file program and asks the JVM itself whether its threads are deadlocked after a settle time: a deadlock that needs a different timing than this run produced is not seen.", "A program that finishes before the settle time says nothing about schedules it did not take.", "This is not Lincheck or jcstress: it does not search schedules."],
+  maximumBounds: { settleMs: 30_000 }, supportsReplay: true, modelsWeakMemory: false,
+  probe() { const j = which("java"), c = which("javac"), d = which("jcmd"); return j && c && d ? { available: true, toolVersion: version(j, ["-version"]) } : { available: false, reason: !j ? "java is not installed" : !c ? "javac is not installed" : "jcmd is not installed (a JDK, not only a JRE, is needed)" }; },
+  async run(h, budget, signal) {
+    const { root, file, sourceHash } = resolveHarness(h, true);
+    if (!file.endsWith(".java")) throw new Error("The JVM probe runs a reviewed single-file Java program");
+    const cls = basename(file, ".java"); const settle = Number(h.args[0] ?? 3000);
+    if (!Number.isSafeInteger(settle) || settle < 200 || settle > jvmDeadlockAdapter.maximumBounds.settleMs) throw new Error("The settle time is between 200 and 30000 ms");
+    const work = mkdtempSync(join(tmpdir(), "cie-jvm-"));
+    try {
+      copyFileSync(file, join(work, basename(file)));
+      const build = await execute("javac", ["-d", work, join(work, basename(file))], { cwd: work, env: cleanEnv({ PATH: process.env.PATH ?? "/usr/bin:/bin" }), budget: { ...budget, wallMs: Math.max(budget.wallMs, 60_000) }, signal });
+      if (build.code !== 0) return { status: build.stopped ?? "INFRA_FAILED", exitCode: build.code, stdout: build.stdout, stderr: build.stderr, sourceHash, buildHash: sha(h.path), observations: { buildFailed: true }, evidenceLevel: "NONE", exclusions: jvmDeadlockAdapter.knownExclusions, seed: null, replay: [] };
+      const env = cleanEnv({ PATH: process.env.PATH ?? "/usr/bin:/bin", ...(process.env.JAVA_HOME ? { JAVA_HOME: process.env.JAVA_HOME } : {}) });
+      const child = spawn("java", ["-Xmx128m", "-cp", work, cls], { cwd: work, env, stdio: ["ignore", "pipe", "pipe"] });
+      let out = "", exited: number | null = null; child.stdout.on("data", (d) => { out += String(d).slice(0, budget.outputBytes); }); child.stderr.on("data", (d) => { out += String(d).slice(0, budget.outputBytes); });
+      const done = new Promise<void>((r) => child.on("close", (c) => { exited = c ?? -1; r(); }));
+      const onAbort = () => child.kill("SIGKILL"); signal?.addEventListener("abort", onAbort, { once: true });
+      await Promise.race([done, new Promise((r) => setTimeout(r, Math.min(settle, budget.wallMs)))]);
+      let dump = "";
+      if (exited === null && !signal?.aborted) { const t = spawnSync("jcmd", [String(child.pid), "Thread.print"], { encoding: "utf8", timeout: 20_000, env }); dump = (t.stdout ?? "") + (t.stderr ?? ""); }
+      const stillRunning = exited === null; child.kill("SIGKILL"); await done; signal?.removeEventListener("abort", onAbort);
+      const parsed = parseJvmDeadlock(dump);
+      const deadlocked = parsed.deadlocks > 0;
+      const status: RunStatus = signal?.aborted ? "CANCELLED" : deadlocked ? "PROPERTY_FAILED" : stillRunning ? "BUDGET_STOPPED" : exited === 0 ? "SUCCEEDED" : "INFRA_FAILED";
+      return {
+        status, exitCode: exited, stdout: out, stderr: "", sourceHash, buildHash: sha(readFileSync(file)),
+        observations: { class: cls, settleMs: settle, stillRunning, deadlocks: parsed.deadlocks, threads: parsed.threads, locks: parsed.locks },
+        evidenceLevel: deadlocked ? "DETECTOR_REPORT" : "NONE",
+        exclusions: [...jvmDeadlockAdapter.knownExclusions, ...(deadlocked ? [] : [stillRunning ? "The program was still running after the settle time and the JVM reported no deadlock: it may be slow, waiting or livelocked." : "The program finished; no deadlock occurred in this execution."])], seed: null,
+        replay: [`javac ${basename(file)} && java ${cls}   # then: jcmd <pid> Thread.print after ${settle} ms`],
+      };
+    } finally { rmSync(work, { recursive: true, force: true }); }
+  },
+};
+
+// ------------------------------------------------------------------------------------------------------------------ Python hang watchdog
+export function parsePyHang(stderr: string): { hung: boolean; threads: { name: string; at: string }[] } {
+  const hung = /Timeout \(\d+:\d+:\d+(?:\.\d+)?\)!/.test(stderr);
+  const threads: { name: string; at: string }[] = [];
+  for (const block of stderr.split(/^(?=Thread 0x|Current thread 0x)/m)) {
+    const head = /^((?:Current thread|Thread) 0x[0-9a-f]+)/.exec(block); if (!head) continue;
+    const frame = /File "([^"]+)", line (\d+) in ([\w<>]+)/.exec(block);
+    threads.push({ name: head[1], at: frame ? `${frame[1].split("/").pop()}:${frame[2]} in ${frame[3]}` : "unknown" });
+  }
+  return { hung, threads };
+}
+export const pyHangAdapter: LocalAdapter = {
+  id: "python.hang-watchdog.local", version: "faulthandler", classes: ["STRESS"], languageIds: ["python"], platformIds: [`${process.platform}-${process.arch}`],
+  knownExclusions: ["Runs a reviewed script under a watchdog: if it has not finished after the settle time, the interpreter dumps every thread's stack. A hang is reported, not diagnosed: a deadlock, a long wait and an infinite loop look the same.", "A script that finishes says nothing about schedules it did not take.", "The Python global interpreter lock hides some races entirely; this does not look for them."],
+  maximumBounds: { settleMs: 30_000 }, supportsReplay: true, modelsWeakMemory: false,
+  probe() { const p = which("python3"); return p ? { available: true, toolVersion: version(p, ["--version"]) } : { available: false, reason: "python3 is not installed" }; },
+  async run(h, budget, signal) {
+    const { root, file, sourceHash } = resolveHarness(h, true);
+    if (!file.endsWith(".py")) throw new Error("The Python watchdog runs a reviewed script");
+    const settle = Number(h.args[0] ?? 3000);
+    if (!Number.isSafeInteger(settle) || settle < 200 || settle > pyHangAdapter.maximumBounds.settleMs) throw new Error("The settle time is between 200 and 30000 ms");
+    const code = `import faulthandler, runpy, sys; faulthandler.dump_traceback_later(${(settle / 1000).toFixed(3)}, exit=True); runpy.run_path(sys.argv[1], run_name="__main__")`;
+    const run = await execute("python3", ["-I", "-X", "faulthandler", "-c", code, file], { cwd: root, env: cleanEnv({ PATH: process.env.PATH ?? "/usr/bin:/bin" }), budget: { ...budget, wallMs: Math.min(budget.wallMs, settle + 15_000) }, signal });
+    const parsed = parsePyHang(run.stderr);
+    const scrub = (t: string) => t.split(root + "/").join("");
+    const status: RunStatus = run.stopped ?? (parsed.hung ? "PROPERTY_FAILED" : run.code === 0 ? "SUCCEEDED" : "INFRA_FAILED");
+    return {
+      status, exitCode: run.code, stdout: run.stdout, stderr: scrub(run.stderr), sourceHash, buildHash: sha(readFileSync(file)),
+      observations: { settleMs: settle, hung: parsed.hung, threads: parsed.threads.map((t) => ({ ...t, at: scrub(t.at) })) },
+      evidenceLevel: parsed.hung ? "DETECTOR_REPORT" : "NONE",
+      exclusions: [...pyHangAdapter.knownExclusions, ...(parsed.hung ? [] : ["The script finished inside the settle time; no hang occurred in this execution."])], seed: null,
+      replay: [`python3 -I -X faulthandler -c 'faulthandler.dump_traceback_later(${(settle / 1000).toFixed(1)}, exit=True); runpy.run_path("${relative(root, file)}")'`],
+    };
+  },
+};
+
 // ------------------------------------------------------------------------------------------------ registry and reasons
-export const LOCAL_ADAPTERS: LocalAdapter[] = [tsanAdapter, loomAdapter, stressAdapter];
+export const LOCAL_ADAPTERS: LocalAdapter[] = [tsanAdapter, loomAdapter, stressAdapter, goRaceAdapter, jvmDeadlockAdapter, pyHangAdapter];
 
 export function capabilityOf(a: LocalAdapter): AdapterCapability {
   return {

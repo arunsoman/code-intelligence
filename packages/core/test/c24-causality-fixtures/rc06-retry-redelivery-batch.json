@@ -1,0 +1,107 @@
+{
+  "id": "RC06",
+  "title": "Message retry/redelivery/batch",
+  "class": "positive",
+  "derivation": {
+    "method": "hand",
+    "rule": "§6/§7: retries keep one logical operation with distinct attempt identities; batching is many-to-one with per-message lineage; no false exactly-once"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:enq",
+        "kind": "ENQUEUE",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": "op:pay!a1",
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": {
+          "messageId": "m1"
+        }
+      },
+      {
+        "id": "e:deq1",
+        "kind": "DEQUEUE",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": "op:pay!a1",
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": {
+          "messageId": "m1"
+        }
+      },
+      {
+        "id": "e:deq2",
+        "kind": "DEQUEUE",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": "op:pay!a2",
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": {
+          "messageId": "m1",
+          "redeliveryOf": "op:pay!a1"
+        }
+      },
+      {
+        "id": "e:batch",
+        "kind": "DEQUEUE",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": null,
+        "attempt": "batch:b1",
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": {
+          "messages": [
+            "m1",
+            "m2"
+          ]
+        }
+      }
+    ],
+    "certificates": [],
+    "proposedEdges": []
+  },
+  "expected": {
+    "acceptedEdges": [
+      "ed rc-1",
+      "ed rc-2"
+    ],
+    "attemptsDistinct": [
+      "op:pay!a1",
+      "op:pay!a2"
+    ],
+    "batchLineage": "per-message",
+    "noExactlyOnceClaim": true
+  }
+}

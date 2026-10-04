@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { join, sep } from "node:path";
 import { StubProvider } from "@cie/model";
 import type { ApiResult, CallContext, ModelProvider } from "@cie/schema";
+import type { RouterModel } from "./llm-router.ts";
 import { Service } from "./service.ts";
 import { Store } from "./store.ts";
 import { WorkerClient } from "./worker.ts";
@@ -21,7 +22,10 @@ export class TenantHost {
   private configs = new Map<string, TenantConfig>();
   private services = new Map<string, Service>();
 
-  constructor(dir: string, opts: { model?: ModelProvider; workerFactory?: () => WorkerClient } = {}) {
+  private router: RouterModel | null;
+
+  constructor(dir: string, opts: { model?: ModelProvider; workerFactory?: () => WorkerClient; router?: RouterModel | null } = {}) {
+    this.router = opts.router ?? null;
     this.dir = dir; mkdirSync(join(dir, "tenants"), { recursive: true });
     this.model = opts.model ?? new StubProvider(); this.workerFactory = opts.workerFactory ?? (() => new WorkerClient());
     const f = join(dir, "tenants.json");
@@ -43,7 +47,7 @@ export class TenantHost {
     if (!cfg) return fail(ctx, "UNAUTHORIZED", "unknown tenant");
     if (cfg.members.length && !cfg.members.includes(ctx.actor.principalId)) return fail(ctx, "UNAUTHORIZED", "not a member of this tenant");
     let svc = this.services.get(t);
-    if (!svc) { svc = new Service(new Store(this.fileFor(t)), this.workerFactory(), this.model); (svc as any).tenantId = t; this.services.set(t, svc); }
+    if (!svc) { svc = new Service(new Store(this.fileFor(t)), this.workerFactory(), this.model); (svc as any).tenantId = t; svc.router = this.router; this.services.set(t, svc); }
     return { ok: true, value: svc, metadata: { requestId: ctx.requestId, completeness: "COMPLETE", warnings: [] } };
   }
 

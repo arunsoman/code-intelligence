@@ -1,0 +1,103 @@
+{
+  "id": "RC05",
+  "title": "Fan-out and actual partial join",
+  "class": "positive",
+  "derivation": {
+    "method": "hand",
+    "rule": "§7: continuation depends on the completions actually awaited; sibling sequence is not invented"
+  },
+  "input": {
+    "events": [
+      {
+        "id": "e:s",
+        "kind": "SPAWN",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": "t0",
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      },
+      {
+        "id": "e:c1",
+        "kind": "TASK_COMPLETE",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": "t1",
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      },
+      {
+        "id": "e:c2",
+        "kind": "TASK_COMPLETE",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": "t2",
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": null
+      },
+      {
+        "id": "e:j",
+        "kind": "JOIN",
+        "clock": {
+          "domain": "wall",
+          "epoch": "1",
+          "observed": null,
+          "earliest": null,
+          "latest": null,
+          "quality": "BOUNDED"
+        },
+        "task": "t0",
+        "attempt": null,
+        "processEpoch": null,
+        "deploymentId": null,
+        "attributes": {
+          "awaited": "t1"
+        }
+      }
+    ],
+    "certificates": [],
+    "proposedEdges": [
+      {
+        "id": "ed j-c1",
+        "from": "e:c1",
+        "to": "e:j",
+        "kind": "COMPLETE_JOIN"
+      }
+    ]
+  },
+  "expected": {
+    "acceptedEdges": [
+      "ed j-c1"
+    ],
+    "quarantinedEdges": [],
+    "noSiblingOrder": [
+      "e:c1",
+      "e:c2"
+    ],
+    "noFictitiousAwait": "e:c2"
+  }
+}

@@ -14,6 +14,9 @@ import { VisualsGallery, type CatalogEntry } from "./VisualsGallery.tsx";
 import { FolderPicker } from "./FolderPicker.tsx";
 import { DefectPanel } from "./DefectPanel.tsx";
 import { InsightsPanel } from "./InsightsPanel.tsx";
+import { InvestigationPanel } from "./InvestigationPanel.tsx";
+import { RuntimeReplay, type ReplayFrame } from "./RuntimeReplay.tsx";
+import { EpistemicSummary } from "./EpistemicSummary.tsx";
 import { arrange } from "./arrange.ts";
 import { DEFAULT_LEVEL, LEVELS, MAX_LEVEL, basePositions, cellKey, effectiveView, render, selectedAggregates, type RenderEdge, type RenderNode } from "./graph.ts";
 
@@ -29,6 +32,12 @@ const CLASS_LABEL: Record<string, string> = { STATIC_PARSED: "Parsed from source
 const EXAMPLES = ["Show me how authentication works", "Show me everything that could cause a payment to fail", "Why could this balance become incorrect?"];
 
 export function App() {
+  const [highContrast, setHighContrast] = useState(() => { try { return localStorage.getItem("cie-high-contrast") === "true"; } catch { return false; } });
+  const [replay, setReplay] = useState<ReplayFrame | null>(null);
+  useEffect(() => {
+    document.documentElement.dataset.contrast = highContrast ? "high" : "normal";
+    try { localStorage.setItem("cie-high-contrast", String(highContrast)); } catch { /* Preferences can still work without storage. */ }
+  }, [highContrast]);
   const [info, setInfo] = useState<StatusInfo | null>(null);
   const [repoPath, setRepoPath] = useState("");
   const [view, setView] = useState<ViewSpec | null>(null);
@@ -56,6 +65,7 @@ export function App() {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [defectsOpen, setDefectsOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
+  const [investigationsOpen, setInvestigationsOpen] = useState(false);
   const [drawMode, setDrawMode] = useState<"matrix" | "graph">("matrix");
   const [cellSel, setCellSel] = useState<string[]>([]); // matrix cells chosen as "these" for the next message
   const [terrainWeights, setTerrainWeights] = useState<Record<string, number>>({});
@@ -105,6 +115,13 @@ export function App() {
   }, [eff, level, positions, changedIds]);
   const selectedRender = useMemo(() => selectedAggregates(rendered, selection), [rendered, selection]);
   const nodeById = useMemo(() => new Map((view?.nodes ?? []).map((n) => [n.id, n])), [view]);
+  const replayNodes = useMemo(() => {
+    const entities = new Map((replay?.entities ?? []).map((e) => [e.entityId, e]));
+    return new Map((view?.nodes ?? []).flatMap((n) => {
+      const hits = n.entityRefs.flatMap((id) => entities.has(id) ? [entities.get(id)!] : []);
+      return hits.length ? [[n.id, hits.some((e) => e.errors > 0)] as const] : [];
+    }));
+  }, [replay, view]);
   const mapReferents = selection.map((id) => ({ id, label: nodeById.get(id)?.label ?? id, source: "map" as const })).filter((r) => nodeById.has(r.id));
   const editorReferents = editorFocus.filter((f) => !dismissed.has(f.entityId) && !selection.some((id) => nodeById.get(id)?.entityRefs.includes(f.entityId))).map((f) => ({ id: `editor:${f.entityId}`, label: f.label, source: "editor" as const }));
   const cardReferents = cardPins ? [{ id: "card:pins", label: `card: ${cardPins.title}`, source: "editor" as const }] : [];
@@ -392,6 +409,7 @@ export function App() {
       <header>
         {defectsOpen && revision && <DefectPanel revision={revision} onClose={() => setDefectsOpen(false)} />}
         {insightsOpen && revision && <InsightsPanel revision={revision} view={view} onClose={() => setInsightsOpen(false)} />}
+        {investigationsOpen && revision && <InvestigationPanel key={`${revision}:${ws.id ?? "repo"}`} revision={revision} workspaceId={ws.id ?? `repo:${info?.revision?.repoRoot ?? repoPath}`} initialQuestion={view?.question ?? ""} entityRefs={[...new Set(selection.flatMap((id) => nodeById.get(id)?.entityRefs ?? []))]} onClose={() => setInvestigationsOpen(false)} />}
         <h1>Code Intelligence</h1>
         <span className="chip" title="Model provider">{providerShort}{info?.hosted ? " · hosted" : ""}</span>
         {info?.revision && <span className="chip mono" title={info.revision.repoRoot}>rev {info.revision.id} · {info.revision.fileCount} files</span>}
@@ -401,7 +419,9 @@ export function App() {
         <button className="secondary small push" onClick={() => setGalleryOpen(true)}>Visuals</button>
         <button className="secondary small" disabled={!revision} onClick={() => setDefectsOpen(true)}>Defects</button>
         <button className="secondary small" disabled={!revision} onClick={() => setInsightsOpen(true)}>Insights</button>
+        <button className="secondary small" disabled={!revision} onClick={() => setInvestigationsOpen(true)}>Investigations</button>
         <button className="link" onClick={openAudit}>Audit log</button>
+        <button className="secondary small" aria-pressed={highContrast} onClick={() => setHighContrast(!highContrast)}>High contrast</button>
       </header>
 
       <aside className="side" aria-label="Controls">
@@ -503,6 +523,7 @@ export function App() {
             {["24h", "7d", "all"].map((w) => <button key={w} className={`secondary small ${view.params?.subject === w ? "on" : ""}`} aria-pressed={view.params?.subject === w} onClick={() => void askForm(view.question, "RuntimeOverlay", w)}>{w === "all" ? "everything" : `last ${w}`}</button>)}
           </div>
         )}
+        {view?.formId === "RuntimeOverlay" && <RuntimeReplay key={viewKey} revision={view.revision} onFrame={setReplay} />}
         {view?.formId === "ChangeRisk" && (
           <div className="formctl" role="group" aria-label="Kind of change">
             <span className="muted small">Weighted for</span>
@@ -525,7 +546,7 @@ export function App() {
               onPick={(id) => { const vn = view.nodes.find((n) => n.id === id); if (vn) { setSelection([id]); void openNodeDrawer(vn); } }}
               onToggle={(id) => setSelection((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]))} />
           ) : (
-          <Canvas rendered={rendered} viewKey={viewKey} level={level} fitTick={fitTick} selected={selectedRender} boxSelect={boxSelect} caption={view?.caption ?? ""}
+          <Canvas rendered={rendered} replayNodes={replayNodes} viewKey={viewKey} level={level} fitTick={fitTick} selected={selectedRender} boxSelect={boxSelect} caption={view?.caption ?? ""}
             onSelectNodes={(ids) => setSelection([...new Set(rendered.nodes.filter((n) => ids.includes(n.id)).flatMap((n) => n.members))])}
             onTapNode={inspectNode} onTapEdge={inspectEdge} onExpand={expand} onZoomLevel={setLevel}
             onToggleNode={(n) => setSelection((sel) => (n.members.every((m) => sel.includes(m)) ? sel.filter((x) => !n.members.includes(x)) : [...new Set([...sel, ...n.members])]))}
@@ -545,6 +566,10 @@ export function App() {
           {!view && <div className="empty">Ask a question to compose a map.</div>}
         </div>
         <footer>
+          {eff && <EpistemicSummary
+            elements={view?.matrix && drawMode === "matrix" ? eff.view.matrix!.cells : view?.terrain ? eff.view.nodes.filter((n) => n.tier !== "HIDDEN") : [...rendered.nodes, ...rendered.edges]}
+            scope={view?.matrix && drawMode === "matrix" ? "matrix cells" : view?.terrain ? "view nodes" : "drawn nodes and edges"}
+            stale={view?.matrix && drawMode === "matrix" ? eff.view.matrix!.cells.filter((c) => eff.stale.has(cellKey(c))).length : view?.terrain ? eff.view.nodes.filter((n) => eff.stale.has(n.id) || changedIds.has(n.id)).length : [...rendered.nodes, ...rendered.edges].filter((n) => n.stale).length} />}
           <ul className="legend">
             {(view?.legend ?? []).map((l) => <li key={l.label}><span className={`swatch ${dm(l.displayMode)}`} aria-hidden /> <strong>{l.label}</strong> — {l.description}</li>)}
           </ul>

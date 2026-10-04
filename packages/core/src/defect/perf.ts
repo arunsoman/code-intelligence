@@ -13,9 +13,11 @@ import { LIMITS, type Call } from "./source.ts";
 const h = (...p: unknown[]) => createHash("sha256").update(JSON.stringify(p)).digest("hex").slice(0, 16);
 
 /** Is this call plausibly I/O: a database, a network client, a queue, a cache? A judgement from names, and said to be one. */
-const IO_RECEIVER = /(^|\.)(db|database|pool|conn|connection|client|http|https|axios|redis|cache|queue|bus|repo|repository|api|gateway|sql|orm|store|session|tx)$/i;
-const IO_METHOD = /^(query|execute|fetch|request|publish|send|post|insert|update|delete|findOne|findAll|findMany|select|save|commit|rollback|call)$/;
-export const looksLikeIo = (c: Pick<Call, "receiver" | "method" | "name">) => (!!c.receiver && IO_RECEIVER.test(c.receiver)) || IO_METHOD.test(c.method ?? c.name) || (!c.receiver && /^(fetch|query)$/.test(c.name));
+const IO_RECEIVER = /(^|\.)(db|database|pool|conn|connection|client|http|https|axios|redis|cache|queue|bus|repo|repository|api|gateway|sql|orm|store|session|tx|cursor|cur|requests|httpx|aiohttp|urllib|jdbc\w*|jdbcTemplate|entityManager|em|restTemplate|webClient|httpClient|kafkaTemplate|rabbitTemplate|\w+(?:Repository|Repo|Dao|DAO|Client|Template|Mapper|Gateway|Service))$/;
+const IO_METHOD = /^(query|execute|fetch|request|publish|send|post|insert|update|delete|findOne|findAll|findMany|select|save|commit|rollback|call|Query|QueryRow|QueryContext|Exec|ExecContext|Do|Get|Post|findById|findAll|findBy\w+|getForObject|postForObject|exchange|executeQuery|executeUpdate|queryForObject|queryForList|saveAll|deleteById|getOne|getById|fetchone|fetchall|fetchmany|executemany|urlopen|getresponse|read_sql|get_or_create|bulk_create)$/;
+/** A Go/Java/Python `Get`/`get` on a map or dict is not I/O: those generic names count only on a receiver that looks like a client, store or session. */
+const GENERIC = /^(Get|Post|get|Do|call|send|update|delete|save|insert|select|execute|exchange)$/;
+export const looksLikeIo = (c: Pick<Call, "receiver" | "method" | "name">) => (!!c.receiver && (IO_RECEIVER.test(c.receiver) || IO_RECEIVER.test(c.receiver.split(/[.(]/)[0]))) || (IO_METHOD.test(c.method ?? c.name) && !(GENERIC.test(c.method ?? c.name) && !!c.receiver && !IO_RECEIVER.test(c.receiver) && /^(map|dict|d|m|cache_?map|opts|options|kwargs|params|headers|config|cfg|settings|env|os\.environ)$/i.test(c.receiver))) || (!c.receiver && /^(fetch|query)$/.test(c.name));
 const MUTATING = /^(push|pop|shift|unshift|splice|sort|reverse|set|add|delete|remove|clear|append|insert|fill|copyWithin)$/;
 const PURE_BUILTIN = /^(Math\.(?:sqrt|abs|floor|ceil|round|min|max|pow|log|exp)|Number|String|Boolean|parseInt|parseFloat)$/;
 
@@ -34,24 +36,31 @@ export function detectPerformance(store: Store, rev: RevisionRow, opts: { entity
   for (const f of fns.values()) {
     if (!keep(f.entity.entityId)) continue;
     const s = f.scan;
+    // In TypeScript and Rust a call waits when it is awaited. Java, Go and Python calls block the thread by default, so every call waits.
+    const blocking = f.lang === "java" || f.lang === "go" || f.lang === "python";
+    const waits = (c: Call) => c.awaited || blocking;
     // Loop variable names, so a call that uses one is "one call per element".
     const loopVars = new Map<number, string[]>();
     for (const l of s.loops) {
       const m = /(?:const|let|var)\s+(?:\[([^\]]+)\]|(\w+))\s+(?:of|in)\b/.exec(l.header);
-      const names = m ? (m[1] ?? m[2]).split(",").map((x) => x.trim()) : [];
-      if (l.kind === "iter") { const cb = /\(?\s*(\w+)/.exec(f.src.slice(l.bodyStart, l.bodyEnd).replace(/^\s*async\s*/, "")); if (cb) names.push(cb[1]); }
+      let names = m ? (m[1] ?? m[2]).split(",").map((x) => x.trim()) : [];
+      if (!m && f.lang === "java") { const j = /(\w+)\s*:\s*[^:]+$/.exec(l.header); if (j) names = [j[1]]; }
+      if (!m && f.lang === "go") { const g = /^([\w\s,]+?)\s*:?=\s*range\b/.exec(l.header); if (g) names = g[1].split(",").map((x) => x.trim()).filter((x) => x !== "_"); }
+      if (!m && f.lang === "python") { const p = /^\(?([\w\s,]+?)\)?\s+in\b/.exec(l.header) ?? /\bfor\s+\(?([\w\s,]+?)\)?\s+in\b/.exec(l.header); if (p && l.kind !== "iter") names = p[1].split(",").map((x) => x.trim()); }
+      if (l.kind === "iter" && f.lang === "python") { const p = /\bfor\s+\(?([\w\s,]+?)\)?\s+in\b/.exec(f.src.slice(l.bodyStart, l.bodyEnd)); if (p) names = p[1].split(",").map((x) => x.trim()); }
+      if (l.kind === "iter" && f.lang !== "python") { const cb = /\(?\s*(\w+)/.exec(f.src.slice(l.bodyStart, l.bodyEnd).replace(/^\s*async\s*/, "")); if (cb) names.push(cb[1]); }
       loopVars.set(l.id, names.filter(Boolean));
     }
     for (const c of s.calls) {
       // N+1: an awaited I/O call inside a loop that uses the loop's own variable.
-      if (c.awaited && c.loops.length && looksLikeIo(c) && c.loops.some((id) => (loopVars.get(id) ?? []).some((v) => new RegExp(`\\b${v}\\b`).test(c.args)))) {
+      if (waits(c) && c.loops.length && looksLikeIo(c) && c.loops.some((id) => (loopVars.get(id) ?? []).some((v) => new RegExp(`\\b${v}\\b`).test(c.args)))) {
         const loop = s.loops.find((l) => c.loops.includes(l.id))!;
-        out.push(finding(f, "REPEATED_EXTERNAL_CALL", "defect.n-plus-one", "MEDIUM", c.at, Math.min(80, c.text.length), `Repeated call candidate: ${c.receiver ? c.receiver + "." : ""}${c.name} is awaited once per element of ${loop.iterable ?? "a loop"}.`,
+        out.push(finding(f, "REPEATED_EXTERNAL_CALL", "defect.n-plus-one", "MEDIUM", c.at, Math.min(80, c.text.length), `Repeated call candidate: ${c.receiver ? c.receiver + "." : ""}${c.name} ${blocking ? "blocks once per element of" : "is awaited once per element of"} ${loop.iterable ?? "a loop"}.`,
           ["Loop cardinality and the cost of the call are not known; no workload has measured this.", "Whether the call touches a database or the network is judged from its name.", ...LIMITS.slice(2, 3)],
           ob("n-plus-one", ["Return the same rows in the same order for the same input.", "Preserve error behaviour: which element fails, and what has already happened.", "Bound memory if the calls are batched or run together."]), { loop: loop.header, line: c.line }));
       }
       // I/O while a lock is held; and the worse shape, a lock held across a whole loop of I/O calls (what coarsening a per-iteration lock produces).
-      if (c.awaited && c.held.length && looksLikeIo(c)) {
+      if (waits(c) && c.held.length && looksLikeIo(c)) {
         const acrossLoop = c.loops.some((id) => s.acquisitions.some((a) => c.held.includes(a.lock) && a.at < s.loops[id].at));
         out.push(finding(f, "CONTENTION", acrossLoop ? "defect.lock-held-across-io-loop" : "defect.io-in-critical-section", acrossLoop ? "MEDIUM" : "MEDIUM", c.at, Math.min(80, c.text.length), `${acrossLoop ? "A lock is held across a loop of I/O calls" : "I/O inside a critical section"}: ${c.receiver ? c.receiver + "." : ""}${c.name} is awaited while ${c.held.join(", ")} is held.`,
           ["Hold time is not measured; the call may be fast.", ...LIMITS.slice(0, 1)],

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { applyContextEvent, currentSequence } from "../src/context.ts";
 import { LIMITS, Runtime, type RtSpan, type RuntimeEnvelope } from "../src/runtime.ts";
+import { buildRuntime } from "../src/forms/runtime.ts";
 import { ctx, demoRepo, setup } from "./helpers.ts";
 
 const T0 = Date.parse("2026-10-01T12:00:00Z");
@@ -18,6 +19,39 @@ async function world() {
   return { ...t, dir, rt };
 }
 const att = (a: any) => { assert.ok(!("ok" in a), JSON.stringify(a)); return a as import("../src/runtime.ts").RuntimeAttribution; };
+
+test("replay bounds span start times, preserves uncertainty, and ingested envelopes populate the runtime map", async () => {
+  const { rt, revision, worker, svc } = await world();
+  try {
+    rt.ingest(env("bounded", [span("s1"), span("s2", { error: true }), span("s3")], { codeRevision: revision, samplingRate: 0.5 }));
+    const window = { from: T0 + 150, to: T0 + 250 };
+    const result = rt.replay(revision, window, T0 + 900);
+    assert.equal(result.cursorMs, window.to);
+    assert.deepEqual(result.entities, [{ entityId: FRAUD, spans: 1, errors: 1 }]);
+    assert.ok(result.warnings.some((w) => /sampled/i.test(w)));
+    assert.ok(result.warnings.some((w) => /no deployment marker/i.test(w)));
+    assert.deepEqual(rt.replay(revision, window, T0).entities, []);
+    assert.equal(rt.queryWindow(revision, window)[0].perEntity[0].spans, 1);
+    const map = buildRuntime(svc.store, svc.store.revision(revision)!, "recorded runtime", "all");
+    const node = map.view.nodes.find((n) => n.entityRefs.includes(FRAUD));
+    assert.ok(node, "runtime intake must be visible even without pasted exceptions or trace files");
+    assert.notEqual(node.displayMode, "FACT", "a hotspot interpretation is not promoted to fact");
+    assert.ok(node.evidenceIds.length > 0);
+    assert.ok(map.view.gaps.some((g) => /sampled/i.test(g)));
+  } finally { worker.close(); }
+});
+
+test("replay rejects invalid windows and unknown revisions through the service", async () => {
+  const { svc, revision, worker } = await world();
+  try {
+    for (const body of [{ revision, cursor: 0 }, { revision, window: { from: 5, to: 1 }, cursor: 2 }, { revision, window: { from: 0, to: 100 }, cursor: NaN }]) {
+      const result = svc.runtimeOps["C24/replay"](ctx(), body);
+      assert.ok(!result.ok && result.error.code === "INVALID_SCHEMA");
+    }
+    const missing = svc.runtimeOps["C24/replay"](ctx(), { revision: "missing", window: { from: 0, to: 100 }, cursor: 50 });
+    assert.ok(!missing.ok && missing.error.code === "NOT_FOUND");
+  } finally { worker.close(); }
+});
 
 test("missing marker: with no deployment marker or revision nothing is attributed (fog); a revision the signal merely claims is not exact; marker plus revision plus code location is", async () => {
   const { rt, revision, worker } = await world();

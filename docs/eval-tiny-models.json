@@ -1,0 +1,176 @@
+{
+ "items": 164,
+ "at": "2026-10-04T07:11:08.856Z",
+ "prompt": "production (llm-router.ts)",
+ "results": [
+  {
+   "system": "qwen3:0.6b",
+   "variant": "clean",
+   "n": 164,
+   "accuracy": 0.8109756097560976,
+   "lo": 0.7441980849851095,
+   "hi": 0.8635177613843247,
+   "medianMs": 4139,
+   "sampleErrors": [
+    "Show me how authentication works \u2192 TrustBoundary (want SemanticMap)",
+    "explain the payment module \u2192 Archaeology (want SemanticMap)",
+    "what does the ledger do \u2192 ConceptAtlas (want SemanticMap)",
+    "where is the account status updated \u2192 SemanticMap (want DataLineage)",
+    "which routes get around the audit rule \u2192 Archaeology (want PolicyMap)",
+    "what protects the payout path \u2192 CausalGraph:invariant (want TrustBoundary)",
+    "what breaks without the rate limiter \u2192 RaceWindow (want Counterfactual)",
+    "where does only one person know the code \u2192 ConceptAtlas (want Ownership)"
+   ]
+  },
+  {
+   "system": "qwen3:0.6b",
+   "variant": "typos",
+   "n": 164,
+   "accuracy": 0.7134146341463414,
+   "lo": 0.6399481839679753,
+   "hi": 0.7771117105992834,
+   "medianMs": 4369,
+   "sampleErrors": [
+    "shoow me how authebtication works \u2192 TrustBoundary (want SemanticMap)",
+    "exlain the payment module \u2192 ConceptAtlas (want SemanticMap)",
+    "pls wht does the ledger do \u2192 ConceptAtlas (want SemanticMap)",
+    "whta can mke a tranfer break \u2192 TransactionJourney (want CausalGraph:failure)",
+    "whaat happens when a user refuhds an order \u2192 ConceptAtlas (want TransactionJourney)",
+    "whhere is the acocunt status updatrd \u2192 SemanticMap (want DataLineage)",
+    "who modiifes the ivoice tale \u2192 Ownership (want DataLineage)",
+    "whst changed snice the last index \u2192 ChangeRisk (want SemanticDiff)"
+   ]
+  }
+ ],
+ "modelComparison": {
+  "note": "first comparison: fixed one-example-per-label prompt, 164 questions clean and with typos; the retrieved-example prompt in results was then run on the best model only",
+  "results": [
+   {
+    "system": "offline router (rules+kNN)",
+    "variant": "clean",
+    "n": 164,
+    "accuracy": 0.8902439024390244,
+    "lo": 0.83318515143031,
+    "hi": 0.9294386557783916,
+    "medianMs": 0
+   },
+   {
+    "system": "offline router (rules+kNN)",
+    "variant": "typos",
+    "n": 164,
+    "accuracy": 0.6341463414634146,
+    "lo": 0.5581403141678739,
+    "hi": 0.7040116195601173,
+    "medianMs": 0
+   },
+   {
+    "system": "smollm2:135m +examples",
+    "variant": "clean",
+    "n": 164,
+    "accuracy": 0.10365853658536585,
+    "lo": 0.06573095864846087,
+    "hi": 0.15972923715520163,
+    "medianMs": 534
+   },
+   {
+    "system": "smollm2:135m +examples",
+    "variant": "typos",
+    "n": 164,
+    "accuracy": 0.09146341463414634,
+    "lo": 0.056211414406629946,
+    "hi": 0.14541678742176065,
+    "medianMs": 683
+   },
+   {
+    "system": "smollm2:360m +examples",
+    "variant": "clean",
+    "n": 164,
+    "accuracy": 0.13414634146341464,
+    "lo": 0.09028394626790795,
+    "hi": 0.19475623447393434,
+    "medianMs": 1138
+   },
+   {
+    "system": "smollm2:360m +examples",
+    "variant": "typos",
+    "n": 164,
+    "accuracy": 0.12804878048780488,
+    "lo": 0.08529805310783155,
+    "hi": 0.1878261306463748,
+    "medianMs": 1223
+   },
+   {
+    "system": "gemma3:270m +examples",
+    "variant": "clean",
+    "n": 164,
+    "accuracy": 0.07926829268292683,
+    "lo": 0.04690729430854731,
+    "hi": 0.13088891354457136,
+    "medianMs": 4388
+   },
+   {
+    "system": "gemma3:270m +examples",
+    "variant": "typos",
+    "n": 164,
+    "accuracy": 0.07317073170731707,
+    "lo": 0.04234887759285955,
+    "hi": 0.12353133327262315,
+    "medianMs": 3486
+   },
+   {
+    "system": "qwen2.5:0.5b +examples",
+    "variant": "clean",
+    "n": 164,
+    "accuracy": 0.4573170731707317,
+    "lo": 0.38291949486520394,
+    "hi": 0.5336685262213444,
+    "medianMs": 957
+   },
+   {
+    "system": "qwen2.5:0.5b +examples",
+    "variant": "typos",
+    "n": 164,
+    "accuracy": 0.3902439024390244,
+    "lo": 0.3189139556125792,
+    "hi": 0.46659809860997353,
+    "medianMs": 1006
+   },
+   {
+    "system": "qwen3:0.6b +examples",
+    "variant": "clean",
+    "n": 164,
+    "accuracy": 0.7073170731707317,
+    "lo": 0.6335731614064832,
+    "hi": 0.7715707361731393,
+    "medianMs": 1141
+   },
+   {
+    "system": "qwen3:0.6b +examples",
+    "variant": "typos",
+    "n": 164,
+    "accuracy": 0.6402439024390244,
+    "lo": 0.5643552797156297,
+    "hi": 0.7097126509999974,
+    "medianMs": 1107
+   },
+   {
+    "system": "llama3.2:1b +examples",
+    "variant": "clean",
+    "n": 164,
+    "accuracy": 0.5060975609756098,
+    "lo": 0.4303191841164993,
+    "hi": 0.5815968128711366,
+    "medianMs": 1460
+   },
+   {
+    "system": "llama3.2:1b +examples",
+    "variant": "typos",
+    "n": 164,
+    "accuracy": 0.4695121951219512,
+    "lo": 0.3947032268615221,
+    "hi": 0.545716788200298,
+    "medianMs": 1543
+   }
+  ]
+ }
+}
