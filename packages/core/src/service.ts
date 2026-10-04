@@ -39,6 +39,7 @@ import { entityAt, fingerprint, locateFrames, looksLikeTrace, parseTrace } from 
 import { compileView } from "./viewspec.ts";
 import { catalog, ensureEdgeClaims, visualByForm, type CatalogEntry } from "./visuals.ts";
 import { isGitRepo } from "./gitinfo.ts";
+import { ensureGhForgeConnector } from "./gh.ts";
 import { backup as backupStore, deleteRepository as deleteRepo, gc as gcStore, type DeleteReport, type GcReport } from "./storage.ts";
 import { API_VERSION, MIN_EXTENSION, health as healthOf, restoreDrill, type Health, type RestoreDrill } from "./ops.ts";
 import { EventBus } from "./events.ts";
@@ -174,6 +175,13 @@ export class Service {
     "C06/extractArtifacts": (c, b) => { try { const r = extractArtifacts(this.store, b.revision); return ok(c, r, { revision: b.revision, warnings: [r.notice] }); } catch (e) { return fail(c, { code: "NOT_FOUND", message: (e as Error).message, retryable: false }); } },
     "C07/computeImpact": (c, b) => { try { return ok(c, this.indexer.computeImpact(b.fromRevision, b.toRevision)); } catch (e) { return fail(c, { code: "NOT_FOUND", message: (e as Error).message, retryable: false }); } },
     "C07/invalidateAndRevalidate": async (c, b) => ok(c, await this.indexer.invalidateAndRevalidate(b.impact)),
+    "C04/ingestGhSource": async (c, b) => {
+      if (!b?.repoRoot || !isAbsolute(b.repoRoot)) return fail(c, { code: "INVALID_SCHEMA", message: "repoRoot must be an absolute path", retryable: false });
+      const conn = ensureGhForgeConnector(this.store, b.repoRoot);
+      if (!conn) return fail(c, { code: "NOT_FOUND", message: "no GitHub origin remote found, or the gh CLI is not installed and authenticated", retryable: false });
+      const rep = await conn.ingestPullRequests();
+      return ok(c, rep, { completeness: rep.partial ? "PARTIAL" : "COMPLETE", warnings: rep.reasons });
+    },
   };
   /** C29 gateway operations. The caller is the authenticated principal; nothing is taken from the request about who is acting. */
   readonly collabOps: Record<string, (ctx: CallContext, b: any) => ApiResult<unknown>> = {
@@ -446,6 +454,11 @@ export class Service {
       if (delta.mode === "delta") warnings.unshift(`Incremental: ${delta.changed} of ${delta.of} file(s) changed${delta.removed ? `, ${delta.removed} removed` : ""}; the rest were carried over from the previous revision.`);
       else if (reuse) warnings.unshift(reuse.files === reuse.of ? "All files unchanged since the previous revision; every parse was reused." : `Incremental: parsed ${reuse.of - reuse.files} of ${reuse.of} file(s); the rest were reused from cache.`);
       if (tests) warnings.push(`Loaded test artifacts (${tests.found.join(", ")}): ${tests.tests.passed} passed, ${tests.tests.failed} failed${tests.coverageLinePercent !== null ? `, ${tests.coverageLinePercent}% line coverage` : ""}.`, ...tests.staleness.map((x) => `Test data may be out of date: ${x}`));
+      // Auto-detect a GitHub source for this repository. Failure here is never fatal to indexing.
+      try {
+        const ghConn = ensureGhForgeConnector(this.store, row.repoRoot);
+        if (ghConn) this.store.audit(actor(ctx), "source.gh.auto", row.repoRoot, { sourceId: ghConn.health().sourceId });
+      } catch (e) { this.store.audit(actor(ctx), "source.gh.auto_failed", row.repoRoot, { error: String((e as Error).message).slice(0, 200) }); }
       return ok(ctx, { ...row, reuse, delta: { ...delta, phasesMs: phases } }, { revision: row.id, warnings, completeness: batch.diagnostics.some((d) => d.code !== "REUSED_CACHED_PARSES") ? "PARTIAL" : "COMPLETE" });
     } catch (e) {
       if (e instanceof Cancelled || (control && e instanceof WorkerError && e.api.code === "CANCELLED")) throw new Cancelled();

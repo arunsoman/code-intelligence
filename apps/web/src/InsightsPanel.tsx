@@ -58,7 +58,7 @@ export function InsightsPanel({ revision, view, onClose }: { revision: string; v
           {tab === "identity" && <Identity revision={revision} />}
           {tab === "changes" && <Changes revision={revision} view={view} />}
           {tab === "runtime" && <Runtime revision={revision} />}
-          {tab === "sources" && <Sources />}
+          {tab === "sources" && <Sources revision={revision} />}
           {tab === "team" && <Team revision={revision} view={view} />}
           {tab === "evaluation" && <Evaluation />}
         </div>
@@ -215,16 +215,33 @@ function Runtime({ revision }: { revision: string }) {
 }
 
 // ---------------------------------------------------------------- C04
-function Sources() {
+function Sources({ revision }: { revision: string }) {
   const s = useCall<{ sourceId: string; state: string; lastOk: string | null; lastError: string | null; resumeAt: string | null }[]>();
-  useEffect(() => { void s.run("C04", "listSources", {}); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const st = useCall<{ revision: { repoRoot: string } | null }>();
+  const ingest = useCall<any>();
+  const load = useCallback(async () => { await s.run("C04", "listSources", {}); await st.run("C01", "status", { revision }); }, [revision]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    void load();
+    // Sources can be registered automatically by indexing in the background;
+    // refresh the list lightly while this panel is open.
+    const t = window.setInterval(() => void load(), 5_000);
+    return () => window.clearInterval(t);
+  }, [load]);
+  const repoRoot = st.data?.revision?.repoRoot;
+  const doIngest = async (sourceId: string) => {
+    if (!repoRoot) return;
+    await ingest.run("C04", "ingestGhSource", { repoRoot });
+    await load();
+  };
   return <>
-    <p className="notice">External sources (a forge's pull requests, reviews) are read by the server. Credentials never enter the browser. Records that fail validation are set aside, so a source can be <em>partial</em>; an expired credential or a rate limit is shown as such, not retried in a loop.</p>
-    <Status error={s.error} busy={s.busy} />
-    {s.data?.length === 0 && <p className="muted">No external source has been connected. Connectors are configured on the server.</p>}
+    <p className="notice">External sources (a forge's pull requests, reviews) are read by the server. Credentials never enter the browser. Records that fail validation are set aside, so a source can be <em>partial</em>; an expired credential or a rate limit is shown as such, not retried in a loop. If the repository has a GitHub <code>origin</code> remote and the <code>gh</code> CLI is authenticated, a source is registered automatically when the repository is indexed; fetching pull requests from GitHub still requires clicking the button, because it consumes API quota.</p>
+    <Status error={s.error ?? st.error ?? ingest.error} busy={s.busy || st.busy || ingest.busy} />
+    {s.data?.length === 0 && <p className="muted">No external source is connected yet. If you index a GitHub repository while <code>gh</code> is authenticated, its source will appear here automatically.</p>}
     <ul className="cards">{(s.data ?? []).map((x) => <li key={x.sourceId} className="card"><strong>{x.sourceId}</strong> <Badge kind={statusKind(x.state)}>{x.state.replace(/_/g, " ").toLowerCase()}</Badge>
       <p className="muted small">{x.lastOk ? `Last good read ${x.lastOk.slice(0, 16).replace("T", " ")}.` : "Never read successfully."} {x.resumeAt ? `Resumes after ${x.resumeAt.slice(0, 16).replace("T", " ")}.` : ""}</p>
-      {x.lastError && <p className="warn-text small">{x.lastError}</p>}</li>)}</ul>
+      {x.lastError && <p className="warn-text small">{x.lastError}</p>}
+      {x.sourceId.startsWith("gh:") && repoRoot && <div className="row"><button className="secondary small" disabled={ingest.busy} onClick={() => void doIngest(x.sourceId)}>Fetch pull requests</button></div>}
+    </li>)}</ul>
   </>;
 }
 

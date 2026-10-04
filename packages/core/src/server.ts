@@ -94,7 +94,7 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
   };
   for (const [key, run] of Object.entries(svc.exportOps)) ops[key] = { mutating: ["C30/subscribe", "C30/unsubscribe", "C30/exportClaims"].includes(key), run };
   for (const [key, run] of Object.entries(svc.screenOps)) ops[key] = { mutating: ["C17/runSuite", "C29/addPrincipal", "C29/setAccess"].includes(key), run: run as any };
-  for (const [key, run] of Object.entries(svc.indexOps)) ops[key] = { mutating: key === "C07/invalidateAndRevalidate", run: run as any };
+  for (const [key, run] of Object.entries(svc.indexOps)) ops[key] = { mutating: ["C07/invalidateAndRevalidate", "C04/ingestGhSource"].includes(key), run: run as any };
   for (const [key, run] of Object.entries(svc.collabOps)) ops[key] = { mutating: !["C29/read", "C29/conceptsFor"].includes(key), run };
   for (const [key, run] of Object.entries(svc.securityOps)) ops[key] = { mutating: ["C25/analyze", "C25/gateSecurityAlarm"].includes(key), run };
   for (const [key, run] of Object.entries(svc.runtimeOps)) ops[key] = { mutating: ["C24/recordMarker", "C24/ingest"].includes(key), run };
