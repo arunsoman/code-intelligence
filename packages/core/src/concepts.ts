@@ -24,8 +24,9 @@ export function chunkSymbols(store: Store, revision: string): string[][] {
   return chunks;
 }
 
-export function cardsFromOutput(store: Store, revision: string, out: ConceptsOutput, bundle: ReturnType<typeof bundleFor>, source: string, run?: ModelRunRef): { cards: ConceptCard[]; claims: Claim[]; dropped: string[] } {
-  const exists = new Set(store.entities(revision).map((e) => e.entityId));
+export function cardsFromOutput(store: Store, revision: string, out: ConceptsOutput, bundle: ReturnType<typeof bundleFor>, source: string, run?: ModelRunRef, knownEntityIds?: Set<string>): { cards: ConceptCard[]; claims: Claim[]; dropped: string[] } {
+  // Built once per extraction by the caller and passed in; loading it per chunk parses every entity each time.
+  const exists = knownEntityIds ?? new Set(store.entities(revision).map((e) => e.entityId));
   const cards: ConceptCard[] = [], claims: Claim[] = [], dropped: string[] = [];
   for (const c of out.cards) {
     const members = c.memberEntityIds.filter((m) => exists.has(m));

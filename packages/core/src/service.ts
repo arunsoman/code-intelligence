@@ -258,11 +258,22 @@ export class Service {
     "C28/approveCandidate": (c, b) => this.taskCall(c, () => this.tasks.approveCandidate(actor(c), { taskId: b?.taskId, candidateIndex: b?.candidateIndex, expectedVersion: b?.expectedVersion, explanation: b?.explanation ?? "" })),
     "C30/createPublicationGrant": (c, b) => this.taskCall(c, () => this.tasks.createGrant(actor(c), { taskId: b?.taskId, candidateIndex: b?.candidateIndex, repository: b?.repository, baseBranch: b?.baseBranch, branchName: b?.branchName })),
     "C30/publishDraftPR": (c, b) => {
+      // The rollout switch comes first: with `tasks.publish` off a task ends at REVIEW_READY and exports a patch, and
+      // no GitHub call is attempted at all. Each flag is independently reversible and none of them is inferred.
+      if (!this.tasksPublicationEnabled()) return Promise.resolve(fail(c, { code: "FORBIDDEN", message: "Publishing from CIE is switched off for this installation, so this task stops at review-ready. The validated patch can still be exported as a patch.", retryable: false }));
       if (!this.forge) return Promise.resolve(fail(c, { code: "PROVIDER_UNAVAILABLE", message: "No GitHub transport is configured, so no draft PR is created. The validated patch can still be exported as a patch.", retryable: false }));
       return this.taskCall(c, () => this.tasks.publishDraftPR(actor(c), { taskId: b?.taskId, candidateIndex: b?.candidateIndex, repositoryId: b?.repositoryId, baseBranch: b?.baseBranch, branchName: b?.branchName, grantId: b?.grantId, generation: b?.generation }, this.forge!));
     },
     "C28/taskRuns": (c, b) => this.taskCall(c, () => this.tasks.listRuns(b?.taskId, b?.candidateIndex)),
   };
+
+  /** `task_flags.publish` is the independent switch for the only write that leaves this machine. */
+  tasksPublicationEnabled(): boolean {
+    try {
+      const row = this.store.db.prepare("select publish from task_flags limit 1").get() as { publish: number } | undefined;
+      return Number(row?.publish ?? 0) === 1;
+    } catch { return false; }
+  }
 
   async taskCall<T>(ctx: CallContext, fn: () => T | Promise<T>): Promise<ApiResult<T>> {
     try { return ok(ctx, await fn()); }
@@ -1363,6 +1374,8 @@ export class Service {
     // Members of prior cards that were not carried over (one of their members changed) are re-read together, so the card is rebuilt whole.
     const rebuildMembers = new Set(priorCards.filter((c) => !carriedIds.has(c.id)).flatMap((c) => c.members));
     const touched = new Set(touchedIds);
+    // The entity-id set grounds every chunk's cards; build it once instead of reparsing every entity per chunk.
+    const knownEntityIds = new Set(this.store.entities(rev.id).map((e) => e.entityId));
     const queue = chunkSymbols(this.store, rev.id);
     // Claims are written with the cards, in one step at the end, so a cancelled run leaves nothing behind.
     const pendingClaims: Claim[] = [];
@@ -1391,7 +1404,7 @@ export class Service {
       if (note && !warnings.includes(note)) warnings.push(note);
       providerName = `${provider.name}/${provider.model}`;
       if (!result.ok) { warnings.push(`extraction failed for a chunk (${result.error.code})`); continue; }
-      const out = cardsFromOutput(this.store, rev.id, result.value, bundle, providerName, result.run);
+      const out = cardsFromOutput(this.store, rev.id, result.value, bundle, providerName, result.run, knownEntityIds);
       pendingClaims.push(...out.claims);
       all.push(...out.cards); dropped.push(...out.dropped);
     }
