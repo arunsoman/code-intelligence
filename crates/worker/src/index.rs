@@ -34,25 +34,37 @@ struct FileRec {
 
 // ---- parse cache (incremental re-index; CE-3 region-level reuse) ----
 // Key: (relative path, content hash); value: the parsed file. Only valid within one
-// analyzer version and one worker process (spawn-local). Entries evicted FIFO beyond a bounded size.
-const CACHE_LIMIT: usize = 4096;
+// analyzer version and one worker process (spawn-local). Bounded by estimated parser bytes, not by an
+// entry count: an entry cap made a large repository stop reusing parses after ~4,096 files (issue #4).
+const CACHE_LIMIT: usize = 4096; // the old entry cap; kept to size the byte budget and the regression fixture
+const CACHE_BYTE_LIMIT: usize = CACHE_LIMIT * 256 * 1024; // ~1 GiB of estimated parser memory
+const PARSE_MEMORY_FACTOR: usize = 50; // README measures ~0.2 MB of parser memory per ~4 KB of source
 #[derive(PartialEq, Eq, Hash, Clone)]
 struct CacheKey(String, String);
-struct ParseCache { entries: HashMap<CacheKey, RawFile> }
+struct CacheEntry { raw: RawFile, bytes: usize }
+struct ParseCache { entries: HashMap<CacheKey, CacheEntry>, order: std::collections::VecDeque<CacheKey>, bytes: usize }
 static PARSE_CACHE: std::sync::OnceLock<std::sync::Mutex<ParseCache>> = std::sync::OnceLock::new();
 
 /// A content-keyed parse cache, so an incremental re-index can reuse parses of files whose
 /// bytes are unchanged. Only valid inside one worker process (spawn-local, one op at a time).
 fn parse_cache() -> std::sync::MutexGuard<'static, ParseCache> {
-    PARSE_CACHE.get_or_init(|| std::sync::Mutex::new(ParseCache { entries: HashMap::new() })).lock().unwrap_or_else(|e| e.into_inner())
+    PARSE_CACHE.get_or_init(|| std::sync::Mutex::new(ParseCache { entries: HashMap::new(), order: std::collections::VecDeque::new(), bytes: 0 })).lock().unwrap_or_else(|e| e.into_inner())
 }
 fn cache_get(rel: &str, hash: &str) -> Option<RawFile> {
-    parse_cache().entries.get(&CacheKey(rel.to_string(), hash.to_string())).cloned()
+    parse_cache().entries.get(&CacheKey(rel.to_string(), hash.to_string())).map(|e| e.raw.clone())
 }
-fn cache_put(rel: &str, hash: &str, raw: &RawFile) {
+fn cache_put(rel: &str, hash: &str, raw: &RawFile, src_len: usize) {
     let mut c = parse_cache();
-    while c.entries.len() >= CACHE_LIMIT { if let Some(k) = c.entries.keys().next().cloned() { c.entries.remove(&k); } else { break; } }
-    c.entries.insert(CacheKey(rel.to_string(), hash.to_string()), raw.clone());
+    let key = CacheKey(rel.to_string(), hash.to_string());
+    if let Some(prev) = c.entries.remove(&key) { c.bytes = c.bytes.saturating_sub(prev.bytes); c.order.retain(|k| k != &key); }
+    let bytes = (src_len * PARSE_MEMORY_FACTOR).max(1);
+    c.entries.insert(key.clone(), CacheEntry { raw: raw.clone(), bytes });
+    c.order.push_back(key);
+    c.bytes = c.bytes.saturating_add(bytes);
+    // Evict oldest-first by bytes. A single file larger than the whole budget is still kept, so one huge file cannot make the cache useless.
+    while c.bytes > CACHE_BYTE_LIMIT && c.entries.len() > 1 {
+        match c.order.pop_front() { Some(old) => { if let Some(e) = c.entries.remove(&old) { c.bytes = c.bytes.saturating_sub(e.bytes); } } None => break }
+    }
 }
 
 /// Rows are built with this stand-in for the revision id (which is only known once every file has been read and changes with every edit anywhere),
@@ -303,7 +315,7 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>, base: Option<&BaseRe
                 retryable: false,
             });
         }
-        cache_put(&rel, &hash, &raw);
+        cache_put(&rel, &hash, &raw, src.len());
         sources.push((rel.clone(), hash.clone()));
         recs.push(FileRec { rel, hash, src, raw, ids: vec![] });
     }
@@ -1191,3 +1203,25 @@ mod delta_tests {
     }
 }
 
+
+#[cfg(test)]
+mod parse_cache_bug {
+    use super::*;
+
+    #[test]
+    fn a_repository_larger_than_the_parse_cache_still_reuses_the_parses_of_unchanged_files() {
+        let dir = std::env::temp_dir().join(format!("cie-bigcache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let files = CACHE_LIMIT + 200;
+        for i in 0..files {
+            std::fs::write(dir.join(format!("m{i:05}.ts")), format!("export function f{i}(n: number) {{ return n + {i}; }}\n")).unwrap();
+        }
+        index_repo(&dir, None, None).unwrap();                       // parses everything and fills the cache
+        std::fs::write(dir.join("m00000.ts"), "export function f0(n: number) { return n; }\n").unwrap(); // one file changes
+        let second = index_repo(&dir, None, None).unwrap();
+        let reused: usize = second.diagnostics.iter().filter(|d| d.code == "REUSED_CACHED_PARSES").filter_map(|d| d.message.split_whitespace().nth(1).and_then(|n| n.parse::<usize>().ok())).sum();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(reused, files - 1, "{files} files, one edited: {reused} parses reused (the parse cache holds at most {CACHE_LIMIT} files, so reuse stops there)");
+    }
+}
