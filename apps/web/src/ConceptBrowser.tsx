@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Claim, ConceptCard, ConceptStore, VerdictKind } from "@cie/schema";
+import type { Claim, ConceptCard, ConceptStore, JobView, VerdictKind } from "@cie/schema";
 import { call } from "./api.ts";
 import { ClaimCard } from "./ClaimCard.tsx";
+import { VERSIONING_HELP, conceptExtractions, versionInfos } from "./concept-status.ts";
 
-interface Props { revision?: string; onClose: () => void; onAsk: (card: ConceptCard) => void; onVerdict: (claim: Claim, v: VerdictKind, text: string) => Promise<string | null> }
+interface Props { revision?: string; jobs?: JobView[]; onShowJobs?: () => void; onClose: () => void; onAsk: (card: ConceptCard) => void; onVerdict: (claim: Claim, v: VerdictKind, text: string) => Promise<string | null> }
 
-export function ConceptBrowser({ revision, onClose, onAsk, onVerdict }: Props) {
+export function ConceptBrowser({ revision, jobs = [], onShowJobs, onClose, onAsk, onVerdict }: Props) {
   const [store, setStore] = useState<ConceptStore | null>(null);
   const [version, setVersion] = useState<number | undefined>(undefined);
   const [kind, setKind] = useState<string>("all");
@@ -20,19 +21,31 @@ export function ConceptBrowser({ revision, onClose, onAsk, onVerdict }: Props) {
 
   const kinds = useMemo(() => ["all", ...new Set((store?.cards ?? []).map((c) => c.kind))], [store]);
   const cards = (store?.cards ?? []).filter((c) => kind === "all" || c.kind === kind);
+  const versions = useMemo(() => versionInfos(store), [store]);
+  const selected = versions.find((v) => v.version === store?.version);
+  const extractions = conceptExtractions(jobs, revision);
+  const active = extractions.filter((j) => j.state === "QUEUED" || j.state === "RUNNING");
+  const failed = extractions.filter((j) => j.failed);
   const latest = store?.versions[0]?.version;
   const verdict = async (c: Claim, v: VerdictKind, t: string) => { const e = await onVerdict(c, v, t); if (!e) await load(version); return e; };
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal wide" role="dialog" aria-modal="true" aria-label="Concept cards" tabIndex={-1} onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}>
-        <h2>Concept cards {store && <span className="muted small">version {store.version}{store.version === latest ? " (current)" : ""}</span>}</h2>
+        <h2>Concept cards {store && <span className="muted small">version {store.version}{store.version === latest ? " (current)" : ""}</span>} {selected && <span className={`chip ${selected.deterministic ? "warn" : ""}`} title={selected.provider}>{selected.badge}</span>}</h2>
         {error && <div className="banner error" role="alert">{error}</div>}
+        {(active.length > 0 || failed.length > 0) && (
+          <div className="banner" role="status" aria-label="Concept extraction status">
+            {active.map((j) => <p key={j.id} className="small">{j.detail}{j.state === "QUEUED" ? " (waiting for the running job)" : ""}</p>)}
+            {failed.map((j) => <p key={j.id} className="small">{j.interrupted ? "Extraction interrupted by a restart; nothing from that run was saved." : `Extraction failed: ${j.progress}.`}</p>)}
+            {onShowJobs && <button className="link small" onClick={onShowJobs}>See background work</button>}
+          </div>
+        )}
         {store && store.versions.length === 0 && <p className="muted">No cards yet. Use “Extract concepts” first.</p>}
         {store && store.versions.length > 0 && (
           <>
             <div className="row wrap">
-              <label>Version <select value={store.version} onChange={(e) => setVersion(Number(e.target.value))}>{store.versions.map((v) => <option key={v.version} value={v.version}>v{v.version} · {v.cards} cards · {v.createdAt.slice(0, 16).replace("T", " ")} · {v.provider}</option>)}</select></label>
+              <label>Version <select value={store.version} onChange={(e) => setVersion(Number(e.target.value))}>{versions.map((v) => <option key={v.version} value={v.version}>v{v.version} · {v.cards} cards · {v.createdAt.slice(0, 16).replace("T", " ")} · {v.provider}{v.deterministic ? " (not model-read)" : ""}</option>)}</select></label>
               <label>Kind <select value={kind} onChange={(e) => setKind(e.target.value)}>{kinds.map((k) => <option key={k}>{k}</option>)}</select></label>
             </div>
             {store.diff && <p className="diff small">Since v{store.diff.against}: <strong>{store.diff.added.length}</strong> added{store.diff.added.length ? ` (${store.diff.added.slice(0, 3).join("; ")})` : ""}, <strong>{store.diff.removed.length}</strong> removed, <strong>{store.diff.changed.length}</strong> changed.</p>}
@@ -60,7 +73,8 @@ export function ConceptBrowser({ revision, onClose, onAsk, onVerdict }: Props) {
             </ul>
           </>
         )}
-        <div className="modal-actions"><span className="muted small">Cards are versioned: each extraction keeps the previous set.</span><button onClick={onClose}>Close</button></div>
+        <p className="muted small help">{VERSIONING_HELP}</p>
+        <div className="modal-actions"><span className="muted small">{selected ? `This version: ${selected.provider} — ${selected.badge}.` : ""}</span><button onClick={onClose}>Close</button></div>
       </div>
     </div>
   );

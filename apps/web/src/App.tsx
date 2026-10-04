@@ -97,6 +97,7 @@ export function App() {
   const [announcement, setAnnouncement] = useState("");
   const [exceptions, setExceptions] = useState<ExceptionRow[]>([]);
   const [browsingCards, setBrowsingCards] = useState(false);
+  const [jobsOpen, setJobsOpen] = useState(false);
   const [cardPins, setCardPins] = useState<{ title: string; ids: string[] } | null>(null);
   const [audit, setAudit] = useState<{ events: AuditEvent[]; chain: { ok: boolean } } | null>(null);
 
@@ -443,8 +444,22 @@ export function App() {
       {galleryOpen && <VisualsGallery revision={info?.revision?.id} onClose={() => setGalleryOpen(false)} onShow={(it: CatalogEntry, q: string) => { setGalleryOpen(false); void askForm(q, it.formId); }} />}
       {outlineOpen && <Outline rendered={rendered} level={level} onClose={() => setOutlineOpen(false)} onPick={(id) => { const n = rendered.nodes.find((x) => x.id === id); setOutlineOpen(false); if (n) void inspectNode(n); }} />}
       {browsingCards && (
-        <ConceptBrowser revision={info?.revision?.id} onClose={() => { setBrowsingCards(false); void refresh(); }} onVerdict={verdict}
+        <ConceptBrowser revision={info?.revision?.id} jobs={jobs} onShowJobs={() => setJobsOpen(true)} onClose={() => { setBrowsingCards(false); void refresh(); }} onVerdict={verdict}
           onAsk={(c) => { setCardPins({ title: c.title, ids: c.members.slice(0, 8) }); setBrowsingCards(false); say("assistant", `Referring to “${c.title}” (${c.members.length} element(s)). Ask your question; they are in the context.`); }} />
+      )}
+      {jobsOpen && (
+        <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setJobsOpen(false); }}>
+          <div className="modal" role="dialog" aria-modal="true" aria-label="Background work" tabIndex={-1} onKeyDown={(e) => { if (e.key === "Escape") setJobsOpen(false); }}>
+            <h2>Background work</h2>
+            <JobBar jobs={jobs} onCancel={(j) => void cancelJob(j)} />
+            {jobs.length === 0 ? <p className="muted">No jobs yet.</p> : (
+              <ul className="dirs" tabIndex={0} aria-label="Recent jobs">
+                {jobs.map((j) => <li key={j.id}><span className="mono">{j.kind}</span><span className="muted small">{j.state.toLowerCase()}{j.message ? ` — ${j.message}` : ""}</span></li>)}
+              </ul>
+            )}
+            <div className="modal-actions"><span className="muted small">Indexing and extraction run in the background; nothing is saved from a cancelled or interrupted run.</span><button onClick={() => setJobsOpen(false)}>Close</button></div>
+          </div>
+        </div>
       )}
       {audit && (
         <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setAudit(null); }}>
