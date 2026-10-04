@@ -1,5 +1,6 @@
 // Subset of contracts §2 used by the MVP. Field names match the contract on the wire.
 import { z } from "zod";
+export * from "./defect.ts";
 
 export type Id = string;
 export type RevisionId = string;
@@ -123,6 +124,55 @@ export type FormId =
 export interface TerrainCell {
   id: Id; label: string; file: string; factors: Record<string, number>; raw: Record<string, string>; evidenceIds: Id[]; area: number; entityIds: Id[]; note?: string;
 }
+export interface MatrixAxis {
+  id: Id; label: string; sub?: string; role?: string;
+  entityRefs: Id[]; evidenceIds: Id[]; claimId?: Id;
+  /** 0 (cool) to 1 (hot) with a plain-words label, for rows that carry a risk. */
+  heat?: { value: number; label: string };
+}
+/** One filled cell: absence of a cell means "no relation", which is itself shown as such. */
+export interface MatrixCell {
+  row: Id; col: Id;
+  /** A form-specific state, spelled out in `ViewMatrix.states`; the UI never relies on colour alone. */
+  state: string;
+  /** 0..1 strength where the state has one (share of a behaviour's code a test reaches). */
+  strength?: number;
+  displayMode: DisplayMode;
+  claimId?: Id; evidenceIds: Id[];
+  /** One sentence saying what this cell asserts. */
+  note: string;
+}
+export interface ViewMatrix {
+  rowTitle: string; colTitle: string;
+  rows: MatrixAxis[]; cols: MatrixAxis[]; cells: MatrixCell[];
+  states: Record<string, { label: string; glyph: string; description: string }>;
+  /** What an empty cell means in this form. */
+  emptyMeaning: string;
+}
+
+// ---- Jobs (C07): long work that runs in the background and can be cancelled ----
+export type JobKind = "index" | "concepts" | "investigate" | "defect-detect" | "defect-experiment";
+export type JobState = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+export interface JobView {
+  id: Id; kind: JobKind; state: JobState;
+  /** Asked to stop, not stopped yet (the runner is at a point where it can). */
+  cancelRequested: boolean;
+  /** Past the commit point: a cancel is refused, because stopping now would leave half a result. */
+  committing: boolean;
+  phase: string; message: string; done?: number; total?: number;
+  params: { repoPath?: string; revision?: string; investigationId?: string; defectRequestHash?: string; specId?: string };
+  createdAt: string; startedAt?: string; finishedAt?: string;
+  /** What the same call would have returned when run directly (value and warnings), once SUCCEEDED. */
+  result?: { value: unknown; warnings: string[] };
+  error?: ApiError;
+}
+
+export interface ViewRoute {
+  source: "rule" | "similarity" | "model" | "default" | "chosen";
+  confidence: "high" | "medium" | "low";
+  form: FormId; kind?: "failure" | "invariant"; name: string; because: string;
+  alternatives: { form: FormId; kind?: "failure" | "invariant"; name: string }[];
+}
 export interface ViewSpec {
   id: Id; version: number; revision: RevisionId; taskId: Id; formId: FormId; caption: string;
   question: string; level: number; nodes: ViewNode[]; edges: ViewEdge[]; groups: ViewGroup[];
@@ -130,6 +180,8 @@ export interface ViewSpec {
   cameraPolicy: { behavior: "PRESERVE" }; gaps: string[];
   /** Why this form was chosen for the question (shown to the user). */
   formReason?: string;
+  /** How the question was read: by which layer, how sure, and the other readings (shown as "I read this as…"). */
+  route?: ViewRoute;
   /** Items deliberately left out and why, for "why is this hidden?". */
   hidden?: { entityId: Id; label: string; reason: string }[];
   /** Pruned by the user ("ignore X"); kept so the view can explain and restore. */
@@ -138,6 +190,8 @@ export interface ViewSpec {
   consequences?: { id: Id; text: string; kind: string; displayMode: DisplayMode; claimId?: Id; evidenceIds: Id[]; entityIds?: Id[] }[];
   /** Change-risk terrain: a composite of grounded factors per region; weights are tunable in the UI. */
   terrain?: { cells: TerrainCell[]; factors: { id: string; label: string; description: string; weight: number }[]; formula: string };
+  /** A many-to-many relation drawn as a grid (V12, V15). Cells are built beside the graph and obey the same provenance rules. */
+  matrix?: ViewMatrix;
   /** Parameters that produced this view, shown to the user and used to refresh it. */
   params?: Record<string, string | number | boolean>;
   /** Whole-system summary for level 0: the system itself and the external packages it depends on. */
@@ -152,6 +206,7 @@ export const SCHEMA_REPRESENTATION = "representation.v1";
 export const SCHEMA_EXPLANATION = "explanation.v1";
 export const SCHEMA_CONCEPTS = "concepts.v1";
 export const SCHEMA_CHALLENGE = "challenge.v1";
+export const SCHEMA_ROUTE = "route.v1";
 
 export const RepresentationOutput = z.object({
   caption: z.string().max(400),
@@ -196,16 +251,29 @@ export const ChallengeOutput = z.object({
 }).strict();
 export type ChallengeOutput = z.infer<typeof ChallengeOutput>;
 
+/** Which visual a question wants. The model picks a form only; it cannot cite evidence or change what the form shows. */
+export const ROUTE_FORMS = ["SemanticMap", "CausalGraph", "TransactionJourney", "DataLineage", "SemanticDiff", "Archaeology", "TrustBoundary", "RuntimeOverlay", "RaceWindow", "Counterfactual", "TestConfidence", "Ownership", "ConceptAtlas", "PolicyMap", "ChangeRisk"] as const;
+export const RouteOutput = z.object({
+  form: z.enum(ROUTE_FORMS).nullable(),
+  /** Set when form is CausalGraph. */
+  kind: z.enum(["failure", "invariant"]).nullable().optional(),
+  /** The model's own judgment, uncalibrated; shown as such. */
+  confidence: z.number().min(0).max(1),
+  reason: z.string().max(300),
+}).strict();
+export type RouteOutput = z.infer<typeof RouteOutput>;
+
 export const OUTPUT_SCHEMAS = {
   [SCHEMA_REPRESENTATION]: RepresentationOutput,
   [SCHEMA_EXPLANATION]: ExplanationOutput,
   [SCHEMA_CONCEPTS]: ConceptsOutput,
   [SCHEMA_CHALLENGE]: ChallengeOutput,
+  [SCHEMA_ROUTE]: RouteOutput,
 } as const;
 
 // ---- Model gateway interface ----
 export interface ModelRequest {
-  purpose: "REPRESENT" | "EXPLAIN" | "EXTRACT" | "CHALLENGE"; schemaId: keyof typeof OUTPUT_SCHEMAS;
+  purpose: "REPRESENT" | "EXPLAIN" | "EXTRACT" | "CHALLENGE" | "ROUTE"; schemaId: keyof typeof OUTPUT_SCHEMAS;
   question: string; bundle: EvidenceBundle; selected?: Id[];
   /** For CHALLENGE: the claim being attacked. */
   claim?: { assertion: string; evidenceIds: Id[] };
@@ -245,7 +313,7 @@ export interface DirListing { path: string; parent: string | null; entries: DirE
 export interface ChangesSince {
   fromRevision: RevisionId; toRevision: RevisionId; changed: boolean;
   files: { added: string[]; removed: string[]; changed: string[] };
-  affectedNodes: { nodeId: Id; label: string; change: "changed" | "removed" }[];
+  affectedNodes: { nodeId: Id; label: string; change: "added" | "changed" | "removed" }[];
   commits: { file: string; subject: string; author: string; date: string }[];
   summary: string;
 }
@@ -279,3 +347,37 @@ export interface ConceptStore {
   diff: { against: number; added: string[]; removed: string[]; changed: string[] } | null;
   statedConfidence: { level: "high" | "medium" | "low"; cards: number; confirmed: number; refuted: number; unjudged: number; band: { lower: number; upper: number; n: number } | null; note: string }[];
 }
+
+// ---- Defect analysis (defect.v1, report-only Phase A) ----
+export type DefectKind = "DEADLOCK_CANDIDATE" | "MEMORY_RACE" | "LOGICAL_RACE" | "STARVATION"
+  | "CONTENTION" | "CPU_HOTSPOT" | "ALLOCATION_HOTSPOT" | "IO_BOTTLENECK"
+  | "QUEUE_SATURATION" | "LOOP_OPTIMIZATION" | "REPEATED_EXTERNAL_CALL" | "RESOURCE_LEAK";
+export type Severity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+export type EvidenceLevel = "STATIC_CANDIDATE" | "DETECTOR_REPORT" | "REPRODUCED" | "MEASURED" | "BOUNDED_EXHAUSTIVE";
+export type ObligationState = "PENDING" | "EVIDENCED" | "FAILED" | "UNRESOLVED";
+export interface SafetyObligation { id: Id; description: string; predicateSchemaId: Id; state: ObligationState; evidenceIds: Id[] }
+export interface DetectorFinding {
+  id: Id; version: number; kind: DefectKind; revision: RevisionId; entityIds: Id[]; spans: SourceSpan[];
+  ruleId: Id; ruleVersion: number; evidenceIds: Id[]; coverageGaps: string[]; severity: Severity;
+  evidenceLevel: EvidenceLevel; safetyObligations: SafetyObligation[]; hypothesisPlanId?: Id;
+  /** A bounded, reviewable witness. It never upgrades the evidence level by itself. */
+  witness?: { kind: string; paths: Id[][]; detail: string };
+}
+export interface MemoryAccessFact {
+  id: Id; entityId: Id; accessPath: string; mode: "READ" | "WRITE"; atomic: boolean;
+  contextId: Id; concurrentWith: Id[]; happensBefore: Id[]; evidenceIds: Id[]; span?: SourceSpan;
+  aliasState?: "RESOLVED" | "MAY_ALIAS" | "UNKNOWN";
+}
+export interface LockOrderFact {
+  id: Id; entityId: Id; heldLockId: Id; acquiredLockId: Id; acquireKind: "BLOCKING" | "TRY" | "REENTRANT";
+  pathCondition?: string; globalGuardId?: Id; evidenceIds: Id[]; span?: SourceSpan;
+  resolution: ResolutionKind;
+}
+export interface DefectDetectionInput {
+  revision: RevisionId; lockOrders?: LockOrderFact[]; memoryAccesses?: MemoryAccessFact[];
+  /** Bounds work and makes truncation visible instead of silently dropping candidates. */
+  budget?: { maxFacts?: number; maxFindings?: number };
+}
+export type ComparisonVerdict = "IMPROVED" | "REGRESSED" | "NO_MATERIAL_CHANGE" | "INCONCLUSIVE";
+export interface BenchmarkPolicy { minimumImprovement: number; maximumRegression: number; minimumSamples: number }
+export interface BenchmarkResult { effectEstimate: number | null; verdict: ComparisonVerdict; limitations: string[] }

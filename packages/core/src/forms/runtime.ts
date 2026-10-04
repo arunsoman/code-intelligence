@@ -1,6 +1,7 @@
 // V9 Runtime Overlay: what has been reported as going wrong, projected onto the structure it happened in.
-// These are reported exceptions and recorded test failures, not live telemetry: there is no latency, rate or sampling data,
-// and the view says so. Frames outside the repository are shown as fog, never as lines.
+// These are reported exceptions, recorded test failures and ingested trace exports — not live telemetry:
+// when a trace export is present the view gains latency and request counts; otherwise it says so. Frames
+// outside the repository are shown as fog, never as lines.
 import type { Claim, ViewNode } from "@cie/schema";
 import type { RevisionRow, Store } from "../store.ts";
 import { locateFrames, parseTrace } from "../trace.ts";
@@ -30,12 +31,23 @@ export function buildRuntime(store: Store, rev: RevisionRow, question: string, s
     });
   }
   const tests = store.factsByPredicate(rev.id, "test_result").filter((f) => (f.object as { value?: { status?: string } }).value?.status === "failed");
+  // Ingested trace exports (post-MVP FR-13): p50/p95 latency and request counts per entity, from files the
+  // project's own tooling wrote earlier.
+  const spans = new Map<string, { op: string; count: number; errors: number; p50: number | null; p95: number | null; evidenceIds: string[] }>();
+  for (const f of store.factsByPredicate(rev.id, "span")) {
+    const v = (f.object as unknown as { value?: { op: string; count: number; errors: number; p50: number | null; p95: number | null; from?: string; until?: string } }).value;
+    if (!v) continue;
+    const untilMs = v.until ? Date.parse(v.until) : 0;
+    if (Number.isFinite(untilMs) && untilMs > 0 && now - untilMs > WINDOWS[win]) continue; // outside the selected window
+    spans.set(f.subject, { op: v.op, count: v.count, errors: v.errors, p50: v.p50, p95: v.p95, evidenceIds: f.evidence.map((x) => x.id) });
+  }
   const calls = new Map<string, string[]>();
   for (const r of store.relationshipsAmong(rev.id, "calls")) calls.set(r.from, [...(calls.get(r.from) ?? []), r.to]);
   for (const f of tests) {
     const name = ((f.object as unknown) as { value: { name: string } }).value.name;
     for (const to of calls.get(f.subject) ?? []) bump(to, 0.55, `Failing test “${name}” calls this`, f.evidence[0].id, 1);
   }
+  for (const [id, s] of spans) bump(id, 0.5 + (s.errors ? 0.2 : 0) + Math.min(0.2, (s.p95 ?? 0) / 5000), s.errors ? `${s.op}: ${s.count} span(s), ${s.errors} error span(s)` : `${s.op}: ${s.count} span(s), p95 ${s.p95} ms`, s.evidenceIds[0], s.count);
   if (heat.size === 0) return emptyForm(o, exs.length === 0 && tests.length === 0
     ? `Nothing has been reported in the ${win === "all" ? "available data" : "last " + win}. Apps can send exceptions here with @cie/reporter, or paste a stack trace.`
     : `${outside} reported exception(s) came from outside this repository, so there is nothing to draw on this structure.`);
@@ -46,21 +58,26 @@ export function buildRuntime(store: Store, rev: RevisionRow, question: string, s
   for (const id of [...heat.keys()]) { for (const r of flow.out.get(id) ?? []) include.add(r.to); for (const r of flow.inn.get(id) ?? []) include.add(r.from); }
   const ids = [...include].filter((id) => flow.entities.has(id)).sort((a, b) => (heat.get(b)?.value ?? 0) - (heat.get(a)?.value ?? 0) || a.localeCompare(b)).slice(0, 36);
   const keep = new Set(ids);
+  const nodesById = new Map(store.entities(rev.id).map((e) => [e.entityId, e]));
   for (const id of ids) {
-    const e = flow.entities.get(id)!, h = heat.get(id);
+    const e = (flow.entities.get(id) ?? nodesById.get(id))!, h = heat.get(id);
+    const span = spans.get(id);
+    const spanNote = span ? `Trace export: ${span.count} span(s) of ${span.op}${span.errors ? `, ${span.errors} error span(s)` : ""}${span.p50 !== null ? `, p50 ${span.p50} ms / p95 ${span.p95} ms` : ""}.` : null;
     const node: ViewNode = { id: `n:${id}`, entityRefs: [id], label: e.name, kind: e.kind, file: e.file, claimIds: [], evidenceIds: h ? [...new Set(h.ev)] : containsEvidence(store, rev.id, id), tier: h ? "CRITICAL" : "CONTEXT", displayMode: fogCount(store, rev.id, id) ? "FOG" : "FACT", unresolvedCalls: fogCount(store, rev.id, id), role: h ? "hot" : "structure", heat: h ? { value: h.value, label: `${h.count} report(s)/failure(s)` } : undefined, notes: h ? h.notes.slice(0, 4) : ["No reported problem here; shown for context."] };
     if (h) {
-      const c = claimOf(store, rev.id, { assertion: `${e.name} is where reported problems concentrate: ${h.notes[0]}.`, claimClass: "runtime-hotspot", evidenceIds: [...new Set(h.ev)], subjects: [id], rationaleSummary: "Built from reported exceptions and recorded test failures, which are a sample, not full telemetry." });
+      const c = claimOf(store, rev.id, { assertion: `${e.name} is where reported problems concentrate: ${h.notes[0]}.`, claimClass: "runtime-hotspot", evidenceIds: [...new Set(h.ev)], subjects: [id], rationaleSummary: span ? "Built from an ingested trace export, which is a sample of the runs the project recorded, not live telemetry." : "Built from reported exceptions and recorded test failures, which are a sample, not full telemetry." });
       claims.push(c); node.claimIds = [c.draft.id]; node.ownClaimId = c.draft.id; node.displayMode = c.displayMode === "HIDDEN" ? "HYPOTHESIS" : "INFERENCE";
+      if (spanNote && node.notes) node.notes.push(spanNote);
     }
     v.nodes.push(node);
   }
   for (const id of ids) for (const r of flow.out.get(id) ?? []) if (keep.has(r.to)) v.edges.push({ id: `e:${r.id}`, fromNodeId: `n:${id}`, toNodeId: `n:${r.to}`, kind: r.kind, relationshipId: r.id, evidenceIds: r.evidence.map((x) => x.id), displayMode: r.kind === "async-flow" ? "HYPOTHESIS" : "FACT", label: r.label });
   autoLayout(v);
-  v.caption = `${heat.size} place(s) with reported problems in the ${win === "all" ? "available data" : "last " + win}: ${exs.length} distinct exception(s), ${total} report(s)${tests.length ? `, ${tests.length} failing test(s)` : ""}. Warmer means more, and more recent.`;
+  const winSpan = [...spans.values()];
+  v.caption = `${heat.size} place(s) with reported problems in the ${win === "all" ? "available data" : "last " + win}: ${exs.length} distinct exception(s), ${total} report(s)${tests.length ? `, ${tests.length} failing test(s)` : ""}${winSpan.length ? `, ${winSpan.reduce((n, s) => n + s.count, 0)} trace span(s)${winSpan.some((s) => s.p95 !== null) ? ` (worst p95 ${Math.max(...winSpan.filter((s) => s.p95 !== null).map((s) => s.p95!))} ms)` : ""}` : ""}. Warmer means more, and more recent.`;
   v.meta = { kind: "runtime", subject: win };
   v.params = { subject: win };
   if (outside) v.gaps.push(`${outside} reported exception(s) came from frames outside this repository and are not drawn: uninstrumented code is fog, not a line.`);
-  v.gaps.push("This is reported data, not live telemetry: there are no latencies, error rates, queue depths or sampling information, and no time scrubber beyond the window.");
+  v.gaps.push(spans.size ? "Trace spans come from exports the project's own tooling wrote earlier (a recorded sample); there is no live connection, no queue depth, and the window buttons are the only time control." : "This is reported data, not live telemetry: there are no latencies, error rates, queue depths or sampling information, and no time scrubber beyond the window. Drop an OpenTelemetry JSON export at traces/otlp.json and re-index to add measured latency.");
   return { view: v, claims };
 }

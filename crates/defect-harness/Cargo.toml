@@ -1,0 +1,8 @@
+[package]
+name = "defect-harness"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dev-dependencies]
+loom = { version = "=0.7.2", features = ["checkpoint"] }

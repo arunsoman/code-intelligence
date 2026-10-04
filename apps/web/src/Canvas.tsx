@@ -1,6 +1,6 @@
 import cytoscape from "cytoscape";
 import { useEffect, useRef } from "react";
-import { describeNode, nextByDirection, nextLevel, zoomForLevel, type Dir, type RenderEdge, type RenderNode, type Rendered } from "./graph.ts";
+import { describeNode, nextByDirection, nextLevel, viaToSegments, zoomForLevel, type Dir, type RenderEdge, type RenderNode, type Rendered } from "./graph.ts";
 
 interface Props {
   rendered: Rendered;
@@ -74,9 +74,21 @@ function style(): cytoscape.StylesheetJson {
     { selector: "edge[kind = 'raises']", style: { "line-color": warn, "target-arrow-color": warn, color: warn } },
     { selector: "edge[count > 1]", style: { width: "mapData(count, 2, 12, 3, 8)" } },
     { selector: "edge.stale", style: { opacity: 0.4 } },
+    { selector: "edge[ambient = 1]", style: { opacity: 0.14, width: 1, "target-arrow-shape": "none", label: "" } },
+    { selector: "edge.focus", style: { opacity: 1, width: 2, "target-arrow-shape": "triangle" } },
     { selector: "node.kbfocus", style: { "overlay-color": accent, "overlay-opacity": 0.28, "overlay-padding": 9, "border-width": 4, "border-color": accent } },
     { selector: ":selected", style: { "overlay-color": accent, "overlay-opacity": 0.25, "overlay-padding": 6 } },
   ] as cytoscape.StylesheetJson;
+}
+
+/** Ambient edges are faint until one of their ends is selected or has keyboard focus. */
+function focusEdges(c: cytoscape.Core, focusId: string | null) {
+  c.batch(() => {
+    c.edges().removeClass("focus");
+    const ends = c.nodes(":selected");
+    ends.connectedEdges().addClass("focus");
+    if (focusId) c.getElementById(focusId).connectedEdges().addClass("focus");
+  });
 }
 
 /** Fit the whole map, but never smaller than readable: a very wide layout starts at a legible zoom at its left edge and is panned from there. */
@@ -149,6 +161,7 @@ export function Canvas(p: Props) {
     const { rendered, level } = p;
     syncing.current = true;
     c.elements().remove();
+    const nodePos = new Map(rendered.nodes.map((n) => [n.id, n.pos]));
     const els: cytoscape.ElementDefinition[] = [
       ...rendered.groups.map((g) => ({ data: { id: g.id, label: g.label, group: g.kind, parent: g.parent && rendered.groups.some((x) => x.id === g.parent) ? g.parent : undefined } })),
       ...rendered.nodes.map((n) => {
@@ -157,7 +170,12 @@ export function Canvas(p: Props) {
         const labelText = bd && level < 6 ? `${n.label}\n${bd}` : detail;
         return { data: { id: n.id, label: labelText, hasBadge: bd ? 1 : 0, heatv: n.node?.heat ? n.node.heat.value : -1, ghost: n.node?.ghost ? 1 : 0, inTx: n.inTx ? 1 : 0, detail: level >= 6 ? 1 : 0, tier: n.tier, display: n.displayMode, role: n.role ?? "", kind: n.kind, parent: n.parent }, position: { ...n.pos }, classes: n.stale ? "stale" : "" };
       }),
-      ...rendered.edges.map((e) => ({ data: { id: e.id, source: e.from, target: e.to, display: e.displayMode, kind: e.kind ?? "", label: level >= 5 || e.count > 1 ? e.label : "", count: e.count, ghost: e.ghost ? 1 : 0, ret: e.ret ? 1 : 0 }, classes: e.stale ? "stale" : "" })),
+      ...rendered.edges.map((e) => {
+        const at = (id: string) => nodePos.get(id);
+        const a = at(e.from), b = at(e.to);
+        const seg = e.via && a && b ? viaToSegments(a, b, e.via) : null;
+        return { ...({ data: { id: e.id, source: e.from, target: e.to, display: e.displayMode, kind: e.kind ?? "", label: level >= 5 || e.count > 1 ? e.label : "", count: e.count, ghost: e.ghost ? 1 : 0, ret: e.ret ? 1 : 0, ambient: e.ambient ? 1 : 0 }, classes: e.stale ? "stale" : "" }), ...(seg ? { style: { "curve-style": "segments", "segment-weights": seg.weights, "segment-distances": seg.distances, "edge-distances": "node-position" } } : {}) };
+      }),
     ];
     c.add(els);
     if (p.viewKey !== lastViewKey.current) {
@@ -168,6 +186,7 @@ export function Canvas(p: Props) {
     }
     // Reapply selection to the fresh elements.
     c.batch(() => { for (const id of p.selected) c.getElementById(id).select(); });
+    focusEdges(c, focusId.current);
     syncing.current = false;
   }, [p.rendered, p.viewKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -189,6 +208,7 @@ export function Canvas(p: Props) {
     if (!c) return;
     syncing.current = true;
     c.batch(() => { c.nodes().unselect(); for (const id of p.selected) c.getElementById(id).select(); });
+    focusEdges(c, focusId.current);
     syncing.current = false;
   }, [p.selected]);
 
@@ -200,6 +220,7 @@ export function Canvas(p: Props) {
     const el = c.getElementById(id);
     if (el.empty()) { focusId.current = null; return; }
     el.addClass("kbfocus");
+    focusEdges(c, id);
     // A keyboard move is the user asking to look there: pan only if the node is off screen, never change zoom.
     const bb = el.renderedBoundingBox(), w = c.width(), h = c.height();
     if (bb.x1 < 0 || bb.y1 < 0 || bb.x2 > w || bb.y2 > h) c.center(el);

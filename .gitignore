@@ -1,5 +1,26 @@
 target/
 node_modules/
 dist/
+dist-test-*/
 *.db
 .cie/
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Test and tooling output
+coverage/
+playwright-report/
+test-results/
+.cache/
+*.log
+*.tmp
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

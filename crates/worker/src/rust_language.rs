@@ -4,7 +4,7 @@
 //! valid Rust parsed by `syn` in nirdosha-rt. We use the Rust tree-sitter
 //! grammar here and add only Nirdosha-aware macro classification; the retired
 //! native Nirdosha language is intentionally unsupported.
-use crate::language::{RawCall, RawFile, RawImport, RawRead, RawSymbol, RawThrow, RawTx, RawWrite};
+use crate::language::{RawCall, RawFile, RawImport, RawLock, RawRead, RawSymbol, RawThrow, RawTx, RawWrite};
 use tree_sitter::{Node, Parser};
 
 const WRITERS: &[&str] = &["update", "set", "save", "insert", "upsert", "create", "increment", "decrement", "write"];
@@ -53,6 +53,7 @@ impl<'a> RustWalker<'a> {
     }
 
     fn visit(&mut self, node: Node, enclosing: Option<usize>, owner: Option<String>) {
+        if let Some(event) = crate::language::semantic_event(node, enclosing, self.src) { self.out.semantic.push(event); }
         match node.kind() {
             "function_item" => {
                 if let Some(name) = node.child_by_field_name("name") {
@@ -110,9 +111,16 @@ impl<'a> RustWalker<'a> {
         let text = self.text(fun);
         let (receiver, callee) = split_call_target(&text);
         if callee.is_empty() { return; }
-        self.out.calls.push(RawCall { caller: enclosing, callee: callee.clone(), receiver, start: node.start_byte(), end: node.end_byte() });
+        let lock_receiver = receiver.clone();
+        self.out.calls.push(RawCall { caller: enclosing, callee: callee.clone(), receiver, recv_type: None, start: node.start_byte(), end: node.end_byte() });
         if TX.contains(&callee.as_str()) {
             self.out.txs.push(RawTx { caller: enclosing, start: node.start_byte(), end: node.end_byte() });
+        }
+        // Mutex/RwLock acquisition: `.lock()` / `.read()` / `.write()` on a lock-ish receiver.
+        if callee == "lock" || callee == "read" || callee == "write" || callee == "acquire" {
+            if lock_receiver.as_deref().map_or(false, crate::language::lockish) {
+                self.out.locks.push(RawLock { caller: enclosing, object: lock_receiver.unwrap_or_default(), start: node.start_byte(), end: node.end_byte() });
+            }
         }
         if WRITERS.contains(&callee.as_str()) {
             collect_struct_keys(node, self.src, enclosing, &mut self.out.writes);
@@ -136,7 +144,8 @@ impl<'a> RustWalker<'a> {
         if let Some(left) = node.child_by_field_name("left") {
             if left.kind() == "field_expression" {
                 if let Some(field) = left.child_by_field_name("field") {
-                    self.out.writes.push(RawWrite { caller: enclosing, field: self.text(field), start: node.start_byte(), end: node.end_byte() });
+                    let receiver = left.child_by_field_name("object").filter(|o| matches!(o.kind(), "identifier" | "field_expression" | "self" | "this")).map(|o| self.text(o));
+                    self.out.writes.push(RawWrite { caller: enclosing, field: self.text(field), receiver, start: node.start_byte(), end: node.end_byte() });
                 }
             }
         }
@@ -146,7 +155,8 @@ impl<'a> RustWalker<'a> {
         let assigned = node.parent().map_or(false, |p| matches!(p.kind(), "assignment_expression" | "compound_assignment_expr") && p.child_by_field_name("left").map_or(false, |n| n.id() == node.id()));
         if assigned { return; }
         if let Some(field) = node.child_by_field_name("field") {
-            self.out.reads.push(RawRead { caller: enclosing, field: self.text(field), start: node.start_byte(), end: node.end_byte() });
+            let receiver = node.child_by_field_name("object").filter(|o| matches!(o.kind(), "identifier" | "field_expression" | "self" | "this")).map(|o| self.text(o));
+            self.out.reads.push(RawRead { caller: enclosing, field: self.text(field), receiver, start: node.start_byte(), end: node.end_byte() });
         }
     }
 }
@@ -212,7 +222,7 @@ fn collect_struct_keys(node: Node, src: &[u8], caller: Option<usize>, writes: &m
             let mut fields = child.walk();
             for field in child.named_children(&mut fields).filter(|n| n.kind() == "field_initializer") {
                 if let Some(name) = field.child_by_field_name("field") {
-                    writes.push(RawWrite { caller, field: name.utf8_text(src).unwrap_or("").into(), start: field.start_byte(), end: field.end_byte() });
+                    writes.push(RawWrite { caller, field: name.utf8_text(src).unwrap_or("").into(), receiver: None, start: field.start_byte(), end: field.end_byte() });
                 }
             }
         }

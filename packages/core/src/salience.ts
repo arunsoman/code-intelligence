@@ -25,9 +25,13 @@ export interface SalienceContext {
 export interface Scored { id: string; score: number; tier: ViewNode["tier"]; factors: FactorScore[] }
 
 interface RevisionIndex { degree: Map<string, number>; maxDegree: number; history: Map<string, { commits: number; lastDate: string; evidenceId: string; subject: string; author: string }>; newest: number; neighbors: Map<string, Set<string>> }
-const cache = new Map<string, RevisionIndex>();
+// Per store: two tenants (two stores) can hold the same content-addressed revision id with different history, so a cache
+// keyed by revision id alone would hand one tenant the other's facts.
+const caches = new WeakMap<Store, Map<string, RevisionIndex>>();
+const cacheOf = (s: Store) => { let c = caches.get(s); if (!c) { c = new Map(); caches.set(s, c); } return c; };
 
 export function revisionIndex(store: Store, revision: string): RevisionIndex {
+  const cache = cacheOf(store);
   const hit = cache.get(revision);
   if (hit) return hit;
   const degree = new Map<string, number>(), neighbors = new Map<string, Set<string>>();
@@ -63,9 +67,15 @@ export function scoreEntity(e: Entity, ctx: SalienceContext): Scored {
   const name = e.name.toLowerCase(), path = e.file.toLowerCase();
   const factors: FactorScore[] = [];
 
-  const hits = ctx.terms.filter((t) => name.includes(t) || path.includes(t));
-  const nameHits = ctx.terms.filter((t) => name.includes(t)).length;
-  let task = Math.min(1, (nameHits * 2 + (hits.length - nameHits)) / 3);
+  // A word and its stem ("authentication", "auth") are one concept, so a name that says it once is not worth two hits, and a
+  // name that repeats it is not worth more. A directory named for the concept is a strong match; a path that merely contains it, a weak one.
+  const groups: string[][] = [];
+  for (const t of [...ctx.terms].sort((a, b) => a.length - b.length)) { const g = groups.find((x) => x.some((y) => t.startsWith(y) || y.startsWith(t))); if (g) g.push(t); else groups.push([t]); }
+  const dirs = path.split("/").slice(0, -1).flatMap((d) => d.split(/[._-]+/)).filter(Boolean);
+  const stem = (path.split("/").pop() ?? "").replace(/\.[a-z0-9]+$/, "").split(/[._-]+/).filter(Boolean);
+  const gscore: number[] = groups.map((g) => (g.some((t) => name.includes(t)) ? 1 : g.some((t) => dirs.some((x) => x === t || (t.length >= 3 && x.startsWith(t)))) ? 0.9 : g.some((t) => stem.some((x) => x === t || (t.length >= 3 && x.startsWith(t)))) ? 0.6 : g.some((t) => path.includes(t)) ? 0.45 : 0));
+  const hits = groups.filter((_, i) => gscore[i] > 0).map((g) => g[g.length - 1]);
+  let task = Math.min(1, gscore.reduce((a, b) => a + b, 0) / 1.5);
   let taskReason = hits.length ? `matches question term(s): ${hits.join(", ")}` : "no question term in its name or path";
   let taskEv: string[] = [];
   const boost = ctx.taskBoost?.get(e.entityId);

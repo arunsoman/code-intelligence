@@ -214,3 +214,58 @@ test("forms with their own layout keep their positions; lanes and walls become p
   assert.equal(r.nodes.find((n) => n.id === "n:a")!.inTx, true);
   assert.equal(r.nodes.find((n) => n.id === "n:b")!.inTx, undefined);
 });
+
+import { cellKey } from "../src/graph.ts";
+
+test("a matrix follows verdicts like the graph does: a refuted claim removes its cells, a stale one marks them, facts are not rewritten", () => {
+  const cell = (row: string, col: string, over: object) => ({ row, col, state: "enforced", displayMode: "INFERENCE" as const, evidenceIds: ["x"], note: "n", ...over });
+  const v: ViewSpec = {
+    ...view, formId: "PolicyMap", nodes: [node("n:a", "src/a.ts")], edges: [], groups: [],
+    matrix: {
+      rowTitle: "Route", colTitle: "Rule", emptyMeaning: "", states: { enforced: { label: "enforced", glyph: "✓", description: "" } },
+      rows: [{ id: "r1", label: "r1", entityRefs: [], evidenceIds: [] }], cols: [1, 2, 3, 4].map((i) => ({ id: `c${i}`, label: `c${i}`, entityRefs: [], evidenceIds: [] })),
+      cells: [cell("r1", "c1", { claimId: "k1" }), cell("r1", "c2", { claimId: "k2" }), cell("r1", "c3", { claimId: "k3", displayMode: "HYPOTHESIS" }), cell("r1", "c4", { displayMode: "FACT" })],
+    },
+  };
+  const e = effectiveView(v, { k1: claim("k1", { displayMode: "HIDDEN", state: "REFUTED" }), k2: claim("k2", { displayMode: "INFERENCE", state: "STALE" }), k3: claim("k3", { displayMode: "INFERENCE" }) });
+  const cells = e.view.matrix!.cells;
+  assert.deepEqual(cells.map((c) => c.col), ["c2", "c3", "c4"], "the refuted claim's cell is gone");
+  assert.equal(cells.find((c) => c.col === "c3")!.displayMode, "INFERENCE", "a hypothesis cell follows its claim's mode");
+  assert.equal(cells.find((c) => c.col === "c4")!.displayMode, "FACT", "static facts are never rewritten by a verdict");
+  assert.ok(e.stale.has(cellKey({ row: "r1", col: "c2" })) && !e.stale.has(cellKey({ row: "r1", col: "c3" })));
+  assert.equal(v.matrix!.cells.length, 4, "the original view is untouched");
+});
+
+test("collapse and expand are orphan-free: at every level each edge has both ends, each member sits in exactly one rendered element, and evidence is carried up", () => {
+  const pos = basePositions(view);
+  for (let level = 1; level <= 5; level++) {
+    const r = render(view, level, pos);
+    const ids = new Set(r.nodes.map((n) => n.id));
+    for (const e of r.edges) assert.ok(ids.has(e.from) && ids.has(e.to), `level ${level}: edge ${e.id} has a missing end`);
+    for (const g of r.groups) if (g.parent) assert.ok(r.groups.some((x) => x.id === g.parent), `level ${level}: group ${g.id} lost its parent`);
+    const count = new Map<string, number>();
+    for (const n of r.nodes) for (const m of n.members) count.set(m, (count.get(m) ?? 0) + 1);
+    for (const [m, c] of count) assert.equal(c, 1, `level ${level}: ${m} appears in ${c} rendered elements`);
+    if (level <= 3) for (const n of view.nodes) assert.equal(count.get(n.id), 1, `level ${level}: ${n.id} was orphaned by collapsing`);
+    // Evidence is transported: an aggregated edge carries the evidence of every edge folded into it.
+    for (const e of r.edges) {
+      const folded = view.edges.filter((x) => e.edgeIds.includes(x.id));
+      assert.deepEqual([...e.evidenceIds].sort(), [...new Set(folded.flatMap((x) => x.evidenceIds))].sort());
+    }
+  }
+  // Expanding again restores the original elements with their own identities.
+  const back = render(view, 5, pos);
+  assert.deepEqual(back.nodes.map((n) => n.id).sort(), view.nodes.map((n) => n.id).sort());
+});
+
+test("identity-preserving zoom: element ids, evidence and selection survive going out and back in", () => {
+  const pos = basePositions(view);
+  const before = render(view, 5, pos);
+  const out = render(view, 3, pos);
+  const again = render(view, 5, pos);
+  assert.deepEqual(again.nodes.map((n) => [n.id, n.evidenceIds ?? n.node?.evidenceIds, n.displayMode]), before.nodes.map((n) => [n.id, n.evidenceIds ?? n.node?.evidenceIds, n.displayMode]));
+  assert.deepEqual([...selectedAggregates(out, ["n:a"])], ["agg:file:src/auth/x.ts"]);
+  assert.deepEqual([...selectedAggregates(again, ["n:a"])], ["n:a"], "the same selection finds the same element after zooming back in");
+  for (const n of out.nodes) assert.ok(n.members.every((m) => view.nodes.some((x) => x.id === m)), "aggregates are made of real elements");
+  assert.equal(view.nodes[0].id, "n:a", "the view itself is not rewritten by zooming");
+});

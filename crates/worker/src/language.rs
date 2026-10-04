@@ -28,6 +28,8 @@ pub struct RawCall {
     pub callee: String,
     /// Receiver text for member calls (`this`, `obj`, ...).
     pub receiver: Option<String>,
+    /// Declared type of the receiver when the language states it (Java fields and parameters, Go receivers, annotated Python parameters).
+    pub recv_type: Option<String>,
     pub start: usize,
     pub end: usize,
 }
@@ -57,6 +59,8 @@ pub struct RawChannel {
 pub struct RawWrite {
     pub caller: Option<usize>,
     pub field: String,
+    /// The object the field is written on (`account.balance` → "account"), when statically present.
+    pub receiver: Option<String>,
     pub start: usize,
     pub end: usize,
 }
@@ -65,6 +69,7 @@ pub struct RawWrite {
 pub struct RawRead {
     pub caller: Option<usize>,
     pub field: String,
+    pub receiver: Option<String>,
     pub start: usize,
     pub end: usize,
 }
@@ -95,8 +100,18 @@ pub struct RawDeclaration {
     pub end: usize,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone)]
+pub struct RawLock {
+    pub caller: Option<usize>,
+    /// The lock object this call locks (receiver text, or the function name for bare helpers like `withLock(fn)`).
+    pub object: String,
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Default, Clone)]
 pub struct RawFile {
+    pub semantic: Vec<RawSemantic>,
     pub symbols: Vec<RawSymbol>,
     pub imports: Vec<RawImport>,
     pub calls: Vec<RawCall>,
@@ -105,8 +120,45 @@ pub struct RawFile {
     pub writes: Vec<RawWrite>,
     pub reads: Vec<RawRead>,
     pub txs: Vec<RawTx>,
+    pub locks: Vec<RawLock>,
     pub declarations: Vec<RawDeclaration>,
     pub had_errors: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct RawSemantic {
+    pub caller: Option<usize>,
+    pub value: serde_json::Value,
+    pub start: usize,
+    pub end: usize,
+}
+
+/// Versioned syntactic facts; lexical containment is not promoted to alias or effect resolution.
+pub fn semantic_event(node: Node, caller: Option<usize>, src: &[u8]) -> Option<RawSemantic> {
+    let kind = match node.kind() {
+        "await_expression" | "await" => "AWAIT",
+        "for_statement" | "for_in_statement" | "while_statement" | "do_statement" | "for_expression" | "while_expression" | "loop_expression" | "enhanced_for_statement" => "LOOP",
+        "if_statement" | "if_expression" => "BRANCH",
+        "call_expression" | "method_invocation" | "call" => "CALL",
+        _ => return None,
+    };
+    let mut loops = Vec::new();
+    let mut conditions = Vec::new();
+    let mut parent = node.parent();
+    while let Some(p) = parent {
+        if matches!(p.kind(), "function_declaration" | "function_item" | "arrow_function" | "function_expression" | "method_definition" | "closure_expression" | "method_declaration" | "function_definition" | "func_literal" | "lambda_expression" | "lambda" | "constructor_declaration") { break; }
+        if matches!(p.kind(), "for_statement" | "for_in_statement" | "while_statement" | "do_statement" | "for_expression" | "while_expression" | "loop_expression" | "enhanced_for_statement") { loops.push(p.start_byte()); }
+        if matches!(p.kind(), "if_statement" | "if_expression") {
+            if let Some(c) = p.child_by_field_name("condition") { conditions.push(c.utf8_text(src).unwrap_or("").to_owned()); }
+        }
+        parent = p.parent();
+    }
+    let callee = node.child_by_field_name("function").or_else(|| node.child_by_field_name("name")).map(|f| f.utf8_text(src).unwrap_or("").to_owned());
+    Some(RawSemantic { caller, start: node.start_byte(), end: node.end_byte(), value: serde_json::json!({
+        "schemaId": "defect.semantic-event.v1", "schemaVersion": 1,
+        "value": { "kind": kind, "callee": callee, "enclosingLoops": loops, "pathConditions": conditions,
+          "effectResolution": "UNKNOWN", "aliasResolution": "UNKNOWN", "controlFlowResolution": "LEXICAL_ONLY" }
+    }) })
 }
 
 const PUBLISH: &[&str] = &["publish", "emit", "enqueue", "send", "dispatch"];
@@ -114,6 +166,8 @@ const SUBSCRIBE: &[&str] = &["subscribe", "on", "consume", "process", "listen"];
 const WRITERS: &[&str] = &["update", "set", "save", "insert", "upsert", "exec", "create", "increment", "decrement"];
 const TX: &[&str] = &["transaction", "withTransaction", "beginTransaction", "runInTransaction", "$transaction"];
 const TEST_FNS: &[&str] = &["it", "test", "describe"];
+const LOCK_FNS: &[&str] = &["lock", "acquire", "readLock", "writeLock", "rLock", "withLock", "with_lock", "synchronized", "try_lock"];
+pub fn lockish(s: &str) -> bool { let l = s.to_ascii_lowercase(); l.contains("lock") || l.contains("mutex") || l.contains("semaphore") || l.contains("atomic") }
 
 pub fn parse_ts(src: &str, tsx: bool) -> RawFile {
     let mut parser = Parser::new();
@@ -168,6 +222,7 @@ impl<'a> Walker<'a> {
     }
 
     fn visit(&mut self, node: Node, enclosing: Option<usize>, class: Option<String>, exported: bool) {
+        if let Some(event) = semantic_event(node, enclosing, self.src) { self.out.semantic.push(event); }
         match node.kind() {
             "export_statement" => {
                 let mut c = node.walk();
@@ -243,7 +298,8 @@ impl<'a> Walker<'a> {
                 if let Some(l) = node.child_by_field_name("left") {
                     if l.kind() == "member_expression" {
                         if let Some(p) = l.child_by_field_name("property") {
-                            self.out.writes.push(RawWrite { caller: enclosing, field: self.text(p), start: node.start_byte(), end: node.end_byte() });
+                            let receiver = l.child_by_field_name("object").filter(|o| matches!(o.kind(), "identifier" | "member_expression" | "this")).map(|o| self.text(o));
+                            self.out.writes.push(RawWrite { caller: enclosing, field: self.text(p), receiver, start: node.start_byte(), end: node.end_byte() });
                         }
                     }
                 }
@@ -254,7 +310,8 @@ impl<'a> Walker<'a> {
                     let assigned = matches!(parent.kind(), "assignment_expression" | "augmented_assignment_expression") && parent.child_by_field_name("left").map_or(false, |l| l.id() == node.id());
                     let called = parent.kind() == "call_expression" && parent.child_by_field_name("function").map_or(false, |f| f.id() == node.id());
                     if !assigned && !called {
-                        self.out.reads.push(RawRead { caller: enclosing, field: self.text(p), start: node.start_byte(), end: node.end_byte() });
+                        let receiver = node.child_by_field_name("object").filter(|o| matches!(o.kind(), "identifier" | "member_expression" | "this")).map(|o| self.text(o));
+                        self.out.reads.push(RawRead { caller: enclosing, field: self.text(p), receiver, start: node.start_byte(), end: node.end_byte() });
                     }
                 }
             }
@@ -315,6 +372,22 @@ impl<'a> Walker<'a> {
         if TX.contains(&name.as_str()) {
             self.out.txs.push(RawTx { caller: enclosing, start: s, end: e });
         }
+        // Lock acquisition: `x.lock()` / `x.acquire()` / `withLock(...)` where the receiver looks
+        // like a lock. Recorded as a fact so the race-window view can honour them.
+        let is_member = node.child_by_field_name("function").map_or(false, |f| f.kind() == "member_expression");
+        let recv_name = if is_member {
+            node.child_by_field_name("function")
+                .and_then(|f| f.child_by_field_name("object"))
+                .filter(|o| matches!(o.kind(), "identifier" | "member_expression"))
+                .map(|o| self.text(o))
+        } else { None };
+        let bare_lock = !is_member && LOCK_FNS.contains(&name.as_str());
+        let receiver = recv_name.unwrap_or_default();
+        let looks_lockish = bare_lock || (LOCK_FNS.contains(&name.as_str()) && (receiver.is_empty() || lockish(&receiver)));
+        if looks_lockish {
+            let obj = if receiver.is_empty() { name.clone() } else { receiver };
+            self.out.locks.push(RawLock { caller: enclosing, object: obj, start: s, end: e });
+        }
         let is_member = node.child_by_field_name("function").map_or(false, |f| f.kind() == "member_expression");
         if is_member {
             if let Some(topic) = self.first_string_arg(node) {
@@ -350,7 +423,16 @@ impl<'a> Walker<'a> {
                             _ => None,
                         };
                         if let Some(k) = key {
-                            self.out.writes.push(RawWrite { caller: enclosing, field: k.trim_matches(|c| c == '"' || c == '\'').to_string(), start: pair.start_byte(), end: pair.end_byte() });
+                            // A literal write whose value is a member access inherits that receiver
+                            // (`{ balance: account.balance }` writes account.balance, not a bare field).
+                            let receiver = (pair.kind() == "pair")
+                                .then(|| pair.child_by_field_name("value"))
+                                .flatten()
+                                .filter(|v| v.kind() == "member_expression")
+                                .and_then(|v| v.child_by_field_name("object"))
+                                .filter(|o| matches!(o.kind(), "identifier" | "member_expression"))
+                                .map(|o| self.text(o));
+                            self.out.writes.push(RawWrite { caller: enclosing, field: k.trim_matches(|c| c == '"' || c == '\'').to_string(), receiver, start: pair.start_byte(), end: pair.end_byte() });
                         }
                     }
                 }
@@ -377,6 +459,7 @@ impl<'a> Walker<'a> {
             caller: enclosing,
             callee,
             receiver,
+            recv_type: None,
             start: node.start_byte(),
             end: node.end_byte(),
         });

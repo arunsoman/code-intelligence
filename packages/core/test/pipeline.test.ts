@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { appendFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { StubProvider } from "@cie/model";
 import type { ModelProvider, ModelRequest } from "@cie/schema";
-import { ctx, setup } from "./helpers.ts";
+import { Service } from "../src/service.ts";
+import { Store } from "../src/store.ts";
+import { WorkerClient } from "../src/worker.ts";
+import { copyFixture, ctx, setup } from "./helpers.ts";
 
 test("auth question yields an auth-focused map with evidenced FACT edges", async () => {
   const { svc, worker, revision } = await setup();
@@ -110,4 +115,59 @@ test("explain rejects unknown entities and empty selection", async () => {
   const b = await svc.explain(ctx(), { revision, entityIds: [] });
   assert.ok(!b.ok && b.error.code === "INVALID_SCHEMA");
   worker.close();
+});
+
+// ---- post-MVP: incremental re-index (CE-3 region-level reuse + revision dedupe) ----
+test("re-indexing an unchanged repository reuses every parse and returns the same revision", async () => {
+  const repo = copyFixture();
+  const worker = new WorkerClient();
+  const svc = new Service(new Store(":memory:"), worker, new StubProvider());
+  const first = await svc.ingestRepository(ctx(), { repoPath: repo });
+  assert.ok(first.ok);
+  const second = await svc.ingestRepository(ctx(), { repoPath: repo });
+  assert.ok(second.ok);
+  assert.equal(second.value.id, first.value.id, "content-addressed revision does not change");
+  assert.ok(second.value.reuse && second.value.reuse.of > 0, "worker reports reused parses");
+  worker.close();
+  rmSync(repo, { recursive: true, force: true });
+});
+
+test("re-indexing after an edit re-parses only the changed file", async () => {
+  const repo = copyFixture();
+  const file = join(repo, "src/db/users.ts");
+  const worker = new WorkerClient();
+  const svc = new Service(new Store(":memory:"), worker, new StubProvider());
+  const first = await svc.ingestRepository(ctx(), { repoPath: repo });
+  assert.ok(first.ok);
+  appendFileSync(file, "\nexport function brandNew() { return 42; }\n");
+  const second = await svc.ingestRepository(ctx(), { repoPath: repo });
+  assert.ok(second.ok);
+  assert.notEqual(second.value.id, first.value.id);
+  assert.ok(second.value.reuse, "incremental info reported");
+  assert.ok(second.value.reuse.files < second.value.reuse.of, `some parses were reused: ${JSON.stringify(second.value.reuse)}`);
+  assert.ok(second.metadata.warnings.some((w) => /Incremental: parsed/.test(w)), `warnings mention it: ${second.metadata.warnings}`);
+  const stats = await svc.revisionStats(ctx(), { revision: second.value.id });
+  assert.ok(stats.ok && stats.value.symbols > 0);
+  worker.close();
+  rmSync(repo, { recursive: true, force: true });
+});
+
+test("changesBetweenRevisions reports added/changed/removed elements between two revisions", async () => {
+  const repo = copyFixture();
+  const file = join(repo, "src/db/users.ts");
+  const worker = new WorkerClient();
+  const svc = new Service(new Store(":memory:"), worker, new StubProvider());
+  const first = await svc.ingestRepository(ctx(), { repoPath: repo });
+  assert.ok(first.ok);
+  appendFileSync(file, "\nexport function brandNew() { return 42; }\n");
+  const second = await svc.ingestRepository(ctx(), { repoPath: repo });
+  assert.ok(second.ok);
+  const r = await svc.changesBetweenRevisions(ctx(), { fromRevision: first.value.id, toRevision: second.value.id });
+  assert.ok(r.ok);
+  assert.equal(r.value.fromRevision, first.value.id);
+  assert.equal(r.value.toRevision, second.value.id);
+  assert.equal(r.value.files.added.length, 0);
+  assert.ok(r.value.affectedNodes.some((n) => n.label === "brandNew" && n.change === "added"));
+  worker.close();
+  rmSync(repo, { recursive: true, force: true });
 });

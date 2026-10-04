@@ -206,7 +206,7 @@ export function applyVerdict(store: Store, req: { claimId: string; verdict: Verd
       state: req.verdict === "CONFIRM" ? "CONFIRMED" : req.verdict === "REFUTE" ? "REFUTED" : claim.state,
       gates: claim.gates.map((g) => (g.gate === "DISPLAY" ? gate : g)),
     };
-    store.putClaim(next);
+    store.putClaim(next, req.actorId, `verdict.${req.verdict.toLowerCase()}`);
     // A refutation invalidates everything derived from it, transitively; those claims need re-checking.
     const affected: Claim[] = [];
     if (req.verdict === "REFUTE") {
@@ -217,7 +217,7 @@ export function applyVerdict(store: Store, req: { claimId: string; verdict: Verd
           if (seen.has(dep.draft.id)) continue;
           seen.add(dep.draft.id);
           const stale: Claim = { ...dep, version: dep.version + 1, state: "STALE", displayMode: dep.displayMode === "HIDDEN" ? "HIDDEN" : "HYPOTHESIS" };
-          store.putClaim(stale);
+          store.putClaim(stale, req.actorId, "stale.dependency");
           affected.push(stale);
           queue.push(dep.draft.id);
         }
@@ -226,4 +226,17 @@ export function applyVerdict(store: Store, req: { claimId: string; verdict: Verd
     store.audit(req.actorId, `claim.${req.verdict.toLowerCase()}`, claim.draft.id, { version: next.version, affected: affected.map((c) => c.draft.id) });
     return { ok: true, claim: next, affected };
   });
+}
+
+/**
+ * Text written by a model is shown to people next to evidence-backed facts, so it must not pass for one. A summary or caption that
+ * claims certainty, carries a link, or speaks to its reader as a system prompt is replaced by the deterministic fallback;
+ * display modes already come from the gates, so this only stops the words from contradicting them.
+ */
+const CERTAINTY = /\b(?:fact|verified|proven|proved|guaranteed|certified|definitely|undeniabl[ey]|100\s?%)\b/i;
+const LINK = /\bhttps?:\/\/|\bwww\./i;
+const ORDERS = /\b(?:ignore|disregard|forget)\b.{0,30}\b(?:previous|prior|above|all)\b.{0,20}\binstructions?\b|\bsystem\s*:|\bsend\b.{0,40}\b(?:to|at)\b.{0,10}https?:/i;
+export function modelText(text: string, fallback: string): { text: string; replaced: boolean } {
+  if (CERTAINTY.test(text) || LINK.test(text) || ORDERS.test(text)) return { text: fallback, replaced: true };
+  return { text, replaced: false };
 }

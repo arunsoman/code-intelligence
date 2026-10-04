@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "build:worker": "cargo build --release",
-    "test": "cargo test && node --test packages/core/test/*.test.ts packages/model/test/*.test.ts apps/web/test/*.test.ts extensions/vscode/test/*.test.ts packages/reporter/test/*.test.ts",
+    "test": "cargo test && node --test packages/core/test/*.test.ts packages/model/test/*.test.ts apps/web/test/*.test.ts apps/web/test/e2e/*.test.ts extensions/vscode/test/*.test.ts packages/reporter/test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "web:build": "npm -w apps/web run build",
     "start": "node packages/core/src/server.ts",

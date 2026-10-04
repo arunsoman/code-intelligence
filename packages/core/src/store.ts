@@ -1,21 +1,27 @@
 // SQLite persistence (C31 slice) on node:sqlite. All reads are revision-bound.
+import { failpoint } from "./failpoint.ts";
+import { canTransition } from "./claim-ledger.ts";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
-import type { AnalysisBatch, Claim, ConceptCard, Entity, EvidenceRef, Fact, Relationship, Verdict } from "@cie/schema";
+import { migrate } from "./migrations.ts";
+import type { AnalysisBatch, Claim, ConceptCard, Entity, EvidenceRef, Fact, JobView, Relationship, Verdict } from "@cie/schema";
 
 export interface RevisionRow { id: string; repoRoot: string; gitHead: string | null; createdAt: string; analyzerVersion: string; diagnostics: AnalysisBatch["diagnostics"]; fileCount: number }
 
 export class Store {
   readonly db: DatabaseSync;
+  readonly path: string;
 
   constructor(path = process.env.CIE_DB ?? ".cie/cie.db") {
+    this.path = path;
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new DatabaseSync(path);
     this.db.exec(`
       pragma journal_mode = wal;
       pragma foreign_keys = on;
+      pragma busy_timeout = 8000;
       create table if not exists revisions(id text primary key, repo_root text not null, git_head text, created_at text not null, analyzer_version text not null, diagnostics text not null, file_count integer not null);
       create table if not exists entities(revision text not null, entity_id text not null, kind text not null, name text not null, file text not null, json text not null, primary key(revision, entity_id));
       create index if not exists entities_file on entities(revision, file);
@@ -39,8 +45,10 @@ export class Store {
       create table if not exists exceptions(id text primary key, fingerprint text not null unique, error_class text not null, message text not null, trace text not null, source text not null, count integer not null, first_seen text not null, last_seen text not null, dismissed integer not null default 0);
       create table if not exists test_runs(repo_root text primary key, json text not null);
       create table if not exists overrides(repo_root text not null, entity_id text not null, mode text not null, updated_at text not null, primary key(repo_root, entity_id));
+      create table if not exists jobs(id text primary key, idem text unique, kind text not null, state text not null, params text not null, json text not null, created_at text not null);
       create table if not exists repo_policy(repo_root text primary key, allow_hosted integer not null, updated_at text not null);
     `);
+    migrate(this.db);
   }
 
   /** Atomic: either the whole revision is stored or none of it. */
@@ -53,6 +61,7 @@ export class Store {
       this.db.prepare("insert into revisions values (?,?,?,?,?,?,?)").run(row.id, row.repoRoot, row.gitHead, row.createdAt, row.analyzerVersion, JSON.stringify(row.diagnostics), files);
       const ie = this.db.prepare("insert into entities values (?,?,?,?,?,?)");
       for (const e of b.entities) ie.run(b.revision, e.entityId, e.kind, e.name, e.file, JSON.stringify(e));
+      failpoint("index.commit"); // test hook: a crash here must leave no revision at all
       const ir = this.db.prepare("insert or ignore into relationships values (?,?,?,?,?,?)");
       const ev = this.db.prepare("insert or ignore into evidence values (?,?,?)");
       for (const r of b.relationships) {
@@ -70,33 +79,40 @@ export class Store {
 
   tx<T>(fn: () => T): T {
     this.db.exec("begin immediate");
-    try { const v = fn(); this.db.exec("commit"); return v; } catch (e) { this.db.exec("rollback"); throw e; }
+    try { const v = fn(); this.db.exec("commit"); return v; } catch (e) {
+      // Some errors (disk full, I/O) make SQLite roll the transaction back itself; rolling back again would hide the real error.
+      try { if (this.db.isTransaction) this.db.exec("rollback"); } catch { /* already rolled back */ }
+      throw e;
+    }
   }
 
-  revision(id: string): RevisionRow | null {
+  /** A revision of a revoked source reads as if it were not indexed (see isRevoked); `raw` is for the purge that deletes it. */
+  revision(id: string, raw = false): RevisionRow | null {
     const r = this.db.prepare("select * from revisions where id = ?").get(id) as any;
-    return r ? this.mapRev(r) : null;
+    return r && (raw || !this.isRevoked(r.repo_root)) ? this.mapRev(r) : null;
   }
+  hasRepo(repoRoot: string): boolean { return !!this.db.prepare("select 1 from revisions where repo_root = ? limit 1").get(repoRoot); }
 
   /** The revision indexed immediately before `id` for the same repository, if any. */
   previousRevision(id: string): RevisionRow | null {
     const cur = this.db.prepare("select rowid as rid, repo_root from revisions where id = ?").get(id) as any;
-    if (!cur) return null;
+    if (!cur || this.isRevoked(cur.repo_root)) return null;
     const r = this.db.prepare("select * from revisions where repo_root = ? and rowid < ? order by rowid desc limit 1").get(cur.repo_root, cur.rid) as any;
     return r ? this.mapRev(r) : null;
   }
   revisionsOf(repoRoot: string): RevisionRow[] {
+    if (this.isRevoked(repoRoot)) return [];
     return (this.db.prepare("select * from revisions where repo_root = ? order by rowid desc").all(repoRoot) as any[]).map((r) => this.mapRev(r));
   }
 
   allRevisionRoots(): { id: string; repoRoot: string }[] {
-    return (this.db.prepare("select r.id as id, r.repo_root as repo_root from revisions r where r.rowid = (select max(rowid) from revisions where repo_root = r.repo_root)").all() as any[]).map((x) => ({ id: x.id, repoRoot: x.repo_root }));
+    return (this.db.prepare("select r.id as id, r.repo_root as repo_root from revisions r where r.rowid = (select max(rowid) from revisions where repo_root = r.repo_root) and r.repo_root not in (select repo_root from repo_access where revoked = 1)").all() as any[]).map((x) => ({ id: x.id, repoRoot: x.repo_root }));
   }
 
   latestRevision(repoRoot?: string): RevisionRow | null {
     const r = (repoRoot
-      ? this.db.prepare("select * from revisions where repo_root = ? order by rowid desc limit 1").get(repoRoot)
-      : this.db.prepare("select * from revisions order by rowid desc limit 1").get()) as any;
+      ? this.db.prepare("select * from revisions where repo_root = ? and repo_root not in (select repo_root from repo_access where revoked = 1) order by rowid desc limit 1").get(repoRoot)
+      : this.db.prepare("select * from revisions where repo_root not in (select repo_root from repo_access where revoked = 1) order by rowid desc limit 1").get()) as any;
     return r ? this.mapRev(r) : null;
   }
 
@@ -167,9 +183,18 @@ export class Store {
   }
 
   // ---- claims & verdicts ----
-  putClaim(c: Claim) {
+  putClaim(c: Claim, actor = "system", event = "gate") {
+    const prev = this.db.prepare("select state, version from claims where id = ?").get(c.draft.id) as any;
+    const from = (prev?.state ?? null) as Claim["state"] | null;
+    // A re-derivation of the same claim (event "gate") never erases what a person decided: a refuted or confirmed claim keeps its verdicts and state.
+    if (event === "gate" && prev && (prev.state === "REFUTED" || prev.state === "CONFIRMED" || prev.state === "RETIRED") && c.verdicts.length === 0) return;
+    if (!canTransition(from, c.state)) throw new Error(`illegal claim transition ${from} -> ${c.state} for ${c.draft.id}`);
     this.db.prepare("insert into claims values (?,?,?,?,?,?) on conflict(id) do update set version=excluded.version, state=excluded.state, json=excluded.json")
       .run(c.draft.id, c.draft.revision, c.version, c.state, c.draft.claimClass, JSON.stringify(c));
+    if (!prev || prev.state !== c.state || prev.version !== c.version) {
+      const seq = Number((this.db.prepare("select coalesce(max(seq),0)+1 as n from claim_events where claim_id = ?").get(c.draft.id) as any).n);
+      this.db.prepare("insert into claim_events values (?,?,?,?,?,?,?,?,?,?)").run(c.draft.id, seq, event, from, c.state, c.displayMode, c.version, actor, new Date().toISOString(), JSON.stringify({ gates: c.gates.map((g) => `${g.gate}:${g.status}`) }));
+    }
   }
   getClaim(id: string): Claim | null {
     const r = this.db.prepare("select json from claims where id = ?").get(id) as any;
@@ -205,6 +230,32 @@ export class Store {
   auditEvents(limit = 100) {
     return this.db.prepare("select seq, actor, action, resource, ts, meta from audit order by seq desc limit ?").all(limit) as any[];
   }
+  /**
+   * Deleting a source must not leave its name in the log. An authorized deletion replaces the name in the events that carry it
+   * and re-links the chain from the first changed event, so the chain still verifies; the redaction is itself recorded
+   * (how many events, never what). This is the one rewrite the log allows, and it exists only for deletion.
+   */
+  redactAudit(needles: string[], replacement = "(deleted source)"): number {
+    const ns = needles.filter((n) => n && n.length >= 6);
+    if (!ns.length) return 0;
+    const scrub = (v: string) => ns.reduce((x, n) => x.split(n).join(replacement), v);
+    return this.tx(() => {
+      const rows = this.db.prepare("select * from audit order by seq").all() as any[];
+      let changed = 0, prev = "genesis", rewriting = false;
+      for (const r of rows) {
+        const actor = scrub(r.actor), resource = scrub(r.resource), meta = scrub(r.meta);
+        const edited = actor !== r.actor || resource !== r.resource || meta !== r.meta;
+        if (edited) { changed++; rewriting = true; }
+        if (rewriting) {
+          const h = createHash("sha256").update([prev, actor, r.action, resource, r.ts, meta].join("|")).digest("hex");
+          this.db.prepare("update audit set actor = ?, resource = ?, meta = ?, prev_hash = ?, event_hash = ? where seq = ?").run(actor, resource, meta, prev, h, r.seq);
+          prev = h;
+        } else prev = r.event_hash;
+      }
+      return changed;
+    });
+  }
+
   verifyAuditChain(): { ok: boolean; brokenAt?: number } {
     let prev = "genesis";
     for (const r of this.db.prepare("select * from audit order by seq").all() as any[]) {
@@ -279,4 +330,57 @@ export class Store {
       }
     });
   }
+
+  // ---- jobs (C07) ----
+  putJob(job: JobView, idem: string | null) {
+    this.db.prepare("insert into jobs(id, idem, kind, state, params, json, created_at) values (?,?,?,?,?,?,?)").run(job.id, idem, job.kind, job.state, JSON.stringify(job.params), JSON.stringify(job), job.createdAt);
+  }
+  saveJob(job: JobView) {
+    this.db.prepare("update jobs set state = ?, json = ? where id = ?").run(job.state, JSON.stringify(job), job.id);
+  }
+  job(id: string): JobView | null {
+    const r = this.db.prepare("select json from jobs where id = ?").get(id) as { json: string } | undefined;
+    return r ? JSON.parse(r.json) : null;
+  }
+  jobByIdempotencyKey(idem: string): JobView | null {
+    const r = this.db.prepare("select json from jobs where idem = ?").get(idem) as { json: string } | undefined;
+    return r ? JSON.parse(r.json) : null;
+  }
+  /** Newest first. Finished jobs are kept for a short history only. */
+  jobs(limit = 20): JobView[] {
+    return (this.db.prepare("select json from jobs order by created_at desc, rowid desc limit ?").all(limit) as { json: string }[]).map((r) => JSON.parse(r.json));
+  }
+  /** Jobs still marked QUEUED or RUNNING when no runner exists belonged to a process that is gone; they cannot resume. */
+  activeJobs(): JobView[] {
+    return (this.db.prepare("select json from jobs where state in ('QUEUED','RUNNING') order by created_at, rowid").all() as { json: string }[]).map((r) => JSON.parse(r.json));
+  }
+  pruneJobs(keep = 50) {
+    this.db.prepare("delete from jobs where state not in ('QUEUED','RUNNING') and id not in (select id from jobs order by created_at desc, rowid desc limit ?)").run(keep);
+  }
+
+  // ---- access (C03 slice): denied paths and revoked sources ----
+  denyPath(repoRoot: string, prefix: string, deny = true) {
+    const p = prefix.replace(/^\.?\//, "").replace(/\/+$/, "");
+    if (deny) this.db.prepare("insert or ignore into access_deny values (?,?)").run(repoRoot, p);
+    else this.db.prepare("delete from access_deny where repo_root = ? and prefix = ?").run(repoRoot, p);
+  }
+  deniedPrefixes(repoRoot: string): string[] { return (this.db.prepare("select prefix from access_deny where repo_root = ? order by prefix").all(repoRoot) as { prefix: string }[]).map((r) => r.prefix); }
+  /** A revoked source is treated as if it were not indexed: nothing derived from it can be read, even before it is purged. */
+  isRevoked(repoRoot: string): boolean { const r = this.db.prepare("select revoked from repo_access where repo_root = ?").get(repoRoot) as { revoked: number } | undefined; return !!r?.revoked; }
+  setRevoked(repoRoot: string, revoked: boolean) {
+    this.db.prepare("insert into repo_access(repo_root, revoked, revoked_at) values (?,?,?) on conflict(repo_root) do update set revoked = excluded.revoked, revoked_at = excluded.revoked_at").run(repoRoot, revoked ? 1 : 0, revoked ? new Date().toISOString() : null);
+  }
+
+  // ---- embeddings (C10): one vector per entity, per revision, kept beside the data it describes ----
+  putEmbeddings(rev: string, rows: { entityId: string; vec: Float32Array }[]) {
+    this.tx(() => {
+      const st = this.db.prepare("insert or replace into embeddings values (?,?,?,?)");
+      for (const r of rows) st.run(rev, r.entityId, r.vec.length, new Uint8Array(r.vec.buffer, r.vec.byteOffset, r.vec.byteLength));
+    });
+  }
+  embeddings(rev: string): { entityId: string; vec: Float32Array }[] {
+    return (this.db.prepare("select entity_id, dim, vec from embeddings where revision = ?").all(rev) as { entity_id: string; dim: number; vec: Uint8Array }[])
+      .map((r) => ({ entityId: r.entity_id, vec: new Float32Array(r.vec.buffer.slice(r.vec.byteOffset, r.vec.byteOffset + r.vec.byteLength)) }));
+  }
+  hasEmbeddings(rev: string): boolean { return Number((this.db.prepare("select count(*) n from embeddings where revision = ?").get(rev) as { n: number }).n) > 0; }
 }

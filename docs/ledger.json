@@ -1,0 +1,1394 @@
+{
+ "C01": {
+  "title": "Client shells and IDE bridge",
+  "items": [
+   {
+    "item": "Keyboard-only complete investigation",
+    "tests": [
+     "keyboard-only complete investigation"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "screen-reader summaries",
+    "tests": [
+     "screen-reader summaries: the map has a name"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "stale/reordered IDE event fixtures",
+    "tests": [
+     "stale and reordered events are dropped, not applied over newer ones",
+     "events are sequenced per session, lines become 1-based",
+     "I-17\u2026I-20: code and runtime events"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C02": {
+  "title": "Event journal and command routing",
+  "items": [
+   {
+    "item": "Crash after commit/before publish",
+    "tests": [
+     "C02: crash after commit and before publish",
+     "C02: crash between a subscriber"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "duplicate event",
+    "tests": [
+     "C02: duplicate event"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "stale revision",
+    "tests": [
+     "C02: stale revision",
+     "stale expectedVersion is rejected with currentVersion"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "reconnect gap recovery",
+    "tests": [
+     "C02: reconnect gap recovery"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C03": {
+  "title": "Identity, authorization and egress policy",
+  "items": [
+   {
+    "item": "Cross-tenant retrieval/embedding/cache tests",
+    "tests": [
+     "C03: cross-tenant retrieval",
+     "C03: cross-tenant embeddings",
+     "C03: identity and authorization",
+     "C03: the gateway takes the caller"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "secret canaries",
+    "tests": [
+     "secret canaries are detected",
+     "scrubbing removes secret-bearing entities",
+     "clean bundles pass through unchanged",
+     "long file paths are not mistaken for keys"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "fail-closed egress",
+    "tests": [
+     "C03: fail-closed egress",
+     "egress: hosted models are blocked"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "source-permission revocation",
+    "tests": [
+     "C03: source-permission revocation"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C04": {
+  "title": "Repository and external-source connectors",
+  "items": [
+   {
+    "item": "Recorded contract fixtures, corrupted fields, credentials expiry, pagination, rate limits and webhook replay",
+    "tests": [
+     "recorded contract fixtures: three recorded pages",
+     "corrupted fields: the field-level contract",
+     "credential expiry: a refused or expired",
+     "pagination: a long listing",
+     "rate limits: a short limit",
+     "webhook replay: only a correctly signed"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C05": {
+  "title": "Language analysis and semantic adapters",
+  "items": [
+   {
+    "item": "Golden multi-language repositories",
+    "tests": [
+     "golden multi-language repository",
+     "Java (Spring Boot), Go and Python: a polyglot repository"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "cross-file references",
+    "tests": [
+     "cross-file references: imports and calls",
+     "Spring Boot: calls through injected fields",
+     "Go: packages, methods on receivers",
+     "Python: relative, absolute and aliased imports"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "dynamic dispatch",
+    "tests": [
+     "dynamic dispatch: computed calls",
+     "Go: packages, methods on receivers, typed struct fields across packages, panics, tests, and calls through maps that stay unknown"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "incremental vs clean-index equivalence",
+    "tests": [
+     "incremental vs clean-index equivalence",
+     "incremental vs clean index across Java, Go and Python"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C06": {
+  "title": "Configuration, schema and artifact analyzers",
+  "items": [
+   {
+    "item": "Route-to-handler, migration, queue binding and feature-flag fixtures with ambiguous and absent configuration",
+    "tests": [
+     "route-to-handler, migration, queue binding and feature-flag joins",
+     "absent configuration: with no migrations",
+     "ambiguity resolves by evidence only",
+     "routes in Spring, Flask and net/http"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C07": {
+  "title": "Incremental indexing and invalidation scheduler",
+  "items": [
+   {
+    "item": "Edit/deletion/rename/branch switch",
+    "tests": [
+     "edit: impact travels through reverse dependencies",
+     "deletion and rename: removed code",
+     "branch switch: moving to another branch"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "crash recovery",
+    "tests": [
+     "crash recovery: a kill -9 in the middle of committing"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "bounded RAM",
+    "tests": [
+     "bounded RAM: parser memory is measured"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "full-vs-incremental parity and freshness budgets",
+    "tests": [
+     "freshness and parity budgets",
+     "generation fence: a change that arrives"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C08": {
+  "title": "Canonical entity and revision registry",
+  "items": [
+   {
+    "item": "Rename continuity",
+    "tests": [
+     "rename continuity: a renamed function"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "duplicate names",
+    "tests": [
+     "duplicate names: the same name in two files"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "entity split/merge",
+    "tests": [
+     "entity split and merge"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "branch divergence",
+    "tests": [
+     "branch divergence: two lines of history"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "dispute reversals",
+    "tests": [
+     "dispute reversals: a person can dispute"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C09": {
+  "title": "Fact graph and projection query engine",
+  "items": [
+   {
+    "item": "Known graph oracles",
+    "tests": [
+     "C09: known graph oracles",
+     "C09: hand-made graphs"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "cycle handling",
+    "tests": [
+     "C09: cycle handling"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "deep traversal limits",
+    "tests": [
+     "C09: deep traversal limits"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "denied intermediate nodes",
+    "tests": [
+     "C09: denied intermediate nodes"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "reproducible projections",
+    "tests": [
+     "C09: projections are reproducible"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C10": {
+  "title": "Hybrid retrieval and evidence selection",
+  "items": [
+   {
+    "item": "Retrieval gold sets",
+    "tests": [
+     "C10: gold sets"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "adversarial distractors",
+    "tests": [
+     "C10: adversarial distractors"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "evidence recall",
+    "tests": [
+     "C10: evidence recall"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "inaccessible matches",
+    "tests": [
+     "C10: inaccessible matches"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "token-budget truncation disclosures",
+    "tests": [
+     "C10: token-budget truncation"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C11": {
+  "title": "Concept extraction and semantic memory",
+  "items": [
+   {
+    "item": "Seeded business concepts",
+    "tests": [
+     "seeded business concepts: the known concepts"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "incorrect merges",
+    "tests": [
+     "incorrect merges: one concept seen in parts"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "correction propagation",
+    "tests": [
+     "correction propagation: a refuted concept",
+     "a refuted card stops influencing ranking"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "regeneration after changed cited code",
+    "tests": [
+     "regeneration after changed cited code"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C12": {
+  "title": "Developer context, salience and persona engine",
+  "items": [
+   {
+    "item": "All six salience factors",
+    "tests": [
+     "All six salience factors:"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "why-hidden query",
+    "tests": [
+     "why-hidden query: a hidden element"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "pin override",
+    "tests": [
+     "pin override: a pin forces CRITICAL",
+     "overrides persist per repository"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "retention",
+    "tests": [
+     "retention: working memory is bounded",
+     "applyContextEvent: ordering is enforced"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "persona fidelity",
+    "tests": [
+     "persona fidelity: lenses reorder"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "event-to-context latency",
+    "tests": [
+     "event-to-context latency"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C13": {
+  "title": "Investigation workspace and visual memory",
+  "items": [
+   {
+    "item": "Kill/restart",
+    "tests": [
+     "kill/restart: after a kill -9"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "five-second checkpoint bound",
+    "tests": [
+     "five-second checkpoint bound"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "missing source",
+    "tests": [
+     "missing source: a workspace whose repository"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "stale claims",
+    "tests": [
+     "stale claims: a refuted claim"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "undo/redo and concurrent workspace edits",
+    "tests": [
+     "undo/redo are attributed events",
+     "concurrent workspace edits"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C14": {
+  "title": "Model gateway and budget controller",
+  "items": [
+   {
+    "item": "Provider failure",
+    "tests": [
+     "provider failure: a throwing provider"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "invalid JSON",
+    "tests": [
+     "invalid JSON: output that does not match",
+     "persistently invalid output fails"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "token caps",
+    "tests": [
+     "token caps: an evidence bundle over the cap"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "local-model feature degradation",
+    "tests": [
+     "local-model feature degradation"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "budget exhaustion and opt-in enforcement",
+    "tests": [
+     "budget exhaustion and opt-in enforcement",
+     "gateway charges the budget"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C15": {
+  "title": "Task planner and grounded reasoning",
+  "items": [
+   {
+    "item": "Authentication question",
+    "tests": [
+     "authentication question: the map holds"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "lasso referents",
+    "tests": [
+     "lasso explanation cites resolvable evidence",
+     "lasso relation query: a lasso"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "insufficient evidence",
+    "tests": [
+     "insufficient evidence: a question"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "prompt injection",
+    "tests": [
+     "prompt injection: repository text"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "bounded steps and cancellation",
+    "tests": [
+     "bounded steps: one question",
+     "cancellation: a model that never answers",
+     "jobs: cancelling during a model call stops at once"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C16": {
+  "title": "Claim verifier and display gates",
+  "items": [
+   {
+    "item": "Fabricated spans",
+    "tests": [
+     "fabricated spans: a claim citing"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "contradictory graph edge",
+    "tests": [
+     "contradictory graph edge: a claim whose hop"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "planted counterarguments",
+    "tests": [
+     "ungrounded model output is dropped",
+     "five gates are always reported"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "low-confidence hypothesis styling",
+    "tests": [
+     "low-confidence claims are never styled as facts"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "alarm without proof/required approvals rejected",
+    "tests": [
+     "alarm without proof or required approvals is rejected"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C17": {
+  "title": "Evaluation, calibration and research registry",
+  "items": [
+   {
+    "item": "Held-out expert labels",
+    "tests": [],
+    "state": "blocked",
+    "needs": "At least 8 independent human experts labelling a held-out set (protocol in evaluation.ts: MIN_EXPERTS). The labelling store, the held-out split, the synthetic-label rule and the expert-coverage report are built and tested (held-out expert labels test); the labels themselves can only come from people."
+   },
+   {
+    "item": "planted failures",
+    "tests": [
+     "planted failures: every planted leak"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "confidence-bin intervals",
+    "tests": [
+     "confidence-bin intervals: stated confidence"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "changed-model regression",
+    "tests": [
+     "changed-model regression: a model that finds fewer"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "measurable task-completion study",
+    "tests": [],
+    "state": "blocked",
+    "needs": "A task-completion study with real participants (at least 20, see MIN_PARTICIPANTS). The study record and analysis are built and tested (task-completion study test); generated data is labelled SYNTHETIC_DATA and is not reported as a study."
+   }
+  ]
+ },
+ "C18": {
+  "title": "Claim lifecycle and provenance ledger",
+  "items": [
+   {
+    "item": "Lifecycle transition matrix",
+    "tests": [
+     "lifecycle transition matrix"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "disputed claims",
+    "tests": [
+     "disputed claims are shown as hypotheses"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "correction updates all dependent views",
+    "tests": [
+     "correction updates all dependent claims",
+     "a matrix follows verdicts like the graph does"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "full evidence chain and historical replay",
+    "tests": [
+     "full evidence chain and historical replay"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C19": {
+  "title": "Representation planner and compiler",
+  "items": [
+   {
+    "item": "Invalid evidence reference",
+    "tests": [
+     "invalid evidence reference: a spec citing"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "orphan-free collapse/expand",
+    "tests": [
+     "collapse and expand are orphan-free"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "identity-preserving zoom",
+    "tests": [
+     "identity-preserving zoom: element ids"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "persona safety",
+    "tests": [
+     "persona safety: a spec that hides code"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "form-plugin conformance",
+    "tests": [
+     "form-plugin conformance: every registered form"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C20": {
+  "title": "Canvas, layout and visualization forms",
+  "items": [
+   {
+    "item": "Forms V1\u2013V15 contracts",
+    "tests": [
+     "every form at every level: no node overlaps",
+     "form-plugin conformance: every registered form"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "50 foreground/2k bounded elements where required",
+    "tests": [
+     "bounded views: at most 50 foreground",
+     "bounding never demotes a safety fact"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "p95 latency",
+    "tests": [
+     "p95 latency: rendering and laying out"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "layout stability",
+    "tests": [
+     "layout stability: the same view",
+     "separate: removes every overlap"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "accessibility and fog",
+    "tests": [
+     "accessibility and fog: every node",
+     "a11y audit: WCAG contrast"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C21": {
+  "title": "Interaction and referent resolver",
+  "items": [
+   {
+    "item": "I-01\u2026I-20 catalogues",
+    "tests": [
+     "interaction catalogue I-01",
+     "I-17\u2026I-20: code and runtime"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "stale selection",
+    "tests": [
+     "stale selection: a gesture made"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "lasso relation query",
+    "tests": [
+     "lasso relation query: a lasso"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "referent carryover",
+    "tests": [
+     "referent carryover: after a lasso"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "equivalent mouse/keyboard commands",
+    "tests": [
+     "equivalent mouse and keyboard commands"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C22": {
+  "title": "Hypothesis and agentic investigation engine",
+  "items": [
+   {
+    "item": "Seeded root cause",
+    "tests": [
+     "C22 contract: a seeded root cause",
+     "H01:"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "competing hypotheses",
+    "tests": [
+     "H01:",
+     "H05:",
+     "H06:"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "crash between steps",
+    "tests": [
+     "H12:"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "mid-flight steering",
+    "tests": [
+     "H11:",
+     "C22 contract: mid-flight steering"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "bounded tools",
+    "tests": [
+     "H08:",
+     "H16:",
+     "C22 contract: bounded tools"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "unresolved conclusion",
+    "tests": [
+     "H19 and the contract's unresolved conclusion"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H02 (design \u00a718)",
+    "tests": [
+     "H02: ten descriptions of one trace are o"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H03 (design \u00a718)",
+    "tests": [
+     "H03: a missing log line under sampling i"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H04 (design \u00a718)",
+    "tests": [
+     "H04: complete predicate coverage that co"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H07 (design \u00a718)",
+    "tests": [
+     "H07: unsupported entity or evidence ids "
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H09 (design \u00a718)",
+    "tests": [
+     "H09: two advances of the same version: o"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H10 (design \u00a718)",
+    "tests": [
+     "H10: pausing or cancelling while a read "
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H13 (design \u00a718)",
+    "tests": [
+     "H13: a late result from an expired lease"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H14 (design \u00a718)",
+    "tests": [
+     "H14: revoking access mid-run stops dispa"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H15 (design \u00a718)",
+    "tests": [
+     "H15: when the code a conclusion rests on"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H17 (design \u00a718)",
+    "tests": [
+     "H17: duplicated, reordered and retracted"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H18 (design \u00a718)",
+    "tests": [
+     "H18: a runtime event with no code attrib"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H20 (design \u00a718)",
+    "tests": [
+     "H20: a human confirmation that disagrees"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H21 (design \u00a718)",
+    "tests": [
+     "H21: after retention removes old events,"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H22 (design \u00a718)",
+    "tests": [
+     "H22: after deletion nothing private can "
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H23 (design \u00a718)",
+    "tests": [
+     "H23: a board update never moves the came"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H24 (design \u00a718)",
+    "tests": [
+     "H24: a visible experiment proposal is no"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H25 (design \u00a718)",
+    "tests": [
+     "H25: calibration is explicitly absent un"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H26 (design \u00a718)",
+    "tests": [
+     "H26: a universal goal gets bounded cover"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H27 (design \u00a718)",
+    "tests": [
+     "H27: an investigation step cannot start "
+    ],
+    "state": "done"
+   },
+   {
+    "item": "H28 (design \u00a718)",
+    "tests": [
+     "H28: a finalized investigation that rece"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C23": {
+  "title": "History, semantic PR and archaeology engine",
+  "items": [
+   {
+    "item": "Architectural change with tiny text diff",
+    "tests": [
+     "architectural change with a tiny text diff"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "issue evidence gap",
+    "tests": [
+     "issue evidence gap: commits name issues"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "merge/rename",
+    "tests": [
+     "merge and rename: a review thread follows",
+     "merge: when two functions are confirmed as merged"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "deleted symbols",
+    "tests": [
+     "deleted symbols: a thread on removed code"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "test-impact comparison",
+    "tests": [
+     "test-impact comparison: tests that reached"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C24": {
+  "title": "Runtime ingestion, attribution and replay",
+  "items": [
+   {
+    "item": "Missing marker",
+    "tests": [
+     "missing marker: with no deployment marker"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "impossible timestamp",
+    "tests": [
+     "impossible timestamp: spans that end before"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "sampling",
+    "tests": [
+     "sampling: a sampled signal"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "out-of-order spans",
+    "tests": [
+     "out-of-order spans: arrival order"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "revision mismatch",
+    "tests": [
+     "revision mismatch: spans from an older revision"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "replay and backpressure",
+    "tests": [
+     "replay and backpressure: ingest is idempotent",
+     "runtime signals matching what the person is looking at"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C25": {
+  "title": "Security, policy and invariant analysis",
+  "items": [
+   {
+    "item": "Seeded leak/authz gaps",
+    "tests": [
+     "seeded leak and authorisation gaps"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "false paths",
+    "tests": [
+     "false paths: sanitised"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "missing policy",
+    "tests": [
+     "missing policy: a required policy"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "alarm gating",
+    "tests": [
+     "alarm gating: a finding becomes an alarm"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "rule version traceability and proof/test evidence",
+    "tests": [
+     "rule version traceability",
+     "proof and test evidence: an invariant"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C26": {
+  "title": "Performance, concurrency and lifecycle analysis",
+  "items": [
+   {
+    "item": "Known N+1/lock/race fixtures",
+    "tests": [
+     "DP01: a realizable lock inversion",
+     "DP02: reentrant, try-lock",
+     "DP09: lock-per-iteration",
+     "DP10: static candidates",
+     "DP04: real TypeScript functions lose",
+     "C05/C26: actual indexed code"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "sampled traces",
+    "tests": [
+     "DP07/11: duplicate and overlapping spans",
+     "DP10: static candidates are ranked"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "lifecycle leak",
+    "tests": [
+     "C26 lifecycle:"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "controlled stress experiment and false-positive controls",
+    "tests": [
+     "DP12/20: stress on real code",
+     "DP06: ThreadSanitizer"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C27": {
+  "title": "Counterfactual scenario and simulation engine",
+  "items": [
+   {
+    "item": "Level-locked comparison",
+    "tests": [
+     "C27: comparison is level-locked"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "assumption tracking",
+    "tests": [
+     "C27: assumptions are tracked"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "invalid scenario",
+    "tests": [
+     "C27: invalid scenarios are refused",
+     "C27: through the service"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "measured-vs-inferred capacity",
+    "tests": [
+     "C27: capacity is measured"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "sandbox escape/timeout tests",
+    "tests": [
+     "DP14: a hostile function under stress",
+     "DP15/20: a run that exceeds its budget"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C28": {
+  "title": "Visual intent and change-proposal engine",
+  "items": [
+   {
+    "item": "Ambiguous drag",
+    "tests": [
+     "C28: an ambiguous drag is never guessed"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "stale patch base",
+    "tests": [
+     "C28: a proposal whose base has changed is stale"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "conflicting edits",
+    "tests": [
+     "C28: conflicting edits are caught"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "compile/test failure",
+    "tests": [
+     "C28: a change that does not compile"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "no-edit invariant",
+    "tests": [
+     "C28: a rename is exact edits"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "approvals and audit",
+    "tests": [
+     "C28: approvals and audit"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C29": {
+  "title": "Team collaboration and organization knowledge",
+  "items": [
+   {
+    "item": "Concurrent edits",
+    "tests": [
+     "concurrent edits: a stale version is a conflict"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "denied recipient",
+    "tests": [
+     "denied recipient: sharing cannot give anyone"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "correction in shared concept",
+    "tests": [
+     "correction in a shared concept"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "tenant boundary",
+    "tests": [
+     "tenant boundary: another organisation"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "handover source-access mismatch",
+    "tests": [
+     "handover with a source-access mismatch"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C30": {
+  "title": "Evidence-faithful exports and notifications",
+  "items": [
+   {
+    "item": "Export preserves confidence/revision",
+    "tests": [
+     "C30: an export preserves how each claim is known"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "forbidden source removal",
+    "tests": [
+     "C30: code the recipient may not see does not leave"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "revoked access",
+    "tests": [
+     "C30: revoked access reaches"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "webhook retry without duplicate delivery",
+    "tests": [
+     "C30: a webhook retried after a lost reply",
+     "C30: webhook failures are classified"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C31": {
+  "title": "Storage, retention and content lifecycle",
+  "items": [
+   {
+    "item": "Crash recovery",
+    "tests": [
+     "C31: crash recovery"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "backup restore",
+    "tests": [
+     "C31: backup restore"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "reference-count garbage collection",
+    "tests": [
+     "C31: reference-count garbage collection"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "deletion propagation",
+    "tests": [
+     "C31: deletion propagation"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "schema migration and multi-writer contention",
+    "tests": [
+     "C31: schema migration is atomic",
+     "C31: three processes writing"
+    ],
+    "state": "done"
+   }
+  ]
+ },
+ "C32": {
+  "title": "Operations, administration and release engineering",
+  "items": [
+   {
+    "item": "Dependency outages",
+    "tests": [
+     "C32: dependency outages"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "disk full",
+    "tests": [
+     "C32: disk full"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "migration rollback",
+    "tests": [
+     "C32: migration rollback"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "restore drill",
+    "tests": [
+     "C32: migration rollback"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "load/cost gates",
+    "tests": [
+     "C32: load and cost gates"
+    ],
+    "state": "done"
+   },
+   {
+    "item": "host/extension compatibility checks",
+    "tests": [
+     "C32: host and extension compatibility"
+    ],
+    "state": "done"
+   }
+  ]
+ }
+}

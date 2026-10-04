@@ -31,3 +31,13 @@ export class EventStream {
 export function reportable(uriScheme: string, fsPath: string): boolean {
   return uriScheme === "file" && fsPath.length > 0 && !fsPath.includes("/node_modules/");
 }
+
+/** Does this extension understand the server it is pointed at? Mirrors `compatibility` in the server's ops.ts (a test keeps them in step). */
+export function compatible(server: { api: string; minExtension: string }, ext: { version: string; api: string }): { ok: boolean; reason?: string } {
+  const parse = (v: string) => v.split(".").map((x) => Number(x) || 0);
+  const cmp = (a: string, b: string) => { const [x, y] = [parse(a), parse(b)]; for (let i = 0; i < 3; i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) < (y[i] ?? 0) ? -1 : 1; return 0; };
+  if (parse(server.api)[0] !== parse(ext.api)[0]) return { ok: false, reason: `the extension speaks API ${ext.api} and the server API ${server.api}; update whichever is older` };
+  if (cmp(ext.version, server.minExtension) < 0) return { ok: false, reason: `extension ${ext.version} is older than the ${server.minExtension} this server supports; update the extension` };
+  return { ok: true };
+}
+export const EXTENSION_API = "1.1.0";

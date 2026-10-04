@@ -1,0 +1,8 @@
+#!/bin/sh
+# Installed into an operator-reviewed pinned image as /opt/cie/tsan-run.
+set -eu
+test "$#" -eq 1
+case "$1" in /source/*.cc|/source/*.cpp) ;; *) exit 64 ;; esac
+clang++ -fsanitize=thread -g -O1 -pthread "$1" -o /work/reproduction
+sha256sum /work/reproduction
+exec /work/reproduction

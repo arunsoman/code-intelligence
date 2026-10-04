@@ -7,7 +7,9 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { createProvider } from "@cie/model";
 import type { ApiResult, CallContext } from "@cie/schema";
+import { Interactions } from "./interactions.ts";
 import { Service } from "./service.ts";
+import { TenantHost } from "./tenants.ts";
 import { Store } from "./store.ts";
 import { WorkerClient } from "./worker.ts";
 
@@ -17,8 +19,20 @@ const MAX_BODY = 8 * 1024 * 1024; // saved views and pasted traces can be large
 const WEB_DIST = fileURLToPath(new URL("../../../apps/web/dist/", import.meta.url));
 const MIME: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json" };
 
-export function buildHandler(svc: Service) {
+export type Identify = (req: IncomingMessage) => { principalId: string; tenantId: string; sessionId: string } | null;
+const LOCAL: Identify = () => ({ principalId: "local-user", tenantId: "local", sessionId: "local" });
+
+/**
+ * `target` is one service (single user, local) or a TenantHost (one isolated service per tenant). Who is calling comes from
+ * `identify`, which stands for the trusted transport (a reverse proxy that authenticated the caller); it is never read from
+ * the request body, and a null answer is a 401.
+ */
+export function buildHandler(target: Service | TenantHost, opts: { identify?: Identify } = {}) {
+  const identify = opts.identify ?? LOCAL;
   // Allowlisted public operations. Mutating ones require an Idempotency-Key header.
+  const interactionCache = new WeakMap<Service, Interactions>();
+  const interactionsOf = (svc: Service) => { let i = interactionCache.get(svc); if (!i) { i = new Interactions(svc); interactionCache.set(svc, i); } return i; };
+  const makeOps = (svc: Service) => {
   const ops: Record<string, { mutating: boolean; run: (ctx: CallContext, body: any) => Promise<ApiResult<unknown>> | ApiResult<unknown> }> = {
     "C01/status": { mutating: false, run: (c, b) => svc.status(c, b) },
     "C01/browseDirectory": { mutating: false, run: (c, b) => svc.browseDirectory(c, b) },
@@ -27,9 +41,28 @@ export function buildHandler(svc: Service) {
     "C03/setEgress": { mutating: true, run: (c, b) => svc.setEgress(c, b) },
     "C03/auditLog": { mutating: false, run: (c, b) => svc.auditLog(c, b) },
     "C04/ingestRepository": { mutating: true, run: (c, b) => svc.ingestRepository(c, b) },
+    "C07/enqueue": { mutating: true, run: (c, b) => svc.enqueueJob(c, b) },
+    "C07/getJob": { mutating: false, run: (c, b) => svc.getJob(c, b) },
+    "C07/listJobs": { mutating: false, run: (c, b) => svc.listJobs(c, b) },
+    "C07/cancelJob": { mutating: true, run: (c, b) => svc.cancelJob(c, b) },
+    "C32/health": { mutating: false, run: (c, b) => svc.health(c, b) },
+    "C32/version": { mutating: false, run: (c, b) => svc.version(c, b) },
+    "C31/backup": { mutating: true, run: (c, b) => svc.backup(c, b) },
+    "C31/gc": { mutating: false, run: (c, b) => svc.gc(c, b) },
+    "C31/deleteRepository": { mutating: true, run: (c, b) => svc.deleteRepository(c, b) },
+    "C02/eventsAfter": { mutating: false, run: (c, b) => ({ ok: true, value: svc.bus.eventsAfter(Number(b?.afterSeq) || 0), metadata: { requestId: c.requestId, completeness: "COMPLETE", warnings: [] } } as ApiResult<unknown>) },
+    "C22/start": { mutating: true, run: (c, b) => svc.c22Legacy.start(c, b) },
+    "C22/advance": { mutating: true, run: (c, b) => svc.c22Legacy.advance(c, b) },
+    "C22/steer": { mutating: true, run: (c, b) => svc.c22Legacy.steer(c, b) },
+    "C22/interrupt": { mutating: true, run: (c, b) => svc.c22Legacy.interrupt(c, b) },
+    "C22/conclude": { mutating: false, run: (c, b) => svc.c22Legacy.conclude(c, b) },
+    "C27/evaluateScenario": { mutating: false, run: (c, b) => svc.evaluateScenario(c, b) },
+    "C27/compareScenarios": { mutating: false, run: (c, b) => svc.compareScenarios(c, b) },
     "C24/reportException": { mutating: false, run: (c, b) => svc.reportException(c, b) },
     "C24/listExceptions": { mutating: false, run: (c, b) => svc.listExceptions(c, b) },
     "C24/dismissException": { mutating: true, run: (c, b) => svc.dismissException(c, b) },
+    "C26/detect": { mutating: true, run: (c, b) => svc.startDefectDetection(c, b) },
+    "C26/compareBenchmarks": { mutating: false, run: (c, b) => svc.compareDefectBenchmarks(c, b) },
     "C11/extractConcepts": { mutating: true, run: (c, b) => svc.extractConcepts(c, b) },
     "C11/listConcepts": { mutating: false, run: (c, b) => svc.listConcepts(c, b) },
     "C11/conceptStore": { mutating: false, run: (c, b) => svc.conceptStore(c, b) },
@@ -40,6 +73,8 @@ export function buildHandler(svc: Service) {
     "C19/ask": { mutating: false, run: (c, b) => svc.ask(c, b) },
     "C19/investigate": { mutating: false, run: (c, b) => svc.investigate(c, b) },
     "C19/steer": { mutating: false, run: (c, b) => svc.steer(c, b) },
+    "C21/resolve": { mutating: true, run: (c, b) => interactionsOf(svc).resolve(c, b) },
+    "C21/followUp": { mutating: true, run: (c, b) => interactionsOf(svc).followUp(c, b.session, b.text, b.view) },
     "C15/converse": { mutating: false, run: (c, b) => svc.converse(c, b) },
     "C15/explain": { mutating: false, run: (c, b) => svc.explain(c, b) },
     "C15/whyShown": { mutating: false, run: (c, b) => svc.whyShown(c, b) },
@@ -51,6 +86,22 @@ export function buildHandler(svc: Service) {
     "C13/listWorkspaces": { mutating: false, run: (c) => svc.listWorkspaces(c) },
     "C13/openWorkspace": { mutating: false, run: (c, b) => svc.openWorkspace(c, b) },
     "C13/changesSince": { mutating: true, run: (c, b) => svc.changesSince(c, b) },
+    "C13/changesSinceIndex": { mutating: true, run: (c, b) => svc.changesSinceIndex(c, b) },
+    "C13/changesBetweenRevisions": { mutating: false, run: (c, b) => svc.changesBetweenRevisions(c, b) },
+    "C13/revisionStats": { mutating: false, run: (c, b) => svc.revisionStats(c, b) },
+  };
+  for (const [key, run] of Object.entries(svc.exportOps)) ops[key] = { mutating: ["C30/subscribe", "C30/unsubscribe", "C30/exportClaims"].includes(key), run };
+  for (const [key, run] of Object.entries(svc.screenOps)) ops[key] = { mutating: ["C17/runSuite", "C29/addPrincipal", "C29/setAccess"].includes(key), run: run as any };
+  for (const [key, run] of Object.entries(svc.indexOps)) ops[key] = { mutating: key === "C07/invalidateAndRevalidate", run: run as any };
+  for (const [key, run] of Object.entries(svc.collabOps)) ops[key] = { mutating: !["C29/read", "C29/conceptsFor"].includes(key), run };
+  for (const [key, run] of Object.entries(svc.securityOps)) ops[key] = { mutating: ["C25/analyze", "C25/gateSecurityAlarm"].includes(key), run };
+  for (const [key, run] of Object.entries(svc.runtimeOps)) ops[key] = { mutating: ["C24/recordMarker", "C24/ingest"].includes(key), run };
+  for (const [key, run] of Object.entries(svc.historyOps)) ops[key] = { mutating: ["C23/addThread", "C23/reanchorThreads"].includes(key), run };
+  for (const [key, run] of Object.entries(svc.registryOps)) ops[key] = { mutating: key === "C08/applyIdentityVerdict", run };
+  for (const [key, run] of Object.entries(svc.workspaceOps)) ops[key] = { mutating: !["C13/resume", "C13/resurface"].includes(key), run };
+  for (const [key, run] of Object.entries(svc.changeOps)) ops[key] = { mutating: !["C28/interpretDrag", "C28/get", "C28/list"].includes(key), run };
+  for (const [key, run] of Object.entries(svc.defectOps)) ops[key] = { mutating: !["C26/listFindings", "C26/explainFinding", "C27/listCapabilities", "C27/getRunManifest"].includes(key), run };
+  return ops;
   };
   const statusFor = (r: ApiResult<unknown>) => r.ok ? 200 : ({ INVALID_SCHEMA: 400, NOT_FOUND: 404, EVIDENCE_MISSING: 404, VERSION_CONFLICT: 409, UNAUTHORIZED: 401, FORBIDDEN: 403, BUDGET_EXCEEDED: 429, DEADLINE_EXCEEDED: 504, PROVIDER_UNAVAILABLE: 503 } as Record<string, number>)[r.error.code] ?? 500;
   const send = (res: ServerResponse, code: number, body: unknown, type = "application/json") => {
@@ -69,22 +120,67 @@ export function buildHandler(svc: Service) {
     const host = (req.headers.host ?? "").replace(/:\d+$/, "");
     if (host !== "127.0.0.1" && host !== "localhost") return send(res, 403, { error: "bad host" });
     const url = new URL(req.url ?? "/", "http://localhost");
+    const isApi = url.pathname.startsWith("/api/") || url.pathname === "/healthz";
+    const actor = isApi ? identify(req) : null;
+    if (isApi && !actor) return send(res, 401, { ok: false, error: { code: "UNAUTHORIZED", message: "not authenticated", retryable: false } });
+    const mk = (idem: string, deadlineMs = 60_000): CallContext => ({ requestId: randomUUID(), idempotencyKey: idem, actor: actor!, deadlineMs: Date.now() + deadlineMs, traceId: randomUUID() });
+    /** The service for this caller: the single one, or the tenant's own after the tenant and member are checked. */
+    const serviceFor = (c: CallContext): { svc: Service } | { failure: ApiResult<never> } => {
+      if (!(target instanceof TenantHost)) return { svc: target };
+      const r = target.service(c);
+      return r.ok ? { svc: r.value } : { failure: r as ApiResult<never> };
+    };
+    // C22's v2 catalogue lives at /api/v2/components/C22/{operation}; the five original operations stay on v1.
+    const v2 = url.pathname.match(/^\/api\/v2\/components\/C22\/([A-Za-z0-9]+)$/);
+    if (v2) {
+      const c0 = mk(""); const sv0 = serviceFor(c0);
+      if ("failure" in sv0) return send(res, statusFor(sv0.failure), sv0.failure);
+      const fn = Object.hasOwn(sv0.svc.c22v2, v2[1]) ? sv0.svc.c22v2[v2[1]] : undefined;
+      if (!fn || req.method !== "POST") return send(res, fn ? 405 : 404, { ok: false, error: { code: "NOT_FOUND", message: "unknown operation", retryable: false } });
+      if (!(req.headers["content-type"] ?? "").startsWith("application/json")) return send(res, 415, { ok: false, error: { code: "INVALID_SCHEMA", message: "content-type must be application/json", retryable: false } });
+      let body: any;
+      try { body = JSON.parse((await readBody(req)) || "{}"); } catch { return send(res, 400, { ok: false, error: { code: "INVALID_SCHEMA", message: "invalid JSON body", retryable: false } }); }
+      const idem = String(req.headers["idempotency-key"] ?? "");
+      const mutating = !["get", "list", "getCompletion", "getBoard", "readEvents"].includes(v2[1]);
+      if (mutating && !idem) return send(res, 400, { ok: false, error: { code: "INVALID_SCHEMA", message: "Idempotency-Key header required", retryable: false } });
+      const result = await fn(mk(idem), body);
+      return send(res, statusFor(result), result);
+    }
     const m = url.pathname.match(/^\/api\/v1\/components\/(C\d\d)\/([A-Za-z]+)$/);
     if (m) {
-      const op = ops[`${m[1]}/${m[2]}`];
+      const c1 = mk(""); const sv1 = serviceFor(c1);
+      if ("failure" in sv1) return send(res, statusFor(sv1.failure), sv1.failure);
+      const op = makeOps(sv1.svc)[`${m[1]}/${m[2]}`];
       if (!op || req.method !== "POST") return send(res, op ? 405 : 404, { ok: false, error: { code: "NOT_FOUND", message: "unknown operation", retryable: false } });
       if (!(req.headers["content-type"] ?? "").startsWith("application/json")) return send(res, 415, { ok: false, error: { code: "INVALID_SCHEMA", message: "content-type must be application/json", retryable: false } });
       let body: any;
       try { body = JSON.parse((await readBody(req)) || "{}"); } catch { return send(res, 400, { ok: false, error: { code: "INVALID_SCHEMA", message: "invalid JSON body", retryable: false } }); }
       const idem = String(req.headers["idempotency-key"] ?? "");
       if (op.mutating && !idem) return send(res, 400, { ok: false, error: { code: "INVALID_SCHEMA", message: "Idempotency-Key header required", retryable: false } });
-      const ctx: CallContext = { requestId: randomUUID(), idempotencyKey: idem, actor: { principalId: "local-user", tenantId: "local", sessionId: "local" }, deadlineMs: Date.now() + 60_000, traceId: randomUUID() };
+      const ctx = mk(idem);
+      // In a multi-tenant server a path is only usable if the tenant is allowed to read it: indexing, and even browsing for it.
+      const opKey = `${m[1]}/${m[2]}`;
+      if (target instanceof TenantHost && (opKey === "C04/ingestRepository" || opKey === "C01/browseDirectory")) {
+        const host: TenantHost = target;
+        const wanted = opKey === "C04/ingestRepository" ? body?.repoPath : body?.path;
+        if (typeof wanted === "string") { const denied = host.authorizeSource(ctx, wanted); if (denied) return send(res, statusFor(denied), denied); }
+        else if (opKey === "C01/browseDirectory") {
+          const first = host.firstRoot(ctx);
+          if (!first) return send(res, 403, { ok: false, error: { code: "FORBIDDEN", message: "this tenant has no readable folders", retryable: false } });
+          body = { ...body, path: first };
+        }
+      }
       try {
         const result = await op.run(ctx, body);
         return send(res, statusFor(result), result);
       } catch (e) {
         return send(res, 500, { ok: false, error: { code: "STORAGE_FAILURE", message: "internal error", retryable: true } });
       }
+    }
+    if (req.method === "GET" && url.pathname === "/healthz") {
+      const c2 = mk("", 5000); const sv2 = serviceFor(c2);
+      if ("failure" in sv2) return send(res, statusFor(sv2.failure), sv2.failure);
+      const h = await sv2.svc.health(c2, {}); return send(res, h.ok && h.value.status === "down" ? 503 : 200, h.ok ? h.value : h);
     }
     // Static web app (SPA fallback).
     if (req.method !== "GET") return send(res, 405, "method not allowed", "text/plain");
@@ -101,5 +197,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const { provider, note } = await createProvider();
   if (note) console.warn(note);
   const svc = new Service(new Store(), new WorkerClient(), provider);
+  // Durable events become notifications, and due webhooks are sent. A crash between the two loses neither: both are stored first.
+  setInterval(() => { try { svc.bus.dispatchPending(); void svc.notifications.dispatch().catch(() => {}); } catch { /* the next tick tries again */ } }, 2000).unref();
   createServer(buildHandler(svc)).listen(PORT, HOST, () => console.log(`cie listening on http://${HOST}:${PORT} (model: ${provider.name}/${provider.model})`));
 }

@@ -7,11 +7,11 @@ import { parseIstanbul, parseJUnit, parseJestJson, parseLcov } from "../src/test
 import { ctx, demoRepo, setup, traceFor } from "./helpers.ts";
 
 test("lcov, Istanbul JSON, JUnit XML and Jest/Vitest JSON all parse", () => {
-  const l = parseLcov("TN:\nSF:src/a.ts\nDA:1,2\nDA:2,0\nDA:2,1\nend_of_record\nSF:src/b.ts\nDA:5,0\nend_of_record\n");
-  assert.deepEqual(l.get("src/a.ts"), { 1: 2, 2: 1 });
-  assert.deepEqual(l.get("src/b.ts"), { 5: 0 });
-  const i = parseIstanbul({ "/p/a.ts": { path: "/p/a.ts", statementMap: { 0: { start: { line: 3 }, end: { line: 3 } }, 1: { start: { line: 4 }, end: { line: 4 } } }, s: { 0: 5, 1: 0 } } });
-  assert.deepEqual(i.get("/p/a.ts"), { 3: 5, 4: 0 });
+  const l = parseLcov("TN:\nSF:src/a.ts\nDA:1,2\nDA:2,0\nDA:2,1\nBRDA:1,0,0,2\nBRDA:2,1,0,-\nBRDA:2,1,1,0\nend_of_record\nSF:src/b.ts\nDA:5,0\nend_of_record\n");
+  assert.deepEqual(l.get("src/a.ts"), { lines: { 1: 2, 2: 1 }, branches: [{ line: 1, taken: 2 }, { line: 2, taken: -1 }, { line: 2, taken: 0 }] });
+  assert.deepEqual(l.get("src/b.ts"), { lines: { 5: 0 }, branches: [] });
+  const i = parseIstanbul({ "/p/a.ts": { path: "/p/a.ts", statementMap: { 0: { start: { line: 3 }, end: { line: 3 } }, 1: { start: { line: 4 }, end: { line: 4 } } }, s: { 0: 5, 1: 0 }, branchMap: { 0: { loc: { start: { line: 3 } }, type: "if" } }, b: { 0: [3, 0] } } });
+  assert.deepEqual(i.get("/p/a.ts"), { lines: { 3: 5, 4: 0 }, branches: [{ line: 3, taken: 3 }, { line: 3, taken: 0 }] });
   const j = parseJUnit(`<testsuite><testcase classname="s" name="a &amp; b" time="0.5"/><testcase name="bad"><failure message="boom &lt;x&gt;">trace</failure></testcase><testcase name="err"><error>kaput\nmore</error></testcase><testcase name="skip"><skipped/></testcase></testsuite>`);
   assert.deepEqual(j.map((t) => [t.name, t.status]), [["a & b", "passed"], ["bad", "failed"], ["err", "failed"], ["skip", "skipped"]]);
   assert.equal(j[1].message, "boom <x>"); assert.equal(j[2].message, "kaput"); assert.equal(j[0].durationMs, 500);
@@ -29,11 +29,14 @@ test("coverage is attached to symbols and test results to tests; the summary and
   assert.deepEqual(t.found.sort(), ["coverage/lcov.info", "test-results/junit.xml"]);
   assert.deepEqual(t.tests, { passed: 1, failed: 1, skipped: 1 });
   assert.ok(t.coverageLinePercent !== null && t.coverageLinePercent > 20 && t.coverageLinePercent < 90);
+  assert.ok(t.coverageBranchPercent !== null && t.coverageBranchPercent > 0 && t.coverageBranchPercent <= 100, `branch coverage is read too (${t.coverageBranchPercent}%)`);
   assert.equal(t.failing[0].name, "flags large amounts");
 
   const fact = (id: string, pred: string) => svc.store.factsFor(revision, id).find((f) => f.predicate === pred);
   const adjust = (fact("function:src/ledger/ledger.ts#adjustBalance", "coverage")!.object as any).value;
   const commit = (fact("function:src/ledger/ledger.ts#commit", "coverage")!.object as any).value;
+  const fraud = (fact("function:src/payments/fraud.ts#checkFraud", "coverage")!.object as any).value;
+  assert.ok(fraud.branches && fraud.branches.total >= 2 && fraud.branches.percent > 0 && fraud.branches.percent < 100, `branch arms are attached per symbol: ${JSON.stringify(fraud.branches)}`);
   assert.equal(adjust.percent, 0, "the refund-path writer has no coverage"); assert.equal(adjust.scope, "symbol");
   assert.equal(commit.percent, 100);
   const ev = svc.store.evidence(revision, fact("function:src/ledger/ledger.ts#adjustBalance", "coverage")!.evidence[0].id)!;

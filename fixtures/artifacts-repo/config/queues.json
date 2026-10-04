@@ -1,0 +1,4 @@
+{ "queues": [
+  { "topic": "payment.capture.requested", "consumer": "capture-worker" },
+  { "topic": "refund.requested", "consumer": "refund-worker" }
+] }

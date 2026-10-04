@@ -1,5 +1,6 @@
 //! Wire DTOs; field names follow contracts §2.
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -60,7 +61,7 @@ pub struct Fact {
     pub resolution: &'static str,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Diagnostic {
     pub code: String,
@@ -80,4 +81,16 @@ pub struct AnalysisBatch {
     pub relationships: Vec<Relationship>,
     pub diagnostics: Vec<Diagnostic>,
     pub analyzer_version: String,
+}
+
+/// The caller's previous revision, per file: content hashes (which files existed and what their
+/// bytes hashed to). Relative paths arrive already normalized; the worker matches on content only.
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeSet {
+    pub files: HashMap<String, String>,
+    /// Which revision the hashes are from (for diagnostics and audit). Not used for dedupe:
+    /// the worker matches on content only.
+    #[allow(dead_code)]
+    pub revision: String,
 }

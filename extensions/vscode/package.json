@@ -2,7 +2,7 @@
   "name": "cie-vscode",
   "displayName": "Code Intelligence",
   "description": "Sends your editor context (open file, selection, breakpoints) to the local Code Intelligence server, so questions can refer to what you are looking at.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "cie",
   "private": true,
   "type": "module",

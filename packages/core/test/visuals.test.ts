@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { Claim, ViewSpec } from "@cie/schema";
@@ -67,7 +67,7 @@ test("V5 data lineage: writers and readers of one field, transaction region, ord
   assert.equal(v.formId, "DataLineage");
   assert.deepEqual(names(v, "writer").sort(), ["adjustBalance", "commit", "reconcileBalances"]);
   assert.ok(names(v, "reader").includes("reserve"), "reserve reads account.balance");
-  assert.ok(v.nodes.some((n) => n.role === "state" && n.label === "balance" && n.pos!.x === 0));
+  assert.ok(v.nodes.some((n) => n.role === "state" && n.label === "account.balance" && n.pos!.x === 0));
   assert.ok(v.nodes.filter((n) => n.role === "writer").every((n) => n.pos!.x < 0) && v.nodes.filter((n) => n.role === "reader").every((n) => n.pos!.x > 0));
   assert.ok(v.groups.some((g) => g.kind === "region" && g.label === "inside a transaction" && g.childNodeIds.includes("n:function:src/ledger/ledger.ts#commit")));
   const hazards = v.nodes.filter((n) => n.role === "hazard");
@@ -207,7 +207,7 @@ test("V11 counterfactual: ghost removal, solid surroundings, consequences that a
   assert.ok(cons.length >= 3 && cons.every((c) => c.displayMode === "HYPOTHESIS" && c.evidenceIds.length > 0));
   const text = cons.map((c) => c.text).join("\n");
   assert.match(text, /charge calls reserve.*would no longer exist/s);
-  assert.match(text, /“balance”.*writer\(s\).*disappear/s);
+  assert.match(text, /“account\.balance”.*writer\(s\).*disappear/s);
   assert.ok(v.edges.filter((e) => e.ghost).length >= 4 && v.nodes.filter((n) => n.ghost).every((n) => n.displayMode === "HYPOTHESIS"), "everything hypothetical is ghost-drawn by construction");
   const guarded = await ask(svc, revision, "What happens without checkFraud?");
   assert.ok(guarded.view.consequences!.some((c) => c.kind === "failure mode gone"));
@@ -245,9 +245,11 @@ test("V13 ownership: formal vs de facto owners, bus factor, and a confirmation-p
   assert.ok(v.groups.filter((g) => g.kind === "region").length >= 2);
   const ledger = v.nodes.find((n) => n.file === "src/ledger/ledger.ts")!;
   assert.ok(ledger.notes!.some((n) => /Formal owner: @payments-team \(CODEOWNERS line 2\)/.test(n)));
+  assert.ok(ledger.notes!.some((n) => /Members from teams\.json: Dana, Lee/.test(n)), `team members are resolved locally: ${ledger.notes}`);
   assert.ok(ledger.notes!.some((n) => /commit\(s\) by \d+ author/.test(n)));
   const c = claims.find((x) => x.draft.id === ledger.ownClaimId)!;
-  assert.match(c.draft.assertion, /de facto owner.*formal owner is @payments-team, and team membership is not known/);
+  assert.match(c.draft.assertion, /de facto owner.*formal owner is @payments-team \(members here: Dana, Lee, including Lee\)/, "mapped teams are named in the claim");
+  assert.ok(!/team membership is not known/.test(c.draft.assertion), "with teams.json present, membership is known");
   assert.ok(!/differs/.test(v.caption), "no mismatch is claimed between people and teams");
   assert.ok(ledger.displayMode === "INFERENCE" && ledger.evidenceIds.length > 0);
   assert.match(v.caption, /bus factor 1/);
@@ -308,5 +310,43 @@ test("the gallery reports what each visual needs and whether it is available", a
   assert.equal(by("V14").available, false); assert.match(by("V14").reason!, /concept cards/);
   assert.equal(by("V9").available, false); assert.match(by("V9").reason!, /reported exceptions/);
   assert.ok(by("V12").available && by("V13").available, "test results and git exist in the demo repo");
+  worker.close();
+});
+
+test("V7 archaeology reads pull request references out of commit messages, and says the forge is not connected", async () => {
+  const repo = demoRepo();
+  const f = join(repo, "src/ledger/ledger.ts");
+  writeFileSync(f, readFileSync(f, "utf8").replace("export async function adjustBalance", "export async function adjustBalanceV2"));
+  execFileSync("git", ["-C", repo, "-c", "user.name=Kim", "-c", "user.email=k@x", "commit", "-qam", "Rename adjustBalance after the refund hotfix (#12) fixing #7"]);
+  const { svc, worker, revision } = await setup(undefined, repo);
+  const { view: v, claims } = await ask(svc, revision, "Why is adjustBalanceV2 not transactional?");
+  assert.equal(v.formId, "Archaeology");
+  const pr = v.nodes.filter((n) => n.role === "event" && /PR #12/.test(n.badge ?? ""));
+  assert.ok(pr.length >= 1, `a commit node carries a PR badge: ${v.nodes.filter((n) => n.role === "event").map((n) => n.badge)}`);
+  assert.ok(pr[0].notes!.some((x) => /forge is not connected|not connected/.test(x)) || v.gaps.some((g) => /forge is not connected/.test(g)));
+  assert.ok(v.caption.includes("reference"), `caption mentions the references: ${v.caption}`);
+  audited(svc, v, claims);
+  worker.close();
+});
+
+test("V9 runtime overlay gains measured latency from an ingested OpenTelemetry trace export", async () => {
+  const repo = demoRepo();
+  mkdirSync(join(repo, "traces"));
+  writeFileSync(join(repo, "traces/otlp.json"), JSON.stringify({
+    resourceSpans: [{ scopeSpans: [{ spans: [
+      { name: "POST /payments", startTimeUnixNano: String((Date.now() - 3600_000) * 1e6), endTimeUnixNano: String(Date.now() - 3600_000 * 1e6 + 120 * 1e6), status: { code: 1 }, attributes: [{ key: "code.filepath", value: { stringValue: "src/api/payments-controller.ts" } }, { key: "code.lineno", value: { intValue: "6" } }, { key: "code.function", value: { stringValue: "createPayment" } }] },
+      { name: "POST /payments", startTimeUnixNano: String((Date.now() - 1800_000) * 1e6), endTimeUnixNano: String(Date.now() - 1800_000 * 1e6 + 400 * 1e6), status: { code: 2, message: "declined" }, attributes: [{ key: "code.filepath", value: { stringValue: "src/api/payments-controller.ts" } }, { key: "code.function", value: { stringValue: "createPayment" } }] },
+      { name: "orphan", startTimeUnixNano: String((Date.now() - 60_000) * 1e6), endTimeUnixNano: String(Date.now() - 60_000 * 1e6 + 5 * 1e6), status: { code: 1 } },
+    ] }] }],
+  }));
+  const { svc, worker, revision } = await setup(undefined, repo);
+  const { view: v, claims } = await ask(svc, revision, "what has been going wrong in the last 7 days");
+  assert.equal(v.formId, "RuntimeOverlay");
+  const hot = v.nodes.find((n) => n.role === "hot" && n.label === "createPayment");
+  assert.ok(hot, "the traced operation is on the map");
+  assert.ok(hot!.notes!.some((n) => /2 span\(s\).*1 error span\(s\).*p95/.test(n)), `span facts are shown: ${hot!.notes}`);
+  assert.match(v.caption, /2 trace span\(s\)/);
+  assert.ok(v.gaps.some((g) => /trace spans come from exports/i.test(g)), "the gap says what the trace data is: a recorded export, not telemetry");
+  audited(svc, v, claims);
   worker.close();
 });

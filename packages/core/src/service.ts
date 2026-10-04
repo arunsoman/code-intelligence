@@ -1,91 +1,653 @@
 // Orchestration. Public operations return ApiResult (contracts §1). Every model call goes through callModel,
 // which enforces the per-repository egress opt-in, scrubs secrets, and writes the audit trail.
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { runModel, StubProvider, type GatewayFailure, type GatewayResult } from "@cie/model";
+import { BudgetController, runModel, StubProvider, type GatewayFailure, type GatewayResult } from "@cie/model";
 import type {
   ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptStore, ConceptsOutput, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceRef, ExplainResult, ExplanationOutput,
-  ModelProvider, ModelRequest, RepresentationOutput, ResolvedEvidence, SavedState, VerdictKind, ViewSpec,
+  ModelProvider, ModelRequest, RepresentationOutput, ResolvedEvidence, JobView, RouteOutput, SavedState, VerdictKind, ViewRoute, ViewSpec,
+  DefectDetectionInput, DetectorFinding, BenchmarkPolicy, BenchmarkResult,
 } from "@cie/schema";
-import { SCHEMA_CHALLENGE, SCHEMA_CONCEPTS, SCHEMA_EXPLANATION, SCHEMA_REPRESENTATION } from "@cie/schema";
-import { applyVerdict, gateClaim, wilson, withChallenge } from "./claims.ts";
-import { cardsFromOutput, chunkSymbols } from "./concepts.ts";
+import { ROUTE_FORMS, SCHEMA_CHALLENGE, SCHEMA_CONCEPTS, SCHEMA_EXPLANATION, SCHEMA_REPRESENTATION, SCHEMA_ROUTE } from "@cie/schema";
+import { applyVerdict, gateClaim, modelText, wilson, withChallenge } from "./claims.ts";
+import { claimOf } from "./forms/common.ts";
+import { cardsFromOutput, chunkSymbols, mergeCards } from "./concepts.ts";
 import { buildFailureGraph, buildInvariantGraph } from "./forms/causal.ts";
+import { short } from "./forms/common.ts";
 import { buildHypothesis } from "./forms/hypothesis.ts";
+import { extractArtifacts } from "./artifacts.ts";
+import { Collab } from "./collab.ts";
+import { Evaluator, PLANTED_SECURITY, SEEDED_CONCEPTS } from "./evaluation.ts";
+import { Indexer } from "./indexer.ts";
+import { History } from "./history.ts";
+import { Runtime } from "./runtime.ts";
+import { Security } from "./security.ts";
+import { Registry } from "./registry.ts";
+import { WorkspaceLog } from "./workspaces.ts";
 import { Journal, type CommitReceipt } from "./journal.ts";
+import { Cancelled, JobRunner, type JobControl } from "./jobs.ts";
 import { EGRESS_FIELDS, payloadHash, scrubBundle } from "./policy.ts";
 import { bundleFor, retrieveAround, retrieveForQuestion } from "./retrieval.ts";
-import { chooseForm, matchName, routeIntent } from "./router.ts";
+import { matchName, routeIntent } from "./router.ts";
+import { routeQuestion } from "./route.ts";
 import { revisionIndex, scoreEntity, WEIGHTS } from "./salience.ts";
 import type { RevisionRow, Store } from "./store.ts";
 import { entityAt, fingerprint, locateFrames, looksLikeTrace, parseTrace } from "./trace.ts";
 import { compileView } from "./viewspec.ts";
 import { catalog, ensureEdgeClaims, matchVisual, visualByForm, type CatalogEntry } from "./visuals.ts";
 import { isGitRepo } from "./gitinfo.ts";
+import { backup as backupStore, deleteRepository as deleteRepo, gc as gcStore, type DeleteReport, type GcReport } from "./storage.ts";
+import { API_VERSION, MIN_EXTENSION, health as healthOf, restoreDrill, type Health, type RestoreDrill } from "./ops.ts";
+import { EventBus } from "./events.ts";
+import { buildExport, ExportError, ExportStore, Notifications, type ExportArtifact } from "./exports.ts";
+import { ChangeEngine, ChangeError, type ChangeProposal, type DragResult, type Intent } from "./changes.ts";
+import { compareScenarios, evaluateScenario, ScenarioError, type AssumptionInput, type CapacityData, type Scenario, type ScenarioResult } from "./scenarios.ts";
+import { policyFor } from "./access.ts";
+import { redactBuilt } from "./redact.ts";
+import { HashEmbedder, semanticScores, type Embedder } from "./embeddings.ts";
+import { InvestigationEngine, type EngineOptions } from "./c22/engine.ts";
+import { C22Error } from "./c22/types.ts";
+import { toPlan } from "./c22/compat.ts";
 import { ingestTestArtifacts, loadTestSummary, type TestSummary } from "./testartifacts.ts";
+import { ingestTraceExports } from "./traceexport.ts";
 import type { WorkerClient } from "./worker.ts";
 import { WorkerError } from "./worker.ts";
+import { compareBenchmark, detectDefects } from "./defects.ts";
+import { DefectDetectionInputSchema } from "@cie/schema";
+import { DefectError, DefectWorkflow } from "./defect-workflow.ts";
+import { detectIndexedDefects } from "./defect-indexed.ts";
+import { artifactHash } from "./defect-schedule.ts";
+
+const chunkTokenBudget = () => Number(process.env.CIE_CHUNK_TOKEN_BUDGET) || 60_000; // per concept-extraction request; the gateway hard limit is 200k
 
 function safeIsDir(p: string): boolean { try { return statSync(p).isDirectory(); } catch { return false; } }
+
+export interface FileStats { files: number; symbols: number; kb: number; byExt: Record<string, number> }
+
+/** Per-file sha256 of a worktree, budgeted: a full walk that never parses (used for the incremental re-index). */
+export function hashFiles(root: string, deadlineMs = 30_000, maxFiles = 5_000): { map: Map<string, string>; count: number; scanned: number; error: string | null } {
+  const out = new Map<string, string>();
+  let scanned = 0;
+  const t0 = Date.now();
+  const walk = (abs: string, rel: string): string | null => {
+    if (Date.now() - t0 > deadlineMs) return `walk exceeded ${deadlineMs} ms`;
+    if (scanned > maxFiles) return `walk exceeded ${maxFiles} files`;
+    let entries: import("node:fs").Dirent[];
+    try { entries = readdirSync(abs, { withFileTypes: true }); } catch { entries = []; }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const e of entries) {
+      if (e.name === ".git" || e.name === "node_modules") continue;
+      if (e.isDirectory()) { const err = walk(join(abs, e.name), `${rel}${e.name}/`); if (err) return err; }
+      else if (e.isFile()) {
+        scanned++;
+        if (scanned > maxFiles) return `walk exceeded ${maxFiles} files`;
+        try { out.set(`${rel}${e.name}`, createHash("sha256").update(readFileSync(join(abs, e.name))).digest("hex")); } catch { /* unreadable: skip */ }
+      }
+    }
+    return null;
+  };
+  const error = walk(root, "");
+  return { map: out, count: out.size, scanned, error };
+}
 
 const meta = (ctx: CallContext, o: Partial<{ revision: string; resourceVersion: number; completeness: "COMPLETE" | "PARTIAL" | "UNKNOWN"; warnings: string[] }> = {}) =>
   ({ requestId: ctx.requestId, completeness: "COMPLETE" as const, warnings: [] as string[], ...o });
 const fail = <T>(ctx: CallContext, error: ApiError): ApiResult<T> => ({ ok: false, error, metadata: meta(ctx) });
 const ok = <T>(ctx: CallContext, value: T, m: Parameters<typeof meta>[1] = {}): ApiResult<T> => ({ ok: true, value, metadata: meta(ctx, m) });
+/** A full disk is a different problem from a broken database: nothing is corrupt, and writing works again once there is room. */
+export function storageFailure(e: unknown): ApiError {
+  const msg = (e as Error).message ?? String(e);
+  if (/database or disk is full|SQLITE_FULL|ENOSPC/i.test(msg)) return { code: "RESOURCE_LIMIT", message: "The disk or database size limit was reached, so nothing was saved. Free some space and try again; existing data is intact.", retryable: true };
+  if (/locked|SQLITE_BUSY/i.test(msg)) return { code: "STORAGE_FAILURE", message: "The database is busy with another writer. Try again in a moment.", retryable: true };
+  return { code: "STORAGE_FAILURE", message: msg, retryable: true };
+}
+
 const actor = (ctx: CallContext) => ctx.actor.principalId;
 
 export class Service {
   readonly journal: Journal;
   readonly store: Store;
+  readonly jobs: JobRunner;
+  readonly bus: EventBus;
+  readonly c22: InvestigationEngine;
+  readonly changes: ChangeEngine;
+  readonly notifications: Notifications;
+  private readonly exportStore: ExportStore;
+  readonly defects: DefectWorkflow;
+  /** What turns text into vectors for semantic retrieval. The default is local and deterministic; see embeddings.ts. */
+  embedder: Embedder = new HashEmbedder();
   private worker: WorkerClient;
   private model: ModelProvider;
   private offline: ModelProvider;
+  /** C13 gateway operations over the workspace log. */
+  readonly workspaceOps: Record<string, (ctx: CallContext, b: any) => ApiResult<unknown>> = {
+    "C13/create": (c, b) => this.wsResult(c, this.workspaceLog.create(c.actor.principalId, b)),
+    "C13/append": (c, b) => this.wsResult(c, this.workspaceLog.append(c.actor.principalId, b)),
+    "C13/resume": (c, b) => this.wsResult(c, this.workspaceLog.resume(b.workspaceId, b.atSequence)),
+    "C13/checkpoint": (c, b) => this.wsResult(c, this.workspaceLog.checkpoint(b.workspaceId)),
+    "C13/annotateStaleness": (c, b) => ok(c, this.workspaceLog.annotateStaleness(c.actor.principalId, b.impact)),
+    "C13/resurface": (c, b) => ok(c, this.workspaceLog.resurface(b.refs ?? [], b.limit)),
+  };
+  private wsResult(ctx: CallContext, r: { ok: true } | { ok: false; error: ApiError }): ApiResult<any> { return r.ok ? ok(ctx, r) : fail(ctx, r.error); }
+  /** C08: canonical identities across revisions. */
+  readonly registry: Registry;
+  /** C23: change sets, archaeology and review threads. */
+  readonly history: History;
+  /** C24: runtime signals joined to code. */
+  readonly runtime: Runtime;
+  /** C25: security findings and the alarm gate. */
+  readonly security: Security;
+  /** C29: shared investigations and team knowledge. */
+  readonly collab: Collab;
+  /** C17: the evaluation registry. */
+  readonly evaluator: Evaluator;
+  /** C07: impact, generation fence and clean-index parity. */
+  readonly indexer: Indexer;
+  /** Operations the screens need that have no other home: revision and source lists, the evaluation registry, and local team administration. */
+  readonly screenOps: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>> | ApiResult<unknown>> = {
+    "C07/listRevisions": (c, b) => ok(c, (this.store.db.prepare("select id, repo_root, created_at, file_count from revisions " + (b?.repoRoot ? "where repo_root = ? " : "") + "order by rowid desc limit 30").all(...(b?.repoRoot ? [b.repoRoot] : [])) as any[]).map((r) => ({ id: r.id, repoRoot: r.repo_root, createdAt: r.created_at, files: r.file_count }))),
+    "C04/listSources": (c) => ok(c, (this.store.db.prepare("select id, state, last_ok, last_error, rate_resume_at from ext_sources order by id").all() as any[]).map((r) => ({ sourceId: r.id, state: r.state, lastOk: r.last_ok ? new Date(r.last_ok).toISOString() : null, lastError: r.last_error, resumeAt: r.rate_resume_at ? new Date(r.rate_resume_at).toISOString() : null }))),
+    "C17/runs": (c, b) => ok(c, this.evaluator.runs(b?.suite).map(({ items, ...r }) => ({ ...r, items: items.length, misses: items.filter((i) => i.expected !== i.predicted).map((i) => i.id) })).reverse().slice(0, 20)),
+    "C17/runSuite": async (c, b) => { const suite = b.suite === "planted-security" ? PLANTED_SECURITY : b.suite === "seeded-concepts" ? SEEDED_CONCEPTS : null; if (!suite) return fail(c, { code: "INVALID_SCHEMA", message: "suite must be planted-security or seeded-concepts", retryable: false }); if (!this.store.latestRevision()) return fail(c, { code: "NOT_FOUND", message: "index a repository first", retryable: false }); const r = await this.evaluator.runSuite(this, suite, this.activeModel); const { items, ...rest } = r; return ok(c, { ...rest, items: items.length, misses: items.filter((i) => i.expected !== i.predicted).map((i) => i.id) }); },
+    "C17/status": (c) => ok(c, { model: this.activeModel, suites: ["planted-security", "seeded-concepts"].map((s) => ({ suite: s, ...this.evaluator.modelStatus(this.activeModel, s) })), calibration: this.evaluator.calibration(), experts: this.evaluator.expertCoverage() }),
+    "C29/whoami": (c) => ok(c, { principal: c.actor.principalId, tenant: c.actor.tenantId }),
+    "C29/addPrincipal": (c, b) => { if (!/^[A-Za-z0-9._-]{1,40}$/.test(b?.principal ?? "")) return fail(c, { code: "INVALID_SCHEMA", message: "a name is 1–40 letters, digits, dots, dashes", retryable: false }); this.collab.addPrincipal(b.principal, c.actor.tenantId); return ok(c, { principal: b.principal, tenant: c.actor.tenantId }); },
+    "C29/setAccess": (c, b) => { const rev = this.store.revision(b?.revision); if (!rev) return fail(c, { code: "NOT_FOUND", message: "unknown revision", retryable: false }); if (!this.collab.tenantOf(b.principal)) return fail(c, { code: "NOT_FOUND", message: "unknown person", retryable: false }); this.collab.setAccess(b.principal, rev.repoRoot, { allowed: !!b.allowed, deniedPrefixes: b.deniedPrefixes ?? [] }); return ok(c, { principal: b.principal, repoRoot: rev.repoRoot, allowed: !!b.allowed }); },
+    "C29/people": (c) => ok(c, (this.store.db.prepare("select principal from collab_principals order by principal").all() as any[]).map((r) => r.principal)),
+    "C29/workspaces": (c) => ok(c, (this.store.db.prepare("select m.ws as id, m.name, s.role from ws_meta m join collab_shares s on s.ws = m.ws and s.principal = ? and s.active = 1 order by m.created_at desc").all(c.actor.principalId) as any[])),
+    "C29/shares": (c, b) => ok(c, { shares: this.store.db.prepare("select principal, role from collab_shares where ws = ? and active = 1 order by principal").all(b.workspaceId), history: this.collab.history(b.workspaceId).slice(-15) }),
+  };
+  /** C05/C06/C07 gateway operations. */
+  readonly indexOps: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>> | ApiResult<unknown>> = {
+    "C04/connectorHealth": (c, b) => { const r = this.store.db.prepare("select * from ext_sources where id = ?").get(b.sourceId) as any; if (!r) return fail(c, { code: "NOT_FOUND", message: "no such source", retryable: false }); const n = (t: string) => Number((this.store.db.prepare(`select count(*) as n from ${t} where source = ?`).get(b.sourceId) as any).n); return ok(c, { sourceId: r.id, state: r.state, lastOk: r.last_ok ? new Date(r.last_ok).toISOString() : null, lastError: r.last_error, items: n("ext_items"), quarantined: n("ext_quarantine"), resumeAt: r.rate_resume_at ? new Date(r.rate_resume_at).toISOString() : null }); },
+    "C05/languageCapabilities": async (c) => ok(c, await this.worker.languageCapabilities()),
+    "C05/compareWithCleanIndex": async (c, b) => { try { return ok(c, await this.indexer.compareWithCleanIndex(b.revision), { revision: b.revision }); } catch (e) { return fail(c, { code: "NOT_FOUND", message: (e as Error).message, retryable: false }); } },
+    "C06/extractArtifacts": (c, b) => { try { const r = extractArtifacts(this.store, b.revision); return ok(c, r, { revision: b.revision, warnings: [r.notice] }); } catch (e) { return fail(c, { code: "NOT_FOUND", message: (e as Error).message, retryable: false }); } },
+    "C07/computeImpact": (c, b) => { try { return ok(c, this.indexer.computeImpact(b.fromRevision, b.toRevision)); } catch (e) { return fail(c, { code: "NOT_FOUND", message: (e as Error).message, retryable: false }); } },
+    "C07/invalidateAndRevalidate": async (c, b) => ok(c, await this.indexer.invalidateAndRevalidate(b.impact)),
+  };
+  /** C29 gateway operations. The caller is the authenticated principal; nothing is taken from the request about who is acting. */
+  readonly collabOps: Record<string, (ctx: CallContext, b: any) => ApiResult<unknown>> = {
+    "C29/create": (c, b) => this.collabResult(c, this.collab.create(c.actor.principalId, b)),
+    "C29/share": (c, b) => this.collabResult(c, this.collab.share(c.actor.principalId, b)),
+    "C29/unshare": (c, b) => this.collabResult(c, this.collab.unshare(c.actor.principalId, b)),
+    "C29/read": (c, b) => this.collabResult(c, this.collab.read(c.actor.principalId, b.workspaceId)),
+    "C29/applyOperation": (c, b) => this.collabResult(c, this.collab.applyOperation(c.actor.principalId, b)),
+    "C29/handover": (c, b) => this.collabResult(c, this.collab.handover(c.actor.principalId, b)),
+    "C29/confirmSharedConcept": (c, b) => this.collabResult(c, this.collab.confirmSharedConcept(c.actor.principalId, b)),
+    "C29/conceptsFor": (c, b) => ok(c, this.collab.conceptsFor(c.actor.principalId, b.revision)),
+  };
+  private collabResult(ctx: CallContext, r: { ok: true } | { ok: false; error: ApiError }): ApiResult<any> { return r.ok ? ok(ctx, r) : fail(ctx, r.error); }
+  /** C25 gateway operations. */
+  readonly securityOps: Record<string, (ctx: CallContext, b: any) => ApiResult<unknown>> = {
+    "C25/analyze": (c, b) => { try { return ok(c, this.security.analyze(b), { revision: b.revision, warnings: ["Findings are candidates from static analysis. No finding does not mean safe, and nothing here certifies compliance."] }); } catch (e) { return fail(c, { code: "NOT_FOUND", message: (e as Error).message, retryable: false }); } },
+    "C25/gateSecurityAlarm": (c, b) => { try { return ok(c, this.security.gateSecurityAlarm(b.findingId, b)); } catch (e) { return fail(c, { code: "NOT_FOUND", message: (e as Error).message, retryable: false }); } },
+    "C25/buildAuditNarrative": (c, b) => ok(c, this.security.buildAuditNarrative(b.revision, b.findingIds ?? [])),
+    "C25/checkInvariant": (c, b) => ok(c, this.security.checkInvariant(b.revision, b)),
+    "C25/ruleTrace": (c, b) => { const t = this.security.ruleTrace(b.findingId); return t ? ok(c, t) : fail(c, { code: "NOT_FOUND", message: "no such finding", retryable: false }); },
+  };
+  /** C24 gateway operations. */
+  readonly runtimeOps: Record<string, (ctx: CallContext, b: any) => ApiResult<unknown>> = {
+    "C24/recordMarker": (c, b) => { this.runtime.recordMarker(b); return ok(c, { recorded: true }); },
+    "C24/ingest": (c, b) => { const r = this.runtime.ingest(b.envelope); return r.ok ? ok(c, r) : fail(c, r.error); },
+    "C24/attribute": (c, b) => { const r = this.runtime.attribute(b.envelopeId, b.revision); return "ok" in r ? fail(c, r.error) : ok(c, r, { revision: b.revision, completeness: r.exact ? "COMPLETE" : "PARTIAL", warnings: r.uncertaintyReason ? [r.uncertaintyReason] : [] }); },
+    "C24/queryWindow": (c, b) => ok(c, this.runtime.queryWindow(b.revision, b.window, b.roots), { revision: b.revision }),
+    "C24/replay": (c, b) => ok(c, this.runtime.replay(b.revision, b.window, b.cursor), { revision: b.revision }),
+  };
+  /** C23 gateway operations. */
+  readonly historyOps: Record<string, (ctx: CallContext, b: any) => ApiResult<unknown>> = {
+    "C23/compare": (c, b) => { try { const cs = this.history.compare(b.base, b.head); return ok(c, cs, { revision: b.head }); } catch (e) { return fail(c, { code: "NOT_FOUND", message: (e as Error).message, retryable: false }); } },
+    "C23/archaeology": (c, b) => { try { return ok(c, this.history.archaeology(b.revision, b.entityId, b.window), { revision: b.revision }); } catch (e) { return fail(c, { code: "NOT_FOUND", message: (e as Error).message, retryable: false }); } },
+    "C23/assessChangeImpact": (c, b) => ok(c, this.history.assessChangeImpact(b.changeSet)),
+    "C23/addThread": (c, b) => { try { return ok(c, this.history.addThread(c.actor.principalId, b)); } catch (e) { return fail(c, { code: "NOT_FOUND", message: (e as Error).message, retryable: false }); } },
+    "C23/reanchorThreads": (c, b) => ok(c, this.history.reanchorThreads(b.mergedRevision)),
+  };
+  /** C08 gateway operations. */
+  readonly registryOps: Record<string, (ctx: CallContext, b: any) => ApiResult<unknown>> = {
+    "C08/proposals": (c, b) => ok(c, this.registry.proposals(b ?? {})),
+    "C08/duplicateNames": (c, b) => ok(c, this.registry.duplicateNames(b.revision)),
+    "C08/lineage": (c, b) => { const canon = this.registry.canonOf(b.revision, b.entityId); return canon ? ok(c, { canonId: canon, lineage: this.registry.lineage(canon, b.revision), history: this.registry.history(canon) }) : fail(c, { code: "NOT_FOUND", message: "no canonical identity for that entity", retryable: false }); },
+    "C08/diverge": (c, b) => ok(c, this.registry.diverge(b.a, b.b)),
+    "C08/applyIdentityVerdict": (c, b) => { const r = this.registry.applyIdentityVerdict(c.actor.principalId, b); return r.ok ? ok(c, r.proposal) : fail(c, r.error); },
+  };
+  /** The model answering questions, for records of what was measured. */
+  get activeModel() { return { name: this.model.name, model: this.model.model }; }
+  /** C13: event-sourced investigations (see workspaces.ts). */
+  readonly workspaceLog: WorkspaceLog;
+  /** Hosted-model allowance per repository. Local models are free and never charged. */
+  readonly budget = new BudgetController({ tokens: Number(process.env.CIE_HOSTED_TOKEN_BUDGET) || 5_000_000, overageTokens: Number(process.env.CIE_HOSTED_OVERAGE_TOKENS) || 0 });
+  /** The last failure from the model provider, cleared by the next success; reported by health(). */
+  modelError: string | null = null;
 
   constructor(store: Store, worker: WorkerClient, model: ModelProvider, offline: ModelProvider = new StubProvider()) {
     this.store = store; this.worker = worker; this.model = model; this.offline = offline;
+    this.registry = new Registry(store);
+    this.history = new History(store, this.registry);
+    this.runtime = new Runtime(store, this.registry);
+    this.security = new Security(store);
+    this.indexer = new Indexer(this);
+    this.evaluator = new Evaluator(store);
+    this.workspaceLog = new WorkspaceLog(store, {
+      evidenceState: (revision, evidenceId) => { const rev = this.store.revision(revision), ev = rev ? this.store.evidence(revision, evidenceId) : null; if (!rev || !ev) return "UNAVAILABLE"; const st = this.resolveEvidence(rev, ev).state; return st === "CURRENT" ? "CURRENT" : st === "STALE" ? "STALE" : "UNAVAILABLE"; },
+      sourceAvailable: (revision) => { const rev = this.store.revision(revision); return !!rev && existsSync(rev.repoRoot); },
+      allowed: (revision) => { const o = revision ? this.store.revision(revision, true) : null; return !(o && this.store.isRevoked(o.repoRoot)); },
+    });
+    this.collab = new Collab(store, this.workspaceLog);
     this.journal = new Journal(store);
+    this.jobs = new JobRunner(store);
+    this.bus = new EventBus(store);
+    this.c22 = new InvestigationEngine(store);
+    this.changes = new ChangeEngine(store);
+    this.notifications = new Notifications(store);
+    this.exportStore = new ExportStore(store);
+    // Durable events become notifications through the same outbox as everything else, so a crash between the two loses neither.
+    this.bus.subscribe("webhooks", (ev) => {
+      if (ev.topic === "c22.COMPLETION_RECORDED") this.notifications.publish({ eventId: ev.eventId, type: "investigation.completed", revision: null, summary: "An investigation was finalized.", links: { investigation: String(ev.payload.investigationId ?? "") } });
+    });
+    this.defects = new DefectWorkflow(store);
   }
+
+  /** C26 Phase A is deliberately report-only: callers supply registered semantic facts for a pinned indexed revision. */
+  detectDefects(ctx: CallContext, req: DefectDetectionInput): ApiResult<{ findings: DetectorFinding[]; truncated: boolean }> {
+    const parsed = DefectDetectionInputSchema.safeParse(req);
+    if (!parsed.success) return fail(ctx, { code: "INVALID_SCHEMA", message: "Invalid defect.v1 detection request", retryable: false });
+    req = parsed.data;
+    if (ctx.deadlineMs <= Date.now()) return fail(ctx, { code: "DEADLINE_EXCEEDED", message: "The detection deadline has expired", retryable: false });
+    if (ctx.expectedRevision && ctx.expectedRevision !== req.revision) return fail(ctx, { code: "STALE_REVISION", message: "The requested revision differs from the expected revision", retryable: false });
+    if (!req || typeof req.revision !== "string" || !this.store.revision(req.revision)) return fail(ctx, { code: "NOT_FOUND", message: "the pinned revision is not indexed or is no longer accessible", retryable: false });
+    if ((req.lockOrders && !Array.isArray(req.lockOrders)) || (req.memoryAccesses && !Array.isArray(req.memoryAccesses))) return fail(ctx, { code: "INVALID_SCHEMA", message: "lockOrders and memoryAccesses must be arrays", retryable: false });
+    const facts = [...(req.lockOrders ?? []), ...(req.memoryAccesses ?? [])];
+    const entityIds = new Set(this.store.entities(req.revision).map((e) => e.entityId));
+    const policy = policyFor(this.store, this.store.revision(req.revision)!.repoRoot);
+    const files = new Map(this.store.entities(req.revision).map((e) => [e.entityId, e.file]));
+    for (const fact of facts) {
+      if (!fact || typeof fact.id !== "string" || typeof fact.entityId !== "string" || !entityIds.has(fact.entityId)) return fail(ctx, { code: "INVALID_SCHEMA", message: `fact ${fact?.id ?? "(unknown)"} cites an entity outside the pinned revision`, retryable: false });
+      if (policy.deniedEntity(fact.entityId, (id) => files.get(id))) return fail(ctx, { code: "FORBIDDEN", message: "The request includes inaccessible entities", retryable: false });
+      if (!Array.isArray(fact.evidenceIds) || fact.evidenceIds.length === 0 || fact.evidenceIds.some((id) => typeof id !== "string" || !this.store.evidence(req.revision, id))) return fail(ctx, { code: "EVIDENCE_MISSING", message: `fact ${fact.id} must cite evidence in the pinned revision`, retryable: false });
+      for (const id of fact.evidenceIds) {
+        const evidence = this.store.evidence(req.revision, id)!;
+        if (evidence.state !== "CURRENT") return fail(ctx, { code: "EVIDENCE_STALE", message: "The request cites evidence that is not current", retryable: false });
+        if (policy.deniedEntity(evidence.sourceId, (x) => files.get(x))) return fail(ctx, { code: "FORBIDDEN", message: "The request cites inaccessible evidence", retryable: false });
+      }
+      if (fact.span && fact.span.revision !== req.revision) return fail(ctx, { code: "STALE_REVISION", message: `fact ${fact.id} has a source span from another revision`, retryable: false });
+    }
+    const supplied = req.lockOrders !== undefined || req.memoryAccesses !== undefined;
+    const value = supplied ? detectDefects(req.revision, { lockOrders: req.lockOrders, memoryAccesses: req.memoryAccesses, maxFacts: req.budget?.maxFacts, maxFindings: req.budget?.maxFindings }) : detectIndexedDefects(this.store, req.revision, req.budget);
+    const gaps = supplied ? ["Caller-supplied semantic facts have not been independently resolved by the language adapter."] : (value as ReturnType<typeof detectIndexedDefects>).coverageGaps;
+    return ok(ctx, value, { revision: req.revision, completeness: "PARTIAL", warnings: [...gaps, ...(value.truncated ? ["The configured analysis bound was reached; findings are incomplete."] : [])] });
+  }
+
+  compareDefectBenchmarks(ctx: CallContext, req: { baseline: number[]; candidate: number[]; policy: BenchmarkPolicy }): ApiResult<BenchmarkResult> {
+    if (!req || !Array.isArray(req.baseline) || !Array.isArray(req.candidate) || req.baseline.length > 10000 || req.candidate.length > 10000 || !req.policy || !Number.isFinite(req.policy.minimumImprovement) || req.policy.minimumImprovement <= 0 || !Number.isFinite(req.policy.maximumRegression) || req.policy.maximumRegression < 0 || !Number.isSafeInteger(req.policy.minimumSamples) || req.policy.minimumSamples < 1) {
+      return fail(ctx, { code: "INVALID_SCHEMA", message: "baseline, candidate, and a valid comparison policy are required", retryable: false });
+    }
+    return ok(ctx, compareBenchmark(req.baseline, req.candidate, req.policy));
+  }
+
+  async defectCall<T>(ctx: CallContext, fn: () => T | Promise<T>): Promise<ApiResult<T>> {
+    try { return ok(ctx, await fn()); }
+    catch (e) {
+      if (e instanceof DefectError) return fail(ctx, { code: e.code, message: e.message, retryable: e.code === "VERSION_CONFLICT" });
+      return fail(ctx, { code: "INVALID_SCHEMA", message: "The defect workflow request could not be accepted", retryable: false });
+    }
+  }
+
+  startDefectDetection(ctx: CallContext, req: DefectDetectionInput): ApiResult<JobView> {
+    const parsed = DefectDetectionInputSchema.safeParse(req);
+    if (!parsed.success || !ctx.idempotencyKey) return fail(ctx, { code: "INVALID_SCHEMA", message: "A valid detection request and idempotency key are required", retryable: false });
+    req = parsed.data;
+    if (!this.store.revision(req.revision)) return fail(ctx, { code: "NOT_FOUND", message: "Revision is not accessible", retryable: false });
+    const scoped = { ...ctx, idempotencyKey: `defect:${artifactHash([ctx.actor.tenantId, ctx.actor.principalId, ctx.idempotencyKey])}` };
+    const hash = artifactHash(req), prior = this.store.jobByIdempotencyKey(scoped.idempotencyKey);
+    if (prior && prior.params.defectRequestHash !== hash) return fail(ctx, { code: "VERSION_CONFLICT", message: "Idempotency key was used for a different detection request", retryable: false });
+    return ok(ctx, this.jobs.enqueue(scoped, { kind: "defect-detect", params: { revision: req.revision, repoPath: this.store.revision(req.revision)!.repoRoot, defectRequestHash: hash }, run: async (c, control) => {
+      control.checkpoint();
+      const result = this.detectDefects(c, req);
+      if (!result.ok) return result;
+      control.commit();
+      for (const f of result.value.findings) this.defects.recordFinding({ ...c, idempotencyKey: `${c.idempotencyKey}:${f.id}` }, f);
+      return ok(c, result.value.findings, { revision: req.revision, completeness: result.metadata.completeness, warnings: result.metadata.warnings });
+    } }));
+  }
+
+  /** Public commands do not register adapters, provision grants, dispatch native code, or publish to a forge. */
+  readonly defectOps: Record<string, (ctx: CallContext, body: any) => Promise<ApiResult<unknown>>> = {
+    "C26/listFindings": (c, b) => this.defectCall(c, () => this.defects.list(b.revision, "finding")),
+    "C26/explainFinding": (c, b) => this.defectCall(c, () => {
+      const f = this.defects.get<DetectorFinding>(b.findingId, "finding");
+      if (f.version !== b.version) throw new DefectError("VERSION_CONFLICT", "Finding version changed");
+      return f.value;
+    }),
+    "C26/defineObligations": (c, b) => this.defectCall(c, () => this.defects.defineObligations(c, b.findingId, b.expectedVersion, b.obligations)),
+    "C27/listCapabilities": (c, b) => this.defectCall(c, () => this.defects.listCapabilities(b.languageId, b.platformId)),
+    "C27/prepareExperiment": (c, b) => this.defectCall(c, () => this.defects.prepareExperiment(c, b.spec)),
+    "C27/getRunManifest": (c, b) => this.defectCall(c, () => this.defects.get(b.manifestId, "manifest").value),
+    "C28/proposeFix": (c, b) => this.defectCall(c, () => this.defects.proposeFix(c, b.proposal)),
+    "C28/validateFix": (c, b) => this.defectCall(c, () => this.defects.validateFix(c, b)),
+    "C30/preparePullRequest": (c, b) => this.defectCall(c, () => this.defects.preparePullRequest(c, b)),
+  };
 
   // ---------------------------------------------------------------- model gateway with egress control
   private async callModel<T>(ctx: CallContext, rev: RevisionRow, req: ModelRequest): Promise<{ result: GatewayResult<T> | GatewayFailure; provider: ModelProvider; note?: string }> {
     let provider = this.model, note: string | undefined, request = req;
-    if (provider.hosted) {
-      if (!this.store.allowHosted(rev.repoRoot)) {
+    // Fail closed: anything that is not clearly "stays on this machine" is treated as leaving it, and anything that goes wrong
+    // while deciding or recording an egress means nothing is sent. An unknown provider, an unreadable policy, an audit that
+    // cannot be written, a scrubber that throws: each of those is a refusal, not a pass-through.
+    if (provider.hosted !== false) {
+      let allowed = false;
+      try { allowed = this.store.allowHosted(rev.repoRoot) === true; } catch { allowed = false; }
+      if (!allowed) {
         provider = this.offline;
         note = "Sending code structure to the hosted model is not approved for this repository, so the offline model answered. Approve it under Repository → hosted model.";
-        this.store.audit(actor(ctx), "egress.denied", rev.repoRoot, { purpose: req.purpose, destination: `${this.model.name}/${this.model.model}` });
+        try { this.store.audit(actor(ctx), "egress.denied", rev.repoRoot, { purpose: req.purpose, destination: `${this.model.name}/${this.model.model}` }); } catch { /* the denial stands even if it could not be logged */ }
       } else {
-        const scrub = scrubBundle(req.bundle);
-        request = { ...req, bundle: scrub.bundle };
-        this.store.audit(actor(ctx), "egress.approved", rev.repoRoot, {
-          purpose: req.purpose, destination: `${provider.name}/${provider.model}`, payloadHash: payloadHash(scrub.bundle), fields: EGRESS_FIELDS, redactions: scrub.removed.length, minimized: scrub.minimized,
-        });
-        if (scrub.removed.length) note = `${scrub.removed.length} element(s) that looked like secrets were removed before sending.`;
-        // History facts (authors, messages, commit ids) are dropped by the scrubber and reported only in the audit trail.
+        try {
+          const scrub = scrubBundle(req.bundle);
+          request = { ...req, bundle: scrub.bundle };
+          // The record is written before anything is sent: a send that cannot be audited does not happen.
+          this.store.audit(actor(ctx), "egress.approved", rev.repoRoot, {
+            purpose: req.purpose, destination: `${provider.name}/${provider.model}`, payloadHash: payloadHash(scrub.bundle), fields: EGRESS_FIELDS, redactions: scrub.removed.length, minimized: scrub.minimized,
+          });
+          if (scrub.removed.length) note = `${scrub.removed.length} element(s) that looked like secrets were removed before sending.`;
+        } catch (e) {
+          provider = this.offline; request = req;
+          note = "Sending to the hosted model was stopped because the safety checks before it could not complete, so the offline model answered.";
+          try { this.store.audit(actor(ctx), "egress.denied", rev.repoRoot, { purpose: req.purpose, destination: `${this.model.name}/${this.model.model}`, reason: "pre-send check failed" }); } catch { /* ignore */ }
+          void e;
+        }
       }
     }
-    const result = await runModel<T>(provider, request, { deadlineMs: Math.max(1000, ctx.deadlineMs - Date.now()) });
+    const hostedCall = provider.hosted !== false;
+    let result = await runModel<T>(provider, request, { deadlineMs: Math.max(1000, ctx.deadlineMs - Date.now()), budget: hostedCall ? { controller: this.budget, scope: rev.repoRoot } : undefined });
+    if (hostedCall && !result.ok && result.error.code === "BUDGET_EXCEEDED") {
+      // Feature degradation, not failure: the offline model answers and the person is told why.
+      try { this.store.audit(actor(ctx), "budget.exhausted", rev.repoRoot, { purpose: req.purpose, message: result.error.message }); } catch { /* ignore */ }
+      note = `The hosted-model budget for this repository is used up (${result.error.message}), so the offline model answered.`;
+      provider = this.offline;
+      result = await runModel<T>(provider, req, { deadlineMs: Math.max(1000, ctx.deadlineMs - Date.now()) });
+    }
+    if (provider === this.model) this.modelError = result.ok ? null : result.error.code;
     return { result, provider, note };
   }
 
   private persist(claims: Claim[]) { for (const c of claims) this.store.putClaim(c); }
 
   // ---------------------------------------------------------------- repository
-  async ingestRepository(ctx: CallContext, req: { repoPath: string }): Promise<ApiResult<RevisionRow>> {
+  async ingestRepository(ctx: CallContext, req: { repoPath: string }, control?: JobControl): Promise<ApiResult<RevisionRow & { reuse?: { files: number; of: number } }>> {
     if (!req.repoPath || !isAbsolute(req.repoPath)) return fail(ctx, { code: "INVALID_SCHEMA", message: "repoPath must be an absolute path", retryable: false });
+    if (this.store.isRevoked(req.repoPath)) return fail(ctx, { code: "FORBIDDEN", message: "access to this source was withdrawn; it is not indexed until access is granted again", retryable: false });
     try {
-      const batch = await this.worker.index(req.repoPath);
+      // Incremental re-index (CE-3): hash the worktree against the previous revision and pass it
+      // to the worker, which re-parses only files whose bytes changed. Budgeted: hashing costs
+      // a full walk but never parses; on any error the full index is used.
+      let changes: { revision: string; files: Record<string, string> } | undefined;
+      control?.progress({ phase: "hashing", message: "Checking which files changed…" });
+      try {
+        const prev = this.store.latestRevision(req.repoPath);
+        if (prev && existsSync(prev.repoRoot)) {
+          const t0 = Date.now();
+          const files = hashFiles(prev.repoRoot, 30_000, 5_000);
+          if (files.error) {
+            this.store.audit(actor(ctx), "repo.ingest", req.repoPath, { incremental: `aborted after ${files.scanned} file(s): ${files.error}` });
+          } else {
+            // The whole map: the worker reuses a parse when it holds the same (path, hash) from this
+            // process's previous index run, which is exactly the set of unchanged files.
+            changes = { revision: prev.id, files: Object.fromEntries(files.map) };
+            this.store.audit(actor(ctx), "repo.ingest", req.repoPath, { incremental: `${files.count} file(s) hashed for the incremental pass`, walkAndHashMs: Date.now() - t0, filesScanned: files.scanned });
+          }
+        }
+      } catch { changes = undefined; /* fall back to a full index */ }
+      control?.checkpoint();
+      control?.progress({ phase: "parsing", message: "Parsing the code…" });
+      // The parser is one blocking call, so cancelling it means ending the process (a fresh one replaces it).
+      const stopWorker = control?.onCancel(() => this.worker.abort());
+      let batch;
+      try {
+        const run = this.worker.index(req.repoPath, control ? 600_000 : 120_000, changes);
+        batch = control ? await control.guard(run) : await run;
+      } finally { stopWorker?.(); }
+      control?.commit();
+      const parentId = this.store.latestRevision(req.repoPath)?.id ?? null;
       const row = this.store.putBatch(batch);
-      this.store.audit(actor(ctx), "repo.ingest", row.repoRoot, { revision: row.id, files: row.fileCount });
+      // Stable identities across revisions (C08). A failure here must not lose the index: identities can be rebuilt later.
+      try { this.registry.registerRevision(row.id, parentId && parentId !== row.id ? parentId : null); } catch (e) { this.store.audit(actor(ctx), "registry.failed", row.id, { error: String((e as Error).message).slice(0, 200) }); }
+      const reused = batch.diagnostics.find((d) => d.code === "REUSED_CACHED_PARSES");
+      const reuse = reused ? { files: Number((/^incremental: (\d+)/.exec(reused.message)?.[1]) ?? 0), of: row.fileCount } : undefined;
+      this.store.audit(actor(ctx), "repo.ingest", row.repoRoot, { revision: row.id, files: row.fileCount, reusedParses: reused?.message ?? "none (full parse)" });
       const tests = ingestTestArtifacts(this.store, row);
-      const warnings = batch.diagnostics.map((d) => d.message);
+      const warnings = batch.diagnostics.filter((d) => d.code !== "REUSED_CACHED_PARSES").map((d) => d.message);
+      const spans = ingestTraceExports(this.store, row);
+      if (spans) warnings.push(`Loaded trace exports (${spans.found.join(", ")}): ${spans.spans} span(s), ${spans.errors} error span(s)${spans.p95 !== null ? `, p95 ${spans.p95} ms` : ""}.`, ...spans.staleness.map((x) => `Trace data may be out of date: ${x}`));
+      if (reuse) warnings.unshift(reuse.files === reuse.of ? "All files unchanged since the previous revision; every parse was reused." : `Incremental: parsed ${reuse.of - reuse.files} of ${reuse.of} file(s); the rest were reused from cache.`);
       if (tests) warnings.push(`Loaded test artifacts (${tests.found.join(", ")}): ${tests.tests.passed} passed, ${tests.tests.failed} failed${tests.coverageLinePercent !== null ? `, ${tests.coverageLinePercent}% line coverage` : ""}.`, ...tests.staleness.map((x) => `Test data may be out of date: ${x}`));
-      return ok(ctx, row, { revision: row.id, warnings, completeness: batch.diagnostics.length ? "PARTIAL" : "COMPLETE" });
+      return ok(ctx, { ...row, reuse }, { revision: row.id, warnings, completeness: batch.diagnostics.some((d) => d.code !== "REUSED_CACHED_PARSES") ? "PARTIAL" : "COMPLETE" });
     } catch (e) {
-      return fail(ctx, e instanceof WorkerError ? e.api : { code: "STORAGE_FAILURE", message: (e as Error).message, retryable: true });
+      if (e instanceof Cancelled || (control && e instanceof WorkerError && e.api.code === "CANCELLED")) throw new Cancelled();
+      return fail(ctx, e instanceof WorkerError ? e.api : storageFailure(e));
     }
+  }
+
+  // ---------------------------------------------------------------- C22 hypothesis and agentic investigation
+  /** Run an engine call as an API call: typed errors become typed failures, never exceptions across the boundary. */
+  async c22Call<T>(ctx: CallContext, fn: () => T | Promise<T>): Promise<ApiResult<T>> {
+    try { return ok(ctx, await fn()); }
+    catch (e) {
+      if (e instanceof C22Error) return fail(ctx, { code: e.code, message: e.message, retryable: e.code === "VERSION_CONFLICT", ...(e.currentVersion !== undefined ? { currentVersion: e.currentVersion } : {}) });
+      return fail(ctx, storageFailure(e));
+    }
+  }
+
+  /** Schedule one bounded wave as a job (the same C07 queue); the wave commits its own snapshot even if the question stays unresolved. */
+  private startWave(ctx: CallContext, investigationId: string, expectedVersion: number, maxSteps: number) {
+    const admitted = this.c22.admitWave(ctx, { investigationId, expectedVersion });
+    return this.jobs.enqueue(ctx, {
+      kind: "investigate", params: { investigationId },
+      run: async (jctx) => { try { return ok(jctx, await this.c22.runWave(investigationId, admitted.generation, maxSteps)); } catch (e) { return fail(jctx, storageFailure(e)); } },
+    });
+  }
+  /** Await a wave and return the snapshot it committed (for callers that want a synchronous answer). */
+  async runInvestigation(ctx: CallContext, req: { investigationId: string; expectedVersion?: number; maximumStepsThisWave?: number }) {
+    const snap = this.c22.load(req.investigationId);
+    const job = this.startWave(ctx, req.investigationId, req.expectedVersion ?? snap.version, req.maximumStepsThisWave ?? snap.policy.maxPlanSteps);
+    await this.jobs.settled(job.id);
+    return this.c22.load(req.investigationId);
+  }
+
+  /** The proposed v2 catalogue (design §5). Privileged operations (runtime intake, experiment dispatch, revocation) are not in this table. */
+  readonly c22v2: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>>> = {
+    create: (c, b) => this.c22Call(c, () => this.c22.create(c, b)),
+    get: (c, b) => this.c22Call(c, () => this.c22.get(b.investigationId)),
+    list: (c, b) => this.c22Call(c, () => this.c22.list(b.workspaceId, b.limit)),
+    proposeHypothesis: (c, b) => this.c22Call(c, () => this.c22.proposeHypothesis(c, b).value),
+    reviseHypothesis: (c, b) => this.c22Call(c, () => this.c22.reviseHypothesis(c, b).value),
+    retireHypothesis: (c, b) => this.c22Call(c, () => this.c22.retireHypothesis(c, b).receipt),
+    proposeChecks: (c, b) => this.c22Call(c, () => this.c22.proposeChecks(c, b).value),
+    advanceV2: (c, b) => this.c22Call(c, () => this.startWave(c, b.investigationId, b.expectedVersion, b.maximumStepsThisWave ?? 8)),
+    attachEvidence: (c, b) => this.c22Call(c, () => { const r = this.c22.attachEvidence(c, b); return { receipt: r.receipt, observationIds: r.value.observationIds, scheduledAssessmentStepIds: r.value.scheduledAssessmentStepIds, rejectedEvidenceIds: [] as string[] }; }),
+    reassess: (c, b) => this.c22Call(c, () => this.c22.reassess(c, b).receipt),
+    steerV2: (c, b) => this.c22Call(c, () => { const r = this.c22.steer(c, b); return { snapshot: this.c22.load(b.investigationId), invalidatedAttemptIds: r.value.invalidatedAttemptIds, clarification: r.value.clarification }; }),
+    pause: (c, b) => this.c22Call(c, () => this.c22.pause(c, b).receipt),
+    resume: (c, b) => this.c22Call(c, () => { this.c22.resume(c, b); return this.c22.load(b.investigationId); }),
+    cancel: (c, b) => this.c22Call(c, () => this.c22.cancel(c, b).receipt),
+    getCompletion: (c, b) => this.c22Call(c, () => this.c22.getCompletion(b.investigationId)),
+    finalize: (c, b) => this.c22Call(c, () => this.c22.finalize(c, b).value),
+    reopen: (c, b) => this.c22Call(c, () => { this.c22.reopen(c, b); return this.c22.load(b.investigationId); }),
+    proposeExperiment: (c, b) => this.c22Call(c, () => this.c22.proposeExperiment(c, b).value),
+    getBoard: (c, b) => this.c22Call(c, () => this.c22.getBoard(b.investigationId, b.knownVersion)),
+    readEvents: (c, b) => this.c22Call(c, () => this.c22.readEvents(b.investigationId, Number(b.afterSequence) || 0, b.limit)),
+  };
+
+  /** The original five APIs, preserved. `start` makes a READY plan with a seed step and does not wait for seeding. */
+  readonly c22Legacy: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>>> = {
+    start: (c, b) => this.c22Call(c, () => { const s = this.c22.create(c, { workspaceId: b.workspaceId, goal: b.goal }); return toPlan(s, this.c22.stepsOf(s.id)); }),
+    advance: (c, b) => this.c22Call(c, () => this.startWave(c, b.planId, b.expectedVersion, 8)),
+    steer: (c, b) => this.c22Call(c, () => { const r = this.c22.steerLegacy(c, { investigationId: b.planId, expectedVersion: b.expectedVersion, instruction: b.instruction }); const s = this.c22.load(b.planId); return { ...toPlan(s, this.c22.stepsOf(s.id)), clarification: r.value.clarification }; }),
+    interrupt: (c, b) => this.c22Call(c, () => this.c22.pause(c, { investigationId: b.planId, expectedVersion: b.expectedVersion, reason: "interrupted" }).receipt),
+    // A summary read: it does not close or finalize anything.
+    conclude: (c, b) => this.c22Call(c, () => this.c22.getCompletion(b.planId).findings),
+  };
+
+  // ---------------------------------------------------------------- C03 source permission
+  /**
+   * Withdraw permission to read a repository. From this call on every read treats it as not indexed (nothing derived from it can
+   * be fetched, even before the purge), investigations over it lose access, queued and running jobs for it are cancelled,
+   * and by default everything derived from it is deleted. Re-indexing it is refused until access is granted again.
+   */
+  revokeSource(ctx: CallContext, req: { repoRoot: string; purge?: boolean }): ApiResult<{ revoked: true; purged: boolean; investigations: number; jobsCancelled: number; rowsAfter: number }> {
+    if (!req.repoRoot || !isAbsolute(req.repoRoot)) return fail(ctx, { code: "INVALID_SCHEMA", message: "repoRoot must be an absolute path", retryable: false });
+    try {
+      for (const r of this.store.db.prepare("select id from revisions where repo_root = ?").all(req.repoRoot) as { id: string }[]) this.notifications.cancelForRevision(r.id);
+      this.store.setRevoked(req.repoRoot, true);
+      let investigations = 0;
+      for (const r of this.store.db.prepare("select id, json from c22_investigations where deleted = 0").all() as { id: string; json: string }[]) {
+        try { if ((JSON.parse(r.json).scope?.repoRoot) === req.repoRoot) { this.c22.revokeAccess(r.id, "source-revoked"); investigations++; } } catch { /* already stopped */ }
+      }
+      let jobsCancelled = 0;
+      for (const j of this.store.activeJobs()) if (j.params.repoPath === req.repoRoot) { const c = this.jobs.cancel(j.id); if (c?.cancelled) jobsCancelled++; }
+      this.store.audit(actor(ctx), "source.revoke", "(source)", { investigations, jobsCancelled, purge: req.purge !== false });
+      let rowsAfter = 0, purged = false;
+      if (req.purge !== false) { const d = deleteRepo(this.store, req.repoRoot, actor(ctx)); rowsAfter = d.rowsAfter; purged = true; }
+      return ok(ctx, { revoked: true, purged, investigations, jobsCancelled, rowsAfter });
+    } catch (e) { return fail(ctx, storageFailure(e)); }
+  }
+  grantSource(ctx: CallContext, req: { repoRoot: string }): ApiResult<{ granted: true }> {
+    this.store.setRevoked(req.repoRoot, false);
+    this.store.audit(actor(ctx), "source.grant", "(source)", {});
+    return ok(ctx, { granted: true });
+  }
+
+  // ---------------------------------------------------------------- C27 counterfactual scenarios
+  /** Evaluate a typed what-if against a revision. Reads only. A scenario that cannot mean anything is refused with every reason. */
+  evaluateScenario(ctx: CallContext, req: { revision?: string; scenario: Scenario; assumptions?: AssumptionInput[]; capacity?: CapacityData | null }): ApiResult<ScenarioResult> {
+    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
+    try {
+      const r = evaluateScenario(this.store, rev, req.scenario, { assumptions: req.assumptions, capacity: req.capacity });
+      this.store.audit(actor(ctx), "scenario.evaluate", rev.id, { ops: req.scenario.ops.length, level: req.scenario.level });
+      return ok(ctx, r, { revision: rev.id });
+    } catch (e) { if (e instanceof ScenarioError) return fail(ctx, { code: "INVALID_SCHEMA", message: e.message, retryable: false }); return fail(ctx, storageFailure(e)); }
+  }
+  compareScenarios(ctx: CallContext, req: { a: ScenarioResult; b: ScenarioResult }): ApiResult<ReturnType<typeof compareScenarios>> {
+    try { return ok(ctx, compareScenarios(req.a, req.b)); } catch (e) { if (e instanceof ScenarioError) return fail(ctx, { code: "INVALID_SCHEMA", message: e.message, retryable: false }); throw e; }
+  }
+
+  // ---------------------------------------------------------------- C28 visual intent and change proposals
+  async changeCall<T>(ctx: CallContext, fn: () => T | Promise<T>): Promise<ApiResult<T & unknown>> {
+    try { return ok(ctx, await fn()); }
+    catch (e) {
+      if (e instanceof ChangeError) return fail(ctx, { code: e.code === "NEEDS_CLARIFICATION" ? "INSUFFICIENT_EVIDENCE" : e.code, message: e.message + (e.options ? ` Options: ${e.options.map((o) => `${o.id} (${o.label})`).join("; ")}` : ""), retryable: e.code === "NEEDS_CLARIFICATION" });
+      return fail(ctx, storageFailure(e));
+    }
+  }
+  /** Gestures and proposals. Nothing here writes to the repository: a proposal is data, and what leaves is a patch. */
+  readonly changeOps: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>>> = {
+    "C28/interpretDrag": (c, b) => this.changeCall(c, () => this.changes.interpretDrag(b.revision, b)),
+    "C28/proposeFromDrag": (c, b) => this.changeCall(c, () => {
+      const g = this.changes.interpretDrag(b.revision, b);
+      const pick = b.choice ? g.options.find((o) => o.id === b.choice) : g.outcome === "READY" ? g.options[0] : undefined;
+      if (g.outcome === "REJECTED") throw new ChangeError("INVALID_SCHEMA", g.reason ?? "that gesture means nothing here");
+      if (!pick) throw new ChangeError("NEEDS_CLARIFICATION", g.reason ?? "that gesture can mean more than one thing", g.options);
+      return this.changes.propose(c.actor.principalId, { revision: b.revision, intent: pick.intent });
+    }),
+    "C28/propose": (c, b) => this.changeCall(c, () => this.changes.propose(c.actor.principalId, { revision: b.revision, intent: b.intent as Intent })),
+    "C28/get": (c, b) => this.changeCall(c, () => this.changes.checkFresh(c.actor.principalId, b.proposalId)),
+    "C28/list": (c, b) => this.changeCall(c, () => this.changes.list(b.revision)),
+    "C28/validate": (c, b) => this.changeCall(c, () => this.changes.validate(c.actor.principalId, b.proposalId)),
+    "C28/approve": (c, b) => this.changeCall(c, () => this.changes.approve(c.actor.principalId, b.proposalId, b.expectedVersion, b.explanation)),
+    "C28/reject": (c, b) => this.changeCall(c, () => this.changes.reject(c.actor.principalId, b.proposalId, b.reason)),
+    "C28/exportPatch": (c, b) => this.changeCall(c, () => this.changes.exportPatch(c.actor.principalId, b.proposalId)),
+  };
+
+  // ---------------------------------------------------------------- C30 exports and notifications
+  async exportCall<T>(ctx: CallContext, fn: () => T | Promise<T>): Promise<ApiResult<T>> {
+    try { return ok(ctx, await fn()); } catch (e) { if (e instanceof ExportError) return fail(ctx, { code: e.code, message: e.message, retryable: false }); return fail(ctx, storageFailure(e)); }
+  }
+  /** What leaves this system. Claims are read from the store and carry their mode, confidence, state and revision; refuted, hidden and denied ones do not leave. */
+  readonly exportOps: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>>> = {
+    "C30/exportClaims": (c, b) => this.exportCall(c, () => {
+      const rev = b.revision ? this.store.revision(b.revision) : this.store.latestRevision();
+      if (!rev) throw new ExportError("NOT_FOUND", "no indexed revision, or access to it was withdrawn");
+      return this.exportStore.create(rev, buildExport(this.store, rev, { title: b.title, claimIds: b.claimIds, format: b.format ?? "markdown" }), actor(c));
+    }),
+    "C30/getExport": (c, b) => this.exportCall(c, () => this.exportStore.get(b.exportId)),
+    "C30/subscribe": (c, b) => this.exportCall(c, () => { const s = this.notifications.subscribe(b); this.store.audit(actor(c), "webhook.subscribe", s.id, { events: s.events }); return { id: s.id, url: s.url, events: s.events }; }),
+    "C30/unsubscribe": (c, b) => this.exportCall(c, () => { this.notifications.unsubscribe(b.subscriptionId); this.store.audit(actor(c), "webhook.unsubscribe", b.subscriptionId, {}); return { ok: true }; }),
+    "C30/listDeliveries": (c) => this.exportCall(c, () => this.notifications.deliveries().map((d) => ({ ...d, payload: undefined }))),
+  };
+
+  // ---------------------------------------------------------------- C31 storage and C32 operations
+  /** Is it healthy? Answers even when parts are down, and says which. */
+  async health(ctx: CallContext, _req: Record<string, never> = {}): Promise<ApiResult<Health>> {
+    return ok(ctx, await healthOf({ store: this.store, ping: () => this.worker.ping(), model: { name: this.model.name, model: this.model.model, lastError: this.modelError }, dbPath: this.store.path }));
+  }
+
+  /** What an editor extension needs to decide whether it can talk to this server. */
+  version(ctx: CallContext, _req: Record<string, never> = {}): ApiResult<{ api: string; minExtension: string; schema: number }> {
+    return ok(ctx, { api: API_VERSION, minExtension: MIN_EXTENSION, schema: Number((this.store.db.prepare("select coalesce(max(version),0) v from schema_version").get() as { v: number }).v) });
+  }
+
+  /** A consistent copy of the database, written beside it under backups/. `name` is a plain file name, never a path. */
+  backup(ctx: CallContext, req: { name?: string }): ApiResult<{ path: string; revisions: number; drill: RestoreDrill }> {
+    const name = (req.name ?? `cie-${new Date().toISOString().replace(/[:.]/g, "-")}`).replace(/[^A-Za-z0-9._-]/g, "_");
+    if (this.store.path === ":memory:") return fail(ctx, { code: "INVALID_SCHEMA", message: "an in-memory database cannot be backed up", retryable: false });
+    const dir = join(dirname(this.store.path), "backups");
+    try {
+      mkdirSync(dir, { recursive: true });
+      const b = backupStore(this.store, join(dir, `${name}.db`));
+      // A backup nobody has restored is a hope. Prove this one before saying it exists.
+      const drill = restoreDrill(b.path);
+      this.store.audit(actor(ctx), "storage.backup", b.path, { revisions: b.revisions, drillOk: drill.ok });
+      return ok(ctx, { ...b, drill });
+    } catch (e) { return fail(ctx, storageFailure(e)); }
+  }
+
+  /** Remove revisions nothing refers to. `dryRun` says what would go without removing it. */
+  gc(ctx: CallContext, req: { dryRun?: boolean; minAgeDays?: number }): ApiResult<GcReport> {
+    const r = gcStore(this.store, { dryRun: req.dryRun ?? true, minAgeMs: Math.max(0, req.minAgeDays ?? 0) * 86_400_000 });
+    if (!r.dryRun) this.store.audit(actor(ctx), "storage.gc", "(revisions)", { removed: r.removed.length, kept: Object.keys(r.kept).length });
+    return ok(ctx, r);
+  }
+
+  /** Delete a repository and everything derived from it. The caller must repeat the path, so it cannot happen by accident. */
+  deleteRepository(ctx: CallContext, req: { repoRoot: string; confirm: string }): ApiResult<DeleteReport> {
+    if (!req.repoRoot || req.confirm !== req.repoRoot) return fail(ctx, { code: "INVALID_SCHEMA", message: "to delete, repeat the repository path in `confirm`", retryable: false });
+    if (!this.store.hasRepo(req.repoRoot)) return fail(ctx, { code: "NOT_FOUND", message: "unknown repository", retryable: false });
+    try { return ok(ctx, deleteRepo(this.store, req.repoRoot, actor(ctx))); } catch (e) { return fail(ctx, storageFailure(e)); }
+  }
+
+  // ---------------------------------------------------------------- C07 jobs
+  /** Start indexing or concept extraction in the background. Returns the job at once; poll getJob for progress. */
+  enqueueJob(ctx: CallContext, req: { kind: "index" | "concepts"; repoPath?: string; revision?: string }): ApiResult<JobView & { deduped?: boolean }> {
+    if (req.kind === "index") {
+      if (!req.repoPath || !isAbsolute(req.repoPath)) return fail(ctx, { code: "INVALID_SCHEMA", message: "repoPath must be an absolute path", retryable: false });
+      const repoPath = req.repoPath;
+      return ok(ctx, this.jobs.enqueue(ctx, { kind: "index", params: { repoPath }, run: (jctx, control) => this.ingestRepository(jctx, { repoPath }, control) }));
+    }
+    if (req.kind === "concepts") {
+      const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+      if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index a repository first", retryable: false });
+      return ok(ctx, this.jobs.enqueue(ctx, { kind: "concepts", params: { revision: rev.id, repoPath: rev.repoRoot }, run: (jctx, control) => this.extractConcepts(jctx, { revision: rev.id }, control) }));
+    }
+    return fail(ctx, { code: "INVALID_SCHEMA", message: "kind must be index or concepts", retryable: false });
+  }
+
+  getJob(ctx: CallContext, req: { jobId: string }): ApiResult<JobView> {
+    const j = this.jobs.get(req.jobId);
+    return j ? ok(ctx, j) : fail(ctx, { code: "NOT_FOUND", message: "no such job", retryable: false });
+  }
+
+  listJobs(ctx: CallContext, req: { limit?: number }): ApiResult<JobView[]> {
+    return ok(ctx, this.jobs.list(Math.min(Math.max(req.limit ?? 20, 1), 50)));
+  }
+
+  /** Ask a job to stop. Before it starts saving, it stops and nothing is kept; once it is saving, it is left to finish. */
+  cancelJob(ctx: CallContext, req: { jobId: string }): ApiResult<{ job: JobView; cancelled: boolean; reason?: string }> {
+    const r = this.jobs.cancel(req.jobId);
+    if (!r) return fail(ctx, { code: "NOT_FOUND", message: "no such job", retryable: false });
+    this.store.audit(actor(ctx), "job.cancel", req.jobId, { kind: r.job.kind, cancelled: r.cancelled });
+    return ok(ctx, r);
   }
 
   /** Directory names only (never file contents) so the UI can offer a folder picker. Loopback-only gateway. */
@@ -186,26 +748,95 @@ export class Service {
   }
 
   // ---------------------------------------------------------------- concept cards
-  async extractConcepts(ctx: CallContext, req: { revision?: string }): Promise<ApiResult<{ cards: ConceptCard[]; dropped: string[]; provider: string }>> {
+  async extractConcepts(ctx: CallContext, req: { revision?: string }, control?: JobControl): Promise<ApiResult<{ cards: ConceptCard[]; dropped: string[]; provider: string }>> {
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
     const all: ConceptCard[] = [], dropped: string[] = [], warnings: string[] = [];
     let providerName = `${this.model.name}/${this.model.model}`;
-    for (const ids of chunkSymbols(this.store, rev.id)) {
-      const bundle = bundleFor(this.store, rev.id, ids, ["concept extraction"]);
-      const { result, provider, note } = await this.callModel<ConceptsOutput>(ctx, rev, { purpose: "EXTRACT", schemaId: SCHEMA_CONCEPTS, question: "Extract concept cards", bundle });
+    // Incremental invalidation (CE-3, region-level): concept cards whose every member symbol is
+    // textually unchanged since the previous extraction are carried over verbatim (their claim
+    // re-gated against this revision); only regions with changed members are re-extracted.
+    const versions = this.store.conceptVersions(rev.repoRoot);
+    const priorVersion = versions[0]?.version ?? 0;
+    const priorCards = priorVersion ? this.store.conceptVersion(rev.repoRoot, priorVersion) ?? [] : [];
+    const priorRevision = versions[0]?.revision ?? null;
+    const carried: ConceptCard[] = [];
+    let touchedIds: string[] = [];
+    // Symbols present in the previous extraction's revision with identical text: a chunk made only of these needs no new model call.
+    const unchangedSymbols = new Set<string>();
+    if (priorRevision && priorRevision !== rev.id) {
+      const before = new Map(this.store.entities(priorRevision).filter((e) => e.symbolHash).map((e) => [e.entityId, e.symbolHash!]));
+      const now = new Map(this.store.entities(rev.id).filter((e) => e.symbolHash).map((e) => [e.entityId, e.symbolHash!]));
+      for (const [id, h] of now) if (before.get(id) === h) unchangedSymbols.add(id);
+      const memberIds = new Set(priorCards.flatMap((c) => c.members));
+      const changedMembers = [...memberIds].filter((id) => before.get(id) !== now.get(id));
+      const changedSet = new Set(changedMembers);
+      carried.push(...priorCards.filter((c) => c.members.length > 0 && !c.members.some((m) => changedSet.has(m))));
+      touchedIds = [...changedSet];
+    }
+    const carriedIds = new Set(carried.map((c) => c.id));
+    if (carried.length) warnings.push(`Incremental: ${carried.length} concept card(s) carried over; ${touchedIds.length || "no"} changed member symbol(s) force re-extraction only for their regions.`);
+    const carriedMembers = new Set(carried.flatMap((c) => c.members));
+    // Members of prior cards that were not carried over (one of their members changed) are re-read together, so the card is rebuilt whole.
+    const rebuildMembers = new Set(priorCards.filter((c) => !carriedIds.has(c.id)).flatMap((c) => c.members));
+    const touched = new Set(touchedIds);
+    const queue = chunkSymbols(this.store, rev.id);
+    // Claims are written with the cards, in one step at the end, so a cancelled run leaves nothing behind.
+    const pendingClaims: Claim[] = [];
+    let chunksDone = 0;
+    while (queue.length) {
+      control?.checkpoint();
+      control?.progress({ phase: "extracting", done: chunksDone, total: chunksDone + queue.length, message: `Reading the code with the model: part ${chunksDone + 1} of about ${chunksDone + queue.length}` });
+      const whole = queue.shift()!;
+      // Region-level re-extraction: only symbols that changed, are new, or belong to a card that must be rebuilt go to the model.
+      // A chunk with none of those needs no call, and a chunk with a few sends only those few.
+      const ids = priorRevision && priorRevision !== rev.id ? whole.filter((id) => touched.has(id) || !(carriedMembers.has(id) || unchangedSymbols.has(id)) || rebuildMembers.has(id)) : whole;
+      if (ids.length === 0) continue;
+      const bundle = bundleFor(this.store, rev.id, ids, ["concept extraction: deep defect semantic events are excluded from this projection"], { includeDefectSemantics: false });
+      // Keep each request well under the gateway budget: halve a chunk whose evidence is too large.
+      if (bundle.tokenEstimate > chunkTokenBudget() && ids.length > 1) {
+        const mid = Math.ceil(ids.length / 2);
+        queue.unshift(ids.slice(0, mid), ids.slice(mid));
+        continue;
+      }
+      // Each model call gets its own deadline; the request that started a job has long expired by the later chunks.
+      const callCtx = control ? { ...ctx, deadlineMs: Date.now() + 120_000 } : ctx;
+      const asked = this.callModel<ConceptsOutput>(callCtx, rev, { purpose: "EXTRACT", schemaId: SCHEMA_CONCEPTS, question: "Extract concept cards", bundle });
+      const { result, provider, note } = control ? await control.guard(asked) : await asked;
+      chunksDone++;
       if (note && !warnings.includes(note)) warnings.push(note);
       providerName = `${provider.name}/${provider.model}`;
       if (!result.ok) { warnings.push(`extraction failed for a chunk (${result.error.code})`); continue; }
       const out = cardsFromOutput(this.store, rev.id, result.value, bundle, providerName, result.run);
-      this.persist(out.claims);
+      pendingClaims.push(...out.claims);
       all.push(...out.cards); dropped.push(...out.dropped);
     }
     // Same-titled cards from different chunks collapse to one.
-    const unique = [...new Map(all.map((c) => [c.id, c])).values()];
-    const version = this.store.replaceConcepts(rev.id, unique, providerName);
-    this.store.audit(actor(ctx), "concepts.extract", rev.id, { cards: unique.length, dropped: dropped.length, provider: providerName, version });
-    return ok(ctx, { cards: unique, dropped, provider: providerName }, { revision: rev.id, warnings, completeness: dropped.length ? "PARTIAL" : "COMPLETE" });
+    const unique = mergeCards(all, (c, evidenceIds) => {
+      const claim = claimOf(this.store, rev.id, { assertion: `${c.title}: ${c.summary}`, claimClass: "concept-card", evidenceIds, rationaleSummary: `Extracted ${c.kind} in several parts and merged; confidence is the model's own, uncalibrated statement (${c.statedConfidence}).` });
+      pendingClaims.push(claim);
+      return claim.draft.id;
+    });
+    // Carried-over cards are re-anchored to this revision: new claim (re-gated with the same
+    // assertion and evidence), new id, so stored cards always name their own revision.
+    const adopted: ConceptCard[] = [];
+    for (const c of carried) {
+      if (carriedIds.has(`${c.id}`) && unique.some((u) => u.title.toLowerCase() === c.title.toLowerCase() && u.kind === c.kind)) continue; // re-extracted anyway; keep the fresh one
+      const prior = this.store.getClaims([c.claimId])[0] ?? null;
+      const assertion = prior ? prior.draft.assertion : `${c.title}: ${c.summary}`;
+      const rationale = prior ? prior.draft.rationaleSummary : `Carried over from revision ${priorRevision}; extracted ${c.kind}.`;
+      const ev = c.evidenceIds.filter((id) => this.store.evidence(rev.id, id));
+      if (!ev.length) { dropped.push(`${c.title}: carried-over card has no evidence in this revision`); continue; }
+      const claim = claimOf(this.store, rev.id, { assertion, claimClass: "concept-card", evidenceIds: ev, rationaleSummary: rationale });
+      pendingClaims.push(claim);
+      adopted.push({ ...c, id: "card:" + createHash("sha256").update(rev.id + c.kind + c.title).digest("hex").slice(0, 12), revision: rev.id, claimId: claim.draft.id, source: `${c.source} (carried over)` });
+    }
+    const merged = [...unique, ...adopted];
+    control?.commit();
+    this.persist(pendingClaims);
+    const version = this.store.replaceConcepts(rev.id, merged, providerName);
+    this.store.audit(actor(ctx), "concepts.extract", rev.id, { cards: merged.length, carried: adopted.length, dropped: dropped.length, provider: providerName, version });
+    return ok(ctx, { cards: merged, dropped, provider: providerName }, { revision: rev.id, warnings, completeness: dropped.length ? "PARTIAL" : "COMPLETE" });
   }
 
   /** The concept store: cards with the claim behind each, the version history, and what changed since the previous version. */
@@ -253,30 +884,62 @@ export class Service {
   }
 
   // ---------------------------------------------------------------- views
-  async ask(ctx: CallContext, req: { question: string; revision?: string; pins?: string[]; seeds?: string[]; level?: number; form?: string; subject?: string }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
+  /** A form the user picked (gallery, or a chip offering another reading). Nothing to second-guess, so no alternatives. */
+  private chosenRoute(form: string, kind?: "failure" | "invariant"): ViewRoute {
+    const v = visualByForm(form);
+    const f = (v?.formId ?? form) as ViewRoute["form"];
+    return { source: "chosen", confidence: "high", form: f, ...(f === "CausalGraph" ? { kind: kind ?? "failure" } : {}), name: f === "CausalGraph" ? (kind === "invariant" ? "Wrong-value map" : "Failure-space map") : v?.name ?? f, because: "You chose this view.", alternatives: [] };
+  }
+
+  /** Rules, then similarity (both offline). When both are unsure, a model may name a form: a form name only, never evidence. */
+  private async readQuestion(ctx: CallContext, rev: RevisionRow, question: string): Promise<ViewRoute> {
+    const route = routeQuestion(question);
+    if (route.confidence !== "low") return route;
+    const empty = { id: "route", revision: rev.id, evidence: [], entities: [], relationships: [], facts: [], coverage: [], unresolved: [], tokenEstimate: Math.ceil(question.length / 4) };
+    const { result, provider } = await this.callModel<RouteOutput>(ctx, rev, { purpose: "ROUTE", schemaId: SCHEMA_ROUTE, question, bundle: empty });
+    if (!result.ok || !result.value.form || result.value.confidence < 0.6 || !ROUTE_FORMS.includes(result.value.form)) return route;
+    const { form, kind } = result.value;
+    const name = form === "CausalGraph" ? (kind === "invariant" ? "Wrong-value map" : "Failure-space map") : visualByForm(form)?.name ?? form;
+    const former = { form: route.form, ...(route.kind ? { kind: route.kind } : {}), name: route.name };
+    return {
+      source: "model", confidence: "medium", form, ...(form === "CausalGraph" ? { kind: kind ?? "failure" } : {}), name,
+      because: `The wording did not settle it, so ${provider.name}/${provider.model} chose this (its own confidence ${Math.round(result.value.confidence * 100)}%, not calibrated): ${result.value.reason}`,
+      alternatives: [former, ...route.alternatives].filter((a) => a.form !== form || (a.kind ?? "") !== (kind ?? "")).slice(0, 3),
+    };
+  }
+
+  async ask(ctx: CallContext, req: { question: string; revision?: string; pins?: string[]; seeds?: string[]; level?: number; form?: string; kind?: "failure" | "invariant"; subject?: string; lens?: string }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
     const question = (req.question ?? "").trim();
     if (!question || question.length > 1000) return fail(ctx, { code: "INVALID_SCHEMA", message: "question must be 1–1000 characters", retryable: false });
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; ingest a repository first", retryable: false });
-    // One of the specialised forms, named explicitly (gallery) or recognised from the question.
-    const visual = (req.form ? visualByForm(req.form) : null) ?? matchVisual(question);
+    // The form is named explicitly (gallery, or a chip for another reading) or read from the question.
+    const route = req.form ? this.chosenRoute(req.form, req.kind) : await this.readQuestion(ctx, rev, question);
+    const visual = route.source === "chosen" && route.form === "SemanticMap" ? null : visualByForm(route.form);
     if (visual?.build) {
-      this.store.audit(actor(ctx), "ask", rev.id, { form: visual.formId, chars: question.length });
+      this.store.audit(actor(ctx), "ask", rev.id, { form: visual.formId, chars: question.length, route: route.source });
       const built = ensureEdgeClaims(this.store, rev, visual.build(this.store, rev, question, req.subject));
+      built.view.route = route;
       this.persist(built.claims);
+      redactBuilt(this.store, rev, built);
       return ok(ctx, built, { revision: rev.id, completeness: built.view.gaps.length ? "PARTIAL" : "COMPLETE" });
     }
-    const choice = chooseForm(question);
-    this.store.audit(actor(ctx), "ask", rev.id, { form: choice.form + (choice.kind ? `:${choice.kind}` : ""), chars: question.length });
+    const choice = route.form === "CausalGraph" ? { form: "CausalGraph" as const, kind: route.kind ?? "failure", reason: route.kind === "invariant" ? "The question is about a value becoming incorrect, so I mapped every writer of that state." : "The question is about what can make something fail, so I mapped failure sites reachable from the operation." }
+      : { form: "SemanticMap" as const, kind: undefined, reason: "The question is about how something works, so I composed a map of the relevant code, grouped by responsibility." };
+    this.store.audit(actor(ctx), "ask", rev.id, { form: choice.form + (choice.kind ? `:${choice.kind}` : ""), chars: question.length, route: route.source });
 
     if (choice.form === "CausalGraph") {
       const built = choice.kind === "invariant" ? buildInvariantGraph(this.store, rev, question) : buildFailureGraph(this.store, rev, question);
       built.view.formReason = choice.reason;
+      built.view.route = route;
       this.persist(built.claims);
+      redactBuilt(this.store, rev, built);
       return ok(ctx, built, { revision: rev.id, completeness: built.view.gaps.length ? "PARTIAL" : "COMPLETE" });
     }
 
-    const { bundle, tiers, scored, hidden } = retrieveForQuestion(this.store, rev.id, question, { pins: new Set(req.pins ?? []), extraSeeds: [...(req.pins ?? []), ...(req.seeds ?? [])] });
+    // Hybrid retrieval: exact names, semantic closeness, concept cards and the graph, over only what this caller may see, cut to the model's budget.
+    const semantic = await semanticScores(this.store, rev.id, question, this.embedder).catch(() => undefined);
+    const { bundle, tiers, scored, hidden, inaccessible, truncation } = retrieveForQuestion(this.store, rev.id, question, { lens: req.lens, pins: new Set(req.pins ?? []), extraSeeds: [...(req.pins ?? []), ...(req.seeds ?? [])], semantic, access: policyFor(this.store, rev.repoRoot), tokenBudget: chunkTokenBudget() });
     const diagnostics = rev.diagnostics.filter((d) => d.code === "PARSE_ERRORS").map((d) => d.message);
     let representation: RepresentationOutput | undefined, run;
     const warnings: string[] = [];
@@ -287,11 +950,17 @@ export class Service {
       else { warnings.push(`model unavailable (${result.error.code}); showing deterministic facts only`); diagnostics.push(`model output unavailable: ${result.error.code}`); }
     }
     const { view, claims } = compileView({ question, bundle, tiers, scored, representation, run, diagnostics, store: this.store, systemName: rev.repoRoot.split("/").filter(Boolean).pop() });
-    view.formReason = choice.reason;
+    // "The question is about how something works" is only true when the wording said so. A default or a guess is described
+    // by the reading itself (route.because), so the two never disagree.
+    view.formReason = route.source === "rule" || route.source === "chosen" ? choice.reason : undefined;
+    view.route = route;
     if (req.level !== undefined) view.level = req.level;
     view.hidden = hidden;
+    if (inaccessible) view.gaps.push(`${inaccessible} match(es) are in code you do not have access to and were left out.`);
+    if (truncation) view.gaps.push(`The evidence was cut to fit the model's budget (${truncation.before} → ${truncation.after} estimated tokens): ${truncation.dropped.length} element(s) were dropped, lowest-ranked first. "Why isn't X shown?" lists them.`);
     this.persist(claims);
-    return ok(ctx, { view, claims }, { revision: rev.id, warnings, completeness: view.gaps.length ? "PARTIAL" : "COMPLETE" });
+    const mapBuilt = redactBuilt(this.store, rev, { view, claims });
+    return ok(ctx, { view: mapBuilt.view, claims: mapBuilt.claims }, { revision: rev.id, warnings, completeness: mapBuilt.view.gaps.length ? "PARTIAL" : "COMPLETE" });
   }
 
   async investigate(ctx: CallContext, req: { trace: string; revision?: string; ignored?: string[] }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
@@ -302,6 +971,7 @@ export class Service {
     if ("error" in built) return fail(ctx, { code: "INSUFFICIENT_EVIDENCE", message: built.error, retryable: false });
     this.persist(built.claims);
     this.store.audit(actor(ctx), "investigate", rev.id, { suspects: built.view.nodes.filter((n) => n.role === "suspect").length });
+    redactBuilt(this.store, rev, built);
     return ok(ctx, built, { revision: rev.id, completeness: built.view.gaps.length ? "PARTIAL" : "COMPLETE" });
   }
 
@@ -352,6 +1022,7 @@ export class Service {
     built.view.version = req.view.version + 1;
     this.persist(built.claims);
     this.store.audit(actor(ctx), `steer.${req.action.toLowerCase()}`, req.entityId, { version: built.view.version });
+    redactBuilt(this.store, rev, built);
     return ok(ctx, built, { revision: rev.id });
   }
 
@@ -361,9 +1032,13 @@ export class Service {
     if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "unknown revision", retryable: false });
     const selected = [...new Set(req.entityIds ?? [])].slice(0, 20);
     if (selected.length === 0) return fail(ctx, { code: "INVALID_SCHEMA", message: "select at least one element", retryable: false });
-    if (this.store.entitiesById(rev.id, selected).length !== selected.length) return fail(ctx, { code: "NOT_FOUND", message: "selection references unknown entities", retryable: false });
+    const found = this.store.entitiesById(rev.id, selected);
+    if (found.length !== selected.length) return fail(ctx, { code: "NOT_FOUND", message: "selection references unknown entities", retryable: false });
+    const acc = policyFor(this.store, rev.repoRoot);
+    // A selection inside code this caller cannot see is refused without saying what it was.
+    if (found.some((e) => acc.denied(e.file))) return fail(ctx, { code: "FORBIDDEN", message: "one or more selected elements are not accessible to you", retryable: false });
 
-    const bundle = retrieveAround(this.store, rev.id, selected);
+    const bundle = retrieveAround(this.store, rev.id, selected, 3, 120, acc);
     const question = req.question?.trim() || "Why are these connected?";
     const { result, note } = await this.callModel<ExplanationOutput>(ctx, rev, { purpose: "EXPLAIN", schemaId: SCHEMA_EXPLANATION, question, bundle, selected });
     if (!result.ok) return fail(ctx, result.error);
@@ -382,7 +1057,8 @@ export class Service {
     const shown = claims.filter((c) => c.displayMode !== "HIDDEN");
     const rejected = claims.length - shown.length;
     const evidence = this.resolveMany(rev, bundle.evidence, [...new Set(shown.flatMap((c) => c.draft.evidenceIds))]);
-    const summary = rejected ? `${result.value.summary} (${rejected} claim(s) withheld: they failed a gate.)` : result.value.summary;
+    const said = modelText(result.value.summary, `The model's summary was withheld: it claimed certainty or carried a link, which only evidence and the gates may do.`);
+    const summary = rejected ? `${said.text} (${rejected} claim(s) withheld: they failed a gate.)` : said.text;
     this.store.audit(actor(ctx), "explain", rev.id, { selected: selected.length, claims: claims.length, withheld: rejected });
     return ok(ctx, { summary, claims, evidence, selected }, { revision: rev.id, completeness: rejected ? "PARTIAL" : "COMPLETE", warnings: note ? [note] : [] });
   }
@@ -450,6 +1126,10 @@ export class Service {
 
   /** Read a span from the repo root of `rev`, refusing paths outside it and hashing to detect drift. */
   resolveEvidence(rev: RevisionRow, ev: EvidenceRef): ResolvedEvidence {
+    // Evidence in a denied path is not readable by this caller: no file name, no snippet.
+    const acc = policyFor(this.store, rev.repoRoot);
+    const where = (ev.location as { kind: string; span?: { sourceId: string } }).span?.sourceId ?? ev.sourceId;
+    if (typeof where === "string" && acc.denied(where)) return { id: ev.id, class: ev.class, file: "(not shown)", startByte: 0, endByte: 0, startLine: 0, endLine: 0, snippet: "", state: "ACCESS_REVOKED" };
     const loc = ev.location as { kind: string; locator?: string; span?: { sourceId: string; contentHash: string; startByte: number; endByteExclusive: number } };
     // Non-code evidence (git history, pasted traces) carries its own description and has no span to re-read.
     if (loc.kind !== "CodeLocation" || !loc.span) {
@@ -474,6 +1154,8 @@ export class Service {
     if (!["CONFIRM", "REFUTE", "DISPUTE"].includes(req.verdict)) return fail(ctx, { code: "INVALID_SCHEMA", message: "verdict must be CONFIRM, REFUTE or DISPUTE", retryable: false });
     const r = applyVerdict(this.store, { claimId: req.claimId, verdict: req.verdict, explanation: req.explanation ?? "", actorId: actor(ctx), expectedVersion: req.expectedVersion });
     if (!r.ok) return fail(ctx, r.error);
+    // Subscribers hear that a judgement was recorded, by id and verdict only: not what the claim said, and nothing about the code.
+    this.notifications.publish({ eventId: `verdict:${r.claim.draft.id}:${r.claim.version}`, type: "verdict.recorded", revision: r.claim.draft.revision, summary: `A claim was ${req.verdict === "CONFIRM" ? "confirmed" : req.verdict === "REFUTE" ? "refuted" : "disputed"}; ${r.affected.length} dependent claim(s) were affected.`, links: { claim: r.claim.draft.id } });
     return ok(ctx, { claim: r.claim, affected: r.affected }, { resourceVersion: r.claim.version });
   }
 
@@ -493,7 +1175,8 @@ export class Service {
   }
 
   listWorkspaces(ctx: CallContext): ApiResult<{ id: string; name: string; version: number; revision: string | null; updatedAt: string }[]> {
-    const rows = this.store.db.prepare("select id, name, version, revision, updated_at from workspaces order by updated_at desc").all() as any[];
+    const rows = (this.store.db.prepare("select id, name, version, revision, updated_at from workspaces order by updated_at desc").all() as any[])
+      .filter((r) => { const o = r.revision ? this.store.revision(r.revision, true) : null; return !(o && this.store.isRevoked(o.repoRoot)); });
     return ok(ctx, rows.map((r) => ({ id: r.id, name: r.name, version: r.version, revision: r.revision, updatedAt: r.updated_at })));
   }
 
@@ -501,6 +1184,9 @@ export class Service {
   openWorkspace(ctx: CallContext, req: { workspaceId: string }): ApiResult<{ id: string; name: string; version: number; revision: string | null; state: SavedState; staleEvidence: string[]; staleFiles: string[]; revisionIndexed: boolean; claimStates: Claim[] }> {
     const row = this.store.db.prepare("select * from workspaces where id = ?").get(req.workspaceId) as any;
     if (!row) return fail(ctx, { code: "NOT_FOUND", message: "no such workspace", retryable: false });
+    // A saved investigation over a source whose permission was withdrawn is not served, even before it is purged.
+    const owner = row.revision ? this.store.revision(row.revision, true) : null;
+    if (owner && this.store.isRevoked(owner.repoRoot)) return fail(ctx, { code: "FORBIDDEN", message: "access to the source this was saved against was withdrawn", retryable: false });
     const state: SavedState = JSON.parse(row.json);
     const rev = row.revision ? this.store.revision(row.revision) : null;
     const ids = new Set<string>();
@@ -558,6 +1244,66 @@ export class Service {
     const summary = !changed ? "Nothing in the repository has changed since you saved this investigation."
       : `Since you left: ${files.changed.length} file(s) changed, ${files.added.length} added, ${files.removed.length} removed; ${affectedNodes.length} element(s) of this investigation are affected.${commits.length ? ` Latest: “${commits[0].subject}” by ${commits[0].author}.` : ""}`;
     return ok(ctx, { fromRevision: rev0.id, toRevision: rev1.id, changed, files, affectedNodes, commits, summary }, { revision: rev1.id });
+  }
+
+  /** "What changed since my last index?": re-index the repository without a saved investigation and summarise the delta. */
+  async changesSinceIndex(ctx: CallContext, req: { revision?: string }): Promise<ApiResult<ChangesSince>> {
+    const from = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+    if (!from) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision to compare against", retryable: false });
+    const ing = await this.ingestRepository(ctx, { repoPath: from.repoRoot });
+    if (!ing.ok) return ing as ApiResult<never>;
+    return this.changesBetween(ctx, from.id, ing.value.id);
+  }
+
+  /** Post-MVP (C04.readRevisionPair): an indexed revision id may name any earlier revision. */
+  async changesBetweenRevisions(ctx: CallContext, req: { fromRevision: string; toRevision?: string }): Promise<ApiResult<ChangesSince>> {
+    const from = this.store.revision(req.fromRevision);
+    if (!from) return fail(ctx, { code: "NOT_FOUND", message: `no such revision: ${req.fromRevision}`, retryable: false });
+    const to = (req.toRevision ? this.store.revision(req.toRevision) : null) ?? this.store.latestRevision(from.repoRoot);
+    if (!to) return fail(ctx, { code: "NOT_FOUND", message: "no later revision of this repository is indexed", retryable: false });
+    return this.changesBetween(ctx, from.id, to.id);
+  }
+
+  /** Diff two stored revisions (C04.readRevisionPair, C23.compare): file deltas, affected elements, commits. */
+  changesBetween(ctx: CallContext, rev0id: string, rev1id: string): ApiResult<ChangesSince> {
+    const rev0 = this.store.revision(rev0id), rev1 = this.store.revision(rev1id);
+    if (!rev0 || !rev1) return fail(ctx, { code: "NOT_FOUND", message: "no such revision", retryable: false });
+    const fileHash = (rev: string) => new Map(this.store.entities(rev).filter((e) => e.kind === "file").map((e) => [e.file, e.spans[0]?.contentHash ?? ""]));
+    const h0 = fileHash(rev0.id), h1 = fileHash(rev1.id);
+    const files = {
+      added: [...h1.keys()].filter((f) => !h0.has(f)).sort(), removed: [...h0.keys()].filter((f) => !h1.has(f)).sort(),
+      changed: [...h1.keys()].filter((f) => h0.has(f) && h0.get(f) !== h1.get(f)).sort(),
+    };
+    const kinds = ["function", "method", "class"];
+    const e0 = new Map(this.store.entities(rev0.id).filter((e) => kinds.includes(e.kind)).map((e) => [e.entityId, e]));
+    const e1 = new Map(this.store.entities(rev1.id).filter((e) => kinds.includes(e.kind)).map((e) => [e.entityId, e]));
+    // Element-level changes: symbols whose text changed inside a changed file (no workspace needed).
+    const affectedNodes: ChangesSince["affectedNodes"] = [];
+    for (const [id, cur] of e1) {
+      const before = e0.get(id);
+      if (!before) affectedNodes.push({ nodeId: `n:${id}`, label: cur.name, change: "added" });
+      else if (cur.symbolHash && before.symbolHash && cur.symbolHash !== before.symbolHash) affectedNodes.push({ nodeId: `n:${id}`, label: cur.name, change: "changed" });
+    }
+    for (const [id] of e0) if (!e1.has(id)) affectedNodes.push({ nodeId: `n:${id}`, label: short(id), change: "removed" });
+    const hist = (rev: string) => new Map(this.store.factsByPredicate(rev, "history").map((f) => [f.subject.replace(/^file:/, ""), (f.object as any).value]));
+    const c0 = hist(rev0.id), c1 = hist(rev1.id);
+    const commits = [...c1].filter(([f, v]) => c0.get(f)?.lastCommit !== v.lastCommit).map(([file, v]) => ({ file, subject: v.lastSubject, author: v.lastAuthor, date: v.lastDate })).slice(0, 10);
+    const changed = rev1.id !== rev0.id;
+    const summary = !changed ? "Nothing in the repository has changed since this revision was indexed."
+      : `Between revisions: ${files.changed.length} file(s) changed, ${files.added.length} added, ${files.removed.length} removed; ${affectedNodes.length} symbol(s) changed.${commits.length ? ` Latest: “${commits[0].subject}” by ${commits[0].author}.` : ""}`;
+    return ok(ctx, { fromRevision: rev0.id, toRevision: rev1.id, changed, files, affectedNodes, commits, summary }, { revision: rev1.id });
+  }
+
+  /** System status (post-MVP worker stats): indexed revisions, file/symbol counts, last analyzer run. */
+  revisionStats(ctx: CallContext, req: { revision?: string }): ApiResult<{ revision: string | null; files: number; symbols: number; diagnostics: string[] }> {
+    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+    if (!rev) return ok(ctx, { revision: null, files: 0, symbols: 0, diagnostics: [] });
+    const ents = this.store.entities(rev.id);
+    return ok(ctx, {
+      revision: rev.id, files: ents.filter((e) => e.kind === "file").length,
+      symbols: ents.filter((e) => ["function", "method", "class"].includes(e.kind)).length,
+      diagnostics: rev.diagnostics.map((d) => d.message),
+    }, { revision: rev.id });
   }
 
   // ---------------------------------------------------------------- conversation

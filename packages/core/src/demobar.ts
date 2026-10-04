@@ -57,6 +57,26 @@ export function provenanceAudit(svc: Service, view: ViewSpec, claims: Record<str
     check(`node ${n.label}`, n.evidenceIds, "any");
     for (const cid of n.claimIds) { const c = claims[cid] ?? svc.store.getClaim(cid); if (c?.displayMode === "HIDDEN") bad.push(`node ${n.label}: backed by a withheld claim`); }
   }
+  // A matrix is a second drawing of the same facts and claims, so it obeys the same rules as nodes and edges.
+  if (view.matrix) {
+    const rows = new Map(view.matrix.rows.map((r) => [r.id, r])), cols = new Map(view.matrix.cols.map((c) => [c.id, c]));
+    for (const ax of [...view.matrix.rows, ...view.matrix.cols]) if (ax.evidenceIds.length) check(`matrix ${ax.label}`, ax.evidenceIds, "any");
+    for (const cell of view.matrix.cells) {
+      const name = `cell ${rows.get(cell.row)?.label ?? cell.row} × ${cols.get(cell.col)?.label ?? cell.col}`;
+      if (!rows.has(cell.row) || !cols.has(cell.col)) { bad.push(`${name}: refers to a row or column that does not exist`); continue; }
+      if (!view.matrix.states[cell.state]) bad.push(`${name}: state ${cell.state} is not explained`);
+      if (cell.displayMode === "FACT") {
+        if (cell.claimId) bad.push(`${name}: shown as FACT but backed by a model/pipeline claim`);
+        check(name, cell.evidenceIds, "static");
+      } else if (cell.displayMode === "INFERENCE" || cell.displayMode === "HYPOTHESIS") {
+        const c = cell.claimId ? claims[cell.claimId] ?? svc.store.getClaim(cell.claimId) : undefined;
+        if (!c) bad.push(`${name}: shown as ${cell.displayMode} without a claim`);
+        else if (c.gates.length !== 5) bad.push(`${name}: claim did not pass through all five gates`);
+        else if (c.displayMode === "HIDDEN") bad.push(`${name}: a withheld claim is displayed`);
+        check(name, cell.evidenceIds, "any");
+      }
+    }
+  }
   return bad;
 }
 

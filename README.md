@@ -46,7 +46,7 @@ How the more inferential ones stay honest:
 - **Terrain (V16)** is labelled a composite and never a fact; missing data counts as a neutral value and is drawn hatched.
 - **Archaeology (V7)** adds no model narration: events are commits, constraints are comments, and "which commit introduced it" is only a claim.
 
-The forms that place their own elements (journey, lineage, diff, archaeology, trust, race, counterfactual, ownership, atlas, policy) keep their layout; level of detail applies to the maps (V1–V3, V9, V12).
+The forms that place their own elements (journey, lineage, diff, archaeology, trust, race, counterfactual, ownership, atlas, policy) keep their own structure (swim lanes, owner columns, zones) but are post-processed by the layout pass below; level of detail applies to the maps (V1–V3, V9, V12).
 
 ## Zoom, concepts, signals and keyboard
 Semantic zoom, **L0–L6**: **L0 system** (the whole thing as one node, with the external packages it depends on) → **L1 domains** (intermediate abstractions the model proposes over the concepts; each is a claim that must be grounded, and when none exist L1 falls back to concepts rather than inventing one) → **L2 concepts** → **L3 files** → **L4 key symbols** → **L5 all symbols** → **L6 detail** (roles, notes, edge labels; double-click for the code). Levels change after a zoom settles (with different enter/exit thresholds, so they never flicker). Choosing a level with the stepper or in chat fits the view to it; zooming by gesture never moves the camera. Selection and identity survive every level.
@@ -56,6 +56,69 @@ Semantic zoom, **L0–L6**: **L0 system** (the whole thing as one node, with the
 **Runtime and test signals.** Paste a stack trace, or let a running app report exceptions with `@cie/reporter` (`installReporter()`); they land in an **Exceptions** inbox (repeats collapse into one entry with a count) and make the code they touch hotter in ranking. Traces from Node/Chrome, Firefox/Safari, async and constructor frames, browser dev servers (Vite/webpack, `file://`, Windows paths) are parsed; frames map to code by line and fall back to the function name. Coverage (lcov, Istanbul JSON) and test results (JUnit XML, Jest/Vitest JSON) found in the repository are attached to symbols as evidence; failing tests and low coverage appear as counter-arguments and make the code they exercise hotter. **Pin / Boost / Demote** any element (drawer buttons, or "pin X" / "boost X" / "demote X" / "reset X" in chat); overrides persist per repository.
 
 **Keyboard and screen readers.** The canvas is one tab stop: arrow keys move between elements (an announcement says what each is, how it is known, and how many links it has), Enter inspects, Space selects, E opens the code, +/− change the level, O opens a **text outline** that lists every element and link in words, Escape clears the selection. Nothing relies on colour alone.
+
+## Drawing: layout and chart types
+
+Every map goes through one layout pass (`apps/web/src/arrange.ts`) that picks the algorithm from the *shape* of the view, then routes edges around nodes. Only positions and edge waypoints change, never claims, evidence or display modes.
+
+| Shape of the view | Algorithm (source) |
+|---|---|
+| Grouped levels L0–L3 | Fruchterman & Reingold 1991 force layout, seeded from the form's own positions, then node-overlap removal in the style of Dwyer, Marriott & Stuckey 2005 |
+| Forms whose columns are layers (failure-space, hypotheses, trust, test confidence, policy, lineage…) and one-lane journeys | Sugiyama, Tagawa & Toda 1981: dummy nodes for long edges, median/barycenter sweeps with adjacent transposition (Eades & Wormald 1994), size-aware coordinates by isotonic regression (a simpler stand-in for Brandes & Köpf 2002) |
+| Owner columns (V13) | Tall columns wrap into sub-columns; rows reordered by median sweeps then swap search on the real crossing count |
+| Swim lanes (journey, race) | Lanes permuted to cut crossings; large multi-lane journeys use columns by call depth |
+| Any edge that would cross a node | Same-column links become margin arcs; otherwise a shortest path over a visibility graph of padded node corners (the basis of Kieffer et al. 2014) |
+| Terrain (V16) | Squarified treemap (no overlaps by construction) |
+
+**Measured, not eyeballed** (`apps/web/src/layoutmetrics.ts`, `apps/web/test/layout.test.ts`): for all fifteen node-link forms at levels 0–6 on the demo repository the tests require **zero node overlaps and zero edges drawn through an unrelated node**. Edge crossings are held to a per-form ceiling that can only go down (V2 ≤ 7, V5 ≤ 7, V13 ≤ 6, V15 ≤ 6, V11 ≤ 4, V14 ≤ 3, V4/V10/V8 ≤ 2, V12 ≤ 1, others 0). `node apps/web/test/layout-report.ts` prints the numbers per form and level; `REPO=/path node apps/web/test/layout-report.ts` runs it on any indexed repository.
+
+What it does **not** do: crossings are minimised, not eliminated. Dense graphs have crossings no layout can remove: on a real 152-file repository a 41-step journey with 68 call edges (shared helpers called from many places) still has about a hundred. Planarization (Hopcroft–Tarjan, Tamassia), multilevel force layout (Walshaw, FM³, sfdp: these views are tens of nodes) and edge bundling (Holten 2006) are not implemented. The ownership map's import links are drawn faint until you select a file, because they are context, not the answer; they are excluded from the crossing count and listed in the outline.
+
+**Chart types, revalidated against the question each answers:** node-link maps suit V1–V3, V5, V8, V9, V11 and V14; swim lanes suit V4 and V10 (a sequence across actors); side-by-side suits V6; a timeline suits V7; a treemap suits V16; owner columns suit V13 (its import links are context, so they are faint until you select a file).
+
+**V12 and V15 are matrices.** Both are many-to-many relations (behaviours × tests, routes × rules), where a graph cannot avoid crossings and a grid can. Each is built on the server beside its graph, so every cell goes through the same claim gates and the same provenance audit as a node or edge (a cell shown as a fact cites static evidence and no claim; an inference or hypothesis cell cites a claim that passed all five gates). The **Matrix / Graph** switch above the view shows either drawing of the same result.
+
+- **V15** rows are routes (entry point → state it changes), columns are rules. ✓ enforced (an inference: proposed from where the code throws), ✕ can get around (the route's own hypothesis claim, naming every check it skips), ○ held by convention, blank means no relation found. Rows with the most ways around come first, with a plain-words count.
+- **V12** rows are behaviours (with confidence in words and a tint), columns are the tests that reach them and the properties a test should assert. A test cell is static fact: the fill is the share of the behaviour's functions the test reaches by parsed calls (four deep), ✗ marks a currently failing test. Reaching code is not asserting its behaviour, and the legend says so. ✓ means a test name mentions the property (an inference from names), ? means none does (a hypothesis).
+- The grid is a real table with row and column headers: one tab stop, arrow keys move between cells, every cell has a spoken label ("route, rule: can get around. Hypothesis."), and the glyph, border style (solid fact, dashed inference, dotted hypothesis) and words carry meaning, never colour alone. axe-core reports zero violations on both.
+- Matrix cells can be chosen as "these" for your next message: a click inspects a cell, **Space** or **Shift-click** adds it to the selection, and each chosen cell appears as a chip in the chat (a cell stands for the code of its row and its column; an empty cell can be chosen too, to ask why nothing is there).
+- Limits: the semantic-diff, atlas and ownership forms stay as they are.
+
+## Choosing the view: how a question is read
+Three layers, cheapest first, and every view says which one answered (the "I read this as…" line under the caption, with the other readings as buttons):
+1. **Rules**: the pattern on each visual plus failure, wrong-value and "how does X work". Marked *high* only when exactly one rule fires and no stronger cue contradicts it.
+2. **Similarity**: a weighted keyword score per form, for wordings no rule names. Marked *medium* or *low*.
+3. **Model**: only when both are unsure. The model sees the question text and an empty bundle (no code, no repository names), may only name a form, and is held to its own confidence of at least 60%; the view says it was the model's choice and that its confidence is not calibrated. Under the offline model this layer says nothing. With a hosted model it needs the same per-repository approval as every other model call.
+A choice you make (the gallery, or a button for another reading) is never second-guessed.
+
+How good is it? Measured on labelled questions in `packages/core/test/route.test.ts`, split so the number is honest: 79 questions the vocabulary was tuned on (100% right, which is not evidence of anything) and 31 written before any tuning. On those 31 the offline layers get **45% right first time, 74% with the right view among the offered alternatives**, and no wrong reading is ever marked high. The first held-out set scored 66% before a confidently wrong rule was fixed; its misses then informed the vocabulary, so those questions moved into the tuning set and a fresh held-out set replaced them. The offline layers are a safety net; paraphrase is the model layer's job, and embeddings would be a separate, later layer. The floors in the test only ever go up.
+
+## Background jobs (indexing and concept extraction)
+Both can take minutes, so they run as jobs (C07): the call returns at once, the side panel shows what the job is doing and how far along, and **Cancel** works. Jobs wait in a queue and run one at a time (there is one parser process); they are stored, so the list survives a page reload.
+- **Cancel before the result is being saved**: stops now. A model call in flight is abandoned and its answer is dropped; the parser process is ended and replaced (its in-memory parse cache goes with it, so the next index is a full parse). Nothing was written, so there is nothing to undo; concept claims are written together with the cards, in one step at the end.
+- **Cancel while saving**: refused, with the reason, and the job finishes whole. Stopping then would leave half a result.
+- **A server restart** marks a job it interrupted as failed ("nothing from the interrupted run was saved"). Jobs cannot resume; run them again.
+- Each model call in a job gets its own deadline; before, the request that started extraction set one deadline for all chunks.
+- Limits: while the repository is being hashed for the incremental pass (synchronous, bounded) a cancel waits for it to finish; the rest of the progress is phases and chunk counts, not a percentage of the parse.
+
+## The 32 components and their acceptance ledger
+Every component of `Code_Intelligence_Component_API_Contracts.md` has its acceptance suite written out as items in `docs/ledger.json`; an item is **done** only when named tests prove it (`ledger.test.ts` fails if a named test does not exist). `node scripts/status.ts -v` prints the state. At the time of writing: **165 of 167 items done, 2 blocked, 0 open**. The two blocked items are the ones whose acceptance criterion is *people*, not code: held-out labels by ≥ 8 independent experts, and a task-completion study with real participants. The machinery for both (label store, held-out split, synthetic-label rule, expert-coverage report, study analysis with intervals) is built and tested; generated data is marked synthetic and is never reported as either.
+
+| Where | What |
+|---|---|
+| `packages/core/src/claims.ts`, `claim-ledger.ts` | five gates; append-only claim event ledger, lifecycle transition matrix (illegal moves are rejected), historical replay, alarm eligibility (deterministic proof or two authorised confirmations) |
+| `c22/` | hypothesis and agentic investigation engine (generations, leases, steering, runtime batches, tombstones) |
+| `graph.ts`, `embeddings.ts`, `retrieval.ts` | graph projection, hybrid retrieval with access policy and token budget |
+| `context.ts`, `interactions.ts` | developer context stream with memory tiers and persona lenses (a lens never hides a safety fact); interaction catalogue I-01…I-20 as typed commands |
+| `workspaces.ts`, `collab.ts` | event-sourced investigations (undo/redo, checkpoints, conflicts); sharing without widening access, handover with access gaps counted not shown, shared concept corrections |
+| `registry.ts`, `history.ts` | stable identities across renames, splits, merges and branches; semantic change sets, archaeology, review threads that survive merges |
+| `indexer.ts`, `artifacts.ts`, `connectors.ts` | change impact through reverse dependencies with a generation fence, parity with a clean index; routes, migrations, queues and flags as declarations of intent; forge connector with pagination, rate limits, credential expiry, quarantine and signed webhooks |
+| `runtime.ts`, `security.ts` | runtime signals joined to code with graded exactness (missing marker, bad timestamps, sampling, reordering, revision mismatch, backpressure, replay); versioned security rules, alarm gate, invariant checks that never say "proven" |
+| `defect/`, `defect-local.ts`, `scenarios.ts`, `changes.ts`, `exports.ts` | defect/performance detectors and local adapters; counterfactual scenarios; visual-intent change proposals validated in an isolated copy; evidence-faithful exports and signed webhooks |
+| `evaluation.ts` | planted-failure suites, confidence-bin intervals, paired regression test between models, release gate on the model in use |
+| `migrations.ts`, `events.ts`, `storage.ts`, `ops.ts`, `tenants.ts`, `access.ts`, `redact.ts` | ordered reversible migrations, transactional outbox, backup/restore/GC/deletion propagation, health and release gates, per-tenant stores, access policy |
+
+Gateway operations are grouped by component under `/api/v1/components/{C}/{op}` (and `/api/v2/components/C22/{op}`); see `makeOps` in `server.ts`.
 
 ## Trust model (the part that is easy to get wrong)
 - **Five claim checks** on every claim: *evidence* (every citation exists and is current), *consistency* (the asserted path is re-verified against the stored graph), *counter-argument* (unresolved calls, async hand-offs, missing tests, plus an adversarial model pass), *calibration* (a confidence band only after ≥20 human verdicts for that claim class — otherwise it abstains and says so), *display* (the single rule that picks Fact / Inference / Hypothesis / Withheld).
@@ -92,7 +155,8 @@ If Ollama is down or the model is missing, the server logs why and uses the stub
 
 ## Verify it
 ```
-npm test          # Rust worker tests + 108 TypeScript tests
+node scripts/status.ts -v   # the acceptance ledger
+npm test          # Rust worker tests + the TypeScript tests (incl. real-browser keyboard and accessibility-tree tests; they need /usr/bin/google-chrome-stable and skip without it)
 npm run eval      # the six-point MVP demo bar, as an executable gate, with the real configured model
 ```
 `npm run eval` checks all six demo steps, median synthesis time (< 10 s), and **zero silently-wrong provenance**: every displayed edge and node is re-checked against stored evidence (a "calls" edge's evidence must actually mention the callee; nothing shown as Fact may be backed by a claim; every inferred element must have gone through all five checks).
@@ -104,25 +168,28 @@ Measured here: every visual passes the provenance audit; all six demo steps pass
 - `packages/schema` — contract types and the registry of model-output schemas.
 - `packages/model` — provider interface, schema-checking gateway, Ollama provider, offline stub.
 - `packages/core` — SQLite store, idempotent journal, salience, claim gates, conversation router, egress policy, audit, HTTP gateway, demo-bar eval. `src/forms/` has one builder per visual (shared analysis in `analysis.ts` and `common.ts`); `src/visuals.ts` is the catalogue that picks a form from a question; `src/gitinfo.ts` reads history, authors, CODEOWNERS and comments.
-- `apps/web` — React + cytoscape: canvas, conversation, claim cards, concept browser, visuals gallery, terrain view, folder picker. `src/graph.ts` holds the testable view logic (layouts, zoom, verdicts).
+- `apps/web` — React + cytoscape: canvas, conversation, claim cards, concept browser, visuals gallery, terrain view, folder picker. `src/graph.ts` holds the testable view logic (zoom, verdicts, aggregation); `src/layout.ts`, `src/arrange.ts` and `src/layoutmetrics.ts` hold the layout algorithms, the per-view algorithm choice and the quality metrics.
 - `extensions/vscode` — the editor bridge.
 
 ## What is not verified or not done (honestly)
 - The **VS Code extension** is type-checked and its logic unit-tested, but has **not been run inside a real VS Code**; the server side is tested end to end with simulated events.
-- **Accessibility** was checked with an automated axe-core audit (0 violations on the empty app, maps, explanations with claim cards and code, the outline, concept browser, the visuals gallery, and the journey, counterfactual, ownership, policy and terrain views) and by computing every colour pair (all ≥ 4.5:1 in both themes). It has **not been tested with a real screen reader**, and automated audits catch only part of what matters. In the swim-lane forms a transaction bracket is shown as a double border on the node, not a surrounding box, because a node can have only one parent.
+- **Accessibility** was checked with an automated axe-core audit (0 violations on the empty app, maps, explanations with claim cards and code, the outline, concept browser, the visuals gallery, and the journey, counterfactual, ownership, policy and terrain views) and by computing every colour pair (all ≥ 4.5:1 in both themes). There has been **no real screen-reader testing and no trackpad testing** (pinch-zoom is only exercised through the browser's wheel events), and automated audits catch only part of what matters. In the swim-lane forms a transaction bracket is shown as a double border on the node, not a surrounding box, because a node can have only one parent.
 - **Calibrated confidence** needs human verdicts; with none, every claim says "not estimated". The spec's reviewer study (≥8 experts, ≥60% preferring it) is a human study and has not been run.
 - **Visual-specific limits:**
   - V4 follows the order calls appear in their caller's source; loops, branches and retries are not modelled.
   - V5 matches reads and writes by field *name*, so two unrelated fields with the same name are conflated.
   - V6 compares the text of each symbol between two *indexed* revisions, so a pure variable rename counts as a change, and it needs the earlier revision to have been indexed.
-  - V7 uses commits and code comments only; pull requests, tickets and incident records are not connected.
-  - V9 is reported data, not live telemetry: there are no latencies, rates, queue depths or sampling information, no time scrubber beyond the window buttons, and no comparison of two windows.
+  - V7 uses commits and code comments only in the UI. A forge connector (`connectors.ts`) can read pull requests and C23 archaeology quotes them, but it is an API, not yet a screen, and issues/tickets/incidents have no connector.
+  - V9 in the UI is reported data. Span ingestion with sampling, timestamps and replay exists as an API (`runtime.ts`), with no screen and no live daemon; there is no comparison of two windows.
   - V10 reads no locks, queues or scheduler settings; V11 simulates only removal, not moving, merging or making code asynchronous.
   - V12 has line coverage only (no branch coverage, flakiness or mutation resistance); "semantic" gaps are judged from test names and files.
   - V13 has no review latency, on-call or ticket data; V14 needs concept cards extracted for the *current* revision.
   - V16 cannot yet plan a route across the terrain or compare terrains over time.
-- **Exceptions** arrive only from a pasted trace or from `@cie/reporter` in a Node or browser app; there is no tracing/OpenTelemetry ingestion, and a trace from a language other than TypeScript is not mapped. Coverage and test results are read from files the project's own tooling produced earlier (stale ones are flagged); nothing is run.
-- Static analysis supports **TypeScript, Rust, and Rust-dialect Nirdosha v2 `.nir`**. Rust/Nirdosha resolves crate/self/super and `#[path]` modules plus direct imported/same-file calls; trait dispatch, generic resolution, macro expansion, and calls through values remain fog. The retired native Nirdosha language is intentionally unsupported. Async joins currently apply to TypeScript literal topic strings.
+- **Exceptions** arrive from a pasted trace or from `@cie/reporter` in a Node or browser app. OpenTelemetry-style spans can be posted to the C24 API; a trace from a language other than TypeScript is not mapped. Coverage and test results are read from files the project's own tooling produced earlier (stale ones are flagged); nothing is run.
+- Static analysis supports **TypeScript, Java (incl. Spring Boot), Go, Python, Rust, and Rust-dialect Nirdosha v2 `.nir`**. Java, Go and Python resolve imports, same-package references and calls through a *declared* receiver type (Java fields/parameters, Go receivers and typed struct fields, annotated Python parameters); interface-typed calls resolve to the interface's declaration, never to one implementation, and anything without a stated type (`getattr`, maps of functions, untyped Python attributes, generics, reflection, Spring bean wiring by name) stays fog. Spring `@Transactional`, `@KafkaListener`/`@RabbitListener`/`@JmsListener`, template sends and `@*Mapping` routes, Flask/FastAPI decorators, `net/http` and gin/chi handlers, JUnit/`go test`/pytest tests are recognised. **The defect, performance and security-rule detectors still read only TypeScript and Rust**: findings for Java, Go and Python are not produced yet (no finding is not safe). Java build files, Go modules and Python virtualenvs are not read (`vendor`, `venv`, `__pycache__`, `.gradle` are skipped). Earlier text on Rust: Rust/Nirdosha resolves crate/self/super and `#[path]` modules plus direct imported/same-file calls; trait dispatch, generic resolution, macro expansion, and calls through values remain fog. The retired native Nirdosha language is intentionally unsupported. Async joins currently apply to TypeScript literal topic strings.
 - Hosted-model answers vary between runs; the gates, not the model, decide what is displayed. The new forms are deterministic and do not use the model at all.
 - Wheel-driven zoom was verified with dispatched wheel events and the stepper with clicks, not a physical trackpad.
-- Indexing re-reads everything each time; fine at tested scale (32 kLOC in 0.7 s), untested near 500 kLOC. No authentication (single local user).
+- Indexing hashes every file each time and re-parses only what changed. **Parser memory grows with the repository (about 0.2 MB per file; 1,500 files peaked at ~290 MB)**. It is not streamed: the bound is an enforced ceiling (`CIE_WORKER_RSS_MB`, default 2048) that fails an over-large index cleanly and saves nothing. Untested near 500 kLOC.
+- **Identity**: the local UI is single-user. Tenancy (a database and parser per tenant, a trusted-transport identity hook), per-principal source access and sharing are implemented and tested, but the web UI has no sign-in and does not yet expose sharing, handover, security findings or the evaluation registry.
+- **Fixtures are authored, not captured.** The forge-connector exchanges follow the documented list-pulls contract (Link pagination, rate-limit headers, 401/429/5xx) but were written by hand: capturing them needs a real account. The security rules are small and have known blind spots (an aliased logger evades the PII-in-logs rule; the evaluation suite measures this).
+- **Real-world checks that automation cannot give**: a real screen-reader session, the VS Code and JetBrains extensions inside the real IDEs, and the two human studies above. What *is* automated: a headless Chrome driven over the DevTools protocol completes a whole investigation with keyboard events only (the page counts pointer events: zero) and the browser's computed accessibility tree is asserted for names, roles, live regions and per-element state in words.

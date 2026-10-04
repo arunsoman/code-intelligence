@@ -158,7 +158,7 @@ test("egress: hosted models are blocked until the repo is opted in; secrets are 
 
   const before = await svc.ask(ctx(), { question: "ok thing", revision });
   assert.ok(before.ok);
-  assert.equal(hosted.seen.length, 0, "nothing sent without approval");
+  assert.equal(hosted.seen.length, 0, "nothing sent without approval, not even for routing");
   assert.ok(before.metadata.warnings.some((w) => /not approved/.test(w)));
   assert.ok((svc.auditLog(ctx(), {}) as any).value.events.some((e: any) => e.action === "egress.denied"));
 
@@ -166,8 +166,12 @@ test("egress: hosted models are blocked until the repo is opted in; secrets are 
   assert.ok(svc.setEgress(ctx(), { repoRoot: svc.store.revision(revision)!.repoRoot, allow: true }).ok);
   const after = await svc.ask(ctx(), { question: "ok thing", revision });
   assert.ok(after.ok);
-  assert.equal(hosted.seen.length, 1);
-  const sent = JSON.stringify(hosted.seen[0].bundle);
+  // The routing call carries the question and an empty bundle: no code, no names from the repository.
+  const routing = hosted.seen.filter((r) => r.purpose === "ROUTE");
+  assert.ok(routing.every((r) => r.bundle.entities.length === 0 && r.bundle.relationships.length === 0 && r.bundle.facts.length === 0));
+  const rep = hosted.seen.filter((r) => r.purpose !== "ROUTE");
+  assert.equal(rep.length, 1);
+  const sent = JSON.stringify(rep[0].bundle);
   assert.ok(!sent.includes("AAAAAAAAAA"), "secret-looking identifier removed before egress");
   assert.ok(sent.includes("okThing"));
   assert.ok(after.metadata.warnings.some((w) => /removed before sending/.test(w)));
@@ -272,7 +276,7 @@ test("CONSISTENCY accepts containment hops, so a claim routed through a file is 
 test("'give me the project overview' builds a zoomed-out map of the project; zoom commands need a map", async () => {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
-  for (const text of ["give me the project overview", "overview of the codebase", "what does this project do", "architecture overview"]) {
+  for (const text of ["give me the project overview", "overview of the codebase", "what does this project do", "architecture overview", "could u show the flow  diagram for the whole project?", "map the entire codebase", "show an architecture diagram of this project"]) {
     assert.equal(routeIntent(text, { hasView: false, selectionCount: 0, looksLikeTrace: false }).type, "overview", text);
   }
   assert.equal(routeIntent("overview", { hasView: true, selectionCount: 0, looksLikeTrace: false }).type, "zoom", "bare 'overview' with a map still means zoom out");

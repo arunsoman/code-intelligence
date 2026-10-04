@@ -76,7 +76,7 @@ export function buildJourney(store: Store, rev: RevisionRow, question: string, s
   }
   v.groups = lanes.map((l): ViewGroup => ({ id: `g:lane:${l}`, label: l, kind: "lane", childNodeIds: v.nodes.filter((n) => n.lane === l).map((n) => n.id), level: 1, evidenceIds: [], displayMode: "FACT" }));
   const fails = v.nodes.filter((n) => n.role === "decision").length, asyncSteps = afterAsync.size;
-  v.caption = `Journey of “${short(op)}”: ${order.length} steps across ${lanes.length} module lane(s), ${fails} place(s) it can fail${asyncSteps ? `, ${asyncSteps} step(s) running after an async hand-off` : ""}. Left to right is execution order.`;
+  v.caption = `Journey of “${short(op)}”: ${order.length} steps across ${lanes.length} module lane(s), ${fails} place(s) it can fail${asyncSteps ? `, ${asyncSteps} step(s) running after an async hand-off` : ""}. Left to right follows the calls: execution order for a short journey, call depth once it has many steps.`;
   v.meta = { kind: "journey", subject: op };
   v.params = { subject: short(op) };
   if (order.length >= 40) v.gaps.push("The journey is long; only the first 40 steps are shown.");

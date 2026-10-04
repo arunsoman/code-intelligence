@@ -3,6 +3,7 @@
 import type { Claim, Entity, ViewNode } from "@cie/schema";
 import type { RevisionRow, Store } from "../store.ts";
 import { entryPoints, guards, routes, sinks } from "./analysis.ts";
+import { fieldKey, type FieldObject } from "./lineage.ts";
 import { baseView, claimOf, containsEvidence, emptyForm, flowGraph, hash, short, isCode } from "./common.ts";
 
 /** What "remove X" means: a function or class by name, or every piece of code in a module / file. */
@@ -49,8 +50,8 @@ export function buildCounterfactual(store: Store, rev: RevisionRow, question: st
   // 4. Failure modes that disappear, state writers that disappear.
   for (const f of store.factsByPredicate(rev.id, "throws")) if (R.has(f.subject)) pending.push({ c: claimOf(store, rev.id, { assertion: `${String((f.object as { value?: unknown }).value)} could no longer be raised: ${name(f.subject)} is removed${[...flow.inn.get(f.subject) ?? []].some((r) => !R.has(r.from)) ? ", and its callers lose that check" : ""}.`, claimClass: "cf-failure-removed", evidenceIds: f.evidence.map((x) => x.id), rationaleSummary: "A throw site is part of the removed code." }), kind: "failure mode gone", anchors: [f.subject] });
   const fields = new Map<string, { before: number; gone: number; ev: string[] }>();
-  for (const f of store.factsByPredicate(rev.id, "writes")) { const k = String((f.object as { value?: unknown }).value); const c = fields.get(k) ?? { before: 0, gone: 0, ev: [] }; c.before++; if (R.has(f.subject)) { c.gone++; c.ev.push(...f.evidence.map((x) => x.id)); } fields.set(k, c); }
-  for (const [k, c] of fields) if (c.gone) pending.push({ c: claimOf(store, rev.id, { assertion: `${c.gone} of the ${c.before} writer(s) of “${k}” would disappear${c.gone === c.before ? ": nothing would update it any more" : ""}.`, claimClass: "cf-writers-gone", evidenceIds: c.ev, rationaleSummary: "Writers in the removal set are counted against all writers." }), kind: "state no longer updated", anchors: [...R].filter((id) => store.factsFor(rev.id, id).some((f) => f.predicate === "writes" && String((f.object as { value?: unknown }).value) === k)).slice(0, 1) });
+  for (const f of store.factsByPredicate(rev.id, "writes")) { const k = fieldKey(f.object as FieldObject); const c = fields.get(k) ?? { before: 0, gone: 0, ev: [] }; c.before++; if (R.has(f.subject)) { c.gone++; c.ev.push(...f.evidence.map((x) => x.id)); } fields.set(k, c); }
+  for (const [k, c] of fields) if (c.gone) pending.push({ c: claimOf(store, rev.id, { assertion: `${c.gone} of the ${c.before} writer(s) of “${k}” would disappear${c.gone === c.before ? ": nothing would update it any more" : ""}.`, claimClass: "cf-writers-gone", evidenceIds: c.ev, rationaleSummary: "Writers in the removal set are counted against all writers." }), kind: "state no longer updated", anchors: [...R].filter((id) => store.factsFor(rev.id, id).some((f) => f.predicate === "writes" && fieldKey(f.object as FieldObject) === k)).slice(0, 1) });
   // 5. Tests that would break.
   const tests = store.entities(rev.id).filter((e) => e.kind === "test");
   const calls = store.relationshipsAmong(rev.id, "calls");
@@ -66,6 +67,8 @@ export function buildCounterfactual(store: Store, rev: RevisionRow, question: st
   removed.forEach((e, i) => v.nodes.push({ id: `n:${e.entityId}`, entityRefs: [e.entityId], label: e.name, kind: e.kind, file: e.file, claimIds: [], evidenceIds: containsEvidence(store, rev.id, e.entityId), tier: "CRITICAL", displayMode: "HYPOTHESIS", unresolvedCalls: 0, role: "removed", ghost: true, pos: { x: 0, y: i * 96 }, badge: "removed in this scenario", notes: ["Hypothetical: this is what would be taken away."] }));
   const present = new Set(v.nodes.map((n) => n.id));
   for (const e of removed) { for (const r of flow.inn.get(e.entityId) ?? []) if (present.has(`n:${r.from}`)) v.edges.push({ id: `e:${r.id}`, fromNodeId: `n:${r.from}`, toNodeId: `n:${e.entityId}`, kind: r.kind, relationshipId: r.id, evidenceIds: r.evidence.map((x) => x.id), displayMode: "FACT", ghost: true, label: r.label }); for (const r of flow.out.get(e.entityId) ?? []) if (present.has(`n:${r.to}`)) v.edges.push({ id: `e:${r.id}`, fromNodeId: `n:${e.entityId}`, toNodeId: `n:${r.to}`, kind: r.kind, relationshipId: r.id, evidenceIds: r.evidence.map((x) => x.id), displayMode: "FACT", ghost: true, label: r.label }); }
+  // A relationship between two removed elements is found from both ends; it is one edge.
+  { const seen = new Set<string>(); v.edges = v.edges.filter((e) => !seen.has(e.id) && !!seen.add(e.id)); }
   for (const { c, kind, anchors } of pending) {
     add(c, kind, anchors);
     const anchor = anchors.map((a) => v.nodes.find((n) => n.id === `n:${a}`)).find(Boolean);

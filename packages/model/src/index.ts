@@ -4,3 +4,4 @@ export { StubProvider } from "./stub.ts";
 export { OllamaProvider, DEFAULT_OLLAMA_MODEL } from "./ollama.ts";
 export { createProvider } from "./factory.ts";
 export type { ProviderChoice } from "./factory.ts";
+export { BudgetController, type BudgetPolicy } from "./budget.ts";

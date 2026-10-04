@@ -2,11 +2,13 @@
 mod index;
 mod language;
 mod model;
+mod polyglot;
 mod protocol;
 mod rust_language;
 mod source_ir;
 
 use protocol::{read_frame, write_frame, FrameError};
+use crate::model::ChangeSet;
 use serde_json::{json, Value};
 use std::io::{stdin, stdout};
 use std::path::Path;
@@ -22,13 +24,32 @@ fn handle(req: &Value) -> Value {
         "languageCapabilities" => Ok(json!({"languages": {
             "typescript": ["PARSED", "RESOLVED(relative imports, same-file, namespace)"],
             "rust": ["PARSED", "RESOLVED(crate/self/super modules, same-file, imported functions)"],
+            "java": ["PARSED", "RESOLVED(imports, same package, calls through fields and parameters of a declared type)", "Spring: @Transactional, @KafkaListener/@RabbitListener/@JmsListener, template sends"],
+            "go": ["PARSED", "RESOLVED(package imports, same package, methods on receivers and typed struct fields)"],
+            "python": ["PARSED", "RESOLVED(absolute, relative and aliased imports, self methods, attributes typed by annotated parameters)"],
             "nirdosha-v2": ["PARSED_AS_RUST", "RESOLVED(path modules, crate modules, Nirdosha screen macros)"]
         }})),
         "index" => match req.pointer("/params/repoPath").and_then(Value::as_str) {
             None => Err(("INVALID_SCHEMA", "params.repoPath required".into())),
-            Some(p) => index::index_repo(Path::new(p))
-                .map_err(|e| ("NOT_FOUND", e))
-                .and_then(|b| serde_json::to_value(b).map_err(|e| ("STORAGE_FAILURE", e.to_string()))),
+            Some(p) => {
+                let changes: Option<ChangeSet> = req.pointer("/params/changes").and_then(|v| serde_json::from_value(v.clone()).ok());
+                match index::index_repo(Path::new(p), changes.as_ref()) {
+                    Err(e) => Err(("NOT_FOUND", e)),
+                    // The batch is streamed straight to a handle file: no intermediate JSON value and no second copy in a byte
+                    // buffer, which together cost several times the batch itself at the peak.
+                    Ok(b) => {
+                        let path = std::env::temp_dir().join(format!("cie-handle-{}-{}.json", std::process::id(), id));
+                        let written = std::fs::File::create(&path)
+                            .map(std::io::BufWriter::new)
+                            .map_err(|e| e.to_string())
+                            .and_then(|mut w| serde_json::to_writer(&mut w, &b).map_err(|e| e.to_string()).and_then(|_| std::io::Write::flush(&mut w).map_err(|e| e.to_string())));
+                        match written {
+                            Ok(()) => return json!({"id": id, "ok": true, "handle": path.to_string_lossy()}),
+                            Err(e) => Err(("STORAGE_FAILURE", e)),
+                        }
+                    }
+                }
+            }
         },
         other => Err(("INVALID_SCHEMA", format!("unknown op {other:?}"))),
     };

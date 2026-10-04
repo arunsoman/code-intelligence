@@ -31,7 +31,38 @@ export const zoomForLevel = (level: number) => [0.08, 0.2, 0.32, 0.5, 0.8, 1.0, 
 const SYNTHETIC = new Set(["failure-site", "symptom", "state"]);
 
 // ------------------------------------------------------------------ verdicts → what is shown
-export interface Effective { view: ViewSpec; stale: Set<string> }
+/** Identity of a matrix cell for staleness and selection. */
+export const cellKey = (c: { row: string; col: string }) => `cell:${c.row}|${c.col}`;
+export interface Effective { view: ViewSpec; stale: Set<string>; bounded?: Bounded }
+/** Most elements a view draws, and most that are drawn as foreground (CRITICAL/RELEVANT). Beyond that the rest is context or left out, and the view says so. */
+export const MAX_ELEMENTS = 2000, MAX_FOREGROUND = 50;
+export interface Bounded { total: number; shown: number; foreground: number; demoted: number; dropped: number }
+const TIER_ORDER = { CRITICAL: 3, RELEVANT: 2, CONTEXT: 1, HIDDEN: 0 } as const;
+const isProtected = (n: ViewNode) => (n.factors?.find((f) => f.factor === "RUNTIME_HOTNESS")?.normalizedScore ?? 0) >= 0.5 || (n.factors?.find((f) => f.factor === "USER_OVERRIDE")?.normalizedScore ?? 0) >= 1;
+/**
+ * Deterministic bounding: rank by tier, then score, then id. At most MAX_FOREGROUND nodes keep a foreground tier (the rest become
+ * context, not hidden), except safety facts, which are never demoted; at most MAX_ELEMENTS are drawn at all. Edges follow their nodes.
+ */
+export function boundView(view: ViewSpec, max = MAX_ELEMENTS, maxFg = MAX_FOREGROUND): { view: ViewSpec; bounded?: Bounded } {
+  const fg = view.nodes.filter((n) => TIER_ORDER[n.tier] >= 2).length;
+  if (view.nodes.length <= max && fg <= maxFg) return { view };
+  const ranked = [...view.nodes].sort((a, b) => TIER_ORDER[b.tier] - TIER_ORDER[a.tier] || (b.score ?? 0) - (a.score ?? 0) || a.id.localeCompare(b.id));
+  let kept = 0, demoted = 0;
+  const nodes: ViewNode[] = [];
+  const keep = new Set<string>();
+  for (const n of ranked) {
+    if (nodes.length >= max && !isProtected(n)) continue;
+    let out = n;
+    if (TIER_ORDER[n.tier] >= 2) { if (kept < maxFg || isProtected(n)) kept++; else { out = { ...n, tier: "CONTEXT" }; demoted++; } }
+    nodes.push(out); keep.add(n.id);
+  }
+  const order = new Map(view.nodes.map((n, i) => [n.id, i]));
+  nodes.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
+  const edges = view.edges.filter((e) => keep.has(e.fromNodeId) && keep.has(e.toNodeId));
+  const dropped = view.nodes.length - nodes.length;
+  const note = `This view is bounded: ${nodes.length} of ${view.nodes.length} elements are drawn${dropped ? ` (${dropped} lowest-ranked left out)` : ""}, ${kept} in the foreground${demoted ? ` and ${demoted} more shown only as context` : ""}. Ask about a part to see it.`;
+  return { view: { ...view, nodes, edges, gaps: [...view.gaps, note] }, bounded: { total: view.nodes.length, shown: nodes.length, foreground: kept, demoted, dropped } };
+}
 export function effectiveView(view: ViewSpec, claims: Record<string, Claim>): Effective {
   const stale = new Set<string>();
   const dropNodes = new Set<string>();
@@ -51,7 +82,20 @@ export function effectiveView(view: ViewSpec, claims: Record<string, Claim>): Ef
     if (c && c.state === "STALE") stale.add(e.id);
     edges.push(c && e.displayMode !== "FACT" ? { ...e, displayMode: c.displayMode } : e);
   }
-  return { view: { ...view, nodes, edges }, stale };
+  // A matrix is a second drawing of the same claims: a refuted claim removes its cells, a stale one marks them.
+  let matrix = view.matrix;
+  if (matrix) {
+    const cells = [];
+    for (const cell of matrix.cells) {
+      const c = cell.claimId ? claims[cell.claimId] : undefined;
+      if (c && c.displayMode === "HIDDEN") continue;
+      if (c && c.state === "STALE") stale.add(cellKey(cell));
+      cells.push(c && cell.displayMode !== "FACT" ? { ...cell, displayMode: c.displayMode } : cell);
+    }
+    matrix = { ...matrix, cells };
+  }
+  const b = boundView({ ...view, nodes, edges, ...(matrix ? { matrix } : {}) });
+  return { view: b.view, stale, ...(b.bounded ? { bounded: b.bounded } : {}) };
 }
 
 // ------------------------------------------------------------------ layouts
@@ -104,7 +148,7 @@ export interface RenderNode {
   id: string; label: string; kind: "node" | "agg" | "ext"; evidenceIds?: string[]; members: string[]; count: number; displayMode: DisplayMode;
   tier: ViewNode["tier"]; pos: Pos; node?: ViewNode; role?: string; parent?: string; rank?: number; stale: boolean; inTx?: boolean;
 }
-export interface RenderEdge { id: string; kind?: string; from: string; to: string; displayMode: DisplayMode; label: string; count: number; edgeIds: string[]; evidenceIds: string[]; stale: boolean; ghost?: boolean; ret?: boolean }
+export interface RenderEdge { id: string; kind?: string; from: string; to: string; displayMode: DisplayMode; label: string; count: number; edgeIds: string[]; evidenceIds: string[]; stale: boolean; ghost?: boolean; ret?: boolean; via?: Pos[]; ambient?: boolean }
 export interface Rendered { nodes: RenderNode[]; edges: RenderEdge[]; groups: { id: string; label: string; kind: "file" | "concept" | "cluster" | "lane" | "region"; parent?: string }[] }
 
 const MODE_RANK: Record<DisplayMode, number> = { HIDDEN: 0, FACT: 1, INFERENCE: 2, FOG: 3, HYPOTHESIS: 4 };
@@ -278,4 +322,18 @@ export function composite(factors: Record<string, number>, weights: Record<strin
   const sum = Object.values(weights).reduce((a, b) => a + b, 0);
   if (sum <= 0) return 0;
   return Object.entries(weights).reduce((n, [k, w]) => n + w * (factors[k] ?? 0.5), 0) / sum;
+}
+
+/**
+ * Waypoints → Cytoscape `segments` parameters: each waypoint as a fraction along source→target and a signed
+ * perpendicular distance from that line (positive = Cytoscape's "left" normal, (-dy, dx)/|d|).
+ */
+export function viaToSegments(from: Pos, to: Pos, via: Pos[]): { weights: number[]; distances: number[] } | null {
+  const dx = to.x - from.x, dy = to.y - from.y, len2 = dx * dx + dy * dy;
+  if (len2 < 1) return null;
+  const len = Math.sqrt(len2);
+  return {
+    weights: via.map((p) => ((p.x - from.x) * dx + (p.y - from.y) * dy) / len2),
+    distances: via.map((p) => ((p.x - from.x) * -dy + (p.y - from.y) * dx) / len),
+  };
 }

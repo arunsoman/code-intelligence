@@ -1,7 +1,7 @@
 // V8 Trust-Boundary and Privilege Map, and V15 Policy Enforcement Map. Both rest on the same finding: where execution
 // enters, what refuses it on the way (a guard: code that can throw a refusal), and what state it can reach.
 // Guards are proposed from throw sites, so they are inferences; "unprotected" is a hypothesis shown with its counter-argument.
-import type { Claim, EvidenceRef, ViewGroup, ViewNode } from "@cie/schema";
+import type { Claim, EvidenceRef, MatrixAxis, MatrixCell, ViewGroup, ViewNode } from "@cie/schema";
 import { commentsAround } from "../gitinfo.ts";
 import { queryTerms } from "../retrieval.ts";
 import type { RevisionRow, Store } from "../store.ts";
@@ -105,6 +105,14 @@ export function buildPolicy(store: Store, rev: RevisionRow, question: string, su
   let escapes = 0, row = 0;
   const escapeRoutes = new Map<string, { r: RoutePath; skipped: string[]; fields: Set<string> }>();
   const entryRow = new Map<string, number>(), sinkRow = new Map<string, number>();
+  // The same routes and rules as a grid: one row per route, one column per rule, a cell where the relation is known.
+  const mRows = new Map<string, MatrixAxis>(), mCols: MatrixAxis[] = [], mCells: MatrixCell[] = [];
+  const colOfPolicy = new Map<string, string>();
+  const rowOfRoute = (r: RoutePath, fields: Iterable<string>) => {
+    const id = `row:${r.entry.id}>${r.sink}`;
+    if (!mRows.has(id)) mRows.set(id, { id, label: r.entry.id === r.sink ? short(r.entry.id) : `${short(r.entry.id)} → ${short(r.sink)}`, sub: `changes ${[...fields].join(", ") || "state"}`, role: "route", entityRefs: [...new Set([r.entry.id, r.sink])], evidenceIds: routeEvidence(r, s).slice(0, 6) });
+    return id;
+  };
   const ensure = (id: string, kind: "entry" | "sink") => {
     if (v.nodes.some((n) => n.id === nodeId(id))) return;
     const e = flow.entities.get(id)!, m = kind === "entry" ? entryRow : sinkRow;
@@ -126,7 +134,10 @@ export function buildPolicy(store: Store, rev: RevisionRow, question: string, su
     claims.push(c);
     v.nodes.push({ id: pid, entityRefs: gnodes, label: p.name.replace(/Error$/, ""), kind: "policy", file: "", claimIds: [c.draft.id], ownClaimId: c.draft.id, evidenceIds: ev, tier: "CRITICAL", displayMode: c.displayMode === "HIDDEN" ? "HYPOTHESIS" : "INFERENCE", unresolvedCalls: 0, role: "policy", pos: { x: 0, y: row * 140 }, badge: "enforced in code", notes: [c.draft.assertion] });
     row++;
+    colOfPolicy.set(p.name, pid);
+    mCols.push({ id: pid, label: p.name.replace(/Error$/, ""), sub: `enforced by ${gnodes.map(short).join(", ")}`, role: "rule", entityRefs: gnodes, evidenceIds: ev.slice(0, 6), claimId: c.draft.id });
     for (const r of governed.slice(0, 8)) { ensure(r.entry.id, "entry"); ensure(r.sink, "sink");
+      mCells.push({ row: rowOfRoute(r, s.get(r.sink)?.fields ?? []), col: pid, state: "enforced", displayMode: c.displayMode === "HIDDEN" ? "HYPOTHESIS" : "INFERENCE", claimId: c.draft.id, evidenceIds: [...routeEvidence(r, s).slice(0, 4), ...ev.slice(0, 3)], note: `${short(r.entry.id)} reaches ${short(r.sink)} through a check that can raise “${p.name}”.` });
       v.edges.push({ id: `e:rail:${p.name}:${r.entry.id}:${r.sink}`, fromNodeId: nodeId(r.entry.id), toNodeId: pid, kind: "governed by", evidenceIds: routeEvidence(r, s).slice(0, 6), displayMode: "FACT" }, { id: `e:rail2:${p.name}:${r.entry.id}:${r.sink}`, fromNodeId: pid, toNodeId: nodeId(r.sink), kind: "guards", evidenceIds: ev.slice(0, 4), displayMode: "FACT" });
     }
     for (const r of escape) {
@@ -142,6 +153,8 @@ export function buildPolicy(store: Store, rev: RevisionRow, question: string, su
     const rules = skipped.map((x) => x.replace(/Error$/, ""));
     const ec = claimOf(store, rev.id, { assertion: r.ids.length === 1 ? `${short(r.entry.id)} changes ${[...fields].join(", ")} directly, without ${rules.join(", ")} — checks that other routes to the same state pass.` : `${short(r.entry.id)} reaches ${short(r.sink)}, which changes ${[...fields].join(", ")}, without passing ${rules.join(", ")} — checks that other routes to the same state pass.`, claimClass: "policy-escape", evidenceIds: routeEvidence(r, s), rationaleSummary: "The shortest path found avoids the enforcing functions.", structure: { kind: "path", entityIds: r.ids } });
     claims.push(ec); ensure(r.entry.id, "entry"); ensure(r.sink, "sink");
+    { const rid = rowOfRoute(r, fields);
+      for (const name of skipped) { const col = colOfPolicy.get(name); if (col) mCells.push({ row: rid, col, state: "bypassed", displayMode: "HYPOTHESIS", claimId: ec.draft.id, evidenceIds: routeEvidence(r, s).slice(0, 6), note: ec.draft.assertion }); } }
     if (r.entry.id !== r.sink) v.edges.push({ id: `e:esc:${r.entry.id}:${r.sink}`, fromNodeId: nodeId(r.entry.id), toNodeId: nodeId(r.sink), kind: "escape route", claimId: ec.draft.id, evidenceIds: routeEvidence(r, s), displayMode: "HYPOTHESIS", label: `skips ${rules.length} check(s)` });
     else { const n = v.nodes.find((x) => x.id === nodeId(r.sink)); if (n) { n.displayMode = "HYPOTHESIS"; n.claimIds = [...n.claimIds, ec.draft.id]; n.badge = `skips ${rules.length} check(s)`; n.notes = [...(n.notes ?? []), ec.draft.assertion]; } }
     (v.consequences ??= []).push({ id: `c:${ec.draft.id}`, text: ec.draft.assertion, kind: "escape route", displayMode: ec.displayMode === "HIDDEN" ? "HIDDEN" : "HYPOTHESIS", claimId: ec.draft.id, evidenceIds: routeEvidence(r, s).slice(0, 6), entityIds: r.ids });
@@ -151,9 +164,29 @@ export function buildPolicy(store: Store, rev: RevisionRow, question: string, su
     claims.push(c);
     v.nodes.push({ id: `n:conv:${hash(cv.id, cv.text)}`, entityRefs: [cv.id], label: cv.text.slice(0, 56), kind: "policy", file: flow.entities.get(cv.id)!.file, claimIds: [c.draft.id], ownClaimId: c.draft.id, evidenceIds: [cv.ev.id], tier: "RELEVANT", displayMode: "HYPOTHESIS", unresolvedCalls: 0, role: "policy", ghost: true, pos: { x: 0, y: row * 140 }, badge: "by convention", notes: [c.draft.assertion] });
     row++;
+    { const colId = `n:conv:${hash(cv.id, cv.text)}`;
+      mCols.push({ id: colId, label: cv.text.slice(0, 56), sub: "held by convention", role: "convention", entityRefs: [cv.id], evidenceIds: [cv.ev.id], claimId: c.draft.id });
+      for (const [rid, ax] of mRows) if (ax.entityRefs.includes(cv.id)) mCells.push({ row: rid, col: colId, state: "convention", displayMode: "HYPOTHESIS", claimId: c.draft.id, evidenceIds: [cv.ev.id], note: c.draft.assertion }); }
     (v.consequences ??= []).push({ id: `c:${c.draft.id}`, text: c.draft.assertion, kind: "convention only", displayMode: c.displayMode === "HIDDEN" ? "HIDDEN" : "HYPOTHESIS", claimId: c.draft.id, evidenceIds: [cv.ev.id], entityIds: [cv.id] });
   }
-  v.caption = `${all.length} rule(s) enforced in code, ${conv.length} held only by convention, ${escapes} route(s) that get around a rule. Solid diamonds are enforced in code; hollow ones rely on convention.`;
+  if (mRows.size && mCols.length) {
+    // Rows with the most ways around come first; the heat says how many of the rules a route skips.
+    const rows = [...mRows.values()].map((ax) => {
+      const mine = mCells.filter((c) => c.row === ax.id), skipped = mine.filter((c) => c.state === "bypassed").length, held = mine.filter((c) => c.state === "enforced").length;
+      return { ...ax, ...(skipped ? { heat: { value: skipped / Math.max(1, skipped + held), label: `skips ${skipped} of ${skipped + held} rule(s) it could pass` } } : {}), _k: skipped };
+    }).sort((a, b) => b._k - a._k || a.label.localeCompare(b.label)).map(({ _k, ...ax }) => ax);
+    v.matrix = {
+      rowTitle: "Route (entry point → state it changes)", colTitle: "Rule",
+      rows, cols: mCols, cells: mCells,
+      states: {
+        enforced: { label: "enforced", glyph: "✓", description: "The route passes through code that can refuse it under this rule. Proposed from where the code throws: not proof." },
+        bypassed: { label: "can get around", glyph: "✕", description: "Another route to the same state does pass this rule, and this one's shortest path does not. It shows that a way around exists, not that anyone uses it." },
+        convention: { label: "by convention", glyph: "◌", description: "A comment states the rule; nothing in the code can refuse a request." },
+      },
+      emptyMeaning: "No relation found: the route does not reach state this rule governs, or the rule is not enforced on a path through it.",
+    };
+  }
+  v.caption = `${all.length} rule(s) enforced in code, ${conv.length} held only by convention, ${escapes} route(s) that get around a rule. In the matrix ✓ is enforced, ✕ is a way around and ○ is convention only; in the graph solid diamonds are enforced and hollow ones rely on convention.`;
   v.meta = { kind: "policy", subject: subject ?? "" };
   v.params = subject ? { subject } : {};
   v.gaps.push("A rule is recognised by the refusal its code can raise; rules enforced in configuration, a database constraint, or another service are not found.");

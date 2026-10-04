@@ -39,3 +39,23 @@ export function cardsFromOutput(store: Store, revision: string, out: ConceptsOut
   }
   return { cards, claims, dropped };
 }
+
+/**
+ * Cards with the same id (same kind and title) come from different chunks of the repository. They are one concept seen in parts,
+ * so their members and evidence are united rather than one overwriting the other, and the card says it was merged so that a
+ * wrong merge is visible and can be refuted. Stated confidence is the lowest of the parts.
+ */
+const CONF = ["low", "medium", "high"] as const;
+export function mergeCards(cards: ConceptCard[], regate: (c: ConceptCard, evidenceIds: string[]) => string): ConceptCard[] {
+  const by = new Map<string, ConceptCard[]>();
+  for (const c of cards) by.set(c.id, [...(by.get(c.id) ?? []), c]);
+  return [...by.values()].map((group) => {
+    if (group.length === 1) return group[0];
+    const members = [...new Set(group.flatMap((g) => g.members))].sort();
+    const evidenceIds = [...new Set(group.flatMap((g) => g.evidenceIds))];
+    const conf = CONF[Math.min(...group.map((g) => CONF.indexOf(g.statedConfidence as (typeof CONF)[number])).filter((i) => i >= 0), 2)];
+    const merged: ConceptCard = { ...group[0], members, evidenceIds, statedConfidence: conf, source: `${group[0].source} (merged from ${group.length} partial extractions: check that these are one concept)` };
+    merged.claimId = regate(merged, evidenceIds);
+    return merged;
+  });
+}

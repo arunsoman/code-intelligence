@@ -1,0 +1,2 @@
+ALTER TABLE accounts ADD COLUMN held INTEGER NOT NULL DEFAULT 0;
+DROP TABLE legacy_sessions;

@@ -44,6 +44,11 @@ Compose a map for this question.
 Kinds: capability (what a module is responsible for), domain-concept, invariant (a condition that must always hold, e.g. about a field written in several places), workflow (a multi-step or asynchronous flow), failure-mode (a way an operation can fail).
 Give 4-15 cards. Each card: title, one-sentence summary, memberEntityIds (exact ids), evidenceIds copied from relationships[] or facts[] that justify it, and statedConfidence (low|medium|high; this is your own uncalibrated judgment). Only cover what the bundle shows.`;
   }
+  if (req.purpose === "ROUTE") {
+    return `Choose which visual best answers this question about a code repository: ${JSON.stringify(req.question)}
+Forms: SemanticMap (how something works, grouped by responsibility), CausalGraph kind=failure (what can make an operation fail), CausalGraph kind=invariant (what can make a value wrong), TransactionJourney (one operation step by step), DataLineage (who reads and writes data), SemanticDiff (what changed between revisions), Archaeology (why code became this way, history), TrustBoundary (who can reach what, what protects it), RuntimeOverlay (reported exceptions and failing tests), RaceWindow (concurrency), Counterfactual (what if something were removed), TestConfidence (what tests cover), Ownership (who owns or knows the code), ConceptAtlas (implicit rules and concepts), PolicyMap (which rules are enforced), ChangeRisk (where change is risky).
+Return form (or null if the question is not about the repository or you cannot tell), kind only for CausalGraph, your confidence from 0 to 1, and a one-sentence reason. The bundle is empty on purpose; do not look for evidence.`;
+  }
   if (req.purpose === "CHALLENGE") {
     return `Adversarially challenge this claim; find reasons it could be wrong or incomplete.
 Claim: ${JSON.stringify(req.claim?.assertion ?? "")}

@@ -1,5 +1,8 @@
 //! Repository walk (C04 local ingestion) + cross-file resolution (C05 resolveSemantics / C09 graph).
+//! With a provided `ChangeSet` (per-file content hashes of the previously indexed revision) only
+//! changed files are re-parsed; the rest reuse cached parses, and diagnostics report what was reused.
 use crate::language::{parse_ts, RawFile};
+use crate::polyglot::{parse_go, parse_java, parse_python};
 use crate::rust_language::parse_rust;
 use crate::source_ir;
 use crate::model::*;
@@ -9,8 +12,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-const SKIP_DIRS: &[&str] = &["node_modules", ".git", "dist", "build", "target", ".next", "coverage"];
-pub const ANALYZER_VERSION: &str = "worker-0.2.0/tree-sitter-typescript-0.23+rust-0.24+nirdosha-v2";
+const SKIP_DIRS: &[&str] = &["node_modules", ".git", "dist", "build", "target", ".next", "coverage", "__pycache__", ".venv", "venv", ".gradle", ".idea", "vendor", "site-packages"];
+pub const ANALYZER_VERSION: &str = "worker-0.3.0/tree-sitter-typescript-0.23+rust-0.24+nirdosha-v2+defect-semantic-v1";
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -29,6 +32,29 @@ struct FileRec {
     ids: Vec<String>,
 }
 
+// ---- parse cache (incremental re-index; CE-3 region-level reuse) ----
+// Key: (relative path, content hash); value: the parsed file. Only valid within one
+// analyzer version and one worker process (spawn-local). Entries evicted FIFO beyond a bounded size.
+const CACHE_LIMIT: usize = 4096;
+#[derive(PartialEq, Eq, Hash, Clone)]
+struct CacheKey(String, String);
+struct ParseCache { entries: HashMap<CacheKey, RawFile> }
+static PARSE_CACHE: std::sync::OnceLock<std::sync::Mutex<ParseCache>> = std::sync::OnceLock::new();
+
+/// A content-keyed parse cache, so an incremental re-index can reuse parses of files whose
+/// bytes are unchanged. Only valid inside one worker process (spawn-local, one op at a time).
+fn parse_cache() -> std::sync::MutexGuard<'static, ParseCache> {
+    PARSE_CACHE.get_or_init(|| std::sync::Mutex::new(ParseCache { entries: HashMap::new() })).lock().unwrap_or_else(|e| e.into_inner())
+}
+fn cache_get(rel: &str, hash: &str) -> Option<RawFile> {
+    parse_cache().entries.get(&CacheKey(rel.to_string(), hash.to_string())).cloned()
+}
+fn cache_put(rel: &str, hash: &str, raw: &RawFile) {
+    let mut c = parse_cache();
+    while c.entries.len() >= CACHE_LIMIT { if let Some(k) = c.entries.keys().next().cloned() { c.entries.remove(&k); } else { break; } }
+    c.entries.insert(CacheKey(rel.to_string(), hash.to_string()), raw.clone());
+}
+
 pub fn git_head(root: &Path) -> Option<String> {
     let out = std::process::Command::new("git")
         .arg("-C")
@@ -39,7 +65,7 @@ pub fn git_head(root: &Path) -> Option<String> {
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
+pub fn index_repo(root: &Path, changes: Option<&ChangeSet>) -> Result<AnalysisBatch, String> {
     if !root.is_dir() {
         return Err(format!("not a directory: {}", root.display()));
     }
@@ -55,7 +81,7 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
         .filter(|p| {
             let n = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
             !n.ends_with(".d.ts")
-                && matches!(p.extension().and_then(|s| s.to_str()), Some("ts" | "tsx" | "mts" | "cts" | "rs" | "nir"))
+                && matches!(p.extension().and_then(|s| s.to_str()), Some("ts" | "tsx" | "mts" | "cts" | "rs" | "nir" | "java" | "go" | "py"))
         })
         .collect();
     paths.sort();
@@ -83,6 +109,11 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
     // Revisions are per repository: identical content at another path is a different revision,
     // because evidence spans resolve against this root.
     rev_hasher.update(root.to_string_lossy().as_bytes());
+    // ---- incremental pass over the walk: hash every file, reuse parses of unchanged ones.
+    // Hashing must touch every file (a change is undetectable otherwise); only *parsing* is skipped.
+    let mut reused = 0usize;
+    let cache = changes.map(|c| c.files.clone()).unwrap_or_default();
+    let cache_by_rel: HashMap<&str, &str> = cache.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     for p in &paths {
         let rel = p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
         let bytes = match std::fs::read(p) {
@@ -112,8 +143,20 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
                 continue;
             }
         };
+        // Same content hash as the caller's previous revision: the parse is content-identical, reuse it.
+        if cache_by_rel.get(rel.as_str()).map_or(false, |h| *h == hash) {
+            if let Some(raw) = cache_get(&rel, &hash) {
+                reused += 1;
+                sources.push((rel.clone(), hash.clone()));
+                recs.push(FileRec { rel, hash, src, raw, ids: vec![] });
+                continue;
+            }
+        }
         let mut raw = match p.extension().and_then(|s| s.to_str()) {
             Some("rs" | "nir") => parse_rust(&src, rel.ends_with(".nir")),
+            Some("java") => parse_java(&src, &rel),
+            Some("go") => parse_go(&src, &rel),
+            Some("py") => parse_python(&src, &rel),
             _ => parse_ts(&src, rel.ends_with(".tsx")),
         };
         if rel.ends_with(".nir") { if let Some(ir)=nirdosha_ir.as_mut() { ir.merge(&rel,&hash,&mut raw); } }
@@ -125,8 +168,17 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
                 retryable: false,
             });
         }
+        cache_put(&rel, &hash, &raw);
         sources.push((rel.clone(), hash.clone()));
         recs.push(FileRec { rel, hash, src, raw, ids: vec![] });
+    }
+    if reused > 0 {
+        batch.diagnostics.push(Diagnostic {
+            code: "REUSED_CACHED_PARSES".into(),
+            message: format!("incremental: {reused} of {} file(s) unchanged since the previous revision; their parses were reused", recs.len()),
+            related_entity_ids: vec![],
+            retryable: false,
+        });
     }
     batch.revision = format!("wt-{}", &hex(&rev_hasher.finalize())[..16]);
     if let Some(ir)=nirdosha_ir { for (rel,code,message) in ir.diagnostics { batch.diagnostics.push(Diagnostic{code,message,related_entity_ids:vec![format!("file:{rel}")],retryable:false}); } }
@@ -224,6 +276,41 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
         let r = &recs[file_idx];
         r.raw.symbols.iter().position(|s| s.qualified == name && s.kind != "method").map(|i| r.ids[i].clone())
     };
+    // Java and Go scope names by package, and a package is a directory: siblings see each other without importing.
+    let pkg_lang = |rel: &str| rel.ends_with(".go") || rel.ends_with(".java");
+    // A Java package is the directory under src/main/java or src/test/java, so main and test code of one package share it.
+    let dir_of = |rel: &str| -> String {
+        let d = rel.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
+        if rel.ends_with(".java") {
+            for root in ["/src/main/java/", "/src/test/java/"] { if let Some((pre, post)) = d.split_once(root.trim_end_matches('/')) { return format!("{pre}|{}", post.trim_start_matches('/')); } }
+            for root in ["src/main/java", "src/test/java"] { if let Some(post) = d.strip_prefix(root) { return format!("|{}", post.trim_start_matches('/')); } }
+        }
+        d
+    };
+    let mut dir_files: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, r) in recs.iter().enumerate() { if pkg_lang(&r.rel) { dir_files.entry(dir_of(&r.rel)).or_default().push(i); } }
+    let siblings = |file_idx: usize| -> Vec<usize> { let r = &recs[file_idx].rel; if pkg_lang(r) { dir_files.get(&dir_of(r)).cloned().unwrap_or_default() } else { vec![file_idx] } };
+    let find_symbol_pkg = |file_idx: usize, name: &str| -> Option<String> {
+        find_symbol(file_idx, name).or_else(|| siblings(file_idx).into_iter().filter(|i| *i != file_idx).find_map(|i| find_symbol(i, name)))
+    };
+    let find_member = |file_idx: usize, class: &str, name: &str| -> Option<String> {
+        let q = format!("{class}.{name}");
+        let r = &recs[file_idx];
+        r.raw.symbols.iter().position(|s| s.qualified == q).map(|i| r.ids[i].clone())
+    };
+    let find_member_pkg = |file_idx: usize, class: &str, name: &str| -> Option<String> {
+        find_member(file_idx, class, name).or_else(|| siblings(file_idx).into_iter().filter(|i| *i != file_idx).find_map(|i| find_member(i, class, name)))
+    };
+    // Suffix indexes for resolving package-style imports to files.
+    let mut java_by_suffix: HashMap<String, usize> = HashMap::new();
+    let mut py_by_suffix: HashMap<String, usize> = HashMap::new();
+    let mut go_dir_by_suffix: HashMap<String, usize> = HashMap::new();
+    for (i, r) in recs.iter().enumerate() {
+        let segs: Vec<&str> = r.rel.split('/').collect();
+        if r.rel.ends_with(".py") { for k in 0..segs.len() { py_by_suffix.entry(segs[k..].join("/")).or_insert(i); } }
+        if r.rel.ends_with(".java") { for k in 0..segs.len() { java_by_suffix.entry(segs[k..].join("/")).or_insert(i); } }
+        if r.rel.ends_with(".go") && !r.rel.ends_with("_test.go") { let d = &segs[..segs.len() - 1]; for k in 0..d.len() { go_dir_by_suffix.entry(d[k..].join("/")).or_insert(i); } }
+    }
 
     let mut rel_ids: HashMap<String, ()> = batch.relationships.iter().map(|r| (r.id.clone(), ())).collect();
     let mut add_rel = |batch: &mut AnalysisBatch, r: Relationship| {
@@ -232,7 +319,7 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
         }
     };
 
-    let mut pending_reads: Vec<(String, String, String, String, usize, usize)> = Vec::new();
+    let mut pending_reads: Vec<(String, String, String, String, Option<String>, usize, usize)> = Vec::new();
     let mut pubs: Vec<(String, String, EvidenceRef)> = Vec::new();
     let mut subs: Vec<(String, String, EvidenceRef)> = Vec::new();
     for fi in 0..recs.len() {
@@ -243,7 +330,18 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
 
         for imp in &rec.raw.imports {
             let ev = evidence(&rec.rel, &rec.hash, imp.start, imp.end, "STATIC_RESOLVED");
-            match resolve_module(&rec.rel, &imp.module, &known_files) {
+            let (resolved, imp_name) = if let Some(m) = imp.module.strip_prefix("java:") {
+                (java_by_suffix.get(&format!("{}.java", m.replace('.', "/"))).copied(), imp.imported.clone())
+            } else if let Some(m) = imp.module.strip_prefix("go:") {
+                // The longest tail of the import path that names a directory in this repository; the rest is the module path.
+                let segs: Vec<&str> = m.split('/').collect();
+                ((0..segs.len()).find_map(|k| go_dir_by_suffix.get(&segs[k..].join("/")).copied()), imp.imported.clone())
+            } else if let Some(m) = imp.module.strip_prefix("py:") {
+                // `from a import b` may name a module (a/b.py) rather than something inside a: prefer the module.
+                let sub = if imp.imported != "*" { resolve_py(&rec.rel, &format!("{m}.{}", imp.imported), &known_files, &py_by_suffix) } else { None };
+                match sub { Some(t) => (Some(t), "*".to_string()), None => (resolve_py(&rec.rel, m, &known_files, &py_by_suffix), imp.imported.clone()) }
+            } else { (resolve_module(&rec.rel, &imp.module, &known_files), imp.imported.clone()) };
+            match resolved {
                 Some(ti) => {
                     let tgt = &recs[ti];
                     add_rel(
@@ -259,10 +357,10 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
                         },
                     );
                     if !imp.local.is_empty() {
-                        bindings.insert(imp.local.clone(), (ti, imp.imported.clone()));
+                        bindings.insert(imp.local.clone(), (ti, imp_name));
                     }
                 }
-                None if imp.module.starts_with('.') => batch.facts.push(Fact {
+                None if imp.module.starts_with('.') || imp.module.starts_with("py:.") => batch.facts.push(Fact {
                     id: format!("fact:unresolved-import:{}:{}", rec.rel, imp.start),
                     subject: fid.clone(),
                     predicate: "imports".into(),
@@ -274,7 +372,7 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
                     id: format!("fact:external-import:{}:{}", rec.rel, imp.module),
                     subject: fid.clone(),
                     predicate: "imports_external".into(),
-                    object: json!({"kind":"ScalarValue","value":imp.module}),
+                    object: json!({"kind":"ScalarValue","value":imp.module.split_once(':').filter(|(p, _)| matches!(*p, "java" | "go" | "py")).map_or(imp.module.as_str(), |(_, m)| m)}),
                     evidence: vec![evidence(&rec.rel, &rec.hash, imp.start, imp.end, "STATIC_PARSED")],
                     resolution: "PARSED",
                 }),
@@ -290,24 +388,33 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
                 .caller
                 .and_then(|i| rec.raw.symbols[i].qualified.split_once('.').map(|(c, _)| c.to_string()));
 
-            let target: Option<(String, &'static str)> = match call.receiver.as_deref() {
+            let typed: Option<(String, &'static str)> = call.recv_type.as_deref().and_then(|t| {
+                // `pkg.Type` (Go): the package names an import, the type is in that package's files.
+                if let Some((pkg, ty)) = t.split_once('.') {
+                    return bindings.get(pkg).and_then(|(ti, _)| find_member_pkg(*ti, ty, &call.callee)).map(|x| (x, "STATIC_RESOLVED"));
+                }
+                // The receiver's declared type names a class: this file, an imported file, or a file of the same package.
+                let via_binding = bindings.get(t).and_then(|(ti, _)| find_member_pkg(*ti, t, &call.callee));
+                via_binding.or_else(|| find_member_pkg(fi, t, &call.callee)).map(|x| (x, "STATIC_RESOLVED"))
+            });
+            let target: Option<(String, &'static str)> = if typed.is_some() { typed } else { match call.receiver.as_deref() {
                 None => bindings
                     .get(&call.callee)
                     .and_then(|(ti, imported)| {
                         let name = if imported == "default" || imported == "*" { &call.callee } else { imported };
                         find_symbol(*ti, name).or_else(|| find_symbol(*ti, &call.callee))
                     })
-                    .or_else(|| find_symbol(fi, &call.callee))
+                    .or_else(|| find_symbol_pkg(fi, &call.callee))
                     .map(|t| (t, "STATIC_RESOLVED")),
                 Some("this" | "self") => caller_class.and_then(|c| {
                     let q = format!("{c}.{}", call.callee);
                     rec.raw.symbols.iter().position(|s| s.qualified == q).map(|i| (rec.ids[i].clone(), "STATIC_RESOLVED"))
-                }),
+                }).or_else(|| if rec.rel.ends_with(".java") { find_symbol_pkg(fi, &call.callee).map(|t| (t, "STATIC_RESOLVED")) } else { None }),
                 Some(recv) => bindings.get(recv).and_then(|(ti, imported)| {
                     // namespace import: ns.fn()
-                    (imported == "*").then(|| find_symbol(*ti, &call.callee)).flatten().map(|t| (t, "STATIC_RESOLVED"))
+                    (imported == "*").then(|| find_symbol_pkg(*ti, &call.callee)).flatten().map(|t| (t, "STATIC_RESOLVED"))
                 }),
-            };
+            } };
 
             match target {
                 Some((to, class)) if to != from => add_rel(
@@ -345,6 +452,27 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
             Some(i) => rec.ids[i].clone(),
             None => fid.clone(),
         };
+        for event in &rec.raw.semantic {
+            batch.facts.push(Fact {
+                id: format!("fact:defect:{}:{}", rec.rel, event.start),
+                subject: subject_of(event.caller), predicate: "defect.semantic-event.v1".into(),
+                object: event.value.clone(),
+                evidence: vec![evidence(&rec.rel, &rec.hash, event.start, event.end, "STATIC_PARSED")],
+                resolution: "PARSED",
+            });
+        }
+        // A field access is qualified by its receiver when one is statically present (`account.balance`,
+        // `self.balance` → the enclosing class), so two unrelated same-named fields stay distinct.
+        // Receiver-free writes (object literals, bare identifiers) keep the bare name.
+        let qualifier_of = |caller: Option<usize>, receiver: &Option<String>| -> Option<String> {
+            let r = receiver.as_ref()?.trim();
+            if r.is_empty() { return None; }
+            if r == "this" || r == "self" {
+                let cls = caller.and_then(|i| rec.raw.symbols[i].qualified.split('.').next().map(String::from));
+                return Some(cls.unwrap_or_else(|| r.to_string()));
+            }
+            Some(r.split('.').next_back().unwrap_or(r).to_string())
+        };
         for t in &rec.raw.throws {
             batch.facts.push(Fact {
                 id: format!("fact:throws:{}:{}", rec.rel, t.start),
@@ -356,18 +484,19 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
             });
         }
         for w in &rec.raw.writes {
+            let q = qualifier_of(w.caller, &w.receiver);
             batch.facts.push(Fact {
                 id: format!("fact:writes:{}:{}", rec.rel, w.start),
                 subject: subject_of(w.caller),
                 predicate: "writes".into(),
-                object: json!({"kind":"ScalarValue","value":w.field}),
+                object: json!({"kind":"ScalarValue","value":w.field,"qualifier":q}),
                 evidence: vec![evidence(&rec.rel, &rec.hash, w.start, w.end, "STATIC_PARSED")],
                 resolution: "PARSED",
             });
         }
         for rd in &rec.raw.reads {
             // Reads are only meaningful for state that is written somewhere in the repository; filtered after all files are seen.
-            pending_reads.push((rec.rel.clone(), rec.hash.clone(), subject_of(rd.caller), rd.field.clone(), rd.start, rd.end));
+            pending_reads.push((rec.rel.clone(), rec.hash.clone(), subject_of(rd.caller), rd.field.clone(), qualifier_of(rd.caller, &rd.receiver), rd.start, rd.end));
         }
         for t in &rec.raw.txs {
             batch.facts.push(Fact {
@@ -376,6 +505,16 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
                 predicate: "uses_transaction".into(),
                 object: json!({"kind":"ScalarValue","value":true}),
                 evidence: vec![evidence(&rec.rel, &rec.hash, t.start, t.end, "STATIC_PARSED")],
+                resolution: "PARSED",
+            });
+        }
+        for l in &rec.raw.locks {
+            batch.facts.push(Fact {
+                id: format!("fact:uses_lock:{}:{}", rec.rel, l.start),
+                subject: subject_of(l.caller),
+                predicate: "uses_lock".into(),
+                object: json!({"kind":"ScalarValue","value":l.object}),
+                evidence: vec![evidence(&rec.rel, &rec.hash, l.start, l.end, "STATIC_PARSED")],
                 resolution: "PARSED",
             });
         }
@@ -412,7 +551,7 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
     // Keep reads of fields that some function writes (the data-lineage view needs both sides), one fact per reader and field.
     let written: std::collections::HashSet<String> = batch.facts.iter().filter(|f| f.predicate == "writes").filter_map(|f| f.object["value"].as_str().map(String::from)).collect();
     let mut seen_reads: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
-    for (rel, hash, subject, field, start, end) in pending_reads {
+    for (rel, hash, subject, field, qualifier, start, end) in pending_reads {
         if !written.contains(&field) || !seen_reads.insert((subject.clone(), field.clone())) {
             continue;
         }
@@ -420,7 +559,7 @@ pub fn index_repo(root: &Path) -> Result<AnalysisBatch, String> {
             id: format!("fact:reads:{rel}:{start}"),
             subject,
             predicate: "reads".into(),
-            object: json!({"kind":"ScalarValue","value":field}),
+            object: json!({"kind":"ScalarValue","value":field,"qualifier":qualifier}),
             evidence: vec![evidence(&rel, &hash, start, end, "STATIC_PARSED")],
             resolution: "PARSED",
         });
@@ -560,6 +699,31 @@ fn resolve_module(from_rel: &str, module: &str, known: &HashMap<String, usize>) 
     cands.into_iter().find_map(|c| known.get(&c).copied())
 }
 
+/// Python modules: `a.b` is `a/b.py` or `a/b/__init__.py` from the repository root, from `src/`, or from the importing file's own
+/// directory; leading dots climb from the importing file's directory.
+fn resolve_py(from_rel: &str, module: &str, known: &HashMap<String, usize>, by_suffix: &HashMap<String, usize>) -> Option<usize> {
+    let dots = module.chars().take_while(|c| *c == '.').count();
+    let rest = module.trim_start_matches('.').replace('.', "/");
+    let dir = Path::new(from_rel).parent().unwrap_or(Path::new(""));
+    let mut bases: Vec<String> = vec![];
+    if dots > 0 {
+        let mut d = dir.to_path_buf();
+        for _ in 1..dots { d = d.parent().map(Path::to_path_buf).unwrap_or_default(); }
+        bases.push(d.join(&rest).to_string_lossy().replace('\\', "/"));
+    } else {
+        bases.push(rest.clone());
+        bases.push(format!("src/{rest}"));
+        bases.push(dir.join(&rest).to_string_lossy().replace('\\', "/"));
+    }
+    for b in bases {
+        let b = b.trim_start_matches('/').to_string();
+        for c in [format!("{b}.py"), format!("{b}/__init__.py")] { if let Some(i) = known.get(&c) { return Some(*i); } }
+    }
+    // An absolute import is relative to some source root that is not named: `app.util` is `<root>/app/util.py` wherever the root is.
+    if dots == 0 { for c in [format!("{rest}.py"), format!("{rest}/__init__.py")] { if let Some(i) = by_suffix.get(&c) { return Some(*i); } } }
+    None
+}
+
 fn rust_module_candidates(base: &str, known: &HashMap<String, usize>) -> Option<usize> {
     let roots = if base.starts_with("src/") { vec![base.to_string()] } else { vec![format!("src/{base}"), base.to_string()] };
     roots.into_iter().flat_map(|b| [format!("{b}.rs"), format!("{b}.nir"), format!("{b}/mod.rs"), format!("{b}/mod.nir")])
@@ -572,7 +736,7 @@ mod tests {
 
     fn fixture() -> AnalysisBatch {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sample-repo");
-        index_repo(&root).unwrap()
+        index_repo(&root, None).unwrap()
     }
 
     fn has_rel(b: &AnalysisBatch, kind: &str, from: &str, to: &str) -> bool {
@@ -624,11 +788,53 @@ mod revision_tests {
             }
         }
         copy(&src, &dst);
-        let a = index_repo(&src).unwrap();
-        let b = index_repo(&dst).unwrap();
+        let a = index_repo(&src, None).unwrap();
+        let b = index_repo(&dst, None).unwrap();
         let _ = std::fs::remove_dir_all(&dst);
         assert_ne!(a.revision, b.revision);
         assert_eq!(a.entities.len(), b.entities.len());
+    }
+}
+
+#[cfg(test)]
+mod incremental_tests {
+    use super::*;
+
+    #[test]
+    fn reindexes_unchanged_content_from_the_previous_hashes_and_reports_reuse() {
+        let dir = std::env::temp_dir().join(format!("cie-incr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.ts"), "export function a() {}\n").unwrap();
+        std::fs::write(dir.join("b.ts"), "export function b() {}\n").unwrap();
+        let first = index_repo(&dir, None).unwrap();
+        assert!(!first.diagnostics.iter().any(|d| d.code == "REUSED_CACHED_PARSES"));
+
+        // Same content, passed as the previous revision's hashes: everything should be reused
+        // and the revision must be identical (content-addressed, not a function of the cache).
+        let files: Vec<(String, String)> = first.entities.iter().filter(|e| e.kind == "file")
+            .map(|e| (e.file.clone(), e.spans[0].content_hash.clone())).collect();
+        let cs = ChangeSet { files: files.into_iter().collect(), revision: first.revision.clone() };
+        let second = index_repo(&dir, Some(&cs)).unwrap();
+        assert_eq!(second.revision, first.revision, "revision is content-addressed");
+        assert_eq!(second.entities.len(), first.entities.len());
+        assert_eq!(second.facts.len(), first.facts.len());
+        assert_eq!(second.relationships.len(), first.relationships.len());
+        let reuse = second.diagnostics.iter().find(|d| d.code == "REUSED_CACHED_PARSES").expect("reuse diagnostic");
+        assert!(reuse.message.contains("2 of 2"), "both files reused: {}", reuse.message);
+
+        // After a change, only the changed file is re-parsed.
+        std::fs::write(dir.join("a.ts"), "export function a() { return 1 }\n").unwrap();
+        let mut cs2 = cs.clone();
+        let b_hash = second.entities.iter().find(|e| e.file == "b.ts").unwrap().spans[0].content_hash.clone();
+        let a_hash = "stale".to_string();
+        cs2.files = [("b.ts".to_string(), b_hash), ("a.ts".to_string(), a_hash)].into_iter().collect();
+        let third = index_repo(&dir, Some(&cs2)).unwrap();
+        assert_ne!(third.revision, first.revision);
+        let reuse3 = third.diagnostics.iter().find(|d| d.code == "REUSED_CACHED_PARSES").expect("reuse diagnostic");
+        assert!(reuse3.message.contains("1 of 2"), "only b.ts reused: {}", reuse3.message);
+        assert!(third.entities.iter().any(|e| e.name == "a" && e.spans[0].content_hash != second.entities.iter().find(|e| e.file == "a.ts").unwrap().spans[0].content_hash));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -637,7 +843,7 @@ mod behavior_tests {
     use super::*;
 
     fn payments() -> AnalysisBatch {
-        index_repo(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/payments-repo")).unwrap()
+        index_repo(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/payments-repo"), None).unwrap()
     }
     fn facts<'a>(b: &'a AnalysisBatch, pred: &str, subject: &str) -> Vec<&'a Fact> {
         b.facts.iter().filter(|f| f.predicate == pred && f.subject == subject).collect()
@@ -703,7 +909,7 @@ mod behavior_tests {
         sh(&["commit", "-qm", "first"]);
         std::fs::write(dir.join("a.ts"), "export function a() { return 1 }\n").unwrap();
         sh(&["commit", "-qam", "second"]);
-        let b = index_repo(&dir).unwrap();
+        let b = index_repo(&dir, None).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         let h = b.facts.iter().find(|f| f.predicate == "history" && f.subject == "file:a.ts").expect("history fact");
         assert_eq!(h.object["value"]["commits"], 2);
@@ -719,7 +925,7 @@ mod reads_tests {
 
     #[test]
     fn records_reads_only_of_fields_that_are_written_somewhere() {
-        let b = index_repo(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/payments-repo")).unwrap();
+        let b = index_repo(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/payments-repo"), None).unwrap();
         let readers = |field: &str| b.facts.iter().filter(|f| f.predicate == "reads" && f.object["value"] == field).map(|f| f.subject.clone()).collect::<Vec<_>>();
         let r = readers("balance");
         assert!(r.contains(&"function:src/ledger/ledger.ts#reserve".to_string()), "reserve reads account.balance: {r:?}");
@@ -736,7 +942,7 @@ mod rust_nir_tests {
     use super::*;
 
     fn fixture() -> AnalysisBatch {
-        index_repo(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/rust-nir-repo")).unwrap()
+        index_repo(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/rust-nir-repo"), None).unwrap()
     }
 
     #[test]

@@ -1,6 +1,7 @@
 // C02 slice: sequenced command journal with idempotency + optimistic version checks (contracts §1, §3).
 import { createHash, randomUUID } from "node:crypto";
 import type { ApiError, CallContext } from "@cie/schema";
+import { failpoint } from "./failpoint.ts";
 import type { Store } from "./store.ts";
 
 export interface Command { id: string; type: "UPDATE_WORKSPACE"; subjectId: string; expectedVersion: number; payload: { name: string; revision?: string; state: unknown } }
@@ -19,7 +20,7 @@ export class Journal {
     const payloadHash = hash({ ...cmd, id: undefined });
     const db = this.store.db;
     try {
-      return this.store.tx<SubmitResult>(() => {
+      const result = this.store.tx<SubmitResult>(() => {
         const prior = db.prepare("select payload_hash, receipt from idempotency where key = ?").get(ctx.idempotencyKey) as any;
         if (prior) {
           // Same key with different bytes is a conflict, never a fresh execution.
@@ -38,9 +39,13 @@ export class Journal {
         const r = db.prepare("insert into journal(resource_id,command_id,type,payload,actor,ts) values (?,?,?,?,?,?)")
           .run(cmd.subjectId, cmd.id, cmd.type, JSON.stringify({ name: cmd.payload.name, version }), ctx.actor.principalId, now);
         const receipt: CommitReceipt = { commandId: cmd.id, transactionId: randomUUID(), committedSequence: Number(r.lastInsertRowid), resourceVersion: version };
+        // The event is written in this same transaction: a committed change always has its event, and a rolled-back one never does.
+        db.prepare("insert into outbox(event_id, topic, payload, created_at) values (?,?,?,?)").run(receipt.transactionId, "workspace.updated", JSON.stringify({ resourceId: cmd.subjectId, version, sequence: receipt.committedSequence, revision: cmd.payload.revision ?? null }), now);
         db.prepare("insert into idempotency values (?,?,?)").run(ctx.idempotencyKey, payloadHash, JSON.stringify(receipt));
         return { ok: true, receipt, replayed: false };
       });
+      failpoint("after-commit");
+      return result;
     } catch (e) {
       return { ok: false, error: { code: "STORAGE_FAILURE", message: (e as Error).message, retryable: true } };
     }

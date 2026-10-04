@@ -1,0 +1,122 @@
+E class:java/src/main/java/com/acme/ledger/LedgerService.java#LedgerService
+E class:java/src/main/java/com/acme/pay/CaptureListener.java#CaptureListener
+E class:java/src/main/java/com/acme/pay/CardGateway.java#CardGateway
+E class:java/src/main/java/com/acme/pay/FraudRejectedException.java#FraudRejectedException
+E class:java/src/main/java/com/acme/pay/PaymentController.java#PaymentController
+E class:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService
+E class:java/src/test/java/com/acme/pay/PaymentServiceTest.java#PaymentServiceTest
+E class:python/app/ledger.py#Ledger
+E class:python/app/service.py#InsufficientFunds
+E class:python/app/service.py#PaymentService
+E function:go/cmd/main.go#chargeHandler
+E function:go/cmd/main.go#main
+E function:go/internal/ledger/ledger.go#Round
+E function:go/internal/ledger/util.go#normalise
+E function:python/app/api.py#create_payment
+E function:python/app/api.py#dynamic
+E function:python/app/api.py#health
+E function:python/app/ledger.py#round_amount
+E function:python/app/util.py#clean
+E interface:java/src/main/java/com/acme/pay/PaymentGateway.java#PaymentGateway
+E method:go/cmd/main.go#Server.Handle
+E method:go/internal/ledger/ledger.go#Ledger.Reserve
+E method:go/internal/ledger/ledger.go#Ledger.record
+E method:java/src/main/java/com/acme/ledger/LedgerService.java#LedgerService.record
+E method:java/src/main/java/com/acme/ledger/LedgerService.java#LedgerService.release
+E method:java/src/main/java/com/acme/ledger/LedgerService.java#LedgerService.reserve
+E method:java/src/main/java/com/acme/pay/CaptureListener.java#CaptureListener.onCaptured
+E method:java/src/main/java/com/acme/pay/CardGateway.java#CardGateway.authorize
+E method:java/src/main/java/com/acme/pay/FraudRejectedException.java#FraudRejectedException.FraudRejectedException
+E method:java/src/main/java/com/acme/pay/PaymentController.java#PaymentController.PaymentController
+E method:java/src/main/java/com/acme/pay/PaymentController.java#PaymentController.audit
+E method:java/src/main/java/com/acme/pay/PaymentController.java#PaymentController.create
+E method:java/src/main/java/com/acme/pay/PaymentController.java#PaymentController.remove
+E method:java/src/main/java/com/acme/pay/PaymentGateway.java#PaymentGateway.authorize
+E method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.PaymentService
+E method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.charge
+E method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.close
+E method:python/app/ledger.py#Ledger.__init__
+E method:python/app/ledger.py#Ledger._record
+E method:python/app/ledger.py#Ledger.reserve
+E method:python/app/service.py#PaymentService.__init__
+E method:python/app/service.py#PaymentService._notify
+E method:python/app/service.py#PaymentService.charge
+E struct:go/cmd/main.go#Server
+E struct:go/internal/ledger/ledger.go#Ledger
+E test:go/internal/ledger/ledger_test.go#TestReserve
+E test:java/src/test/java/com/acme/pay/PaymentServiceTest.java#PaymentServiceTest.chargesAnAccount
+E test:python/tests/test_service.py#test_charges_account
+F calls file:python/app/api.py "cannot statically resolve call to Flask" UNRESOLVED
+F calls function:go/cmd/main.go#chargeHandler "cannot statically resolve call to fmt.Println" UNRESOLVED
+F calls function:go/cmd/main.go#main "cannot statically resolve call to <computed>" UNRESOLVED
+F calls function:go/cmd/main.go#main "cannot statically resolve call to http.HandleFunc" UNRESOLVED
+F calls function:go/cmd/main.go#main "cannot statically resolve call to http.HandleFunc" UNRESOLVED
+F calls function:python/app/api.py#dynamic "cannot statically resolve call to <computed>" UNRESOLVED
+F calls function:python/app/util.py#clean "cannot statically resolve call to value.strip" UNRESOLVED
+F calls method:go/cmd/main.go#Server.Handle "cannot statically resolve call to fmt.Println" UNRESOLVED
+F calls method:go/internal/ledger/ledger.go#Ledger.Reserve "cannot statically resolve call to l.mu.Lock" UNRESOLVED
+F calls method:go/internal/ledger/ledger.go#Ledger.Reserve "cannot statically resolve call to l.mu.Unlock" UNRESOLVED
+F calls method:java/src/main/java/com/acme/pay/CaptureListener.java#CaptureListener.onCaptured "cannot statically resolve call to System.out.println" UNRESOLVED
+F calls method:java/src/main/java/com/acme/pay/PaymentController.java#PaymentController.audit "cannot statically resolve call to System.out.println" UNRESOLVED
+F calls method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.charge "cannot statically resolve call to kafkaTemplate.send" UNRESOLVED
+F calls method:python/app/service.py#PaymentService._notify "cannot statically resolve call to queue.publish" UNRESOLVED
+F calls test:python/tests/test_service.py#test_charges_account "cannot statically resolve call to PaymentService(None).charge" UNRESOLVED
+F imports_external file:go/cmd/main.go "fmt" PARSED
+F imports_external file:go/cmd/main.go "net/http" PARSED
+F imports_external file:go/internal/ledger/ledger.go "sync" PARSED
+F imports_external file:go/internal/ledger/ledger_test.go "testing" PARSED
+F imports_external file:java/src/main/java/com/acme/ledger/LedgerService.java "org.springframework.stereotype.Service" PARSED
+F imports_external file:java/src/main/java/com/acme/pay/CaptureListener.java "org.springframework.kafka.annotation.KafkaListener" PARSED
+F imports_external file:java/src/main/java/com/acme/pay/CaptureListener.java "org.springframework.stereotype.Component" PARSED
+F imports_external file:java/src/main/java/com/acme/pay/CardGateway.java "org.springframework.stereotype.Component" PARSED
+F imports_external file:java/src/main/java/com/acme/pay/PaymentService.java "org.springframework.kafka.core.KafkaTemplate" PARSED
+F imports_external file:java/src/main/java/com/acme/pay/PaymentService.java "org.springframework.stereotype.Service" PARSED
+F imports_external file:java/src/main/java/com/acme/pay/PaymentService.java "org.springframework.transaction.annotation.Transactional" PARSED
+F imports_external file:java/src/test/java/com/acme/pay/PaymentServiceTest.java "org.junit.jupiter.api.Test" PARSED
+F imports_external file:python/app/api.py "flask" PARSED
+F imports_external file:python/app/service.py "django.db" PARSED
+F throws method:go/internal/ledger/ledger.go#Ledger.Reserve "panic" PARSED
+F throws method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.charge "FraudRejectedException" PARSED
+F throws method:python/app/service.py#PaymentService.charge "InsufficientFunds" PARSED
+F uses_transaction method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.charge true PARSED
+F uses_transaction method:python/app/service.py#PaymentService.charge true PARSED
+F writes method:java/src/main/java/com/acme/ledger/LedgerService.java#LedgerService.reserve "balance" PARSED
+F writes method:java/src/main/java/com/acme/pay/PaymentController.java#PaymentController.PaymentController "paymentService" PARSED
+F writes method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.PaymentService "gateway" PARSED
+F writes method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.PaymentService "kafkaTemplate" PARSED
+F writes method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.PaymentService "ledger" PARSED
+F writes method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.charge "charged" PARSED
+F writes method:python/app/ledger.py#Ledger.__init__ "balance" PARSED
+F writes method:python/app/ledger.py#Ledger.reserve "balance" PARSED
+F writes method:python/app/service.py#PaymentService.__init__ "ledger" PARSED
+R async-flow method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.charge > method:java/src/main/java/com/acme/pay/CaptureListener.java#CaptureListener.onCaptured PARSED
+R async-flow method:python/app/service.py#PaymentService._notify > method:java/src/main/java/com/acme/pay/CaptureListener.java#CaptureListener.onCaptured PARSED
+R calls function:go/cmd/main.go#main > method:go/cmd/main.go#Server.Handle RESOLVED
+R calls function:go/internal/ledger/ledger.go#Round > function:go/internal/ledger/util.go#normalise RESOLVED
+R calls function:python/app/api.py#create_payment > method:python/app/service.py#PaymentService.charge RESOLVED
+R calls method:go/cmd/main.go#Server.Handle > function:go/internal/ledger/ledger.go#Round RESOLVED
+R calls method:go/cmd/main.go#Server.Handle > method:go/internal/ledger/ledger.go#Ledger.Reserve RESOLVED
+R calls method:go/internal/ledger/ledger.go#Ledger.Reserve > method:go/internal/ledger/ledger.go#Ledger.record RESOLVED
+R calls method:java/src/main/java/com/acme/ledger/LedgerService.java#LedgerService.release > method:java/src/main/java/com/acme/ledger/LedgerService.java#LedgerService.record RESOLVED
+R calls method:java/src/main/java/com/acme/ledger/LedgerService.java#LedgerService.reserve > method:java/src/main/java/com/acme/ledger/LedgerService.java#LedgerService.record RESOLVED
+R calls method:java/src/main/java/com/acme/pay/PaymentController.java#PaymentController.create > method:java/src/main/java/com/acme/pay/PaymentController.java#PaymentController.audit RESOLVED
+R calls method:java/src/main/java/com/acme/pay/PaymentController.java#PaymentController.create > method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.charge RESOLVED
+R calls method:java/src/main/java/com/acme/pay/PaymentController.java#PaymentController.remove > method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.close RESOLVED
+R calls method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.charge > method:java/src/main/java/com/acme/ledger/LedgerService.java#LedgerService.reserve RESOLVED
+R calls method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.charge > method:java/src/main/java/com/acme/pay/PaymentGateway.java#PaymentGateway.authorize RESOLVED
+R calls method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.close > method:java/src/main/java/com/acme/ledger/LedgerService.java#LedgerService.release RESOLVED
+R calls method:python/app/ledger.py#Ledger.reserve > method:python/app/ledger.py#Ledger._record RESOLVED
+R calls method:python/app/service.py#PaymentService.charge > class:python/app/service.py#InsufficientFunds RESOLVED
+R calls method:python/app/service.py#PaymentService.charge > function:python/app/ledger.py#round_amount RESOLVED
+R calls method:python/app/service.py#PaymentService.charge > function:python/app/util.py#clean RESOLVED
+R calls method:python/app/service.py#PaymentService.charge > method:python/app/ledger.py#Ledger.reserve RESOLVED
+R calls method:python/app/service.py#PaymentService.charge > method:python/app/service.py#PaymentService._notify RESOLVED
+R calls test:go/internal/ledger/ledger_test.go#TestReserve > method:go/internal/ledger/ledger.go#Ledger.Reserve RESOLVED
+R calls test:java/src/test/java/com/acme/pay/PaymentServiceTest.java#PaymentServiceTest.chargesAnAccount > method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.charge RESOLVED
+R calls test:python/tests/test_service.py#test_charges_account > class:python/app/service.py#PaymentService RESOLVED
+R imports file:go/cmd/main.go > file:go/internal/ledger/ledger.go RESOLVED
+R imports file:java/src/main/java/com/acme/pay/PaymentService.java > file:java/src/main/java/com/acme/ledger/LedgerService.java RESOLVED
+R imports file:python/app/api.py > file:python/app/service.py RESOLVED
+R imports file:python/app/service.py > file:python/app/ledger.py RESOLVED
+R imports file:python/app/service.py > file:python/app/util.py RESOLVED
+R imports file:python/tests/test_service.py > file:python/app/service.py RESOLVED

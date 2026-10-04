@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 export interface Message { role: "user" | "assistant"; text: string; at: string; error?: boolean }
 interface Props {
-  messages: Message[]; referents: { id: string; label: string; source?: "map" | "editor" }[]; busy: boolean; canAsk: boolean;
+  messages: Message[]; referents: { id: string; label: string; source?: "map" | "editor" | "cell" }[]; busy: boolean; canAsk: boolean;
   examples: string[]; onSend: (text: string) => void; onDropReferent: (id: string) => void;
 }
 
@@ -27,7 +27,7 @@ export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend,
       </div>
       {referents.length > 0 && (
         <div className="referents" role="group" aria-label="Selected elements the next message refers to">
-          {referents.slice(0, 6).map((r) => <span key={r.id} className={`ref ${r.source === "editor" ? "editor" : ""}`} title={r.source === "editor" ? "From your editor selection" : "Selected on the map"}>{r.source === "editor" ? "⌨ " : ""}{r.label}<button aria-label={`Remove ${r.label} from the selection`} onClick={() => onDropReferent(r.id)}>×</button></span>)}
+          {referents.slice(0, 6).map((r) => <span key={r.id} className={`ref ${r.source === "editor" ? "editor" : ""}`} title={r.source === "editor" ? "From your editor selection" : r.source === "cell" ? "Selected in the matrix: the code of this row and column" : "Selected on the map"}>{r.source === "editor" ? "⌨ " : ""}{r.label}<button aria-label={`Remove ${r.label} from the selection`} onClick={() => onDropReferent(r.id)}>×</button></span>)}
           {referents.length > 6 && <span className="muted small">+{referents.length - 6} more</span>}
         </div>
       )}

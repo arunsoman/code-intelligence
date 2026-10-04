@@ -2,12 +2,12 @@
 // Rules are explicit and ordered so behavior is predictable and testable; unmatched text is a new question.
 export type FormChoice = { form: "SemanticMap" | "CausalGraph"; kind?: "failure" | "invariant"; reason: string };
 
-const FAIL = /\b(fail(s|ed|ure|ures|ing)?|break(s)?|crash(es)?|go(es)? wrong|can(not|'t)? (complete|succeed)|reject(ed|s)?|error(s)?|declin(e|ed)|time ?out|cause[sd]?)\b/i;
-const INVARIANT = /\b(incorrect|wrong|invariant|inconsisten\w*|corrupt\w*|drift\w*|mismatch\w*|out of sync|stale|go(es)? negative|double[- ]?(spend|charge|count))\b/i;
+export const FAIL_RE = /\b(fail(s|ed|ure|ures|ing)?|break(s)?|crash(es)?|go(es)? wrong|can(not|'t)? (complete|succeed)|reject(ed|s)?|error(s)?|declin(e|ed)|time ?out|cause[sd]?)\b/i;
+export const INVARIANT_RE = /\b(incorrect|wrong|invariant|inconsisten\w*|corrupt\w*|drift\w*|mismatch\w*|out of sync|stale|go(es)? negative|double[- ]?(spend|charge|count))\b/i;
 
 export function chooseForm(question: string): FormChoice {
-  if (INVARIANT.test(question)) return { form: "CausalGraph", kind: "invariant", reason: "The question is about a value becoming incorrect, so I mapped every writer of that state." };
-  if (FAIL.test(question)) return { form: "CausalGraph", kind: "failure", reason: "The question is about what can make something fail, so I mapped failure sites reachable from the operation." };
+  if (INVARIANT_RE.test(question)) return { form: "CausalGraph", kind: "invariant", reason: "The question is about a value becoming incorrect, so I mapped every writer of that state." };
+  if (FAIL_RE.test(question)) return { form: "CausalGraph", kind: "failure", reason: "The question is about what can make something fail, so I mapped failure sites reachable from the operation." };
   return { form: "SemanticMap", reason: "The question is about how something works, so I composed a map of the relevant code, grouped by responsibility." };
 }
 
@@ -34,6 +34,9 @@ export function routeIntent(text: string, c: IntentContext): Intent {
   if (m && /investigation|session|work|continue|resume|reopen/i.test(t) && !/^open\s+\S+\.\w+$/i.test(t)) return { type: "resume", name: m[1].replace(/\b(investigation|session)\b/gi, "").trim() };
   // "project overview" / "overview of the codebase" is a question about the repository, with or without a map on screen.
   if (/\b(project|repo(?:sitory)?|code ?base|system|app(?:lication)?|architecture)\b.{0,20}\b(overview|summary|big picture)\b|\b(overview|summary|big picture|tour)\b.{0,20}\b(of|for)\b.{0,12}\b(the |this |my )?(project|repo(?:sitory)?|code ?base|system|app(?:lication)?|architecture)\b|\bwhat does (this|the) (project|repo(?:sitory)?|code ?base|app(?:lication)?) do\b/i.test(t)) return { type: "overview" };
+  // "flow diagram for the whole project", "map the entire codebase": a whole-repository scope, so no keyword can match a symbol.
+  const PROJECT = "(?:project|repo(?:sitory)?|code ?base|system|app(?:lication)?)";
+  if (new RegExp(`\\b(?:whole|entire|full|complete|overall|all of)\\s+(?:the\\s+|this\\s+|my\\s+)?${PROJECT}\\b|\\b(?:flow|architecture|dependency|component|module|system|block)\\s+(?:diagram|map|chart|graph)\\b.{0,20}\\b(?:of|for)\\s+(?:the\\s+|this\\s+|my\\s+)?${PROJECT}\\b`, "i").test(t)) return { type: "overview" };
   if (c.hasView && /\b(zoom out|zoom-out|overview|big picture|higher level|less detail)\b/i.test(t)) return { type: "zoom", direction: /overview|big picture/i.test(t) ? "overview" : "out" };
   if (c.hasView && /\b(zoom in|zoom-in|more detail|drill (down|in))\b/i.test(t)) return { type: "zoom", direction: "in" };
   if (c.hasView && (m = /why\s+(?:isn'?t|is not|aren'?t|are not|wasn'?t|doesn'?t)\s+(.+?)\s+(?:shown|showing|included|displayed|there|in (?:the )?(?:map|view|graph)|appear(?:ing)?)\s*\??$/i.exec(t))) return { type: "whyHidden", target: m[1].replace(/^(the|a)\s+/i, "").trim() };

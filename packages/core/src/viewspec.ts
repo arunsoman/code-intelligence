@@ -2,7 +2,7 @@
 // model-derived abstraction (INFERENCE); ungrounded model output is dropped and reported as a gap.
 import { createHash } from "node:crypto";
 import type { Claim, EvidenceBundle, RepresentationOutput, ViewEdge, ViewGroup, ViewNode, ViewSpec } from "@cie/schema";
-import { gateClaim } from "./claims.ts";
+import { gateClaim, modelText } from "./claims.ts";
 import type { ModelRunRef } from "@cie/schema";
 import type { Store } from "./store.ts";
 import type { Scored } from "./salience.ts";
@@ -108,7 +108,13 @@ export function compileView(inp: CompileInput): { view: ViewSpec; claims: Claim[
   const empty = nodes.length === 0;
   const caption = empty
     ? "Nothing in this repository matches that question. Try naming a feature or module — the map stays empty rather than guessing."
-    : inp.representation?.caption ?? `${nodes.length} symbols relevant to "${inp.question}".`;
+    : (() => {
+      const dflt = `${nodes.length} symbols relevant to "${inp.question}".`;
+      if (!inp.representation?.caption) return dflt;
+      const t = modelText(inp.representation.caption, dflt);
+      if (t.replaced) gaps.push("the model's caption was replaced: it claimed certainty or carried a link, which only evidence and the gates may do");
+      return t.text;
+    })();
   const id = "view:" + createHash("sha256").update(bundle.id + inp.question).digest("hex").slice(0, 12);
   return {
     claims,

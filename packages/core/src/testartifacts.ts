@@ -9,8 +9,10 @@ import type { RevisionRow, Store } from "./store.ts";
 
 export interface TestResult { name: string; suite: string; file?: string; status: "passed" | "failed" | "skipped"; message?: string; durationMs?: number }
 export interface LineHits { [line: number]: number }
+export interface Branch { line: number; taken: number }
+export interface CoverageFile { lines: LineHits; branches: Branch[] }
 export interface TestSummary {
-  found: string[]; coverageFiles: number; coverageLinePercent: number | null;
+  found: string[]; coverageFiles: number; coverageLinePercent: number | null; coverageBranchPercent: number | null;
   tests: { passed: number; failed: number; skipped: number }; failing: { name: string; file?: string; message?: string }[];
   generatedAt: string; staleness: string[];
 }
@@ -19,29 +21,40 @@ const COVERAGE_PATHS = ["coverage/lcov.info", "lcov.info", "coverage/coverage-fi
 const RESULT_PATHS = ["junit.xml", "test-results/junit.xml", "reports/junit.xml", "test-report.xml", "test-results.json", "reports/test-results.json", "jest-results.json", "vitest-results.json"];
 const MAX_BYTES = 20 * 1024 * 1024;
 
-export function parseLcov(text: string): Map<string, LineHits> {
-  const out = new Map<string, LineHits>();
-  let cur: LineHits | null = null;
+export function parseLcov(text: string): Map<string, CoverageFile> {
+  const out = new Map<string, CoverageFile>();
+  let cur: CoverageFile | null = null;
   for (const raw of text.split(/\r?\n/)) {
-    if (raw.startsWith("SF:")) { cur = {}; out.set(raw.slice(3).trim(), cur); }
-    else if (raw.startsWith("DA:") && cur) { const [l, h] = raw.slice(3).split(","); const n = Number(l); if (Number.isInteger(n)) cur[n] = (cur[n] ?? 0) + Number(h || 0); }
+    if (raw.startsWith("SF:")) { cur = { lines: {}, branches: [] }; out.set(raw.slice(3).trim(), cur); }
+    else if (cur && raw.startsWith("DA:")) { const [l, h] = raw.slice(3).split(","); const n = Number(l); if (Number.isInteger(n)) cur.lines[n] = (cur.lines[n] ?? 0) + Number(h || 0); }
+    else if (cur && raw.startsWith("BRDA:")) { // BRDA:<line>,<block>,<branch>,<taken> — "taken" may be "-" (never evaluated)
+      const [l, , , taken] = raw.slice(5).split(","); const n = Number(l);
+      if (Number.isInteger(n)) cur.branches.push({ line: n, taken: taken === "-" ? -1 : Number(taken) });
+    }
     else if (raw === "end_of_record") cur = null;
   }
   return out;
 }
 
-export function parseIstanbul(json: unknown): Map<string, LineHits> {
-  const out = new Map<string, LineHits>();
+export function parseIstanbul(json: unknown): Map<string, CoverageFile> {
+  const out = new Map<string, CoverageFile>();
   if (!json || typeof json !== "object") return out;
   for (const [file, cov] of Object.entries(json as Record<string, any>)) {
     const sm = cov?.statementMap, s = cov?.s;
     if (!sm || !s) continue;
-    const hits: LineHits = {};
+    const lines: LineHits = {};
     for (const [id, loc] of Object.entries<any>(sm)) {
       const line = loc?.start?.line;
-      if (Number.isInteger(line)) hits[line] = Math.max(hits[line] ?? 0, Number(s[id] ?? 0));
+      if (Number.isInteger(line)) lines[line] = Math.max(lines[line] ?? 0, Number(s[id] ?? 0));
     }
-    out.set(cov.path ?? file, hits);
+    const branches: Branch[] = [];
+    const bm = cov?.branchMap, b = cov?.b;
+    if (bm && b) for (const [id, loc] of Object.entries<any>(bm)) {
+      const line = loc?.loc?.start?.line;
+      const counts: number[] = b[id] ?? [];
+      for (const taken of counts) if (Number.isInteger(line)) branches.push({ line, taken });
+    }
+    out.set(cov.path ?? file, { lines, branches });
   }
   return out;
 }
@@ -105,35 +118,40 @@ export function ingestTestArtifacts(store: Store, rev: RevisionRow): TestSummary
   const staleness: string[] = [];
 
   // ---- coverage
-  let cov: Map<string, LineHits> | null = null, covPath = "";
+  let cov: Map<string, CoverageFile> | null = null, covPath = "";
   for (const rel of COVERAGE_PATHS) {
     const abs = join(root, rel); if (!existsSync(abs)) continue;
     const text = readSmall(abs); if (text === null) continue;
     try { cov = rel.endsWith(".json") ? parseIstanbul(JSON.parse(text)) : parseLcov(text); covPath = rel; found.push(rel); break; } catch { staleness.push(`${rel} could not be parsed`); }
   }
-  let totalLines = 0, coveredLines = 0, coverageFiles = 0;
+  let totalLines = 0, coveredLines = 0, coverageFiles = 0, totalBranches = 0, coveredBranches = 0;
   if (cov) {
-    const byFile = new Map<string, LineHits>();
+    const byFile = new Map<string, CoverageFile>();
     for (const [p, hits] of cov) { const f = toRepoFile(p, root, files); if (f) byFile.set(f, hits); }
     coverageFiles = byFile.size;
     const covMtime = statSync(join(root, covPath)).mtimeMs;
-    for (const [file, hits] of byFile) {
+    for (const [file, cf] of byFile) {
+      const hits = cf.lines;
       const lines = Object.keys(hits).map(Number);
       const covered = lines.filter((l) => hits[l] > 0).length;
-      totalLines += lines.length; coveredLines += covered;
+      const branches = cf.branches.filter((b) => b.taken >= 0), taken = branches.filter((b) => b.taken > 0).length;
+      totalLines += lines.length; coveredLines += covered; totalBranches += branches.length; coveredBranches += taken;
       try { if (statSync(join(root, file)).mtimeMs > covMtime + 1000) staleness.push(`${file} changed after the coverage report was produced`); } catch { /* ignore */ }
       const buf = (() => { try { return readFileSync(resolve(root, file)); } catch { return null; } })();
       const fileEnt = `file:${file}`;
-      facts.push({ id: `fact:coverage:${file}`, subject: fileEnt, predicate: "coverage", object: { kind: "ScalarValue", value: { lines: lines.length, covered, percent: lines.length ? Math.round((covered / lines.length) * 100) : 0, scope: "file" } },
-        evidence: [evidence(rev.id, `cov:${file}`, file, `${covPath}: ${covered}/${lines.length} executable lines covered in ${file}`, at)], resolution: "OBSERVED" });
+      facts.push({ id: `fact:coverage:${file}`, subject: fileEnt, predicate: "coverage", object: { kind: "ScalarValue", value: { lines: lines.length, covered, percent: lines.length ? Math.round((covered / lines.length) * 100) : 0, branches: branches.length ? { total: branches.length, covered: taken, percent: Math.round((taken / branches.length) * 100) } : undefined, scope: "file" } },
+        evidence: [evidence(rev.id, `cov:${file}`, file, `${covPath}: ${covered}/${lines.length} executable lines covered in ${file}${branches.length ? `; ${taken}/${branches.length} branch arms taken` : ""}`, at)], resolution: "OBSERVED" });
       if (!buf) continue;
       for (const sym of symbols.filter((s) => s.file === file && s.spans[0])) {
-        const a = lineOf(buf, sym.spans[0].startByte), b = lineOf(buf, sym.spans[0].endByteExclusive);
-        const inside = lines.filter((l) => l >= a && l <= b);
+        const a = lineOf(buf, sym.spans[0].startByte), stop = lineOf(buf, sym.spans[0].endByteExclusive);
+        const inside = lines.filter((l) => l >= a && l <= stop);
         if (inside.length === 0) continue;
         const c = inside.filter((l) => hits[l] > 0).length;
-        facts.push({ id: `fact:coverage:${sym.entityId}`, subject: sym.entityId, predicate: "coverage", object: { kind: "ScalarValue", value: { lines: inside.length, covered: c, percent: Math.round((c / inside.length) * 100), scope: "symbol" } },
-          evidence: [evidence(rev.id, `cov:${sym.entityId}`, file, `${covPath}: ${c}/${inside.length} executable lines of ${sym.name} (lines ${a}–${b}) covered`, at)], resolution: "OBSERVED" });
+        const inBranches = branches.filter((br) => br.line >= a && br.line <= stop);
+        const bTaken = inBranches.filter((b) => b.taken > 0).length;
+        const branchVal = inBranches.length ? { total: inBranches.length, covered: bTaken, percent: Math.round((bTaken / inBranches.length) * 100) } : undefined;
+        facts.push({ id: `fact:coverage:${sym.entityId}`, subject: sym.entityId, predicate: "coverage", object: { kind: "ScalarValue", value: { lines: inside.length, covered: c, percent: Math.round((c / inside.length) * 100), branches: branchVal, scope: "symbol" } },
+          evidence: [evidence(rev.id, `cov:${sym.entityId}`, file, `${covPath}: ${c}/${inside.length} executable lines of ${sym.name} (lines ${a}–${stop}) covered${branchVal ? `; ${bTaken}/${branchVal.total} branch arms` : ""}`, at)], resolution: "OBSERVED" });
       }
     }
   }
@@ -162,7 +180,7 @@ export function ingestTestArtifacts(store: Store, rev: RevisionRow): TestSummary
   store.replaceFactsBySource(rev.id, "fact:coverage:", facts.filter((f) => f.id.startsWith("fact:coverage:")));
   store.replaceFactsBySource(rev.id, "fact:test_result:", facts.filter((f) => f.id.startsWith("fact:test_result:")));
   if (found.length === 0) return null;
-  const summary: TestSummary = { found, coverageFiles, coverageLinePercent: totalLines ? Math.round((coveredLines / totalLines) * 100) : null, tests: counts, failing: failing.slice(0, 20), generatedAt: at, staleness };
+  const summary: TestSummary = { found, coverageFiles, coverageLinePercent: totalLines ? Math.round((coveredLines / totalLines) * 100) : null, coverageBranchPercent: totalBranches ? Math.round((coveredBranches / totalBranches) * 100) : null, tests: counts, failing: failing.slice(0, 20), generatedAt: at, staleness };
   store.db.prepare("insert into test_runs values (?,?) on conflict(repo_root) do update set json = excluded.json").run(rev.repoRoot, JSON.stringify(summary));
   return summary;
 }

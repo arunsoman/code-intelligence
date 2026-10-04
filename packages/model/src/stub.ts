@@ -188,6 +188,8 @@ export class StubProvider implements ModelProvider {
       case "EXTRACT": return extract(req);
       // The deterministic adversarial checks run in core; the stub has no judgment of its own to add.
       case "CHALLENGE": return { objections: [] } satisfies ChallengeOutput;
+      // Routing by judgment needs a language model; offline, the rule and similarity layers have already answered.
+      case "ROUTE": return { form: null, confidence: 0, reason: "the offline model does not route" };
     }
   }
 }

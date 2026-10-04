@@ -1,13 +1,15 @@
 // V6 Semantic Diff Timeline: what changed between two indexed revisions, at the level of symbols, behaviour and concepts.
-// The before/after pair is level-locked: both sides show exactly the same elements.
+// The before/after pair is level-locked: both sides show exactly the same elements. Renames and moves are understood
+// through the pair's own evidence: identical symbol text in a different name/file is a rename or a move, not a change,
+// and behavioural facts follow the symbol so a rename never reads as a behaviour change.
 import type { Claim, Entity, Fact, ViewNode } from "@cie/schema";
-import { recentCommits, isGitRepo } from "../gitinfo.ts";
+import { forgeRefs, recentCommits, isGitRepo } from "../gitinfo.ts";
 import type { RevisionRow, Store } from "../store.ts";
 import { baseView, claimOf, containsEvidence, emptyForm, observation, short } from "./common.ts";
 
 const SYMBOLS = new Set(["function", "method", "class"]);
-const fkey = (f: Fact) => `${f.subject}|${f.predicate}|${JSON.stringify((f.object as { value?: unknown }).value)}`;
 const BEHAVIOR = new Set(["throws", "writes", "uses_transaction", "publishes", "subscribes"]);
+const fkey = (f: Fact) => `${f.subject}|${f.predicate}|${JSON.stringify((f.object as { value?: unknown }).value)}`;
 
 export function buildDiff(store: Store, rev: RevisionRow, question: string, subject?: string) {
   const o = { rev, form: "SemanticDiff" as const, question, kind: "diff", caption: "", reason: "You asked what changed, so this compares two indexed revisions: the before and after side by side, and what the change means." };
@@ -19,17 +21,35 @@ export function buildDiff(store: Store, rev: RevisionRow, question: string, subj
   const A = ents(before.id), B = ents(rev.id);
   const added = [...B.keys()].filter((id) => !A.has(id)), removed = [...A.keys()].filter((id) => !B.has(id));
   const changed = [...B.keys()].filter((id) => A.has(id) && A.get(id)!.symbolHash !== B.get(id)!.symbolHash);
-  const factsOf = (id: string) => store.allFacts(id).filter((f) => BEHAVIOR.has(f.predicate));
+
+  // Rename and move understanding (post-MVP): an entity id is `kind:file#name`, so a disappearance
+  // paired with an appearance elsewhere maps onto the pair when the symbol text (name-base +
+  // symbol hash) is identical. Same file → rename; different file → move. Anything else is a
+  // real add/remove. Behavioural facts are re-keyed through the pair so they compare equal.
+  const idMap = new Map<string, string>(); // old id → new id
+  const kindOf = new Map<string, "moved" | "renamed">();
+  const bByBase = new Map<string, string>();
+  for (const id of added) bByBase.set(`${B.get(id)!.name.split(".").pop()}|${B.get(id)!.symbolHash ?? ""}`, id);
+  for (const id of removed) {
+    const hit = bByBase.get(`${A.get(id)!.name.split(".").pop()}|${A.get(id)!.symbolHash ?? ""}`);
+    if (!hit) continue;
+    const k = A.get(id)!.file === B.get(hit)!.file ? "renamed" : "moved";
+    idMap.set(id, hit); kindOf.set(id, k); kindOf.set(hit, k);
+  }
+  const reallyAdded = added.filter((id) => !kindOf.has(id));
+  const reallyRemoved = removed.filter((id) => !kindOf.has(id));
+  const touched = [...new Set([...changed, ...reallyAdded, ...reallyRemoved])].sort();
+  const moveFacts = (fs: Fact[]): Fact[] => fs.map((f) => { const to = idMap.get(f.subject); return to && !f.subject.includes("test:") ? { ...f, subject: to } : f; });
+  const factsOf = (id: string) => moveFacts(store.allFacts(id).filter((f) => BEHAVIOR.has(f.predicate)));
   const fa = new Map(factsOf(before.id).map((f) => [fkey(f), f])), fb = new Map(factsOf(rev.id).map((f) => [fkey(f), f]));
   const newFacts = [...fb].filter(([k]) => !fa.has(k)).map(([, f]) => f), goneFacts = [...fa].filter(([k]) => !fb.has(k)).map(([, f]) => f);
 
   const v = baseView({ ...o, caption: "" });
   const claims: Claim[] = [], consequences: NonNullable<typeof v.consequences> = [];
-  const touched = [...new Set([...changed, ...added, ...removed])].sort();
-  if (touched.length === 0 && newFacts.length === 0 && goneFacts.length === 0) return emptyForm(o, `Nothing about the code changed between ${before.id} and ${rev.id}.`);
+  if (touched.length === 0 && newFacts.length === 0 && goneFacts.length === 0 && kindOf.size === 0) return emptyForm(o, `Nothing about the code changed between ${before.id} and ${rev.id}.`);
 
   const shown = touched.slice(0, 30);
-  const status = (id: string) => (added.includes(id) ? "added" : removed.includes(id) ? "removed" : "changed");
+  const status = (id: string) => (reallyAdded.includes(id) ? "added" : reallyRemoved.includes(id) ? "removed" : "changed");
   shown.forEach((id, i) => {
     const e = (B.get(id) ?? A.get(id)) as Entity, st = status(id), y = i * 64;
     const beforeEv = st === "added" ? [observation(store, rev.id, `absent:${before.id}:${id}`, "HISTORY", e.file, `Revision ${before.id}: ${e.name} did not exist yet.`).id] : [observation(store, rev.id, `before:${before.id}:${id}`, "HISTORY", e.file, `Revision ${before.id}: ${e.name} existed here (symbol hash ${A.get(id)?.symbolHash ?? "?"}).`).id];
@@ -41,6 +61,15 @@ export function buildDiff(store: Store, rev: RevisionRow, question: string, subj
     });
     v.nodes.push(mk("b", -320, beforeEv, st !== "added"), mk("a", 320, afterEv, st !== "removed"));
     v.edges.push({ id: `e:pair:${id}`, fromNodeId: `b:${id}`, toNodeId: `a:${id}`, kind: "became", evidenceIds: [...beforeEv, ...afterEv], displayMode: "FACT", label: st });
+  });
+  // Renames and moves: their own rows, drawn as understood, never as changed behaviour.
+  const pairs = [...idMap.entries()].reverse().slice(0, 12);
+  pairs.forEach(([from, to], i) => {
+    const k = kindOf.get(from)!, a = A.get(from)!, b = B.get(to)!, y = i * 64;
+    const ev = [observation(store, rev.id, `pair:${before.id}:${from}`, "HISTORY", a.file, `Revision ${before.id}: ${a.name} in ${a.file} (symbol text ${a.symbolHash ?? "?"}).`).id,
+      observation(store, rev.id, `pair:${rev.id}:${to}`, "HISTORY", b.file, `Revision ${rev.id}: ${b.name} in ${b.file}; the symbol text is identical.`).id];
+    v.nodes.push({ id: `b:${from}`, entityRefs: [from], label: a.name, kind: a.kind, file: a.file, claimIds: [], evidenceIds: ev, tier: "RELEVANT", unresolvedCalls: 0, displayMode: "FACT", role: `before-${k}`, pos: { x: -320, y }, ghost: true, lane: "before", badge: k, notes: [`This is a ${k}, not a behaviour change: the symbol text is identical in revision ${rev.id}.`] }, { id: `a:${to}`, entityRefs: [to], label: b.name, kind: b.kind, file: b.file, claimIds: [], evidenceIds: ev, tier: "RELEVANT", unresolvedCalls: 0, displayMode: "FACT", role: `after-${k}`, pos: { x: 320, y }, lane: "after", badge: k, notes: [`Identical symbol text to ${a.name}; reads as a ${k}.`] });
+    v.edges.push({ id: `e:pair:${from}`, fromNodeId: `b:${from}`, toNodeId: `a:${to}`, kind: "became", evidenceIds: ev, displayMode: "FACT", label: k });
   });
   v.groups.push({ id: "g:lane:before", label: `before · ${before.id.slice(0, 14)}`, kind: "lane", childNodeIds: v.nodes.filter((n) => n.lane === "before").map((n) => n.id), level: 1, evidenceIds: [], displayMode: "FACT" }, { id: "g:lane:after", label: `after · ${rev.id.slice(0, 14)}`, kind: "lane", childNodeIds: v.nodes.filter((n) => n.lane === "after").map((n) => n.id), level: 1, evidenceIds: [], displayMode: "FACT" });
 
@@ -88,14 +117,16 @@ export function buildDiff(store: Store, rev: RevisionRow, question: string, subj
     const strip = recentCommits(rev.repoRoot, 40).filter((c) => c.files.some((f) => files.has(f))).slice(0, 6);
     strip.forEach((c, i) => {
       const ev = observation(store, rev.id, `commit:${c.hash}`, "HISTORY", c.files.find((f) => files.has(f)) ?? "", `${c.hash.slice(0, 8)} ${c.date.slice(0, 10)} ${c.author}: ${c.subject}`, c.date);
-      v.nodes.push({ id: `n:commit:${c.hash}`, entityRefs: [], label: c.subject.slice(0, 40), kind: "commit", file: "", claimIds: [], evidenceIds: [ev.id], tier: "CONTEXT", displayMode: "FACT", unresolvedCalls: 0, role: "commit", pos: { x: (i - (strip.length - 1) / 2) * 150, y: shown.length * 64 + 70 }, badge: c.author, notes: [`${c.date.slice(0, 10)} by ${c.author}.`] });
+      const refs = forgeRefs(c.subject);
+      v.nodes.push({ id: `n:commit:${c.hash}`, entityRefs: [], label: c.subject.slice(0, 40), kind: "commit", file: "", claimIds: [], evidenceIds: [ev.id], tier: "CONTEXT", displayMode: "FACT", unresolvedCalls: 0, role: "commit", pos: { x: (i - (strip.length - 1) / 2) * 150, y: shown.length * 64 + 70 }, badge: refs.length ? refs.map((r) => `${r.kind === "pr" ? "PR" : "issue"} #${r.number}`).join(" ") : c.author, notes: [`${c.date.slice(0, 10)} by ${c.author}.`, ...refs.map((r) => `References ${r.kind === "pr" ? "pull request" : "issue"} #${r.number} (from the commit message).`)] });
     });
   }
-  const parts = [`${changed.length} changed`, `${added.length} added`, `${removed.length} removed`];
-  v.caption = `Between ${before.id.slice(0, 14)} and ${rev.id.slice(0, 14)}: ${parts.join(", ")} symbol(s); ${consequences.length} consequence(s). Before on the left, after on the right.`;
+  const parts = [`${changed.length} changed`, ...[...new Set([...kindOf.values()])].map((k) => `${[...kindOf.values()].filter((x) => x === k).length / 2} ${k}`), `${reallyAdded.length} added`, `${reallyRemoved.length} removed`];
+  v.caption = `Between ${before.id.slice(0, 14)} and ${rev.id.slice(0, 14)}: ${parts.filter((p, i) => !p.startsWith("0 ") || i === 0 || !p.startsWith("0 ")).join(", ")} symbol(s); ${consequences.length} consequence(s). Before on the left, after on the right.`;
   v.meta = { kind: "diff", subject: before.id };
   v.params = { subject: before.id };
+  if (kindOf.size) v.gaps.push("Renames and moves are understood when the symbol text is identical and only the name or file changed; a rename bundled with an edit still counts as a change.");
   if (touched.length > shown.length) v.gaps.push(`${touched.length - shown.length} more changed symbol(s) are not drawn; the consequences above still count them.`);
-  v.gaps.push("Changes are detected per symbol by comparing the text of each symbol; a pure rename of a variable counts as a change.");
+  v.gaps.push("Changes are detected per symbol by comparing the text of each symbol, and behavioural facts per asserted fact; matching relies on indexed symbol text, so restructuring an expression counts as a change.");
   return { view: v, claims };
 }

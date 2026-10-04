@@ -26,6 +26,16 @@ export function authorCounts(root: string, rel: string, limit = 200): { author: 
   return [...by].map(([author, v]) => ({ author, ...v })).sort((a, b) => b.commits - a.commits || a.author.localeCompare(b.author));
 }
 
+/** A pull request or issue reference in a commit subject: squash-merges say "(#123)", bodies say "fixes #42". */
+export interface ForgeRef { number: number; kind: "pr" | "issue" }
+export function forgeRefs(subject: string): ForgeRef[] {
+  const out: ForgeRef[] = [];
+  const pr = subject.match(/\(#(\d+)\)/); // squash-merge convention: the PR number in parentheses
+  if (pr) out.push({ number: Number(pr[1]), kind: "pr" });
+  for (const m of subject.matchAll(/(?<![(\w])#(\d+)\b/g)) { const n = Number(m[1]); if (!out.some((x) => x.number === n)) out.push({ number: n, kind: "issue" }); }
+  return out.slice(0, 3);
+}
+
 /** Commits in the repository, newest first, with the files each touched (names only). */
 export function recentCommits(root: string, limit = 60): (Commit & { files: string[] })[] {
   const out = git(root, ["log", `-n${limit}`, "--no-renames", "--name-only", "--pretty=format:@@%H%x1f%an%x1f%ae%x1f%aI%x1f%s"]);
@@ -67,6 +77,30 @@ export function codeowners(root: string): { rules: OwnerRule[]; path: string | n
   return { rules: [], path: null };
 }
 export const ownersOf = (rules: OwnerRule[], rel: string): OwnerRule | null => { let hit: OwnerRule | null = null; for (const r of rules) if (r.re.test(rel)) hit = r; return hit; };
+
+/**
+ * Optional team-membership map (post-MVP): `.github/teams.json` maps a CODEOWNERS team handle
+ * (`@payments-team`, the `@` optional) to its members. No network is used; if the file is absent
+ * or malformed, team membership stays unknown and the ownership claim says so.
+ */
+export function teamMembers(root: string): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const rel of [".github/teams.json", "teams.json", ".github/CODEOWNERS.teams.json"]) {
+    const abs = join(root, rel);
+    if (!existsSync(abs)) continue;
+    try {
+      const raw = JSON.parse(readFileSync(abs, "utf8")) as Record<string, unknown>;
+      for (const [team, members] of Object.entries(raw)) {
+        if (!Array.isArray(members)) continue;
+        const names = members.filter((m): m is string => typeof m === "string").slice(0, 20);
+        const handle = team.startsWith("@") ? team : `@${team}`;
+        if (names.length) out.set(handle.toLowerCase(), names);
+      }
+      return out;
+    } catch { /* malformed: treat as absent */ }
+  }
+  return out;
+}
 
 /** Comments that explain a symbol: the block directly above it, and TODO/FIXME/HACK/NOTE/deliberate remarks inside it. */
 export interface CodeComment { text: string; line: number; startByte: number; endByte: number; kind: "doc" | "marker" | "remark" }

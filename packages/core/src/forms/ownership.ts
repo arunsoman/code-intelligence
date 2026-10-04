@@ -1,7 +1,7 @@
 // V13 Ownership and Knowledge Map: who owns code formally (CODEOWNERS) and in practice (git), where knowledge is thin,
 // and whose knowledge has gone stale. De facto ownership is an inference until someone who knows confirms it.
 import type { Claim, ViewGroup } from "@cie/schema";
-import { authorCounts, codeowners, fileLog, isGitRepo, ownersOf } from "../gitinfo.ts";
+import { authorCounts, codeowners, fileLog, isGitRepo, ownersOf, teamMembers } from "../gitinfo.ts";
 import type { RevisionRow, Store } from "../store.ts";
 import { baseView, claimOf, emptyForm, flowGraph, observation, short } from "./common.ts";
 
@@ -12,6 +12,7 @@ export function buildOwnership(store: Store, rev: RevisionRow, question: string,
   if (!isGitRepo(rev.repoRoot)) return emptyForm(o, "This folder is not a git repository, so there is no history to say who knows the code.");
   const flow = flowGraph(store, rev.id);
   const co = codeowners(rev.repoRoot);
+  const teams = teamMembers(rev.repoRoot); // optional .github/teams.json: team handle → members
   const files = store.entities(rev.id).filter((e) => e.kind === "file" && (flow.byFile.get(e.file)?.length ?? 0) > 0);
   if (!files.length) return emptyForm(o, "There are no source files to assess.");
   const want = subject?.toLowerCase();
@@ -36,6 +37,8 @@ export function buildOwnership(store: Store, rev: RevisionRow, question: string,
     const top = ranked[0], share = top ? top.w / wsum : 1;
     let bus = 0, acc = 0; for (const a of ranked) { acc += a.w / wsum; bus++; if (acc >= 0.5) break; }
     const formal = ownersOf(co.rules, f.file);
+    const formalTeams = (formal?.owners ?? []).filter((o) => o.startsWith("@"));
+    const mapped = [...new Set(formalTeams.flatMap((t) => teams.get(t.toLowerCase()) ?? []))];
     const ownerLabel = formal ? formal.owners[0] : top?.author ?? "unknown";
     const heat = total === 0 ? 0.5 : Math.min(1, 0.55 * share + 0.25 * (bus <= 1 ? 1 : 0) + 0.2 * (top?.inactive ? 1 : 0));
     const hist = observation(store, rev.id, `own:${f.file}`, "HISTORY", f.file, total ? `${f.file}: ${total} commit(s) by ${authors.map((a) => `${a.author} ${a.commits}`).join(", ")}${formal ? `; CODEOWNERS line ${formal.line}: ${formal.pattern} → ${formal.owners.join(" ")}` : ""}` : `${f.file}: no commits found`);
@@ -43,12 +46,18 @@ export function buildOwnership(store: Store, rev: RevisionRow, question: string,
     const r = ownerRows.get(ownerLabel) ?? 0; ownerRows.set(ownerLabel, r + 1);
     const node = { id: `n:${f.entityId}`, entityRefs: [f.entityId], label: f.file.split("/").slice(-2).join("/"), kind: "file", file: f.file, claimIds: [] as string[], evidenceIds: [hist.id], tier: heat > 0.6 ? "CRITICAL" as const : "RELEVANT" as const, displayMode: "FACT" as import("@cie/schema").DisplayMode, unresolvedCalls: 0, role: "owned-file", pos: { x: ownerCol.get(ownerLabel)! * 280, y: r * 74 }, badge: ownerLabel, heat: { value: heat, label: total ? `${Math.round(share * 100)}% by ${top.author}; bus factor ${bus}${top?.inactive ? "; main contributor inactive" : ""}` : "no history" }, notes: [] as string[], ownClaimId: undefined as string | undefined };
     if (total) node.notes.push(`${total} commit(s) by ${authors.length} author(s): ${authors.slice(0, 4).map((a) => `${a.author} (${a.commits})`).join(", ")}.`);
-    if (formal) node.notes.push(`Formal owner: ${formal.owners.join(", ")} (CODEOWNERS line ${formal.line}).`);
+    if (formal) node.notes.push(`Formal owner: ${formal.owners.join(", ")} (CODEOWNERS line ${formal.line}).${mapped.length ? ` Members from teams.json: ${mapped.join(", ")}.` : ""}`);
     if (bus <= 1 && total >= 2) { thin++; node.notes.push("Bus factor 1: a single person accounts for most of the knowledge."); }
-    // De facto ownership is a claim; it needs a person who knows to confirm it.
+    // De facto ownership is a claim; it needs a person who knows to confirm it. When the repository
+    // maps its CODEOWNERS teams (teams.json), the members are named and a mismatch with the main
+    // contributor is reported; without the map, no membership is claimed.
     if (top) {
-      // CODEOWNERS usually names teams, and a person cannot be matched to a team from git alone, so no mismatch is claimed.
-      const c = claimOf(store, rev.id, { assertion: `${top.author} is the de facto owner of ${f.file} (${Math.round(share * 100)}% of recent-weighted commits)${formal ? `; its formal owner is ${formal.owners.join(", ")}, and team membership is not known here` : ""}.`, claimClass: "de-facto-ownership", evidenceIds: [hist.id], rationaleSummary: "Inferred from who changed the file, weighted toward recent work; it needs confirmation by someone who knows." });
+      const teamText = formal
+        ? mapped.length
+          ? `; its formal owner is ${formal.owners.join(", ")} (members here: ${mapped.join(", ")}${mapped.includes(top.author) ? `, including ${top.author}` : `, which does not include ${top.author}`})`
+          : `; its formal owner is ${formal.owners.join(", ")}, and team membership is not known here`
+        : "";
+      const c = claimOf(store, rev.id, { assertion: `${top.author} is the de facto owner of ${f.file} (${Math.round(share * 100)}% of recent-weighted commits)${teamText}.`, claimClass: "de-facto-ownership", evidenceIds: [hist.id], rationaleSummary: mapped.length ? "Inferred from who changed the file, weighted toward recent work; team membership is read from the repository's teams.json. It needs confirmation by someone who knows." : "Inferred from who changed the file, weighted toward recent work; it needs confirmation by someone who knows." });
       claims.push(c); node.claimIds = [c.draft.id]; node.ownClaimId = c.draft.id; node.displayMode = c.displayMode === "HIDDEN" ? "HYPOTHESIS" : "INFERENCE";
     }
     v.nodes.push(node);
@@ -56,10 +65,10 @@ export function buildOwnership(store: Store, rev: RevisionRow, question: string,
   const ids = new Set(v.nodes.map((n) => n.entityRefs[0]));
   for (const r of store.relationshipsAmong(rev.id, "imports")) if (ids.has(r.from) && ids.has(r.to)) v.edges.push({ id: `e:${r.id}`, fromNodeId: `n:${r.from}`, toNodeId: `n:${r.to}`, kind: "imports", relationshipId: r.id, evidenceIds: r.evidence.map((x) => x.id), displayMode: "FACT" });
   v.groups = [...ownerCol.keys()].map((owner): ViewGroup => ({ id: `g:region:${owner}`, label: owner, kind: "region", childNodeIds: v.nodes.filter((n) => n.badge === owner).map((n) => n.id), level: 2, evidenceIds: [], displayMode: "FACT" }));
-  v.caption = `${chosen.length} file(s) under ${ownerCol.size} owner(s); ${thin} with bus factor 1. Warmer means thinner or staler knowledge.`;
+  v.caption = `${chosen.length} file(s) under ${ownerCol.size} owner(s); ${thin} with bus factor 1. Warmer means thinner or staler knowledge. Import links are faint until you select a file.`;
   v.meta = { kind: "ownership", subject: subject ?? "" };
   v.params = subject ? { subject } : {};
   if (!co.path) v.gaps.push("There is no CODEOWNERS file, so ownership shown is de facto only: an inference until a team lead confirms it.");
-  v.gaps.push("Review latency, on-call and ticket data are not connected; knowledge is judged from commits alone, and a commit is not proof of understanding.");
+  v.gaps.push("Review latency, on-call and ticket data are not connected; knowledge is judged from commits alone, and a commit is not proof of understanding. Team membership is read from the repository's optional .github/teams.json only — no forge API is contacted.");
   return { view: v, claims };
 }

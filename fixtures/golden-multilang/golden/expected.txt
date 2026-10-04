@@ -1,0 +1,36 @@
+E class:ts/shapes.ts#Circle
+E file:rust/src/lib.rs
+E file:rust/src/util.rs
+E file:ts/main.ts
+E file:ts/shapes.ts
+E file:ts/util.ts
+E function:rust/src/lib.rs#run
+E function:rust/src/util.rs#helper
+E function:ts/main.ts#onA
+E function:ts/main.ts#onB
+E function:ts/main.ts#run
+E function:ts/main.ts#viaAny
+E function:ts/shapes.ts#makeCircle
+E function:ts/util.ts#helper
+E function:ts/util.ts#unused
+E method:rust/src/lib.rs#Dog.speak
+E method:ts/shapes.ts#Circle.area
+E module:rust/src/lib.rs#util
+E struct:rust/src/lib.rs#Dog
+E trait:rust/src/lib.rs#Speak
+F calls function:rust/src/lib.rs#run {"kind":"UnknownValue","reason":"cannot statically resolve call to animal.speak"} UNRESOLVED
+F calls function:rust/src/util.rs#helper {"kind":"UnknownValue","reason":"cannot statically resolve call to s.to_string"} UNRESOLVED
+F calls function:ts/main.ts#run {"kind":"UnknownValue","reason":"cannot statically resolve call to <computed>"} UNRESOLVED
+F calls function:ts/main.ts#run {"kind":"UnknownValue","reason":"cannot statically resolve call to c.area"} UNRESOLVED
+F calls function:ts/main.ts#run {"kind":"UnknownValue","reason":"cannot statically resolve call to external"} UNRESOLVED
+F calls function:ts/main.ts#viaAny {"kind":"UnknownValue","reason":"cannot statically resolve call to <computed>"} UNRESOLVED
+F imports_external file:ts/main.ts {"kind":"ScalarValue","value":"some-package"} PARSED
+R calls function:rust/src/lib.rs#run > function:rust/src/util.rs#helper RESOLVED
+R calls function:ts/main.ts#run > function:ts/shapes.ts#makeCircle RESOLVED
+R calls function:ts/main.ts#run > function:ts/util.ts#helper RESOLVED
+R calls method:rust/src/lib.rs#Dog.speak > function:rust/src/util.rs#helper RESOLVED
+R calls method:ts/shapes.ts#Circle.area > function:ts/util.ts#helper RESOLVED
+R imports file:rust/src/lib.rs > file:rust/src/util.rs RESOLVED
+R imports file:ts/main.ts > file:ts/shapes.ts RESOLVED
+R imports file:ts/main.ts > file:ts/util.ts RESOLVED
+R imports file:ts/shapes.ts > file:ts/util.ts RESOLVED

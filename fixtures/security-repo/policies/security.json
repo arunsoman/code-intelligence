@@ -1,0 +1,6 @@
+{
+  "policies": [
+    { "id": "POL-PII-1", "rule": "R-PII-LOG", "text": "No secrets or personal data in logs." },
+    { "id": "POL-AUTHZ-1", "rule": "R-AUTHZ-GAP", "text": "State-changing requests are checked for the caller's right to make them." }
+  ]
+}

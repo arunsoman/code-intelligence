@@ -7,23 +7,31 @@ import { baseView, claimOf, containsEvidence, emptyForm, flowGraph, short } from
 import { entryPoints } from "./analysis.ts";
 import { reach } from "./common.ts";
 
+/** The key a read/write fact is filed under: `qualifier.field` when the receiver is known, else the bare name. */
+export type FieldObject = { value?: unknown; qualifier?: unknown };
+export const fieldKey = (o: FieldObject): string => {
+  const v = String((o.value ?? "") as string);
+  const q = typeof o.qualifier === "string" && o.qualifier.trim() ? o.qualifier.trim() : null;
+  return q ? `${q}.${v}` : v;
+};
+
 export function pickField(store: Store, rev: string, question: string, subject?: string): string | null {
-  const writes = store.factsByPredicate(rev, "writes");
-  const fields = new Map<string, Set<string>>();
-  for (const f of writes) { const k = String((f.object as { value?: unknown }).value); fields.set(k, (fields.get(k) ?? new Set()).add(f.subject)); }
+  const keys = new Map<string, Set<string>>();
+  for (const pred of ["writes", "reads"] as const) for (const f of store.factsByPredicate(rev, pred)) { const k = fieldKey(f.object as FieldObject); keys.set(k, (keys.get(k) ?? new Set()).add(f.subject)); }
   const terms = subject ? [subject.toLowerCase()] : queryTerms(question);
-  const hits = [...fields].filter(([k]) => terms.some((t) => k.toLowerCase() === t || k.toLowerCase().includes(t) || t.includes(k.toLowerCase())));
-  const pool = hits.length ? hits : subject ? [] : [...fields];
-  return pool.sort((a, b) => b[1].size - a[1].size || a[0].localeCompare(b[0]))[0]?.[0] ?? null;
+  const hits = [...keys].filter(([k]) => terms.some((t) => k.toLowerCase() === t || k.toLowerCase().includes(t) || t.includes(k.toLowerCase())));
+  // An exact name wins; otherwise the group with the most code behind it.
+  const pool = hits.length ? hits : subject ? [] : [...keys];
+  return pool.sort((a, b) => Number(terms.some((t) => b[0].toLowerCase() === t)) - Number(terms.some((t) => a[0].toLowerCase() === t)) || b[1].size - a[1].size || a[0].localeCompare(b[0]))[0]?.[0] ?? null;
 }
 
 export function buildLineage(store: Store, rev: RevisionRow, question: string, subject?: string): { view: ReturnType<typeof baseView>; claims: Claim[] } {
   const o = { rev, form: "DataLineage" as const, question, kind: "lineage", caption: "", reason: "You asked who touches some data, so this puts it at the centre with every writer and reader around it, and the transaction boundaries between them." };
   const field = pickField(store, rev.id, question, subject);
-  if (!field) return emptyForm(o, "I can't tell which data you mean. Name a field, e.g. “who writes balance?”.");
+  if (!field) return emptyForm(o, "I can't tell which data you mean. Name a field, e.g. “who writes account.balance?”.");
   const flow = flowGraph(store, rev.id);
   const tx = new Set(store.factsByPredicate(rev.id, "uses_transaction").map((f) => f.subject));
-  const pick = (pred: string) => { const m = new Map<string, string[]>(); for (const f of store.factsByPredicate(rev.id, pred)) if (String((f.object as { value?: unknown }).value) === field && flow.entities.has(f.subject)) m.set(f.subject, [...(m.get(f.subject) ?? []), ...f.evidence.map((x) => x.id)]); return m; };
+  const pick = (pred: string) => { const m = new Map<string, string[]>(); for (const f of store.factsByPredicate(rev.id, pred)) if (fieldKey(f.object as FieldObject) === field && flow.entities.has(f.subject)) m.set(f.subject, [...(m.get(f.subject) ?? []), ...f.evidence.map((x) => x.id)]); return m; };
   const writers = pick("writes"), readers = pick("reads");
   const fieldId = `n:data:${field}`;
   const v = baseView({ ...o, caption: "" });
@@ -85,6 +93,9 @@ export function buildLineage(store: Store, rev: RevisionRow, question: string, s
   v.meta = { kind: "lineage", field, subject: field };
   v.params = { subject: field };
   if (readers.size === 0) v.gaps.push("No readers of this field were found; reads through destructuring, helpers or an ORM are not visible.");
-  v.gaps.push("Reads and writes are matched by field name, so two unrelated fields with the same name are conflated.");
+  const siblings = new Map<string, number>();
+  for (const pred of ["writes", "reads"] as const) for (const f of store.factsByPredicate(rev.id, pred)) { const k = fieldKey(f.object as FieldObject); if (k !== field && k.split(".").pop() === field.split(".").pop()) siblings.set(k, (siblings.get(k) ?? 0) + 1); }
+  if (siblings.size) v.gaps.push(`Other state named “${field.split(".").pop()}” sits in its own group (${[...siblings.keys()].join(", ")}); a receiver-free same-named write cannot be told apart from them statically.`);
+  v.gaps.push("Fields are matched by their receiver and name when the code names one (`account.balance`), so two unrelated same-named fields stay apart; writes with no visible object (bare literals, values not statically tied to an object) still share one key.");
   return { view: v, claims };
 }
