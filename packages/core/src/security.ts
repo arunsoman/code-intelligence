@@ -40,7 +40,48 @@ const SECRET_KIND = /(?:pass(?:word|wd)?|secret|token|api[_-]?key|ssn|cvv|card)/
 const SANITIZER = /^(?:len|size|count|length|hash\w*|mask\w*|redact\w*|digest|sha\w*|md5|encrypt\w*|anonym\w*|truncate\w*|fingerprint\w*|typeof|Boolean|String\.length)$/i;
 // Loggers in the languages we read: console / logger / log objects, Java's System.out and SLF4J-style `log.info`, Go's log and fmt printers
 // and Python's logging and print. `print(` and `fmt.Print*` write to the process output, which is where logs go.
-const LOG_CALL = /\b(?:(?:[\w$]+\s*\.\s*)*(?:console|logger|log|LOG|LOGGER|logging|slog|zap|glog|klog|System\s*\.\s*(?:out|err))\s*\.\s*(?:log|info|warn|warning|error|debug|trace|fatal|critical|exception|printf|println|print|Printf|Println|Print|Infof|Info|Warnf|Warn|Errorf|Error|Debugf|Debug|Fatalf|Fatal|Panicf|Panic)|fmt\s*\.\s*(?:Print|Printf|Println|Fprintf|Fprintln)|print)\s*\(/g;
+const LOGGER_RECEIVERS = ["console", "logger", "log", "LOG", "LOGGER", "logging", "slog", "zap", "glog", "klog"];
+const LOG_METHODS = ["log", "info", "warn", "warning", "error", "debug", "trace", "fatal", "critical", "exception", "printf", "println", "print", "Printf", "Println", "Print", "Infof", "Info", "Warnf", "Warn", "Errorf", "Error", "Debugf", "Debug", "Fatalf", "Fatal", "Panicf", "Panic"];
+const LOGGER_FACTORY = /^(?:LoggerFactory|LogFactory|logrus|zap|slog|logging)$/;
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Names that refer to a logger in this text: `const out = console`, `const l = logger.child(...)`,
+ * destructured `const { info } = logger`, Python `log = logging.getLogger(...)`, and plain
+ * reassignment. Only simple, local assignments are followed; anything indirect stays unresolved and
+ * therefore unreported, as before.
+ */
+export function loggerAliases(src: string): { receivers: Set<string>; methods: Set<string> } {
+  const receivers = new Set<string>();
+  const methods = new Set<string>();
+  const isLogger = (expr: string): boolean => {
+    const parts = expr.replace(/\s+/g, "").split(".").filter(Boolean);
+    if (!parts.length) return false;
+    if (parts[0] === "System" && (parts[1] === "out" || parts[1] === "err")) return true;
+    return receivers.has(parts[0]) || LOGGER_RECEIVERS.includes(parts[0]) || LOGGER_FACTORY.test(parts[0]);
+  };
+  // const out = console / let l = logger.child("x") / final Logger log = LoggerFactory.getLogger(...)
+  for (const m of src.matchAll(/\b(?:const|let|var|final|val)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]+)?=\s*([A-Za-z_$][\w$.]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*)/g)) if (isLogger(m[2])) receivers.add(m[1]);
+  // plain reassignment: out = console
+  for (const m of src.matchAll(/(?:^|[;{}\n])\s*([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$.]*)\s*[;\n]/g)) if (isLogger(m[2])) receivers.add(m[1]);
+  // destructuring: const { info, error: e } = logger
+  for (const m of src.matchAll(/\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*([A-Za-z_$][\w$.]*)/g)) {
+    if (!isLogger(m[2])) continue;
+    for (const part of m[1].split(",")) { const name = part.trim().split(/\s*:\s*/).pop()?.trim() ?? ""; if (/^[A-Za-z_$][\w$]*$/.test(name)) methods.add(name); }
+  }
+  // python: log = logging.getLogger(__name__)
+  for (const m of src.matchAll(/\b([A-Za-z_]\w*)\s*=\s*(?:logging|log)\s*\.\s*getLogger\s*\(/g)) receivers.add(m[1]);
+  return { receivers, methods };
+}
+
+function logCallRegex(aliases: { receivers: Set<string>; methods: Set<string> }): RegExp {
+  const names = [...LOGGER_RECEIVERS, "System\\s*\\.\\s*(?:out|err)", ...[...aliases.receivers].map(escapeRe)];
+  const methods = LOG_METHODS.map(escapeRe).join("|");
+  const bare = [...aliases.methods].map(escapeRe).join("|");
+  const parts = [`(?:[\\w$]+\\s*\\.\\s*)*(?:${names.join("|")})\\s*\\.\\s*(?:${methods})`, `fmt\\s*\\.\\s*(?:Printf|Println|Print|Fprintf|Fprintln|Fprint)`, `print`];
+  if (bare) parts.push(bare);
+  return new RegExp(`\\b(?:${parts.join("|")})\\s*\\(`, "g");
+}
 /** Expressions inside f-strings and template literals: `f"user {email}"` and `${email}` carry the value even though the string content is blanked. */
 const interpolations = (text: string, lang: string): string => {
   const out: string[] = [];
@@ -59,6 +100,7 @@ function balancedEnd(s: string, open: number): number {
 export function sensitiveLogArgs(src: string, lang: "ts" | "rust" | "java" | "go" | "python" = "ts"): { at: number; end: number; ids: string[] }[] {
   const clean = blank(src, lang);
   const out: { at: number; end: number; ids: string[] }[] = [];
+  const LOG_CALL = logCallRegex(loggerAliases(clean));
   LOG_CALL.lastIndex = 0;
   for (let m = LOG_CALL.exec(clean); m; m = LOG_CALL.exec(clean)) {
     const open = m.index + m[0].length - 1, close = balancedEnd(clean, open);

@@ -31,3 +31,15 @@ export function ping(req: any, res: any) {
   // console.log(req.body.password)
   res.status(200).end();
 }
+
+// Seeded: the same leak written through an alias of the logger. The alias is resolved, so it is found too.
+export function aliasedLogger(user: { password: string }) {
+  const out = console;
+  out.log("created", user.password);
+}
+
+// Not a finding: an alias of the logger, but only a derived non-secret is written.
+export function aliasedSafe(user: { name: string }) {
+  const out = console;
+  out.log("created", user.name.length);
+}

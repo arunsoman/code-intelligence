@@ -75,7 +75,7 @@ export const PLANTED_SECURITY: Suite = {
     const found = new Security(svc.store).analyze({ revision: rev.id });
     const flagged = (rule: string, fn: string) => found.some((f) => f.ruleId === rule && new RegExp(`\\b${fn}\\b`).test(f.summary));
     const truth: [string, string, boolean][] = [
-      ["R-PII-LOG", "registerUser", true], ["R-PII-LOG", "legacyExport", true], ["R-PII-LOG", "ping", false], ["R-PII-LOG", "updateProfileHandler", false], ["R-PII-LOG", "deleteAccountHandler", false],
+      ["R-PII-LOG", "registerUser", true], ["R-PII-LOG", "legacyExport", true], ["R-PII-LOG", "aliasedLogger", true], ["R-PII-LOG", "ping", false], ["R-PII-LOG", "aliasedSafe", false], ["R-PII-LOG", "updateProfileHandler", false], ["R-PII-LOG", "deleteAccountHandler", false],
       ["R-AUTHZ-GAP", "deleteAccountHandler", true], ["R-AUTHZ-GAP", "updateProfileHandler", false], ["R-AUTHZ-GAP", "registerUser", false], ["R-AUTHZ-GAP", "ping", false],
     ];
     return truth.map(([rule, fn, expected]) => ({ id: `${rule}:${fn}`, expected, predicted: flagged(rule, fn) }));

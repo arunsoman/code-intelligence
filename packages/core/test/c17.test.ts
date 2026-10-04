@@ -15,19 +15,19 @@ test("planted failures: every planted leak and authorisation gap is found and ev
   const { svc, worker } = await setup(undefined, SEC);
   const e = new Evaluator(svc.store, "test");
   const run = await e.runSuite(svc, PLANTED_SECURITY, svc.activeModel);
-  assert.equal(run.items.length, 9);
-  assert.deepEqual([run.metrics.tp, run.metrics.fp, run.metrics.fn, run.metrics.tn], [3, 0, 0, 6]);
+  assert.equal(run.items.length, 11);
+  assert.deepEqual([run.metrics.tp, run.metrics.fp, run.metrics.fn, run.metrics.tn], [4, 0, 0, 7]);
   assert.equal(run.metrics.recall.value, 1); assert.equal(run.metrics.precision.value, 1);
-  // Nine items cannot support certainty: the interval says how much is left open.
-  assert.ok(run.metrics.recall.lower < 0.5 && run.metrics.recall.upper === 1, `recall interval ${run.metrics.recall.lower}..${run.metrics.recall.upper}`);
-  assert.ok(run.metrics.accuracy.lower > 0.65 && run.metrics.accuracy.lower < 0.8);
+  // Eleven items cannot support certainty: the interval says how much is left open.
+  assert.ok(run.metrics.recall.lower < 0.6 && run.metrics.recall.upper === 1, `recall interval ${run.metrics.recall.lower}..${run.metrics.recall.upper}`);
+  assert.ok(run.metrics.accuracy.lower > 0.65 && run.metrics.accuracy.lower < 0.85);
   assert.equal(e.runs("planted-security").length, 1, "the run is in the registry");
   worker.close();
-  // The same leak, written so the detector cannot see it (the logger is aliased): a planted failure that is missed is reported as missed.
+  // The same leak, written so the detector cannot see it (the logger comes from an opaque factory, not a name it can resolve): a planted failure that is missed is reported as missed.
   const dir = mkdtempSync(join(tmpdir(), "cie-evade-"));
   cpSync(SEC, dir, { recursive: true });
   const f = join(dir, "src/api/handlers.ts");
-  writeFileSync(f, readFileSync(f, "utf8").replace('console.log("new user", req.body.email, req.body.password);', 'const out = console; out.log("new user", req.body.email, req.body.password);'));
+  writeFileSync(f, readFileSync(f, "utf8").replace('console.log("new user", req.body.email, req.body.password);', 'const out = getLogger(); out.log("new user", req.body.email, req.body.password);'));
   const t2 = await setup(undefined, dir);
   const run2 = await new Evaluator(t2.svc.store, "test").runSuite(t2.svc, PLANTED_SECURITY, { name: "rules", model: "v1" });
   assert.equal(run2.metrics.fn, 1, "the aliased logger evades the rule");
