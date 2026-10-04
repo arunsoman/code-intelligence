@@ -12,8 +12,44 @@ export interface Commit { hash: string; author: string; email: string; date: str
 
 export function isGitRepo(root: string): boolean { return git(root, ["rev-parse", "--is-inside-work-tree"])?.trim() === "true"; }
 
-/** Commits that touched `rel`, newest first. */
+// ------------------------------------------------------------------ repository-wide history index
+// One `git log --name-only` pass groups every commit by the files it touched, so history-based forms
+// (change risk, ownership, archaeology fallbacks) read the whole repository with a bounded number of
+// git processes instead of starting one per file. The index is cached per repository and invalidated
+// when a new revision is indexed, so a repository that advances is never served stale history.
+interface HistoryIndex { limit: number; byFile: Map<string, Commit[]> }
+const historyIndexCache = new Map<string, HistoryIndex>();
+
+/** Drop the cached history for one repository, or for every repository when called with no argument. */
+export function clearHistoryCache(root?: string): void {
+  if (root === undefined) historyIndexCache.clear(); else historyIndexCache.delete(root);
+}
+
+const HISTORY_INDEX_MIN = 200;
+function buildHistoryIndex(root: string, limit: number): HistoryIndex | null {
+  const out = git(root, ["log", `-n${limit}`, "--no-renames", "--name-only", "--pretty=format:@@%H%x1f%an%x1f%ae%x1f%aI%x1f%s"], 32 * 1024 * 1024);
+  if (out === null) return null;
+  const byFile = new Map<string, Commit[]>();
+  let current: Commit | null = null;
+  for (const line of out.split("\n")) {
+    if (line.startsWith("@@")) { const [hash, author, email, date, subject] = line.slice(2).split("\x1f"); current = { hash, author, email, date, subject }; }
+    else if (line.trim() && current) { const rel = line.trim(); const list = byFile.get(rel); if (list) list.push(current); else byFile.set(rel, [current]); }
+  }
+  return { limit, byFile };
+}
+
+function repoHistory(root: string, limit: number): HistoryIndex | null {
+  const cached = historyIndexCache.get(root);
+  if (cached && cached.limit >= limit) return cached;
+  const built = buildHistoryIndex(root, Math.max(limit, HISTORY_INDEX_MIN));
+  if (built) historyIndexCache.set(root, built);
+  return built;
+}
+
+/** Commits that touched `rel`, newest first. Served from the repository-wide index when available. */
 export function fileLog(root: string, rel: string, limit = 40): Commit[] {
+  const index = repoHistory(root, limit);
+  if (index) return (index.byFile.get(rel) ?? []).slice(0, limit);
   const out = git(root, ["log", `-n${limit}`, "--no-renames", "--pretty=format:%H%x1f%an%x1f%ae%x1f%aI%x1f%s", "--", rel]);
   if (!out) return [];
   return out.split("\n").filter(Boolean).map((l) => { const [hash, author, email, date, subject] = l.split("\x1f"); return { hash, author, email, date, subject }; });

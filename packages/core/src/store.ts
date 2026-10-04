@@ -6,6 +6,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { migrate } from "./migrations.ts";
+import { clearHistoryCache } from "./gitinfo.ts";
 import type { AnalysisBatch, Claim, ConceptCard, Entity, EvidenceRef, Fact, JobView, Relationship, Verdict } from "@cie/schema";
 
 export interface RevisionRow { id: string; repoRoot: string; gitHead: string | null; createdAt: string; analyzerVersion: string; diagnostics: AnalysisBatch["diagnostics"]; fileCount: number }
@@ -94,6 +95,7 @@ export class Store {
       this.insertRows(b.revision, b, this.ownerOf(b));
       this.insertManifest(b.revision, b.manifest);
     });
+    clearHistoryCache(b.repoRoot); // a newly indexed revision means the repository may have advanced
     return row;
   }
 
@@ -132,6 +134,7 @@ export class Store {
       d.prepare("update revisions set file_count = ? where id = ?").run(files, nu);
       row = this.revision(nu, true)!;
     });
+    clearHistoryCache(b.repoRoot); // a newly indexed revision means the repository may have advanced
     return row;
   }
 
