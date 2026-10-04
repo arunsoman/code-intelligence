@@ -2,7 +2,9 @@ import cytoscape from "cytoscape";
 import { useEffect, useRef, useState } from "react";
 import { describeNode, MAX_LEVEL, nextByDirection, viaToSegments, type Dir, type RenderEdge, type RenderNode, type Rendered } from "./graph.ts";
 import type { OverlayMark } from "./mapoverlays.ts";
-import { POLICY, fontPx, levelMove, panFor, pullInside, resolveAnchor, visibility, zoomAfterSwitch, type AnchorNode, type Move } from "./legibility.ts";
+import { POLICY, fontPx, levelMove, panFor, planTransition, pullInside, resolveAnchor, visibility, zoomAfterSwitch, type AnchorNode, type Move } from "./legibility.ts";
+import { detailPolicyFor, type DetailPolicy, type SemanticAnchor } from "./detail.ts";
+import { renderedLevelFromGraph } from "./rendered-level.ts";
 import "./zoom.css";
 
 interface Props {
@@ -23,6 +25,8 @@ interface Props {
   caption: string;
   /** Bumps when the level was chosen explicitly (stepper, chat); the camera then fits the new rendering. */
   fitTick: number;
+  formId?: string;
+  policy?: DetailPolicy;
   onToggleNode: (n: RenderNode) => void;
   onStepLevel: (delta: number) => void;
   /** True for forms whose levels change the content (the semantic map); the others keep one drawing and only hide labels that are too small to read. */
@@ -349,14 +353,36 @@ export function Canvas(p: Props) {
 
   useEffect(() => { cy.current?.userPanningEnabled(!p.boxSelect); }, [p.boxSelect]);
 
-  // An explicit level choice is a request to see that level: fit it, and re-anchor "relative zoom" so wheel zoom continues from here.
+  // An explicit level choice is a request to see that level: land readable on the anchor, disclose the rest.
   const lastFit = useRef(p.fitTick);
   useEffect(() => {
     const c = cy.current;
     if (!c || p.fitTick === lastFit.current) return;
     lastFit.current = p.fitTick;
-    quietly(c, () => fitReadable(c));
-    lockZoom.current = c.zoom();
+    const policy = p.policy ?? (p.formId ? detailPolicyFor(p.formId as Parameters<typeof detailPolicyFor>[0]) : undefined);
+    if (policy?.aggregationSupported && p.semanticLevels) {
+      const candidate = renderedLevelFromGraph(p.rendered, p.level, policy);
+      const anchor = captureAnchor(c, p.rendered, p.selected, pointer.current, focusId.current);
+      const semAnchor: SemanticAnchor = {
+        entityIds: anchor.ids,
+        screenPoint: anchor.screen ?? { x: c.width() / 2, y: c.height() / 2 },
+        selectionId: [...p.selected][0],
+        source: anchor.screen ? "POINTER" : p.selected.size ? "SELECTION" : "CENTRE",
+      };
+      const plan = planTransition({
+        currentCamera: { zoom: c.zoom(), pan: c.pan() },
+        viewport: { width: c.width(), height: c.height() },
+        anchor: semAnchor,
+        candidate,
+        policy,
+        kind: "EXPLICIT_LEVEL",
+      });
+      quietly(c, () => c.viewport(plan.camera));
+      lockZoom.current = plan.camera.zoom;
+    } else {
+      quietly(c, () => fitReadable(c));
+      lockZoom.current = c.zoom();
+    }
     refreshRef.current();
   }, [p.fitTick, p.rendered]); // eslint-disable-line react-hooks/exhaustive-deps
 

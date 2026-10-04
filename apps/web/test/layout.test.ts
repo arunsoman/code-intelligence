@@ -149,7 +149,7 @@ test("every form at every level: no node overlaps and no edge through an unrelat
   }
   assert.deepEqual(problems, []);
   for (const [form, n] of Object.entries(worst)) assert.ok(n <= (CROSSING_CEILING[form] ?? 0), `${form}: ${n} crossings exceeds its ceiling of ${CROSSING_CEILING[form] ?? 0}`);
-  assert.equal(views.length, 15, "all fifteen canvas forms were checked (the terrain view is not a node-link drawing)");
+  assert.equal(views.length, 16, "all sixteen canvas forms were checked (the terrain view is not a node-link drawing)");
   worker.close();
 });
 

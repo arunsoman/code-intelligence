@@ -105,9 +105,15 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
   for (const [key, run] of Object.entries(svc.workspaceOps)) ops[key] = { mutating: !["C13/resume", "C13/resurface"].includes(key), run };
   for (const [key, run] of Object.entries(svc.changeOps)) ops[key] = { mutating: !["C28/interpretDrag", "C28/get", "C28/list"].includes(key), run };
   for (const [key, run] of Object.entries(svc.searchOps)) ops[key] = { mutating: key === "C07/enqueueIndex", run: run as any };
+  for (const [key, run] of Object.entries(svc.hotspotOps)) ops[key] = { mutating: ["C26/analyzeHistory", "C26/grantContributorNames", "C26/setHistoryTerrain"].includes(key), run: run as any };
   for (const [key, run] of Object.entries(svc.prOps)) ops[key] = { mutating: !["C23/getPrAnalysis", "C16/listPolicies", "C16/getPolicy", "C16/verifyBinding"].includes(key), run: run as any };
   for (const [key, run] of Object.entries(svc.defectOps)) ops[key] = { mutating: !["C26/listFindings", "C26/explainFinding", "C27/listCapabilities", "C27/getRunManifest"].includes(key), run };
-  for (const [key, run] of Object.entries(svc.profilingOps)) ops[key] = { mutating: key === "C04/ingestProfile", run: run as any };
+  for (const [key, run] of Object.entries(svc.profilingOps)) ops[key] = { mutating: key === "C04/ingestProfile" || key === "C24/correlateProfile", run: run as any };
+  // F07 task execution: every command that records a decision, spends a run or writes to a forge is mutating. The
+  // read-only ones (get/list) are not, so a client can poll a task's timeline without holding a write token.
+  const TASK_MUTATING = new Set(["C02/submitTask", "C02/confirmIntent", "C02/cancelTask", "C15/draftPlan", "C22/resolveObligation", "C28/prepareChange", "C27/validatePatch", "C28/reviewPropertyChange", "C28/approveCandidate", "C30/createPublicationGrant", "C30/publishDraftPR"]);
+  for (const [key, run] of Object.entries(svc.taskOps)) ops[key] = { mutating: TASK_MUTATING.has(key), run: run as any };
+  for (const [key, run] of Object.entries(svc.campaignOps)) ops[key] = { mutating: !["C28/getCampaign", "C28/listCampaigns", "C28/listChildren", "C28/getCampaignPlan", "C28/clusterChildren", "C28/getDryRun"].includes(key), run: run as any };
   return ops;
   };
   const statusFor = (r: ApiResult<unknown>) => r.ok ? 200 : ({ INVALID_SCHEMA: 400, NOT_FOUND: 404, EVIDENCE_MISSING: 404, VERSION_CONFLICT: 409, UNAUTHORIZED: 401, FORBIDDEN: 403, BUDGET_EXCEEDED: 429, DEADLINE_EXCEEDED: 504, PROVIDER_UNAVAILABLE: 503 } as Record<string, number>)[r.error.code] ?? 500;

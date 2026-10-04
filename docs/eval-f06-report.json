@@ -1,0 +1,401 @@
+{
+  "at": "2026-10-04T20:40:10.776Z",
+  "corpus": {
+    "repository": "/home/arun/cie",
+    "analysedBy": "scripts/f06-bench.ts",
+    "note": "the repository's own git history; the head revision is indexed (search indexing off) so static dependency checks are real, and the working tree is read for code-health metrics only",
+    "indexed": {
+      "ok": true,
+      "files": 428
+    }
+  },
+  "policy": {
+    "hash": "6cca4dfe82dfc9e296ef4273f8890d684e3ba863cb37788048697594348131d6",
+    "window": {
+      "months": 12
+    },
+    "mergePolicy": "AUTO",
+    "decay": {
+      "halfLifeDays": 180
+    },
+    "coupling": {
+      "minSupport": 2,
+      "minConfidence": 0.2,
+      "maxFilesPerChange": 30,
+      "ubiquitousShare": 0.25
+    },
+    "contributors": "COUNTS_ONLY"
+  },
+  "boundary": {
+    "repositoryId": "repo:344a32c11d706aef",
+    "headCommit": "7569bb43bc25848d627e79760ea1fc8831cf37ad",
+    "since": "2025-10-09T18:18:12.000Z",
+    "until": "2026-10-04T18:18:12.000Z",
+    "shallow": false,
+    "commitCount": 23,
+    "commitListHash": "a92b5638a7918ef4"
+  },
+  "coverage": {
+    "shallow": false,
+    "commitCount": 23,
+    "symbolResolution": "FILE_ONLY",
+    "gaps": [
+      "475 co-change pair(s) fell below the reporting floor (support ≥ 2 and confidence ≥ 0.2); they are counted but not reported",
+      "history is resolved to files, not symbols: commits before the first indexed revision are not resolved to definitions (Registry carries identity only for indexed revisions); function-level history is not attempted",
+      "files deleted before the analysed head are not ranked; a rename keeps its history only because rename tracking is on"
+    ]
+  },
+  "timings": {
+    "indexMs": 18737,
+    "analysisMs": 1376,
+    "reportMs": 179
+  },
+  "commits": {
+    "read": 23,
+    "dedupedSecondRun": true,
+    "sameRunId": true
+  },
+  "exclusions": {
+    "total": 4,
+    "byRule": [
+      {
+        "rule": "bulk",
+        "count": 4
+      }
+    ],
+    "ubiquitousFiles": 0,
+    "samples": [
+      {
+        "hash": "5adcaa2fc9",
+        "subject": "Complete durable code intelligence platform",
+        "rule": "bulk",
+        "classReason": "touches 260 files — more than 20% of the 477 tracked files in the window — at least 5× the median commit size (5)"
+      },
+      {
+        "hash": "75032e408d",
+        "subject": "feat: cross-repository search, PR analysis and quality gate, profile ingestion",
+        "rule": "bulk",
+        "classReason": "touches 40 files — at least 5× the median commit size (5)"
+      },
+      {
+        "hash": "871277c01a",
+        "subject": "Route questions through a small local model instead of regexes",
+        "rule": "bulk",
+        "classReason": "touches 135 files — more than 20% of the 477 tracked files in the window — at least 5× the median commit size (5)"
+      },
+      {
+        "hash": "f2b319d2ce",
+        "subject": "Establish verified code intelligence MVP baseline",
+        "rule": "bulk",
+        "classReason": "touches 125 files — more than 20% of the 477 tracked files in the window — at least 5× the median commit size (5)"
+      }
+    ]
+  },
+  "ranking": {
+    "rows": 72,
+    "top": [
+      {
+        "rank": 1,
+        "rankRaw": 1,
+        "path": "packages/core/src/service.ts",
+        "score": 0.8108,
+        "changes": 3,
+        "logical": 3,
+        "decayed": 3,
+        "renamedFrom": [],
+        "missing": [
+          "health"
+        ],
+        "contributors": 1
+      },
+      {
+        "rank": 2,
+        "rankRaw": 2,
+        "path": "packages/core/src/server.ts",
+        "score": 0.7594,
+        "changes": 2,
+        "logical": 2,
+        "decayed": 2,
+        "renamedFrom": [],
+        "missing": [
+          "health"
+        ],
+        "contributors": 1
+      },
+      {
+        "rank": 3,
+        "rankRaw": 5,
+        "path": "crates/worker/src/index.rs",
+        "score": 0.7413,
+        "changes": 3,
+        "logical": 3,
+        "decayed": 2.99,
+        "renamedFrom": [],
+        "missing": [
+          "health"
+        ],
+        "contributors": 1
+      },
+      {
+        "rank": 4,
+        "rankRaw": 3,
+        "path": "apps/web/src/App.tsx",
+        "score": 0.7309,
+        "changes": 2,
+        "logical": 2,
+        "decayed": 2,
+        "renamedFrom": [],
+        "missing": [
+          "health"
+        ],
+        "contributors": 1
+      },
+      {
+        "rank": 5,
+        "rankRaw": 4,
+        "path": "apps/web/src/Canvas.tsx",
+        "score": 0.7309,
+        "changes": 2,
+        "logical": 2,
+        "decayed": 2,
+        "renamedFrom": [],
+        "missing": [
+          "health"
+        ],
+        "contributors": 1
+      },
+      {
+        "rank": 6,
+        "rankRaw": 8,
+        "path": "apps/web/src/InsightsPanel.tsx",
+        "score": 0.7205,
+        "changes": 2,
+        "logical": 2,
+        "decayed": 2,
+        "renamedFrom": [],
+        "missing": [
+          "health"
+        ],
+        "contributors": 1
+      },
+      {
+        "rank": 7,
+        "rankRaw": 9,
+        "path": "README.md",
+        "score": 0.6809,
+        "changes": 4,
+        "logical": 4,
+        "decayed": 3.99,
+        "renamedFrom": [],
+        "missing": [
+          "health"
+        ],
+        "contributors": 1
+      },
+      {
+        "rank": 8,
+        "rankRaw": 12,
+        "path": "crates/worker/src/main.rs",
+        "score": 0.6622,
+        "changes": 3,
+        "logical": 3,
+        "decayed": 2.99,
+        "renamedFrom": [],
+        "missing": [
+          "health"
+        ],
+        "contributors": 1
+      },
+      {
+        "rank": 9,
+        "rankRaw": 17,
+        "path": "apps/web/test/e2e/insights.test.ts",
+        "score": 0.6517,
+        "changes": 2,
+        "logical": 2,
+        "decayed": 2,
+        "renamedFrom": [],
+        "missing": [
+          "health"
+        ],
+        "contributors": 1
+      },
+      {
+        "rank": 10,
+        "rankRaw": 13,
+        "path": "packages/schema/src/index.ts",
+        "score": 0.6267,
+        "changes": 2,
+        "logical": 2,
+        "decayed": 2,
+        "renamedFrom": [],
+        "missing": [
+          "health"
+        ],
+        "contributors": 1
+      }
+    ],
+    "factorsSumEqualsScore": true
+  },
+  "coupling": {
+    "total": 11,
+    "hidden": 10,
+    "staticRelationUnknown": 0,
+    "staticallyCoupled": 1,
+    "top": [
+      {
+        "a": "README.md",
+        "b": "crates/worker/src/main.rs",
+        "support": 3,
+        "countA": 4,
+        "countB": 3,
+        "confidence": 0.75,
+        "lift": 4.25,
+        "staticDependency": "NONE"
+      },
+      {
+        "a": "README.md",
+        "b": "crates/worker/src/index.rs",
+        "support": 3,
+        "countA": 4,
+        "countB": 3,
+        "confidence": 0.75,
+        "lift": 4.25,
+        "staticDependency": "NONE"
+      },
+      {
+        "a": "crates/worker/src/main.rs",
+        "b": "crates/worker/src/index.rs",
+        "support": 3,
+        "countA": 3,
+        "countB": 3,
+        "confidence": 1,
+        "lift": 5.67,
+        "staticDependency": "A_TO_B"
+      },
+      {
+        "a": "packages/core/src/server.ts",
+        "b": "packages/core/src/service.ts",
+        "support": 2,
+        "countA": 2,
+        "countB": 3,
+        "confidence": 1,
+        "lift": 5.67,
+        "staticDependency": "NONE"
+      },
+      {
+        "a": "packages/core/src/server.ts",
+        "b": "apps/web/src/InsightsPanel.tsx",
+        "support": 2,
+        "countA": 2,
+        "countB": 2,
+        "confidence": 1,
+        "lift": 8.5,
+        "staticDependency": "NONE"
+      },
+      {
+        "a": "README.md",
+        "b": "packages/core/src/service.ts",
+        "support": 2,
+        "countA": 4,
+        "countB": 3,
+        "confidence": 0.5,
+        "lift": 2.83,
+        "staticDependency": "NONE"
+      },
+      {
+        "a": "apps/web/src/App.tsx",
+        "b": "apps/web/test/e2e/insights.test.ts",
+        "support": 2,
+        "countA": 2,
+        "countB": 2,
+        "confidence": 1,
+        "lift": 8.5,
+        "staticDependency": "NONE"
+      },
+      {
+        "a": "apps/web/src/App.tsx",
+        "b": "apps/web/src/Canvas.tsx",
+        "support": 2,
+        "countA": 2,
+        "countB": 2,
+        "confidence": 1,
+        "lift": 8.5,
+        "staticDependency": "NONE"
+      },
+      {
+        "a": "packages/schema/src/index.ts",
+        "b": "packages/core/src/service.ts",
+        "support": 2,
+        "countA": 2,
+        "countB": 3,
+        "confidence": 1,
+        "lift": 5.67,
+        "staticDependency": "NONE"
+      },
+      {
+        "a": "apps/web/test/e2e/insights.test.ts",
+        "b": "apps/web/src/Canvas.tsx",
+        "support": 2,
+        "countA": 2,
+        "countB": 2,
+        "confidence": 1,
+        "lift": 8.5,
+        "staticDependency": "NONE"
+      }
+    ],
+    "hiddenSamples": [
+      {
+        "a": "README.md",
+        "b": "crates/worker/src/main.rs",
+        "support": 3,
+        "lift": 4.25
+      },
+      {
+        "a": "README.md",
+        "b": "crates/worker/src/index.rs",
+        "support": 3,
+        "lift": 4.25
+      },
+      {
+        "a": "packages/core/src/server.ts",
+        "b": "packages/core/src/service.ts",
+        "support": 2,
+        "lift": 5.67
+      },
+      {
+        "a": "packages/core/src/server.ts",
+        "b": "apps/web/src/InsightsPanel.tsx",
+        "support": 2,
+        "lift": 8.5
+      },
+      {
+        "a": "README.md",
+        "b": "packages/core/src/service.ts",
+        "support": 2,
+        "lift": 2.83
+      }
+    ]
+  },
+  "stability": {
+    "topK": 5,
+    "trials": 50,
+    "stableFraction": 1,
+    "seedHex": "ed0a1dfb5d02"
+  },
+  "determinism": {
+    "canonicalRowsHash": "1cba968c42f6d566",
+    "secondRunRowsHash": "1cba968c42f6d566",
+    "secondRunSameRows": true
+  },
+  "honesty": {
+    "shallow": false,
+    "gaps": [
+      "475 co-change pair(s) fell below the reporting floor (support ≥ 2 and confidence ≥ 0.2); they are counted but not reported",
+      "history is resolved to files, not symbols: commits before the first indexed revision are not resolved to definitions (Registry carries identity only for indexed revisions); function-level history is not attempted",
+      "files deleted before the analysed head are not ranked; a rename keeps its history only because rename tracking is on"
+    ],
+    "warnings": [],
+    "note": "a score is a prioritisation heuristic, not a defect probability; co-change is statistical, not a dependency; contributor identity is keyed and names appear only with a policy and a grant"
+  }
+}

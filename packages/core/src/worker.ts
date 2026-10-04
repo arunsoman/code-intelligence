@@ -6,6 +6,18 @@ import type { AnalysisBatch, ApiError, BaseRevision } from "@cie/schema";
 
 export interface ProfileDiagnosticsRpc { code: string; message: string }
 export interface ProfileMappingRpc { mappingId: number; buildId?: string | null; file?: string | null; hasFunctions: boolean; hasFilenames: boolean; hasLineNumbers: boolean; hasInlineFrames: boolean; revision?: string | null; revisionState: string }
+export interface ProfileIngestResultRpc {
+  artifactHash: string; format: string;
+  sampleTypes: { ordinal: number; kind: string; unit: string; rawType: string; rawUnit: string }[];
+  periodNs: number | null;
+  mappings: ProfileMappingRpc[];
+  diagnostics: ProfileDiagnosticsRpc[];
+  droppedSamples: number | "NOT_REPORTED";
+  service?: string | null; instance?: string | null; runtime?: string | null;
+  profiler?: string | null; profilerVersion?: string | null;
+  startNs?: number; endNs?: number; samplingRateHz?: number | null; truncated?: number;
+}
+
 export interface ProfileHotspotRowRpc { rank: number; functionKey?: string; function_key?: string; name: string; file: string; line: number; selfValue?: number; self_value?: number; totalValue?: number; total_value?: number; selfShare?: number; self_share?: number; totalShare?: number; total_share?: number; sampleCount?: number; sample_count?: number; uncertaintyLow?: number | null; uncertainty_low?: number | null; uncertaintyHigh?: number | null; uncertainty_high?: number | null; entityId?: string | null; entity_id?: string | null; attributionMethod?: string; attribution_method?: string }
 export interface ProfileHotspotResultRpc { rows: ProfileHotspotRowRpc[]; unit: string; sampleCount?: number; sample_count?: number; populationValue?: number; population_value?: number; coverage: { collectionRatio?: number | null; collection_ratio?: number | null; droppedSamples?: number | null; dropped_samples?: string | number | null; truncatedStacks?: number | null; truncated_stacks?: number | null; unattributedShare?: number | null; unattributed_share?: number | null; prunedShare?: number | null; pruned_share?: number | null }; uncertainty: { method: string; minSamplesForRanking: number; tooFewSamples: boolean }; basis: string; grade: string; populationHash?: string; population_hash?: string }
 export interface ProfileFlameNodeRpc { functionKey?: string; function_key?: string; name: string; file: string; line: number; selfValue?: number; self_value?: number; totalValue?: number; total_value?: number; children: ProfileFlameNodeRpc[]; otherValue?: number; other_value?: number }
@@ -200,35 +212,45 @@ export class WorkerClient {
    * The path is read inside the worker, so only parsed aggregates cross the RPC; oversized or corrupt files return
    * typed diagnostics (RESOURCE_LIMIT / INVALID_SCHEMA).
    */
-  async ingestProfileFile(path: string, serviceHint?: string, timeoutMs = 60_000): Promise<{ artifactHash: string; format: string; sampleTypes: { ordinal: number; kind: string; unit: string; rawType: string; rawUnit: string }[]; periodNs: number | null; mappings: ProfileMappingRpc[]; diagnostics: ProfileDiagnosticsRpc[]; droppedSamples: number | "NOT_REPORTED" }> {
+  async ingestProfileFile(path: string, serviceHint?: string, timeoutMs = 60_000): Promise<ProfileIngestResultRpc> {
     const msg = await this.callRetry("ingestProfile", { path, serviceHint }, timeoutMs);
     if (!msg.ok) throw new WorkerError(msg.error);
     return msg.result;
   }
 
   /** F05: hotspots for one sample type of the profile at `path`, ranked by self (default) or cumulative value. */
-  async profileHotspots(path: string, opts: { serviceHint?: string; ordinal?: number; order?: "SELF" | "TOTAL"; limit?: number; timeoutMs?: number } = {}) {
+  async profileHotspots(path: string, opts: { serviceHint?: string; ordinal?: number; order?: "SELF" | "TOTAL"; limit?: number; timeoutMs?: number } = {}): Promise<ProfileHotspotResultRpc> {
     const msg = await this.callRetry("queryHotspots", { path, serviceHint: opts.serviceHint, ordinal: opts.ordinal ?? 0, order: opts.order ?? "SELF", limit: opts.limit ?? 2000 }, opts.timeoutMs ?? 60_000);
     if (!msg.ok) throw new WorkerError(msg.error);
     return msg.result;
   }
 
+  /**
+   * F06 / WP-05: code-health metrics for the given files of `root`, parsed in the worker
+   * (bounded: ≤ 400 files per call, ≤ 2 MiB each). Only the per-function signals cross the RPC.
+   */
+  async metrics(root: string, files: string[], timeoutMs = 30_000): Promise<{ files: { path: string; language?: string; lines?: number; symbols?: number; hadErrors?: boolean; functions?: { name: string; startLine: number; endLine: number; length: number; complexity: number; nesting: number; params: number }[]; error?: string; metricsVersion?: number }[]; metricsVersion: number }> {
+    const msg = await this.callRetry("metrics", { root, files }, timeoutMs);
+    if (!msg.ok) throw new WorkerError(msg.error);
+    return msg.result;
+  }
+
   /** F05: the pruned, bounded call tree used to draw the flamegraph (a view of the hotspot table, not a separate truth). */
-  async profileFlamegraph(path: string, opts: { serviceHint?: string; ordinal?: number; timeoutMs?: number } = {}) {
+  async profileFlamegraph(path: string, opts: { serviceHint?: string; ordinal?: number; timeoutMs?: number } = {}): Promise<ProfileFlamegraphResultRpc> {
     const msg = await this.callRetry("buildFlamegraph", { path, serviceHint: opts.serviceHint, ordinal: opts.ordinal ?? 0 }, opts.timeoutMs ?? 60_000);
     if (!msg.ok) throw new WorkerError(msg.error);
     return msg.result;
   }
 
-  /** F05: close this profile with read ops for the other profile ops (worker-side correlation of windows/labels). */
-  async correlateProfileFile(path: string, params: { serviceHint?: string; trace: { service: string; instance?: string; fromNs: number; toNs: number; revision?: string; traceId?: string; spanId?: string; endpoint?: string }; buildId?: string; revision?: string; timeoutMs?: number }) {
+  /** F05: worker-side correlation of one profile file against one trace window (grades windows/span labels). */
+  async correlateProfileFile(path: string, params: { serviceHint?: string; trace: { service: string; instance?: string; fromNs: number; toNs: number; revision?: string; traceId?: string; spanId?: string; endpoint?: string }; buildId?: string; revision?: string; timeoutMs?: number }): Promise<ProfileCorrelationRpc> {
     const msg = await this.callRetry("correlateProfile", { path, serviceHint: params.serviceHint, trace: params.trace, buildId: params.buildId, revision: params.revision }, params.timeoutMs ?? 60_000);
     if (!msg.ok) throw new WorkerError(msg.error);
     return msg.result;
   }
 
   /** F05: compare two profile files under population equivalence rules (the caller still gates on error populations). */
-  async compareProfileFiles(params: { baselinePath: string; candidatePath: string; serviceHint?: string; baseline?: { ordinal?: number; service: string; windowFromNs: number; windowToNs: number; revision?: string }; candidate?: { ordinal?: number; service: string; windowFromNs: number; windowToNs: number; revision?: string }; baselineTrace?: { service: string; fromNs: number; toNs: number }; candidateTrace?: { service: string; fromNs: number; toNs: number }; normalise?: "PER_REQUEST"; declareEquivalent?: { reason: string }; timeoutMs?: number }) {
+  async compareProfileFiles(params: { baselinePath: string; candidatePath: string; serviceHint?: string; baseline?: { ordinal?: number; service: string; windowFromNs: number; windowToNs: number; revision?: string }; candidate?: { ordinal?: number; service: string; windowFromNs: number; windowToNs: number; revision?: string }; baselineTrace?: { service: string; fromNs: number; toNs: number }; candidateTrace?: { service: string; fromNs: number; toNs: number }; normalise?: "PER_REQUEST"; declareEquivalent?: { reason: string }; timeoutMs?: number }): Promise<ProfileCompareResultRpc> {
     const msg = await this.callRetry("compareProfiles", params, params.timeoutMs ?? 60_000);
     if (!msg.ok) throw new WorkerError(msg.error);
     return msg.result;

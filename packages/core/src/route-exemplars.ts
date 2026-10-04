@@ -77,6 +77,11 @@ export const EXEMPLARS: Record<string, string[]> = {
     "show the places where the rule is skipped", "where is the retention rule enforced", "which routes get around the validation", "what requirements are written down but not enforced",
     "do all paths apply the rate limit", "audit the enforcement of the data handling rules",
   ],
+  TraceLinkedProfile: [
+    "where does the cpu actually go when this runs", "which functions dominate the sampled execution time", "show the profiling hotspots of the service", "what is the service spending its cpu on",
+    "where are the allocation hotspots in this build", "which code paths eat the wall clock time", "rank the functions by self time from the profile", "what does the sampled profile say is hot",
+    "which call stacks dominate the profile window", "where did the samples land during that run",
+  ],
   ChangeRisk: [
     "which parts are hardest to modify safely", "where is the code most fragile", "what areas change the most and are tightly coupled", "which modules are likely to cause regressions",
     "rank the files by how risky they are to touch", "where is the technical debt concentrated", "what would be dangerous to refactor", "show hotspots of churn and complexity",

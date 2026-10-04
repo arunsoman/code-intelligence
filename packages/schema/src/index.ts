@@ -1,6 +1,8 @@
 // Subset of contracts §2 used by the MVP. Field names match the contract on the wire.
 import { z } from "zod";
 export * from "./defect.ts";
+export * from "./task.ts";
+export * from "./twin.ts";
 
 export type Id = string;
 export type RevisionId = string;
@@ -170,7 +172,7 @@ export interface ViewMatrix {
 
 // ---- Jobs (C07): long work that runs in the background and can be cancelled ----
 // "pr-analysis": F02 — a pull request's base and head are indexed, compared, analysed and gated in one background job.
-export type JobKind = "index" | "concepts" | "investigate" | "defect-detect" | "defect-experiment" | "pr-analysis" | "search-index" | "dependency-scan";
+export type JobKind = "index" | "concepts" | "investigate" | "defect-detect" | "defect-experiment" | "pr-analysis" | "search-index" | "dependency-scan" | "history-analysis" | "campaign-advance" | "campaign-joint-check";
 export type JobState = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 export interface JobView {
   id: Id; kind: JobKind; state: JobState;
@@ -179,7 +181,7 @@ export interface JobView {
   /** Past the commit point: a cancel is refused, because stopping now would leave half a result. */
   committing: boolean;
   phase: string; message: string; done?: number; total?: number;
-  params: { repoPath?: string; revision?: string; investigationId?: string; defectRequestHash?: string; specId?: string; prNumber?: number; policyId?: string; headHash?: string; headRef?: string; baseRef?: string; decisionId?: string; analysisId?: string; forge?: string; inventoryId?: string; snapshotId?: string; reportId?: string; findingId?: string; feedSource?: string };
+  params: { repoPath?: string; revision?: string; investigationId?: string; defectRequestHash?: string; specId?: string; prNumber?: number; policyId?: string; headHash?: string; headRef?: string; baseRef?: string; decisionId?: string; analysisId?: string; forge?: string; inventoryId?: string; snapshotId?: string; reportId?: string; findingId?: string; feedSource?: string; runId?: string; repositoryId?: string; campaignId?: string; batchId?: string; caseId?: string };
   createdAt: string; startedAt?: string; finishedAt?: string;
   /** F01 scheduling classes: INTERACTIVE (100) > LIVE (10) > BACKFILL (0). Higher runs first. */
   priority?: number;
@@ -956,6 +958,7 @@ export interface ProfileUncertainty {
 
 export interface HotspotResult {
   rows: HotspotRow[];
+  nextCursor?: string;
   unit: string;
   sampleCount: number;
   populationValue: number;
@@ -1086,4 +1089,321 @@ export interface ProfileViewSpec {
   flame?: FlameTreeResult;
   outline?: { depth: number; name: string; file: string; share: number; id: string }[];
   unverified?: { locator: string; reasons: string[] }[];
+}
+
+// ---- F06 — Historical hotspots and change coupling ----
+// A prioritisation heuristic built from the repository's own recorded history, code-health signals,
+// impact and knowledge concentration. It is never a statement about defects or productivity (§12.2).
+
+export interface HistoryPolicy {
+  window: { since?: string; until?: string; months?: number };
+  mergePolicy: "AUTO" | "FIRST_PARENT" | "ALL_NO_MERGE_DIFFS" | "SQUASH_ONLY";
+  rename: { enabled: boolean; similarityPercent: number };
+  exclusions: { bulk: { files: number; shareOfTracked: number }; format: boolean; botPatterns: string[]; generated: boolean; revertPairs: boolean };
+  decay: { halfLifeDays: number };
+  coupling: { minSupport: number; minConfidence: number; maxFilesPerChange: number; ubiquitousShare: number };
+  /** Thresholds for the code-health signals, versioned (formulaVersion). */
+  health: { thresholds: Record<string, number>; formulaVersion: number };
+  weights: { preset: "default" | "refactor" | "security" | "incident" | "custom"; custom?: Record<string, number> };
+  contributors: "HIDDEN" | "COUNTS_ONLY" | "NAMES_FOR_AUTHORISED";
+}
+
+/** §6.1: what was analysed. Every derived number carries the same boundaryHash. */
+export interface HistoryBoundaryView {
+  repositoryId: string; headCommit: string;
+  since?: string; until: string;
+  shallow: boolean; commitCount: number; commitListHash: string;
+  /** True when the commit cap bit and only the newest commits were analysed. */
+  cappedAt?: number;
+}
+
+export interface FactorExplanation {
+  id: string; label: string; raw: number; normalised: number | null; weight: number; contribution: number; missing: boolean;
+}
+
+/** One counted or excluded commit, with its evidence (F06-A5). */
+export interface CommitEvidence {
+  commitHash: string; committedAt: string; subject: string; prNumber: number | null;
+  class: string; classReason: string; filesChanged: number; logicalChangeId: string;
+  /** When the change touched the file by an older name, the path then in use. */
+  pathAtCommit?: string;
+}
+
+export interface ExcludedCommitView extends CommitEvidence { rule: string }
+
+export interface HealthSignal { id: string; label: string; value: number | "NOT_AVAILABLE"; threshold: number; status: "OK" | "ABOVE" | "MISSING" }
+
+export interface RankSensitivity {
+  baseline: number;
+  /** rank again with each exclusion class counted back in ("the ranking effect of the exclusions"). */
+  withClass: { rule: string; rank: number }[];
+  /** rank again with each factor removed ("what would change the rank"). */
+  withoutFactor: { id: string; label: string; rank: number }[];
+}
+
+export interface HotspotScoreRow {
+  runId: string; lineageId: string; path: string; renamedFrom: string[];
+  score: number; rank: number; rankRaw: number;
+  change: { raw: number; logical: number; decayed: number; percentile: number };
+  health: { signals: HealthSignal[]; worstFunction?: { name: string; value: number } };
+  impact: { dependents: number; incidents: number | "NOT_AVAILABLE"; coveragePercent: number | "NOT_AVAILABLE" };
+  knowledge: { contributors: number | "HIDDEN"; topContributorShare?: number };
+  /** Factors that fell back to the neutral 0.5 because the data is missing. */
+  missing: string[];
+}
+
+export interface CouplingEdgeView {
+  edgeId: string; runId: string; aLineage: string; aPath: string; bLineage: string; bPath: string;
+  support: number; countA: number; countB: number; totalChanges: number;
+  confidenceAToB: number; confidenceBToA: number; lift: number; jaccard: number;
+  firstSeen: string; lastSeen: string;
+  /** NONE | A_TO_B | B_TO_A | BOTH from the static call/import graph at the head, or UNKNOWN when no revision is indexed to check. */
+  staticDependency: string;
+}
+
+export interface RankStabilityView {
+  topK: number; trials: number; stableFraction: number;
+  changes: { entered: string[]; left: string[] }[];
+  perturbationPercent: number;
+  /** The seed is derived from the policyHash: same policy, same trial sets (F06-D10). */
+  seedHex: string;
+}
+
+export interface ExclusionSummary {
+  total: number;
+  byRule: { rule: string; count: number }[];
+  /** Files dropped from coupling as ubiquitous (in more than `ubiquitousShare` of changes), listed. */
+  ubiquitousFiles: { path: string; share: number; logicalChanges: number; totalChanges: number }[];
+  samples: ExcludedCommitView[];
+}
+
+export interface HotspotReportView {
+  runId: string; boundary: HistoryBoundaryView; policyHash: string; mergePolicyUsed: string;
+  state: string; stale: { stale: boolean; behindBy: number; rewritten: boolean }; warnings: string[];
+  rows: HotspotScoreRow[]; nextCursor?: string;
+  exclusions: ExclusionSummary;
+  stability: RankStabilityView | null;
+  coverage: { shallow: boolean; commitCount: number; cappedAt?: number; symbolResolution: "FILE_ONLY" | "FILE_AND_TOP_SYMBOLS"; gaps: string[] };
+  contributorsAvailable: boolean;
+}
+
+export interface ExplainHotspotView {
+  runId: string; lineageId: string; path: string; renamedFrom: string[]; score: number; rank: number;
+  factors: FactorExplanation[];
+  changes: CommitEvidence[]; nextCursor?: string;
+  excluded: ExcludedCommitView[];
+  sensitivity: RankSensitivity;
+  /** Monthly counts of the counted changes (raw and decayed), oldest month last (F06 §12 trend sparkline). */
+  trend: { month: string; raw: number; decayed: number }[];
+  /** Present only when the policy allows names AND the caller holds a grant (F06-A6); never an individual ranking. */
+  contributors?: { displayName: string; commits: number }[];
+  gaps: string[];
+}
+
+export interface ExplainCouplingView {
+  edgeId: string; runId: string; aPath: string; bPath: string;
+  support: number; countA: number; countB: number; total: number;
+  confidenceAToB: number; confidenceBToA: number; lift: number;
+  staticDependency: string;
+  commits: CommitEvidence[]; nextCursor?: string;
+  gaps: string[];
+}
+
+// ---- F08 — Coordinated multi-repository changes ----
+
+export type CampaignState = "DRAFT" | "POPULATION_FROZEN" | "PLANNED" | "RUNNING" | "PAUSED" | "COMPLETED" | "CANCELLED" | "FAILED";
+export type ChildState =
+  | "NOT_STARTED" | "PLANNED" | "RUNNING" | "REVIEW_READY" | "PUBLISHED" | "FAILED"
+  | "BLOCKED" | "STALE" | "EXCLUDED" | "CANCELLED" | "CLOSED_ON_GITHUB";
+export type AssessmentState = "ASSESSED" | "NEEDS_ASSESSMENT";
+export type CampaignRole = "PRODUCER" | "CONSUMER" | "BOTH" | "INDEPENDENT";
+export type CompatibilityMode = "CANDIDATE_WITH_CANDIDATE" | "CANDIDATE_WITH_BASE" | "BASE_WITH_CANDIDATE";
+export type CompatibilityState = "PENDING" | "PASSED" | "FAILED" | "NOT_EVALUABLE" | "NOT_EVALUATED";
+export type BatchKind = "CANARY" | "STANDARD";
+export type BatchState = "PENDING" | "RUNNING" | "COMPLETE" | "PAUSED";
+
+export interface PauseRule {
+  kind: "CANARY_ALL_READY" | "FAILURE_RATE" | "JOINT_FAILURE";
+  /** FAILURE_RATE only: pause when the failed fraction of a standard batch exceeds this (e.g. 0.1 = 10 %). */
+  threshold?: number;
+}
+
+export interface CampaignSelector {
+  explicit?: string[];
+  search?: { query: string; mode: "LITERAL" | "REGEX" | "SYMBOL" };
+  dependentsOf?: { package?: string; symbol?: string };
+  attributes?: Record<string, string>;
+}
+
+export type CampaignTransformation =
+  | { kind: "RECIPE"; recipeId: string; recipeVersion: string; args: Record<string, unknown> }
+  | { kind: "TASK_TEMPLATE"; templateId: string };
+
+export interface CampaignCompatibilityPolicy {
+  policyId: string;
+  required: CompatibilityMode[];
+  contractTests?: string[];
+}
+
+export interface CampaignBatchesPolicy {
+  canarySize: number;
+  maxConcurrent: number;
+  pauseRules: PauseRule[];
+}
+
+export interface CampaignBudgets {
+  wallMs: number;
+  modelTokens?: number;
+  githubWrites: number;
+}
+
+export interface CampaignSpec {
+  name: string;
+  selector: CampaignSelector;
+  transformation: CampaignTransformation;
+  compatibility: CampaignCompatibilityPolicy;
+  batches: CampaignBatchesPolicy;
+  budgets: CampaignBudgets;
+}
+
+export interface Campaign {
+  campaignId: string; tenantId: string; name: string;
+  spec: CampaignSpec; specHash: string; transformationHash: string;
+  state: CampaignState; version: number;
+  createdBy: string; createdAt: string; updatedAt: string;
+}
+
+export interface PopulationVersion {
+  campaignId: string; version: number; populationHash: string;
+  frozenAt: string; createdBy: string;
+  selectorResult: string[];
+}
+
+export interface CampaignChild {
+  campaignId: string; repositoryId: string; populationVersion: number;
+  baseCommit: string; taskId?: string; batchId?: string;
+  state: ChildState; role: CampaignRole; blockedBy: string[];
+  assessmentState: AssessmentState;
+  publicationId?: string; prNumber?: number; prState?: string;
+  validation?: { runs: number; passed: number; failed: number };
+  updatedAt: string;
+}
+
+export interface ChildView {
+  repositoryId: string; role: CampaignRole; state: ChildState; assessmentState: AssessmentState;
+  batchId: string | null; baseCommit: string;
+  validation: { runs: number; passed: number; failed: number } | null;
+  pr: { number: number; state: string } | null;
+  gate: string | null; stale: boolean; exception: boolean;
+  /** The most recent stated reason for a non-ready state (validation failure, forbidden path, exclusion). */
+  reason?: string;
+  /** The materialised candidate's identity: the candidate content hash and the binding hash a grant/approval names. */
+  headHash?: string; bindingHash?: string; shapeHash?: string;
+  /** Set once a reviewer approves this child's exact binding hash; per child, never cluster-wide. */
+  approved?: boolean;
+  /** Who produced the child (the second-approver rule is applied against this). */
+  author?: string;
+  /** Model tokens this child consumed (0 for a deterministic recipe). */
+  tokensUsed?: number;
+}
+
+export interface ChildClusterMember {
+  repositoryId: string; bindingHash: string; state: ChildState; approved: boolean; stale: boolean;
+}
+export interface ChildCluster {
+  clusterId: string; shapeHash: string; representativeRepositoryId: string;
+  members: ChildClusterMember[]; note: string;
+}
+export interface PublicationGrantView {
+  id: string; campaignId: string; repositoryId: string; principal: string;
+  baseHash: string; headHash: string; diffHash: string; expiresAt: string; revoked: boolean;
+}
+export interface DryRunRepositoryResult {
+  repositoryId: string; applies: boolean; reason: string;
+  diffHash: string | null; files: string[]; forbiddenPaths: string[];
+  validation: { state: "PASSED" | "FAILED"; runs: number; passedRuns: number; failedRuns: number; reason?: string } | null;
+}
+export interface DryRunResult {
+  campaignId: string; runId: string; createdBy: string; createdAt: string;
+  populationHash: string | null; populationSize: number; repositories: DryRunRepositoryResult[];
+  note: string;
+}
+
+export interface CampaignOrderEntry {
+  repositoryId: string; role: CampaignRole; batchId: string;
+  dependsOnRepositoryIds: string[];
+  reason: string;
+}
+
+export interface CampaignOrder {
+  mergeOrder: CampaignOrderEntry[];
+  cycles: string[][];
+  notSafeToReorder: { producer: string; consumer: string; mode: CompatibilityMode; state: CompatibilityState }[];
+  rollbackPlan: { repositoryId: string; action: string; consumersFirst: string[] }[];
+  externalEffects: string[];
+}
+
+export interface BatchView {
+  batchId: string; ordinal: number; kind: BatchKind; state: BatchState;
+  members: string[]; dependsOn: string[]; pauseRule: PauseRule;
+}
+
+export interface CompatCaseView {
+  caseId: string; producerRepository: string; consumerRepository: string;
+  mode: CompatibilityMode; state: CompatibilityState; reason?: string;
+}
+
+export interface CampaignPlan {
+  campaignId: string; version: number;
+  batches: BatchView[];
+  compatibility: CompatCaseView[];
+  roles: Record<string, CampaignRole>;
+  cycles: string[][];
+  order: CampaignOrder;
+}
+
+export interface PopulationDiffEntry {
+  repositoryId: string;
+  change: "ADDED" | "REMOVED" | "BASE_CHANGED" | "UNCHANGED";
+  fromBase?: string; toBase?: string;
+  previousVersion: number; nextVersion: number;
+  state: "NEEDS_ASSESSMENT" | "EXCLUDED" | "ASSESSED";
+  reason: string;
+}
+
+export interface PopulationDiff {
+  campaignId: string; fromVersion: number; toVersion: number;
+  populationHash: string; entries: PopulationDiffEntry[];
+  added: string[]; removed: string[]; baseChanged: string[];
+}
+
+export interface ChildPublicationResult {
+  repositoryId: string; action: "CREATED" | "ADOPTED" | "FAILED" | "SKIPPED";
+  prNumber?: number; state: ChildState; reason?: string;
+}
+
+export interface ReconcileRow {
+  repositoryId: string;
+  recorded: string; github: string;
+  action: "NONE" | "ADOPT" | "RETRY" | "STALE";
+}
+
+export interface CampaignProgress {
+  campaignId: string; version: number; batchId: string | null;
+  counts: Partial<Record<ChildState, number>>;
+  started: string[]; hiddenNote: string; paused: boolean; reason?: string;
+}
+
+export interface CampaignView {
+  campaign: Campaign;
+  population: { version: number; populationHash: string; frozenAt: string } | null;
+  children: ChildView[];
+  counts: Partial<Record<ChildState, number>>;
+  batchSizes: Record<string, number>;
+  progress: { completed: number; total: number };
+  hiddenNote: string;
+  order: CampaignOrder | null;
+  /** Budget usage so far: wall time admitted, model tokens and GitHub writes (global, viewer-independent). */
+  usage?: { wallMs: number; modelTokens: number; githubWrites: number };
+  budget?: CampaignBudgets;
 }

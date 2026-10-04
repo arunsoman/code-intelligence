@@ -11,12 +11,13 @@ import { buildOwnership } from "./forms/ownership.ts";
 import { buildRace } from "./forms/race.ts";
 import { buildRuntime } from "./forms/runtime.ts";
 import { buildTerrain } from "./forms/terrain.ts";
+import { buildProfile } from "./forms/profile.ts";
 import { buildTestConfidence } from "./forms/testconf.ts";
 import { buildPolicy, buildTrust } from "./forms/trust.ts";
 import type { RevisionRow, Store } from "./store.ts";
 import { claimOf, short } from "./forms/common.ts";
 
-export type Need = "git" | "concepts" | "tests" | "coverage" | "exceptions" | "two revisions" | "stack trace";
+export type Need = "git" | "concepts" | "tests" | "coverage" | "exceptions" | "two revisions" | "stack trace" | "profiles";
 export type Built = { view: ViewSpec; claims: Claim[] };
 export interface VisualDef {
   code: string; formId: FormId; name: string; blurb: string; example: string; needs: Need[];
@@ -41,6 +42,9 @@ export const VISUALS: VisualDef[] = [
   { code: "V1", formId: "SemanticMap", name: "Intent-relative architecture map", blurb: "Relevant code grouped by responsibility, with semantic zoom from the whole system down to the code.", example: "Show me how authentication works", needs: [] },
   { code: "V2", formId: "HypothesisGraph", name: "Causal hypothesis graph", blurb: "A pasted exception becomes ranked suspects with the evidence that discriminates between them; you can steer it.", example: "Paste a stack trace into the conversation", needs: ["stack trace"] },
   { code: "V3", formId: "CausalGraph", name: "Failure-space map", blurb: "Everything that could make an operation fail, or make a value wrong, each cited.", example: "Show me everything that could cause a payment to fail", needs: [] },
+  // Ordered last on purpose: the earlier entries are the fallback forms a scripted/absent router may pick, and a form
+  // whose need (an imported profile) is unmet must never shadow the general map it falls back to.
+  { code: "V17", formId: "TraceLinkedProfile", name: "Trace-linked profile", blurb: "Where sampled execution time (or allocations) actually fell, per sample kind, joined to the traced window — measured shares with their population hash, unattributed and withheld parts shown as fog, never a causal claim.", example: "Where does the CPU actually go?", needs: ["profiles"], build: buildProfile },
 ];
 
 /** Any inferred or hypothetical edge without its own claim (asynchronous hand-offs, mostly) gets one, so nothing uncertain is shown unexplained. */
@@ -69,8 +73,9 @@ export function catalog(store: Store, rev: RevisionRow | null, git: boolean): Ca
     tests: rev ? store.factsByPredicate(rev.id, "test_result").length > 0 : false,
     coverage: rev ? store.factsByPredicate(rev.id, "coverage").length > 0 : false,
     exceptions: store.exceptions(false).length > 0, "two revisions": rev ? !!store.previousRevision(rev.id) : false, "stack trace": true,
+    profiles: (store.db.prepare("select count(*) as n from profile_artifacts").get() as { n: number }).n > 0,
   } as Record<Need, boolean>;
-  const why: Record<Need, string> = { git: "needs a git repository", concepts: "needs concept cards (Extract concepts)", tests: "needs a test results file", coverage: "needs a coverage report", exceptions: "needs reported exceptions", "two revisions": "needs two indexed revisions (change something and re-index)", "stack trace": "" };
+  const why: Record<Need, string> = { git: "needs a git repository", concepts: "needs concept cards (Extract concepts)", tests: "needs a test results file", coverage: "needs a coverage report", exceptions: "needs reported exceptions", "two revisions": "needs two indexed revisions (change something and re-index)", "stack trace": "", profiles: "needs an imported profile (Profiles panel)" };
   const staleCards = !!rev && !have.concepts && store.conceptVersions(rev.repoRoot).length > 0;
   return VISUALS.map((v) => {
     const missing = v.needs.find((n) => !have[n]);

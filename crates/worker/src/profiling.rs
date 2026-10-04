@@ -504,8 +504,10 @@ fn parse_v8_cpuprofile(bytes: &[u8], service_hint: Option<&str>) -> Result<Parse
                 None => break,
             }
         }
-        // stack currently root->leaf; reverse so inner-most first.
-        stack.reverse();
+        // The walk starts at the sampled node and climbs to the root, so the stack is already leaf-first: the first
+        // entry is where the sample landed (self) and the rest is its ancestry (total). Reversing it here put every
+        // sample's self value on the root node — the hotspot table showed the leafs with zero self time.
+        debug_assert!(stack.first().copied() == loc_by_node.get(node_id).copied());
         samples.push(Sample {
             location_ids: stack,
             values: vec![value],

@@ -87,3 +87,86 @@ test("visibility counts whole nodes outside, nodes cut by the edge, and the visi
   assert.equal(visibility([], 800, 600).drawingInViewPct, 100);
   assert.equal(visibility([{ x1: 0, y1: 0, x2: 800, y2: 600 }], 800, 600).drawingInViewPct, 100);
 });
+
+// ------------------------------------------------------------------ F09 planner tests
+import { chooseInitialLevel, fitZoomForBBox, planTransition, semanticMapPolicy, type RenderedLevel, type SemanticAnchor } from "../src/legibility.ts";
+
+function makeCandidate(level: number, nodeCount: number, spacing = 100, fontUnits = 11): RenderedLevel {
+  const nodes = Array.from({ length: nodeCount }, (_, i) => ({
+    id: `n${level}-${i}`,
+    label: `node ${i}`,
+    members: [`e${i}`],
+    x: (i % 4) * spacing,
+    y: Math.floor(i / 4) * spacing,
+    width: 80,
+    height: 28,
+    labelClass: "NODE_NAME" as const,
+  }));
+  const xs = nodes.map((n) => n.x), ys = nodes.map((n) => n.y);
+  return {
+    level,
+    nodes,
+    edges: [],
+    membership: new Map(nodes.map((n) => [n.id, n.members])),
+    bbox: { x1: Math.min(...xs) - 40, y1: Math.min(...ys) - 14, x2: Math.max(...xs) + 40, y2: Math.max(...ys) + 14 },
+    labelStats: [{ class: "NODE_NAME", count: nodeCount, fontUnits, maxTextWidthUnits: 136 }],
+    caveats: [],
+  };
+}
+
+test("fitZoomForBBox computes the zoom that fits a bbox with padding", () => {
+  const bb = { x1: 0, y1: 0, x2: 1000, y2: 500 };
+  assert.equal(fitZoomForBBox(bb, { width: 1080, height: 600 }), (1080 - 80) / 1000); // width limited
+  assert.equal(fitZoomForBBox(bb, { width: 2000, height: 600 }), (600 - 80) / 500); // height limited
+});
+
+test("chooseInitialLevel picks the finest readable level (F09-D4)", () => {
+  const policy = semanticMapPolicy();
+  const viewport = { width: 800, height: 600 };
+  const c6 = makeCandidate(6, 40, 100, 11); // 4 cols x 10 rows: very tall
+  const c5 = makeCandidate(5, 20, 100, 11); // 4 x 5
+  const c3 = makeCandidate(3, 6, 100, 11);  // 2 x 3
+  const picked = chooseInitialLevel([c3, c5, c6], viewport, policy);
+  assert.ok(picked.plan.minEssentialLabelPx >= policy.targetPx, `label px ${picked.plan.minEssentialLabelPx} below target ${policy.targetPx}`);
+  assert.equal(picked.level, c3.level, "chooses the coarsest level that reaches the target");
+});
+
+test("planTransition lands readable and anchored for explicit level (F09-D8)", () => {
+  const policy = semanticMapPolicy();
+  const viewport = { width: 800, height: 600 };
+  const c = makeCandidate(6, 40, 100, 11);
+  const anchor: SemanticAnchor = { entityIds: ["e5"], screenPoint: { x: 400, y: 300 }, source: "SELECTION" };
+  const plan = planTransition({ currentCamera: { zoom: 1, pan: { x: 0, y: 0 } }, viewport, anchor, candidate: c, policy, kind: "EXPLICIT_LEVEL" });
+  assert.ok(plan.minEssentialLabelPx >= policy.landingMinPx, `explicit level labels ${plan.minEssentialLabelPx} below landing min`);
+  assert.ok(plan.drawingCoverage < 1.0, "a tall drawing cannot all be in view at readable size");
+  assert.ok(plan.unmetConstraints.includes("COVERAGE_BELOW_TARGET"));
+  assert.equal(plan.resolvedAnchor?.renderId, "n6-5");
+});
+
+test("planTransition pulls a drawing that fits fully into view", () => {
+  const policy = semanticMapPolicy();
+  const viewport = { width: 800, height: 600 };
+  const c = makeCandidate(3, 6, 80, 11);
+  const plan = planTransition({
+    currentCamera: { zoom: 1, pan: { x: 0, y: 0 } },
+    viewport,
+    anchor: { entityIds: [], screenPoint: { x: 400, y: 300 }, source: "CENTRE" },
+    candidate: c,
+    policy,
+    kind: "INITIAL_FIT",
+  });
+  assert.equal(plan.drawingCoverage, 1);
+  assert.equal(plan.offscreenNodeCount, 0);
+  assert.ok(plan.minEssentialLabelPx >= policy.targetPx);
+});
+
+test("planTransition reports ANCHOR_UNRESOLVED when the anchor entity is gone", () => {
+  const policy = semanticMapPolicy();
+  const viewport = { width: 800, height: 600 };
+  const c = makeCandidate(5, 10, 100, 11);
+  const anchor: SemanticAnchor = { entityIds: ["missing"], screenPoint: { x: 400, y: 300 }, source: "SELECTION" };
+  const plan = planTransition({ currentCamera: { zoom: 1, pan: { x: 0, y: 0 } }, viewport, anchor, candidate: c, policy, kind: "EXPLICIT_LEVEL" });
+  assert.equal(plan.resolvedAnchor, null);
+  assert.ok(plan.unmetConstraints.includes("ANCHOR_UNRESOLVED"));
+});
+

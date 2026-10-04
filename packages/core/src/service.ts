@@ -26,6 +26,8 @@ import { Runtime } from "./runtime.ts";
 import { mapOverlays } from "./overlays.ts";
 import { Security } from "./security.ts";
 import { PrAnalysis, PrCheckError, resolvePr, type PrRef } from "./pr-analysis.ts";
+import { Profiles, ProfileCheckError } from "./profiles-analysis.ts";
+import { Tasks, TaskError } from "./execution.ts";
 import { GitHubCheckPublisher, newGrant } from "./pr-publish.ts";
 import { githubRemote } from "./gh.ts";
 import type { PrAnalysisView } from "@cie/schema";
@@ -49,6 +51,7 @@ import { API_VERSION, MIN_EXTENSION, health as healthOf, restoreDrill, type Heal
 import { EventBus } from "./events.ts";
 import { buildExport, ExportError, ExportStore, Notifications, type ExportArtifact } from "./exports.ts";
 import { SearchEngine, type ApiFail } from "./search.ts";
+import { HistoryEngine, PolicyError, inspectHead, normalizePolicy, policyHash } from "./hotspots.ts";
 import { ChangeEngine, ChangeError, type ChangeProposal, type DragResult, type Intent } from "./changes.ts";
 import { compareScenarios, evaluateScenario, ScenarioError, type AssumptionInput, type CapacityData, type Scenario, type ScenarioResult } from "./scenarios.ts";
 import { policyFor } from "./access.ts";
@@ -65,10 +68,12 @@ import type { WorkerClient } from "./worker.ts";
 import { WorkerError } from "./worker.ts";
 import { compareBenchmark, detectDefects } from "./defects.ts";
 import { DefectDetectionInputSchema } from "@cie/schema";
-import { DefectError, DefectWorkflow } from "./defect-workflow.ts";
+import { DefectError, DefectWorkflow, type DraftForge } from "./defect-workflow.ts";
 import { detectIndexedDefects } from "./defect-indexed.ts";
 import { artifactHash } from "./defect-schedule.ts";
 import { Profiling } from "./profiling.ts";
+import { Campaigns, CampaignError, type CampaignAdapters } from "./campaigns.ts";
+import { GitHubPublisher, JointRunner, RecipeRunner, repositoryInventory, validateCandidate } from "./campaign-runner.ts";
 
 const chunkTokenBudget = () => Number(process.env.CIE_CHUNK_TOKEN_BUDGET) || 60_000; // per concept-extraction request; the gateway hard limit is 200k
 
@@ -137,6 +142,8 @@ export class Service {
   embedder: Embedder = new HashEmbedder();
   /** Reads what a question wants (which view, or which conversational request). Null: nothing configured, and the general map is used. */
   router: RouterModel | null = null;
+  /** The GitHub transport F07 publishes through. Unset means publication is refused, never simulated. */
+  forge: DraftForge | null = null;
   private worker: WorkerClient;
   private model: ModelProvider;
   private offline: ModelProvider;
@@ -160,6 +167,11 @@ export class Service {
   readonly security: Security;
   /** F05: trace-linked continuous profiling. */
   readonly profiling: Profiling;
+  /** F08: coordinated multi-repository campaigns. */
+  readonly campaigns: Campaigns;
+  /** F05: the profiling engine — persists artifacts, attributes builds, correlates traces, and verifies presentation (F05-A5). */
+  readonly profiles: Profiles;
+  readonly tasks: Tasks;
   /** C29: shared investigations and team knowledge. */
   readonly collab: Collab;
   /** C17: the evaluation registry. */
@@ -207,14 +219,148 @@ export class Service {
     "C29/confirmSharedConcept": (c, b) => this.collabResult(c, this.collab.confirmSharedConcept(c.actor.principalId, b)),
     "C29/conceptsFor": (c, b) => ok(c, this.collab.conceptsFor(c.actor.principalId, b.revision)),
   };
-  /** F05 gateway operations for trace-linked continuous profiling. */
+  /** F05 gateway operations for trace-linked continuous profiling. The engine persists aggregates, enforces the
+   * attribution ladder (F05-A2), grades correlation (F05-D8), gates compare on error populations (F05-A6) and verifies
+   * every rendered metric against a registered template (F05-A5). `this.profiling` remains as the raw worker shim. */
   readonly profilingOps: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>> | ApiResult<unknown>> = {
-    "C04/ingestProfile": (c, b) => this.profiling.ingestProfile(c, b),
-    "C24/correlateProfile": (c, b) => this.profiling.correlateProfile(c, b),
-    "C26/queryHotspots": (c, b) => this.profiling.queryHotspots(c, b),
-    "C26/compareProfiles": (c, b) => this.profiling.compareProfiles(c, b),
-    "C19/buildFlamegraph": (c, b) => this.profiling.buildFlamegraph(c, b),
+    "C04/ingestProfile": (c, b) => this.profileWrap(c, () => this.profiles.ingestProfile({ path: b?.path, serviceHint: b?.serviceHint, revisionHint: b?.revisionHint })),
+    "C24/correlateProfile": (c, b) => this.profileWrap(c, () => this.profiles.correlate({ artifactHash: b?.artifactHash, traceSourceId: b?.traceSourceId, timeWindowMs: b?.timeWindowMs, overrideRevisionMismatch: b?.overrideRevisionMismatch })),
+    "C26/queryHotspots": (c, b) => this.profileWrap(c, () => this.profiles.queryHotspots(b ?? {})),
+    "C26/compareProfiles": (c, b) => this.profileWrap(c, () => this.profiles.compare({ baselinePopulationHash: b?.baselinePopulationHash, candidatePopulationHash: b?.candidatePopulationHash, normalise: b?.normalise ?? "PER_REQUEST", declareEquivalent: b?.declareEquivalent })),
+    "C19/buildFlamegraph": (c, b) => this.profileWrap(c, () => this.profiles.flamegraph({ artifactHash: b?.artifactHash ?? b?.path, ordinal: b?.ordinal, viewRevision: b?.viewRevision })),
+    "C26/profileEndpoints": (c, b) => this.profileWrap(c, () => this.profiles.endpointStats({ traceSourceId: b?.traceSourceId, window: b?.window, artifactHash: b?.artifactHash, viewRevision: b?.viewRevision })),
+    "C26/profileWaterfall": (c, b) => this.profileWrap(c, () => this.profiles.waterfall({ traceSourceId: b?.traceSourceId, traceId: b?.traceId, window: b?.window })),
+    "C26/listProfilePopulations": (c, b) => this.profileWrap(c, () => this.profiles.listPopulations({ traceSourceId: b?.traceSourceId, artifactHash: b?.artifactHash, limit: b?.limit })),
+    "C04/listProfileArtifacts": (c, b) => this.profileWrap(c, () => this.profiles.listArtifacts({ traceSourceId: b?.traceSourceId, limit: b?.limit })),
+    "C19/compileProfileView": (c, b) => this.profileWrap(c, () => this.profiles.compileProfileView(b ?? {})),
+    "C16/verifyMetricPresentation": (c, b) => this.profileWrap(c, () => this.profiles.verifyPresentation(b?.items ?? [], b?.revision ?? this.store.latestRevision() ?? "")),
   };
+
+  /**
+   * F07 task execution. Every command here is a human gate in the guide's flow: intake and confirmation, a plan with
+   * bounded unknowns, candidate proposals as exact edit operations, one validation run per role, a property-change
+   * review, a second-person approval and a publication. `C30/publishDraftPR` needs the real forge supplied by the
+   * caller (the `gh` implementation in production, a recording one in tests); without one it refuses rather than
+   * pretending a draft PR exists.
+   */
+  readonly taskOps: Record<string, (ctx: CallContext, body: any) => Promise<ApiResult<unknown>>> = {
+    "C02/submitTask": (c, b) => this.taskCall(c, () => { const view = this.tasks.submitTask(actor(c), { spec: b?.spec }); return { ...view, restatement: this.tasks.restatement(view.taskId) }; }),
+    "C02/confirmIntent": (c, b) => this.taskCall(c, () => this.tasks.confirmIntent(actor(c), { taskId: b?.taskId, specHash: b?.specHash, expectedVersion: b?.expectedVersion })),
+    "C02/getTask": (c, b) => this.taskCall(c, () => this.tasks.getTask(b?.taskId)),
+    "C02/listTasks": (c, b) => this.taskCall(c, () => this.tasks.listTasks(b?.limit)),
+    "C02/listTaskEvents": (c, b) => this.taskCall(c, () => ({ events: this.tasks.listEvents(b?.taskId, b?.afterSeq ?? 0) })),
+    "C02/cancelTask": (c, b) => this.taskCall(c, () => this.tasks.cancelTask(actor(c), { taskId: b?.taskId, reason: b?.reason ?? "" })),
+    "C15/draftPlan": (c, b) => this.taskCall(c, () => this.tasks.draftPlan(actor(c), { taskId: b?.taskId })),
+    "C22/resolveObligation": (c, b) => this.taskCall(c, () => this.tasks.resolveObligation(actor(c), { taskId: b?.taskId, obligationId: b?.obligationId })),
+    "C28/prepareChange": (c, b) => this.taskCall(c, () => this.tasks.prepareChange(actor(c), { taskId: b?.taskId, planVersion: b?.planVersion, editOperations: b?.editOperations ?? [], origin: b?.origin })),
+    "C27/validatePatch": (c, b) => this.taskCall(c, () => this.tasks.validatePatch(actor(c), { taskId: b?.taskId, candidateIndex: b?.candidateIndex, requireAuditedIsolation: b?.requireAuditedIsolation })),
+    "C28/reviewPropertyChange": (c, b) => this.taskCall(c, () => this.tasks.reviewPropertyChange(actor(c), { taskId: b?.taskId, candidateIndex: b?.candidateIndex, decision: b?.decision, rationale: b?.rationale })),
+    "C28/approveCandidate": (c, b) => this.taskCall(c, () => this.tasks.approveCandidate(actor(c), { taskId: b?.taskId, candidateIndex: b?.candidateIndex, expectedVersion: b?.expectedVersion, explanation: b?.explanation ?? "" })),
+    "C30/createPublicationGrant": (c, b) => this.taskCall(c, () => this.tasks.createGrant(actor(c), { taskId: b?.taskId, candidateIndex: b?.candidateIndex, repository: b?.repository, baseBranch: b?.baseBranch, branchName: b?.branchName })),
+    "C30/publishDraftPR": (c, b) => {
+      if (!this.forge) return Promise.resolve(fail(c, { code: "PROVIDER_UNAVAILABLE", message: "No GitHub transport is configured, so no draft PR is created. The validated patch can still be exported as a patch.", retryable: false }));
+      return this.taskCall(c, () => this.tasks.publishDraftPR(actor(c), { taskId: b?.taskId, candidateIndex: b?.candidateIndex, repositoryId: b?.repositoryId, baseBranch: b?.baseBranch, branchName: b?.branchName, grantId: b?.grantId, generation: b?.generation }, this.forge!));
+    },
+    "C28/taskRuns": (c, b) => this.taskCall(c, () => this.tasks.listRuns(b?.taskId, b?.candidateIndex)),
+  };
+
+  async taskCall<T>(ctx: CallContext, fn: () => T | Promise<T>): Promise<ApiResult<T>> {
+    try { return ok(ctx, await fn()); }
+    catch (e) {
+      if (e instanceof TaskError) return fail(ctx, { code: e.code as ApiError["code"], message: e.message, retryable: e.code === "VERSION_CONFLICT" });
+      return fail(ctx, storageFailure(e));
+    }
+  }
+  /** Wraps an engine call: F05 check failures already carry an api-shaped code; anything else is a storage failure. */
+  private async profileWrap(ctx: CallContext, fn: () => unknown | Promise<unknown>): Promise<ApiResult<unknown>> {
+    try { return ok(ctx, await fn()); }
+    catch (e) {
+      if (e instanceof ProfileCheckError) return fail(ctx, e.api);
+      return fail(ctx, { code: "STORAGE_FAILURE", message: (e as Error).message || "profile operation failed", retryable: false });
+    }
+  }
+  /** F08 gateway operations for coordinated multi-repository campaigns. */
+  readonly campaignOps: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>> | ApiResult<unknown>> = {
+    "C28/createCampaign": (c, b) => this.campaignResult(c, () => this.campaigns.createCampaign(c.actor.principalId, c.actor.tenantId, b.spec)),
+    "C28/listCampaigns": (c, b) => this.campaignResult(c, () => this.campaigns.listCampaigns(c.actor.principalId, b.limit)),
+    "C28/freezePopulation": (c, b) => this.campaignResult(c, () => this.campaigns.freezePopulation(b.campaignId, c.actor.principalId, b.expectedVersion)),
+    "C28/assessPopulationChange": (c, b) => this.campaignResult(c, () => this.campaigns.assessPopulationChange(b.campaignId, c.actor.principalId, b.fromVersion, b.toVersion)),
+    "C28/assessChild": (c, b) => this.campaignResult(c, () => this.campaigns.assessChild(b.campaignId, c.actor.principalId, b.repositoryId)),
+    "C28/planCampaign": (c, b) => this.campaignResult(c, () => this.campaigns.planCampaign(b.campaignId, c.actor.principalId, b.expectedVersion)),
+    "C28/getCampaignPlan": (c, b) => this.campaignResult(c, () => this.campaigns.getCampaignPlan(b.campaignId, c.actor.principalId)),
+    "C28/advanceCampaign": (c, b) => ok(c, this.jobs.enqueue(c, {
+      kind: "campaign-advance",
+      params: { campaignId: b.campaignId, batchId: b.batchId },
+      run: async (jctx) => this.campaignResult(jctx, () => this.campaigns.advanceCampaign(b.campaignId, jctx.actor.principalId, b.expectedVersion, b.batchId ?? null, jctx.idempotencyKey)),
+    })),
+    "C28/pauseCampaign": (c, b) => this.campaignResult(c, () => this.campaigns.pause(b.campaignId, c.actor.principalId, b.reason ?? "paused by an operator")),
+    "C28/resumeCampaign": (c, b) => this.campaignResult(c, () => this.campaigns.resume(b.campaignId, c.actor.principalId, b.expectedVersion)),
+    "C28/cancelCampaign": (c, b) => this.campaignResult(c, () => this.campaigns.cancel(b.campaignId, c.actor.principalId, b.expectedVersion, b.reason ?? "cancelled by an operator")),
+    "C28/getCampaign": (c, b) => this.campaignResult(c, () => this.campaigns.getCampaign(b.campaignId, c.actor.principalId)),
+    "C28/listChildren": (c, b) => this.campaignResult(c, () => this.campaigns.listChildren(b.campaignId, c.actor.principalId, b.filter, b.cursor, b.limit)),
+    "C28/clusterChildren": (c, b) => this.campaignResult(c, () => this.campaigns.clusterChildren(b.campaignId, c.actor.principalId)),
+    "C28/approveChild": (c, b) => this.campaignResult(c, () => this.campaigns.approveChild(b.campaignId, c.actor.principalId, b.repositoryId, b.explanation, b.clusterId ?? null)),
+    "C28/confirmCluster": (c, b) => this.campaignResult(c, () => this.campaigns.confirmCluster(b.campaignId, c.actor.principalId, b.repositoryId, b.clusterId, b.expectedBindingHash ?? "")),
+    "C28/runDryRun": (c, b) => this.campaignResult(c, () => this.campaigns.runDryRun(b.campaignId, c.actor.principalId, b.expectedVersion)),
+    "C28/getDryRun": (c, b) => this.campaignResult(c, () => this.campaigns.getDryRun(b.campaignId, c.actor.principalId, b.runId)),
+    "C28/updateTransformation": (c, b) => this.campaignResult(c, () => this.campaigns.updateTransformation(b.campaignId, c.actor.principalId, b.expectedVersion, b.transformation)),
+    "C28/runJointCheck": (c, b) => ok(c, this.jobs.enqueue(c, {
+      kind: "campaign-joint-check",
+      params: { campaignId: b.campaignId, caseId: b.caseId },
+      run: async (jctx) => this.campaignResult(jctx, () => this.campaigns.runJointCheck(b.campaignId, jctx.actor.principalId, b.caseId)),
+    })),
+    "C30/publishCampaignChildren": (c, b) => this.campaignResult(c, () => this.campaigns.publishCampaignChildren(b.campaignId, c.actor.principalId, b.batchId ?? null, b.childRepositoryIds ?? null, c.idempotencyKey)),
+    "C30/reconcileCampaign": (c, b) => this.campaignResult(c, () => this.campaigns.reconcileCampaign(b.campaignId, c.actor.principalId)),
+    "C30/issuePublicationGrant": (c, b) => this.campaignResult(c, () => this.campaigns.issuePublicationGrant(b.campaignId, c.actor.principalId, b.repositoryId, b.ttlMs)),
+    "C30/revokePublicationGrant": (c, b) => this.campaignResult(c, () => { this.campaigns.revokePublicationGrant(b.campaignId, c.actor.principalId, b.grantId); return { revoked: true }; }),
+    "C29/assignChildReviewers": (c, b) => this.campaignResult(c, () => { this.campaigns.assignChildReviewers(b.campaignId, c.actor.principalId, b.repositoryId, b.principals ?? [], b.role, b.source); return { ok: true }; }),
+    "C29/recordChildException": (c, b) => this.campaignResult(c, () => ({ id: this.campaigns.recordChildException(b.campaignId, c.actor.principalId, b.repositoryId, b.scope, b.rationale, b.approver ?? null, b.expiresAt ?? null) })),
+  };
+  private campaignResult<T>(ctx: CallContext, fn: () => T): ApiResult<T> { try { return ok(ctx, fn()); } catch (e) { const api = e instanceof CampaignError ? e.api : storageFailure(e); return fail(ctx, api); } }
+
+  /** Real campaign adapters: the F01/F04 repository inventory (packages, cross-repository edges, owners), an isolated
+   * recipe runner, an isolated per-child validator, an npm local-link joint runner and a `gh`-based draft publisher.
+   * Each is synchronous, matching the change engine; nothing here writes inside a repository's own root. */
+  private campaignAdapters(): CampaignAdapters {
+    const store = this.store;
+    const collab = this.collab;
+    const recipe = new RecipeRunner();
+    const joint = new JointRunner();
+    const publisher = new GitHubPublisher();
+    for (const root of (process.env.CIE_CAMPAIGN_TRUSTED_ROOTS ?? "").split(":").filter(Boolean)) { try { recipe.trust(realpathSync(root)); } catch { /* the operator named a path that is not there */ } }
+
+    const repoRoots = () => {
+      const rows = store.db.prepare(
+        "select r.id, r.repo_root, r.git_head from revisions r join (select repo_root, max(rowid) rid from revisions group by repo_root) m on m.rid = r.rowid where r.repo_root not in (select repo_root from repo_access where revoked = 1)",
+      ).all() as any[];
+      return rows.map((r) => {
+        const repoRoot = r.repo_root as string;
+        const branch = (() => { try { return (store.db.prepare("select default_branch from repositories where root = ?").get(repoRoot) as { default_branch?: string } | undefined)?.default_branch; } catch { return undefined; } })();
+        return { repositoryId: repoRoot, repoRoot, defaultBranch: branch ?? "main", baseCommit: (r.git_head ?? r.id) as string };
+      });
+    };
+    const inventory = () => repositoryInventory(store, repoRoots);
+    const find = (id: string) => inventory().find((r) => r.repositoryId === id);
+
+    return {
+      repos: () => inventory(),
+      baseCommit: (id, pinned) => pinned ?? find(id)?.baseCommit ?? null,
+      transformationApplies: (id, t) => { const repo = find(id); return repo ? recipe.transformationApplies(repo.repoRoot, t) : { applies: false, reason: "unknown repository" }; },
+      applyRecipe: (id, base, t) => { const repo = find(id); return repo ? recipe.applyRecipe(repo.repoRoot, base, t) : { ok: false, error: "unknown repository" }; },
+      validateChild: (id, _base, candidate) => {
+        const repo = find(id);
+        const trusted = !!repo && recipe.trustedRoots.has(repo.repoRoot);
+        return validateCandidate({ candidate, trusted });
+      },
+      jointCheck: (request) => joint.check(request),
+      publish: (request) => publisher.publish(request),
+      githubState: (id, prNumber) => { const repo = find(id); return repo ? publisher.state(repo.repoRoot, prNumber) : null; },
+      rateLimit: () => publisher.rateLimit(),
+      canSee: (principal, repo) => collab.access(principal, repo.repoRoot).allowed,
+      canPublish: (principal, repo) => collab.access(principal, repo.repoRoot).allowed,
+      ownerOf: (id) => find(id)?.owner ?? null,
+    };
+  }
   private collabResult(ctx: CallContext, r: { ok: true } | { ok: false; error: ApiError }): ApiResult<any> { return r.ok ? ok(ctx, r) : fail(ctx, r.error); }
   /** C25 gateway operations. */
   readonly securityOps: Record<string, (ctx: CallContext, b: any) => ApiResult<unknown>> = {
@@ -243,6 +389,8 @@ export class Service {
     "C23/assessChangeImpact": (c, b) => ok(c, this.history.assessChangeImpact(b.changeSet)),
     "C23/addThread": (c, b) => { try { return ok(c, this.history.addThread(c.actor.principalId, b)); } catch (e) { return fail(c, { code: "NOT_FOUND", message: (e as Error).message, retryable: false }); } },
     "C23/reanchorThreads": (c, b) => ok(c, this.history.reanchorThreads(b.mergedRevision)),
+    "C23/explainHotspot": (c, b) => this.hotspotCallSync(c, () => this.hotspots.explainHotspot(c, b ?? {})),
+    "C23/explainCoupling": (c, b) => this.hotspotCallSync(c, () => this.hotspots.explainCoupling(c, b ?? {})),
   };
   /** C08 gateway operations. */
   readonly registryOps: Record<string, (ctx: CallContext, b: any) => ApiResult<unknown>> = {
@@ -254,6 +402,8 @@ export class Service {
   };
   /** The model answering questions, for records of what was measured. */
   get activeModel() { return { name: this.model.name, model: this.model.model }; }
+  /** F06: historical hotspots and change coupling (see hotspots.ts). Shares the store and the worker. */
+  readonly hotspots: HistoryEngine;
   /** C13: event-sourced investigations (see workspaces.ts). */
   readonly workspaceLog: WorkspaceLog;
   /** Hosted-model allowance per repository. Local models are free and never charged. */
@@ -268,6 +418,8 @@ export class Service {
     this.runtime = new Runtime(store, this.registry);
     this.security = new Security(store);
     this.profiling = new Profiling(worker, store);
+    this.profiles = new Profiles(store, worker);
+    this.tasks = new Tasks({ store });
     this.indexer = new Indexer(this);
     this.evaluator = new Evaluator(store);
     this.workspaceLog = new WorkspaceLog(store, {
@@ -276,10 +428,13 @@ export class Service {
       allowed: (revision) => { const o = revision ? this.store.revision(revision, true) : null; return !(o && this.store.isRevoked(o.repoRoot)); },
     });
     this.collab = new Collab(store, this.workspaceLog);
+    this.campaigns = new Campaigns(store, this.campaignAdapters());
     this.journal = new Journal(store);
     this.jobs = new JobRunner(store);
     // F01: the cross-repository search engine shares the store (its own schema slice) and the worker (regex runs there).
     this.search = new SearchEngine(store, () => this.worker);
+    // F06: history reads run in the job runner; code-health metrics run in the worker.
+    this.hotspots = new HistoryEngine(store, worker);
     this.bus = new EventBus(store);
     // Model-backed seeding (design §20 step 3): hypothesis drafts come from the model gateway through the same
     // egress, scrubbing and budget path as every other model call. The proposers' output is registry-validated
@@ -698,6 +853,88 @@ export class Service {
       const done = await this.jobs.settled(job.id);
       if (done.error) return fail(c, done.error);
       return ok(c, { ...done, value: done.result?.value, warnings: done.result?.warnings ?? [] });
+    },
+  };
+
+  // ---------------------------------------------------------------- F06 historical hotspots and change coupling (hotspots.ts)
+  /** History analysis is off only when the deployment says so; reads never touch the model. */
+  historyEnabled(): boolean { return process.env.CIE_HISTORY !== "off"; }
+  private hotspotCallSync<T>(ctx: CallContext, fn: () => T | ApiFail): ApiResult<T> {
+    try {
+      const v = fn();
+      if (v && (v as { ok?: boolean }).ok === false) return fail(ctx, (v as ApiFail).error);
+      return ok(ctx, v as T);
+    } catch (e) {
+      if (e instanceof PolicyError) return fail(ctx, { code: "INVALID_SCHEMA", message: e.message, retryable: false });
+      return fail(ctx, storageFailure(e));
+    }
+  }
+  private async hotspotCall<T>(ctx: CallContext, fn: () => Promise<T | ApiFail> | T | ApiFail): Promise<ApiResult<T>> {
+    try {
+      const v = await fn();
+      if (v && (v as { ok?: boolean }).ok === false) return fail(ctx, (v as ApiFail).error);
+      return ok(ctx, v as T);
+    } catch (e) {
+      if (e instanceof PolicyError) return fail(ctx, { code: "INVALID_SCHEMA", message: e.message, retryable: false });
+      return fail(ctx, storageFailure(e));
+    }
+  }
+  /**
+   * C26 history operations (§8). `analyzeHistory` and the two settings mutate; the rest read a stored
+   * run and cannot see files the caller is denied (A3/A6 are enforced inside the engine).
+   */
+  readonly hotspotOps: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>> | ApiResult<unknown>> = {
+    "C26/analyzeHistory": async (c, b) => {
+      if (!this.historyEnabled()) return fail(c, { code: "PROVIDER_UNAVAILABLE", message: "history analysis is disabled for this deployment (CIE_HISTORY=off)", retryable: false });
+      let policy;
+      try { policy = normalizePolicy(b?.policy ?? {}); } catch (e) { if (e instanceof PolicyError) return fail(c, { code: "INVALID_SCHEMA", message: e.message, retryable: false }); throw e; }
+      const root = typeof b?.repositoryId === "string" ? this.hotspots.rootFor(b.repositoryId) : typeof b?.repoPath === "string" ? resolve(b.repoPath) : this.store.latestRevision()?.repoRoot;
+      if (!root) return fail(c, { code: "NOT_FOUND", message: "give a repositoryId or a repoPath, or index a repository first", retryable: false });
+      if (!existsSync(root)) return fail(c, { code: "NOT_FOUND", message: "that folder does not exist", retryable: false });
+      const head = inspectHead(root);
+      if (!head.isRepo) return fail(c, { code: "INSUFFICIENT_EVIDENCE", message: "this folder is not a Git work tree, so history-based hotspots cannot be computed", retryable: false });
+      if (!head.head) return fail(c, { code: "INSUFFICIENT_EVIDENCE", message: "this repository has no commits yet, so there is no history to analyse", retryable: false });
+      const priority = ({ INTERACTIVE: 100, LIVE: 10, BACKFILL: 0 } as Record<string, number | undefined>)[b?.priority ?? "LIVE"] ?? 10;
+      const pH = policyHash(policy);
+      const jctx: CallContext = {
+        requestId: `req-history:${randomUUID()}`,
+        idempotencyKey: `history-analysis:${root}:${pH}`,
+        actor: c.actor, deadlineMs: Date.now() + 600_000, traceId: `trace-history:${randomUUID()}`,
+      };
+      const job = this.jobs.enqueue(jctx, {
+        kind: "history-analysis", priority, params: { repoPath: root },
+        run: async (jctx2, control) => {
+          try {
+            const r = await this.hotspots.runAnalysis(jctx2, control, root, policy, Math.max(5_000, jctx2.deadlineMs - Date.now()));
+            return ok(jctx2, r, { warnings: r.warnings, completeness: r.state === "PARTIAL" ? "PARTIAL" : "COMPLETE" });
+          } catch (e) {
+            if (e instanceof PolicyError) return fail(jctx2, { code: "INVALID_SCHEMA", message: e.message, retryable: false });
+            return fail(jctx2, storageFailure(e));
+          }
+        },
+      });
+      if (b?.wait === false) return ok(c, job);
+      const done = await this.jobs.settled(job.id);
+      if (done.error) return fail(c, done.error);
+      const value = done.result?.value as { runId?: string; state?: string; commitCount?: number } | undefined;
+      return ok(c, { ...done, ...(value ? { runId: value.runId, state: value.state, commitCount: value.commitCount } : {}), value, warnings: done.result?.warnings ?? [] });
+    },
+    "C26/getHotspotReport": (c, b) => this.hotspotCall(c, () => this.hotspots.getReport(c, b ?? {})),
+    "C26/listCoupling": (c, b) => this.hotspotCall(c, () => this.hotspots.listCoupling(c, b ?? {})),
+    "C26/rankStability": (c, b) => this.hotspotCall(c, () => this.hotspots.rankStability(c, b ?? {})),
+    /** Contributor display names leave the store only for a granted principal with a policy that allows them (F06-A6). */
+    "C26/grantContributorNames": (c, b) => {
+      const granted = b?.grant !== false;
+      this.hotspots.grantContributorNames(c.actor.principalId, granted);
+      this.store.audit(actor(c), granted ? "history.grantNames" : "history.revokeNames", "(history)", {});
+      return ok(c, { granted });
+    },
+    /** §17: opt this store into the F06 terrain factors (churn and knowledge from the analysed history). */
+    "C26/setHistoryTerrain": (c, b) => {
+      const enabled = b?.enabled === true;
+      this.hotspots.setTerrainV2(enabled);
+      this.store.audit(actor(c), "history.setTerrain", "(history)", { enabled });
+      return ok(c, { enabled });
     },
   };
 

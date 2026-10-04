@@ -1,6 +1,7 @@
 //! Rust worker (contracts §10): C04–C09 collapsed. Speaks length-prefixed JSON on stdio.
 mod index;
 mod language;
+mod metrics;
 mod model;
 mod polyglot;
 mod profiling;
@@ -122,6 +123,13 @@ fn handle(req: &Value) -> Value {
             match params.get("root").and_then(Value::as_str) {
                 None => Err(("INVALID_SCHEMA", "params.root required".into())),
                 Some(r) => regexfind::regex_verify(Path::new(r), &params),
+            }
+        }
+        "metrics" => {
+            let params = req.pointer("/params").cloned().unwrap_or(Value::Null);
+            match params.get("root").and_then(Value::as_str) {
+                None => Err(("INVALID_SCHEMA", "params.root required".into())),
+                Some(r) => metrics::metrics_verify(Path::new(r), &params),
             }
         }
         "ingestProfile" => profile_rpc(req, |bytes, hint| profiling::ingest_profile(bytes, hint)),

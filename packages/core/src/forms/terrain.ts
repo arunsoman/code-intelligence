@@ -3,6 +3,7 @@
 import type { Claim, TerrainCell, ViewNode } from "@cie/schema";
 import { authorCounts, isGitRepo } from "../gitinfo.ts";
 import { runtimeHotness } from "../hotness.ts";
+import { historyFactors } from "../hotspots.ts";
 import type { RevisionRow, Store } from "../store.ts";
 import { baseView, claimOf, emptyForm, flowGraph, observation } from "./common.ts";
 
@@ -28,6 +29,9 @@ export function buildTerrain(store: Store, rev: RevisionRow, question: string, s
   if (!files.length) return emptyForm(o, "There are no source files to assess.");
   const git = isGitRepo(rev.repoRoot);
   const hot = runtimeHotness(store, rev);
+  // F06 §17: with the `history.v2` flag on and a usable run stored, churn and knowledge come from the
+  // analysed history (rename-aware, windowed, exclusion-ledgered) instead of the git-fact commit counts.
+  const history = historyFactors(store, rev);
   const degree = (file: string) => (flow.byFile.get(file) ?? []).reduce((n, e) => n + (flow.out.get(e.entityId)?.length ?? 0) + (flow.inn.get(e.entityId)?.length ?? 0), 0);
   const raw = files.map((f) => {
     const hist = store.factsFor(rev.id, f.entityId).find((x) => x.predicate === "history");
@@ -40,6 +44,11 @@ export function buildTerrain(store: Store, rev: RevisionRow, question: string, s
   const maxC = Math.max(1, ...raw.map((r) => r.coupling)), maxH = Math.max(1, ...raw.map((r) => r.hv?.commits ?? 0));
   const maxI = Math.max(1, ...raw.map((r) => r.hits.reduce((n, h) => n + h.value, 0)));
   const v = baseView({ ...o, caption: "" });
+  if (history) {
+    v.gaps.push("Churn and knowledge are read from the analysed history window (F06), which ignores bulk, formatting and bot commits and follows renames; the history is resolved to files, not symbols.");
+    if (history.warning) v.gaps.push(history.warning);
+    v.caption = `${v.caption} Churn and knowledge come from analysed history run ${history.runId.slice(0, 8)}.`.trim();
+  }
   const claims: Claim[] = [];
   const cells: TerrainCell[] = [];
   const weights = PRESETS[task];
@@ -48,17 +57,18 @@ export function buildTerrain(store: Store, rev: RevisionRow, question: string, s
   for (const r of raw) {
     const missing: string[] = [];
     const incidents = r.hits.reduce((n, h) => n + h.value, 0);
+    const h6 = history?.factors.get(r.f.file);
     const factors: Record<string, number> = {
-      coupling: r.coupling / maxC,
-      churn: r.hv ? r.hv.commits / maxH : (missing.push("churn"), 0.5),
+      coupling: h6?.coupling ?? r.coupling / maxC,
+      churn: h6 ? h6.churn : r.hv ? r.hv.commits / maxH : (missing.push("churn"), 0.5),
       incidents: incidents / maxI,
       testGap: r.cv ? 1 - r.cv.percent / 100 : (missing.push("testGap"), 0.5),
-      knowledge: r.hv ? 1 / Math.max(1, r.hv.authors) : (missing.push("knowledge"), 0.5),
+      knowledge: h6 ? h6.knowledge : r.hv ? 1 / Math.max(1, r.hv.authors) : (missing.push("knowledge"), 0.5),
     };
     const authors = git ? authorCounts(rev.repoRoot, r.f.file) : [];
     const rawText: Record<string, string> = {
-      coupling: `${r.coupling} link(s)`, churn: r.hv ? `${r.hv.commits} commit(s)` : "no data", incidents: r.hits.length ? r.hits.slice(0, 2).map((h) => h.reason).join("; ") : "none reported",
-      testGap: r.cv ? `${r.cv.percent}% covered (${r.cv.covered}/${r.cv.lines} lines)` : "no coverage data", knowledge: r.hv ? `${r.hv.authors} author(s)${authors[0] ? `, most by ${authors[0].author}` : ""}` : "no data",
+      coupling: h6?.coupling !== undefined && h6?.coupling !== null ? `${history?.raw.get(r.f.file)?.coupling ?? `${r.coupling} link(s)`} · ${r.coupling} static link(s)` : `${r.coupling} link(s)`, churn: (h6 ? history?.raw.get(r.f.file)?.churn : undefined) ?? (r.hv ? `${r.hv.commits} commit(s)` : "no data"), incidents: r.hits.length ? r.hits.slice(0, 2).map((h) => h.reason).join("; ") : "none reported",
+      testGap: r.cv ? `${r.cv.percent}% covered (${r.cv.covered}/${r.cv.lines} lines)` : "no coverage data", knowledge: (h6 ? history?.raw.get(r.f.file)?.knowledge : undefined) ?? (r.hv ? `${r.hv.authors} author(s)${authors[0] ? `, most by ${authors[0].author}` : ""}` : "no data"),
     };
     const evidenceIds = [...(r.hist?.evidence.map((e) => e.id) ?? []), ...(r.cov?.evidence.map((e) => e.id) ?? []), ...r.hits.flatMap((h) => h.evidenceIds).slice(0, 3)];
     if (evidenceIds.length === 0) evidenceIds.push(observation(store, rev.id, `terrain:${r.f.file}`, "HISTORY", r.f.file, `${r.f.file}: ${r.coupling} link(s), ${r.size} symbol(s); no history, coverage or incident data.`).id);

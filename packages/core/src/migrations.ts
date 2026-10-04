@@ -393,8 +393,8 @@ export const MIGRATIONS: Migration[] = [
         format text not null, format_version text,
         profiler text, profiler_version text,
         service text, instance text, runtime_name text,
-        start_ns integer not null, end_ns integer not null,
-        period_ns integer,
+        start_ns real not null, end_ns real not null,   -- nanoseconds since the epoch: doubles, since SQLite integers cannot return 1.8e18 to JS
+        period_ns real,
         sampling_rate_hz real, declared_overhead_percent real,
         dropped_samples integer,
         truncated integer not null default 0,
@@ -439,12 +439,13 @@ export const MIGRATIONS: Migration[] = [
       create index if not exists profile_trace_links_artifact on profile_trace_links(artifact_hash, trace_source);
       create table if not exists profile_populations(
         population_hash text primary key, service text not null,
-        window_from_ns integer not null, window_to_ns integer not null,
+        window_from_ns real not null, window_to_ns real not null,
         revision text, sample_type_kind text not null,
         chunk_ids_json text not null,
         sample_count integer not null, expected_samples integer, collection_ratio real,
         request_count integer, error_count integer, created_at text not null);
-      create table if not exists profile_flags(id integer primary key check (id = 1), import integer not null, correlate integer not null, compare integer not null);`),
+      create table if not exists profile_flags(id integer primary key check (id = 1), import integer not null, correlate integer not null, compare integer not null);
+      insert or ignore into profile_flags(id, import, correlate, compare) values (1, 1, 1, 1);`),
     down: (db) => db.exec(`
       drop table if exists profile_flags; drop table if exists profile_populations;
       drop index if exists profile_trace_links_artifact; drop table if exists profile_trace_links;
@@ -525,6 +526,318 @@ export const MIGRATIONS: Migration[] = [
       drop table if exists dep_findings; drop index if exists advisories_pkg; drop table if exists advisories;
       drop table if exists feed_snapshots; drop table if exists dep_roots; drop table if exists dep_edges;
       drop table if exists dep_packages; drop table if exists dependency_inventories;`),
+  },
+  {
+    // F06: historical hotspots and change coupling. The repository's own git history is analysed into commit events,
+    // per-file changes, rename continuations (lineages), scored hotspots, statistical co-change edges and an
+    // exclusions ledger (§6.2). Contributor identity is a keyed hash (`author_hash`); display names live only in the
+    // restricted `history_contributor_names` table and are returned only to authorised principals (F06-A6).
+    version: 28, name: "historical-hotspots",
+    up: (db) => db.exec(`
+      create table history_runs(
+        run_id text primary key, repository_id text not null,
+        head_commit text not null, since_time text, until_time text not null,
+        shallow integer not null, commit_count integer not null,
+        boundary_hash text not null, policy_hash text not null,
+        worker_version text not null, state text not null, created_at text not null,
+        note text not null default '', policy_json text not null default '{}', stats_json text not null default '{}',
+        repo_root text not null default '',
+        unique(repository_id, boundary_hash, policy_hash));
+      create index history_runs_repo on history_runs(repository_id);
+      create table commit_events(
+        repository_id text not null, commit_hash text not null,
+        author_hash text not null,
+        committed_at text not null, parent_count integer not null,
+        files_changed integer not null, insertions integer not null, deletions integer not null,
+        class text not null, class_reason text not null,
+        logical_change_id text not null, pr_number integer,
+        primary key(repository_id, commit_hash));
+      create table file_changes(
+        repository_id text not null, commit_hash text not null,
+        path text not null, old_path text, status text not null,
+        similarity integer, insertions integer, deletions integer, generated integer not null,
+        primary key(repository_id, commit_hash, path));
+      create table file_lineage(
+        repository_id text not null, lineage_id text not null,
+        path text not null, valid_from_commit text not null, valid_to_commit text,
+        primary key(repository_id, lineage_id, path, valid_from_commit));
+      create table hotspot_scores(
+        run_id text not null, lineage_id text not null, path text not null,
+        changes_raw integer not null, changes_decayed real not null,
+        logical_changes integer not null, distinct_contributors integer not null,
+        health_json text not null, impact_json text not null, factors_json text not null,
+        score real not null, rank integer not null, rank_raw integer not null,
+        times_json text not null default '[]',
+        formula_version text not null,
+        primary key(run_id, lineage_id));
+      create table cochange_edges(
+        run_id text not null, a_lineage text not null, b_lineage text not null,
+        support integer not null, count_a integer not null, count_b integer not null,
+        total_changes integer not null, confidence_a_to_b real not null, confidence_b_to_a real not null,
+        lift real not null, jaccard real not null, first_seen text not null, last_seen text not null,
+        static_dependency text not null,
+        edge_id text not null,
+        primary key(run_id, a_lineage, b_lineage));
+      create unique index cochange_edge_id on cochange_edges(run_id, edge_id);
+      create index cochange_support on cochange_edges(run_id, support desc);
+      create table history_exclusions(
+        run_id text not null, commit_hash text not null, reason text not null, rule text not null,
+        primary key(run_id, commit_hash));
+      create table history_contributor_names(
+        repository_id text not null, author_hash text not null, display_name text not null,
+        primary key(repository_id, author_hash));
+      create table history_name_grants(
+        principal text primary key, granted_at text not null);
+      create table history_flags(id integer primary key check (id = 1), v2 integer not null);`),
+    down: (db) => db.exec(`
+      drop table if exists history_flags; drop table if exists history_name_grants; drop table if exists history_contributor_names;
+      drop table if exists history_exclusions;
+      drop index if exists cochange_support; drop index if exists cochange_edge_id; drop table if exists cochange_edges;
+      drop table if exists hotspot_scores;
+      drop table if exists file_lineage; drop table if exists file_changes;
+      drop index if exists history_runs_repo; drop table if exists history_runs;`),
+  },
+  {
+    version: 29, name: "coordinated-campaigns",
+    up: (db) => db.exec(`
+      create table if not exists campaigns(
+        campaign_id text primary key, tenant_id text not null, name text not null,
+        spec_json text not null, spec_hash text not null, transformation_hash text not null,
+        state text not null, version integer not null,
+        created_by text not null, created_at text not null, updated_at text not null);
+      create table if not exists campaign_populations(
+        campaign_id text not null, version integer not null,
+        population_hash text not null, selector_result_json text not null,
+        frozen_at text not null, created_by text not null,
+        primary key(campaign_id, version));
+      create table if not exists campaign_children(
+        campaign_id text not null, repository_id text not null, population_version integer not null,
+        base_commit text not null, task_id text, batch_id text, state text not null,
+        role text not null default 'INDEPENDENT', blocked_by_json text not null default '[]',
+        assessment_state text not null default 'ASSESSED',
+        publication_id text, pr_number integer, pr_state text,
+        validation_json text, updated_at text not null,
+        primary key(campaign_id, repository_id));
+      create table if not exists campaign_batches(
+        campaign_id text not null, batch_id text not null, ordinal integer not null,
+        kind text not null, members_json text not null, depends_on_json text not null,
+        pause_rule_json text not null, state text not null,
+        primary key(campaign_id, batch_id));
+      create table if not exists campaign_compat(
+        campaign_id text not null, case_id text not null,
+        producer_repository text not null, consumer_repository text not null,
+        mode text not null, run_manifest_id text, state text not null, reason text,
+        primary key(campaign_id, case_id));
+      create table if not exists campaign_events(
+        campaign_id text not null, seq integer not null, at text not null, actor text not null,
+        type text not null, repository_id text, payload_json text not null, idempotency_key text,
+        primary key(campaign_id, seq));
+      create table if not exists campaign_reviewers(
+        campaign_id text not null, repository_id text not null, principal text not null,
+        role text not null, source text not null,
+        primary key(campaign_id, repository_id, principal, role));
+      create table if not exists campaign_exceptions(
+        id text primary key, campaign_id text not null, repository_id text not null,
+        scope text not null, rationale text not null, actor text not null, approver text,
+        created_at text not null, expires_at text);`),
+    down: (db) => db.exec(`
+      drop table if exists campaign_exceptions; drop table if exists campaign_reviewers;
+      drop table if exists campaign_events; drop table if exists campaign_compat;
+      drop table if exists campaign_batches; drop table if exists campaign_children;
+      drop table if exists campaign_populations; drop table if exists campaigns;`),
+  },
+  {
+    // F08 follow-on: the parts of a running campaign that are not derivable from the plan alone — the materialised
+    // child candidate, its recorded author and token cost, per-child publication grants bound to the exact
+    // (base, head, diff), per-child approvals, the dry-run record, the joint run manifests and the budget usage.
+    version: 30, name: "campaign-execution",
+    up: (db) => db.exec(`
+      alter table campaign_children add column recipe_json text;
+      alter table campaign_children add column head_hash text;
+      alter table campaign_children add column author text;
+      alter table campaign_children add column tokens_used integer not null default 0;
+      create table if not exists campaign_publication_grants(
+        id text primary key, campaign_id text not null, repository_id text not null, principal text not null,
+        base_hash text not null, head_hash text not null, diff_hash text not null,
+        expires_at text not null, revoked integer not null default 0, created_at text not null);
+      create index if not exists campaign_publication_grants_lookup on campaign_publication_grants(campaign_id, repository_id, principal);
+      create table if not exists campaign_approvals(
+        campaign_id text not null, repository_id text not null, principal text not null, version integer not null,
+        binding_hash text not null, explanation text not null, cluster_id text, created_at text not null,
+        primary key(campaign_id, repository_id, principal));
+      create table if not exists campaign_dry_runs(
+        run_id text primary key, campaign_id text not null, created_by text not null, created_at text not null, result_json text not null);
+      create index if not exists campaign_dry_runs_campaign on campaign_dry_runs(campaign_id, created_at);
+      create table if not exists campaign_joint_runs(
+        run_manifest_id text primary key, campaign_id text not null, case_id text not null, manifest_json text not null);
+      create table if not exists campaign_usage(
+        campaign_id text primary key, wall_ms integer not null default 0, model_tokens integer not null default 0, github_writes integer not null default 0);`),
+    down: (db) => db.exec(`
+      drop table if exists campaign_usage; drop table if exists campaign_joint_runs;
+      drop index if exists campaign_dry_runs_campaign; drop table if exists campaign_dry_runs;
+      drop table if exists campaign_approvals;
+      drop index if exists campaign_publication_grants_lookup; drop table if exists campaign_publication_grants;
+      alter table campaign_children drop column tokens_used;
+      alter table campaign_children drop column author;
+      alter table campaign_children drop column head_hash;
+      alter table campaign_children drop column recipe_json;`),
+  },
+  {
+    // F10: the bounded workflow digital twin. Twins and their versions, the workload/environment
+    // identities a result is bound to, the model artifacts and their full calibration history, the
+    // validation certificates (scope is part of the certificate identity), the paired experiments and
+    // their per-cell evidence, reports, and bounded schedule explorations.
+    version: 31, name: "workflow-twins",
+    up: (db) => db.exec(`
+      create table if not exists twins(
+        twin_id text primary key, workflow_id text not null, name text not null, created_by text not null, created_at text not null);
+      create table if not exists twin_versions(
+        twin_id text not null, version integer not null, twin_hash text not null,
+        revision text not null, snapshot_json text not null,
+        structure_json text not null, structure_hash text not null,
+        baseline_evidence_json text not null,
+        workload_hash text not null, environment_hash text not null, model_spec_hash text not null, oracle_hash text not null,
+        state text not null,
+        primary key(twin_id, version));
+      create table if not exists workload_fixtures(
+        workload_hash text primary key, spec_json text not null, fixture_ref text not null,
+        derived_from_json text, streams_json text not null, created_at text not null);
+      create table if not exists environment_specs(
+        environment_hash text primary key, spec_json text not null, created_at text not null);
+      create table if not exists model_artifacts(
+        model_id text primary key, twin_id text not null, twin_version integer not null,
+        model_spec_hash text not null, adapter_id text not null, adapter_version text not null,
+        parent_model_id text, fit_hash text, parameters_json text not null, state text not null, created_at text not null);
+      create table if not exists calibration_runs(
+        calibration_id text primary key, model_id text not null,
+        training_dataset_ids_json text not null, structure_candidates_json text not null, chosen_structure text not null,
+        fit_metrics_json text not null, policy_id text not null, created_at text not null);
+      create table if not exists validation_certificates(
+        certificate_id text primary key, twin_id text not null, twin_version integer not null, model_id text not null,
+        scope_json text not null, binding_hash text not null,
+        holdout_report_json text not null, intervention_report_json text not null,
+        state text not null, issued_at text not null, issued_by text not null,
+        invalidated_by text, invalidated_at text, invalidation_reason text);
+      create table if not exists twin_experiments(
+        plan_id text primary key, twin_id text not null, twin_version integer not null,
+        intervention_hash text not null, validation_plan_hash text not null, seed_plan_hash text not null,
+        state text not null, generation integer not null, created_at text not null, plan_json text);
+      create table if not exists twin_run_cells(
+        plan_id text not null, cell_id text not null, pair_id text not null, role text not null,
+        run_manifest_id text not null, order_index integer not null, comparable integer not null, incomparable_reason text,
+        primary key(plan_id, cell_id));
+      create table if not exists twin_reports(
+        report_id text primary key, plan_id text, kind text not null,
+        result_class text not null, content_json text not null, certificate_id text, created_at text not null);
+      create table if not exists schedule_explorations(
+        exploration_id text primary key, twin_id text not null, harness_hash text not null, oracle_hash text not null,
+        bounds_json text not null, status text not null, explored integer not null, completed integer not null,
+        schedule_artifact_hash text, created_at text not null, finding_json text);
+      create table if not exists twin_baselines(
+        twin_id text not null, twin_version integer not null, baseline_json text not null, primary key(twin_id, twin_version));
+      create table if not exists prediction_records(
+        prediction_id text primary key, parameter text not null, value real not null, load_multiplier real not null,
+        interval_json text not null, baseline_value real not null, predicted_value real not null,
+        recorded_at_ms integer not null, hash text not null);
+      create index if not exists twin_versions_workflow on twin_versions(twin_id, state);
+      create index if not exists model_artifacts_twin on model_artifacts(twin_id, twin_version, created_at);
+      create index if not exists validation_certificates_twin on validation_certificates(twin_id, twin_version, state);
+      create index if not exists twin_run_cells_plan on twin_run_cells(plan_id, role);`),
+    down: (db) => db.exec(`
+      drop table if exists prediction_records;
+      drop table if exists twin_baselines;
+      drop table if exists schedule_explorations;
+      drop table if exists twin_reports;
+      drop table if exists twin_run_cells;
+      drop table if exists twin_experiments;
+      drop table if exists validation_certificates;
+      drop table if exists calibration_runs;
+      drop table if exists model_artifacts;
+      drop table if exists environment_specs;
+      drop table if exists workload_fixtures;
+      drop table if exists twin_versions;
+      drop table if exists twins;`),
+  },
+  {
+    // F07: task → candidate → validated patch → CIE-owned branch → draft PR. The task row is a projection of an
+    // append-only event log (replay reproduces it exactly); the candidate's identity is the binding hash, which is
+    // what grants, approvals, verdicts and the GitHub receipt all quote. Nothing in this migration writes to a
+    // user's working tree: the branch tables describe a CIE-owned clone kept outside the repository.
+    version: 32, name: "task-execution",
+    up: (db) => db.exec(`
+      create table if not exists tasks(
+        task_id text primary key, repository_id text not null, revision text not null,
+        base_ref text not null, base_commit text not null, base_content_hash text not null,
+        spec_json text not null, spec_hash text not null,
+        state text not null, version integer not null default 0, generation integer not null default 0,
+        confirmed_at text, confirmed_by text, confirmed_spec_hash text,
+        created_by text not null, created_at text not null, updated_at text not null);
+      create index if not exists tasks_repo on tasks(repository_id, state, updated_at);
+      create table if not exists task_events(
+        task_id text not null, seq integer not null, at text not null, actor text not null,
+        type text not null, payload_json text not null, generation integer not null, idempotency_key text,
+        primary key(task_id, seq));
+      create unique index if not exists task_events_idem on task_events(task_id, idempotency_key) where idempotency_key is not null;
+      create table if not exists task_plans(
+        task_id text not null, plan_version integer not null, plan_json text not null, plan_hash text not null,
+        unknowns_json text not null, obligations_json text not null, created_by text not null, created_at text not null,
+        primary key(task_id, plan_version));
+      create table if not exists task_obligations(
+        task_id text not null, obligation_id text not null, question text not null, state text not null,
+        result_json text, steps integer not null default 0, updated_at text not null,
+        primary key(task_id, obligation_id));
+      create table if not exists task_candidates(
+        task_id text not null, candidate_index integer not null, proposal_id text not null,
+        binding_json text not null, binding_hash text not null, origin text not null,
+        oracle_state text not null, state text not null, edit_operations_json text not null,
+        changed_files_json text not null, plan_version integer not null, created_by text not null, created_at text not null,
+        primary key(task_id, candidate_index));
+      create index if not exists task_candidates_binding on task_candidates(binding_hash);
+      create table if not exists oracle_reviews(
+        id text primary key, task_id text not null, candidate_index integer not null,
+        changes_json text not null, decision text not null, reviewer text not null, rationale text not null, created_at text not null);
+      create index if not exists oracle_reviews_candidate on oracle_reviews(task_id, candidate_index);
+      create table if not exists task_runs(
+        task_id text not null, candidate_index integer not null, role text not null,
+        run_manifest_id text not null, status text not null, outcomes_artifact_hash text not null,
+        isolation text not null, omissions_json text not null, started_at text not null, finished_at text not null,
+        primary key(task_id, run_manifest_id));
+      create index if not exists task_runs_candidate on task_runs(task_id, candidate_index);
+      create table if not exists task_verdicts(
+        id text primary key, task_id text not null, candidate_index integer not null, binding_hash text not null,
+        state text not null, oracle_state text not null, plan_hash text not null, verdict_json text not null, created_at text not null);
+      create index if not exists task_verdicts_binding on task_verdicts(binding_hash);
+      create table if not exists task_approvals(
+        task_id text not null, candidate_index integer not null, principal text not null, version integer not null,
+        binding_hash text not null, explanation text not null, created_at text not null,
+        primary key(task_id, candidate_index, principal));
+      create table if not exists task_grants(
+        id text primary key, task_id text not null, principal text not null, repository text not null,
+        base_branch text not null, branch text not null, base_hash text not null, head_hash text not null,
+        diff_hash text not null, binding_hash text not null, expires_at text not null, revoked integer not null default 0,
+        created_at text not null);
+      create index if not exists task_grants_lookup on task_grants(binding_hash, repository);
+      create table if not exists branch_publications(
+        id text primary key, task_id text not null, repository text not null, branch text not null,
+        base_hash text not null, head_hash text not null, push_state text not null,
+        pr_number integer, pr_url text, receipt_draft integer, idempotency_key text not null unique, updated_at text not null);
+      create index if not exists branch_publications_task on branch_publications(task_id, updated_at);
+      create table if not exists task_isolations(
+        profile_id text primary key, class text not null, audited integer not null, properties_json text not null,
+        omissions_json text not null, checked_at text not null);`),
+    down: (db) => db.exec(`
+      drop table if exists task_isolations;
+      drop index if exists branch_publications_task; drop table if exists branch_publications;
+      drop index if exists task_grants_lookup; drop table if exists task_grants;
+      drop table if exists task_approvals;
+      drop index if exists task_verdicts_binding; drop table if exists task_verdicts;
+      drop index if exists task_runs_candidate; drop table if exists task_runs;
+      drop index if exists oracle_reviews_candidate; drop table if exists oracle_reviews;
+      drop index if exists task_candidates_binding; drop table if exists task_candidates;
+      drop table if exists task_obligations;
+      drop table if exists task_plans;
+      drop index if exists task_events_idem; drop table if exists task_events;
+      drop index if exists tasks_repo; drop table if exists tasks;`),
   },
 ];
 export function currentVersion(db: DatabaseSync): number {

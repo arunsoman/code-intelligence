@@ -389,3 +389,14 @@ header { flex-wrap: wrap; }
 .overlay-legend { font-size: 11px; }
 .test-low, .test-covered, .test-failing, .runtime-observed, .runtime-errors { font-weight: 650; }
 .test-low { color: var(--inference); } .test-covered { color: var(--ok); } .test-failing, .runtime-errors { color: var(--warn); } .runtime-observed { color: var(--accent); }
+
+/* F06 — historical hotspots and change coupling panel */
+.hotspot-modal { max-width: min(1100px, 96vw); }
+.hotspot-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }
+.hotspot-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+.hotspot-table th, .hotspot-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.hotspot-table tbody tr[role="button"] { cursor: pointer; }
+.hotspot-table tbody tr[role="button"]:hover, .hotspot-table tbody tr[role="button"]:focus { background: color-mix(in srgb, var(--line) 40%, transparent); outline: none; }
+.hotspot-table th button.link { font: inherit; }
+/* Missing data is hatched and labelled, never silently scored as if it were measured. */
+.hatch { background-image: repeating-linear-gradient(45deg, color-mix(in srgb, var(--line) 70%, transparent) 0 3px, transparent 3px 6px); border-radius: 3px; padding: 0 3px; }

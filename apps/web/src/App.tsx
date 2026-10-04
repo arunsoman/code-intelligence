@@ -14,13 +14,18 @@ import { VisualsGallery, type CatalogEntry } from "./VisualsGallery.tsx";
 import { FolderPicker } from "./FolderPicker.tsx";
 import { DefectPanel } from "./DefectPanel.tsx";
 import { PrPanel } from "./PrPanel.tsx";
+import { ProfilePanel } from "./ProfilePanel.tsx";
+import { TaskPanel } from "./TaskPanel.tsx";
+import { CampaignPanel } from "./CampaignPanel.tsx";
 import { SearchPanel } from "./SearchPanel.tsx";
+import { HotspotPanel } from "./HotspotPanel.tsx";
 import { InsightsPanel } from "./InsightsPanel.tsx";
 import { InvestigationPanel } from "./InvestigationPanel.tsx";
 import { overlayMarks } from "./mapoverlays.ts";
 import { RuntimeReplay, type ReplayFrame } from "./RuntimeReplay.tsx";
 import { EpistemicSummary } from "./EpistemicSummary.tsx";
 import { arrange } from "./arrange.ts";
+import { semanticLevelsApply } from "./detail.ts";
 import { DEFAULT_LEVEL, LEVELS, MAX_LEVEL, basePositions, cellKey, effectiveView, render, selectedAggregates, type RenderEdge, type RenderNode } from "./graph.ts";
 
 interface ExceptionRow { id: string; errorClass: string; message: string; trace: string; source: string; count: number; lastSeen: string }
@@ -75,7 +80,11 @@ export function App() {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [defectsOpen, setDefectsOpen] = useState(false);
   const [prOpen, setPrOpen] = useState(false);
+  const [profilesOpen, setProfilesOpen] = useState(false);
+  const [tasksOpen, setTasksOpen] = useState(false);
+  const [campaignsOpen, setCampaignsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [hotspotsOpen, setHotspotsOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
   const [chatSeed, setChatSeed] = useState<{ text: string; n: number } | null>(null);
   /** "Ask about this finding" (UX-57): close the drawer, fill the composer, put the focus there. */
@@ -423,7 +432,7 @@ export function App() {
     }
     say("assistant", mode === "pin" ? "Pinned: it will always be shown." : mode === "boost" ? "Boosted: it ranks higher." : mode === "demote" ? "Demoted: it ranks lower." : "Reset to its computed relevance.");
   };
-  const levelsApply = !!view && view.nodes.some((n) => !n.pos) && !view.terrain && !(view.matrix && drawMode === "matrix");
+  const levelsApply = !!view && semanticLevelsApply(view);
   const stepLevel = (d: number) => { setLevel((l) => Math.max(0, Math.min(MAX_LEVEL, l + d))); setFitTick((t) => t + 1); };
   const dm = (m: string) => (m === "FACT" ? "fact" : m === "INFERENCE" ? "inference" : m === "FOG" ? "fog" : "hyp");
   const providerShort = info?.provider ?? "…";
@@ -449,7 +458,11 @@ export function App() {
       <header>
         {defectsOpen && revision && <DefectPanel revision={revision} onClose={() => setDefectsOpen(false)} />}
         {prOpen && repoPath && <PrPanel repoPath={repoPath} onClose={() => setPrOpen(false)} />}
+        {profilesOpen && <ProfilePanel revision={revision} onClose={() => setProfilesOpen(false)} />}
+        {tasksOpen && <TaskPanel revision={revision} onClose={() => setTasksOpen(false)} />}
+        {campaignsOpen && <CampaignPanel onClose={() => setCampaignsOpen(false)} />}
         {searchOpen && repoPath && <SearchPanel repoPath={repoPath} revision={revision} onClose={() => setSearchOpen(false)} />}
+        {hotspotsOpen && repoPath && <HotspotPanel repoPath={repoPath} revision={revision} onClose={() => setHotspotsOpen(false)} />}
         {insightsOpen && revision && <InsightsPanel revision={revision} view={view} onClose={() => setInsightsOpen(false)} onAsk={askFromInsights} />}
         {investigationsOpen && revision && <InvestigationPanel key={`${revision}:${ws.id ?? "repo"}`} revision={revision} workspaceId={ws.id ?? `repo:${info?.revision?.repoRoot ?? repoPath}`} initialQuestion={view?.question ?? ""} entityRefs={[...new Set(selection.flatMap((id) => nodeById.get(id)?.entityRefs ?? []))]} onClose={() => setInvestigationsOpen(false)} />}
         <h1>Code Intelligence</h1>
@@ -462,6 +475,10 @@ export function App() {
         <button className="secondary small" onClick={() => setGalleryOpen(true)}>Visuals</button>
         <button className="secondary small" disabled={!revision} onClick={() => setDefectsOpen(true)}>Defects</button>
         <button className="secondary small" onClick={() => setPrOpen(true)} title="Analyse a pull request: changed-code findings, the quality gate, and publishing its status to GitHub">Pull requests</button>
+        <button className="secondary small" onClick={() => setHotspotsOpen(true)} title="Historical hotspots and change coupling: ranked from the repository's own git history, rename-aware, with the excluded commits listed and every rank explained down to the commits">Hotspots</button>
+        <button className="secondary small" onClick={() => setProfilesOpen(true)} title="Import a profile (V8 .cpuprofile or folded stacks), read hotspots per sample kind, correlate it to a recorded trace window, and compare under the error-population gate">Profiles</button>
+        <button className="secondary small" onClick={() => setTasksOpen(true)} title="F07: turn a defect report into a candidate patch, validate it against the original oracle in an isolated run, get a second-person approval, and publish one draft pull request on a CIE-owned branch. Nothing here merges.">Tasks</button>
+        <button className="secondary small" onClick={() => setCampaignsOpen(true)} title="Coordinated multi-repository changes: freeze a versioned population, plan a dependency-ordered canary rollout, review each child independently, run joint compatibility checks, and publish per-child draft PRs">Campaigns</button>
         <button className="secondary small" disabled={!revision} onClick={() => setInsightsOpen(true)}>Insights</button>
         <button className="secondary small" disabled={!revision} onClick={() => setInvestigationsOpen(true)}>Investigations</button>
         <button className="link" onClick={openAudit}>Audit log</button>
@@ -602,7 +619,7 @@ export function App() {
               onPick={(id) => { const vn = view.nodes.find((n) => n.id === id); if (vn) { setSelection([id]); void openNodeDrawer(vn); } }}
               onToggle={(id) => setSelection((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]))} />
           ) : (
-          <Canvas rendered={rendered} replayNodes={replayNodes} overlayNodes={overlayNodes} viewKey={viewKey} level={level} fitTick={fitTick} semanticLevels={levelsApply} selected={selectedRender} boxSelect={boxSelect} caption={view?.caption ?? ""}
+          <Canvas rendered={rendered} replayNodes={replayNodes} overlayNodes={overlayNodes} viewKey={viewKey} level={level} fitTick={fitTick} semanticLevels={levelsApply} formId={view?.formId} selected={selectedRender} boxSelect={boxSelect} caption={view?.caption ?? ""}
             onSelectNodes={(ids) => setSelection([...new Set(rendered.nodes.filter((n) => ids.includes(n.id)).flatMap((n) => n.members))])}
             onTapNode={inspectNode} onTapEdge={inspectEdge} onExpand={expand} onZoomLevel={setLevel}
             onToggleNode={(n) => setSelection((sel) => (n.members.every((m) => sel.includes(m)) ? sel.filter((x) => !n.members.includes(x)) : [...new Set([...sel, ...n.members])]))}

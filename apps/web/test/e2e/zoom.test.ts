@@ -95,7 +95,7 @@ test("a form with no levels keeps one drawing and stops drawing labels that are 
     await click(b, "Index");
     await b.waitFor(() => `/rev \\S+ · \\d+ files/.test(document.querySelector('header').innerText)`, 60_000);
     await click(b, "Visuals"); await wait(500);
-    await b.eval(`(() => { const card = [...document.querySelectorAll('[role=dialog] li, [role=dialog] article, [role=dialog] section')].filter((x) => x.innerText.includes('Ownership') && x.querySelector('button')).sort((p, q) => p.innerText.length - q.innerText.length)[0]; [...card.querySelectorAll('button')].find((x) => x.textContent.trim() === 'Show').click(); })()`);
+    await b.eval(`(() => { const card = [...document.querySelectorAll('[role=dialog] li, [role=dialog] article, [role=dialog] section')].filter((x) => x.innerText.includes('Data lineage') && x.querySelector('button')).sort((p, q) => p.innerText.length - q.innerText.length)[0]; [...card.querySelectorAll('button')].find((x) => x.textContent.trim() === 'Show').click(); })()`);
     await b.waitFor(() => `document.querySelectorAll('.elements li').length > 0`, 30_000); await wait(1500);
     assert.equal(lvl((await probe(b)).level), -1, "this form has no level stepper");
     assert.equal(await b.eval(`document.querySelector('.canvas')._cyreg.cy.nodes().filter((n) => !n.isParent())[0].pstyle('min-zoomed-font-size').value`), HARD_MIN, "labels below the hard minimum are not drawn");

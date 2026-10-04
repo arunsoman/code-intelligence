@@ -23,8 +23,8 @@ function audited(svc: any, v: ViewSpec, claims: Claim[]) {
   assert.ok(v.nodes.length > 0 && v.caption && v.formReason);
 }
 
-test("all sixteen forms are in the catalogue, each with a builder or a built-in route", () => {
-  assert.equal(new Set(VISUALS.map((v) => v.code)).size, 16);
+test("all seventeen forms are in the catalogue, each with a builder or a built-in route", () => {
+  assert.equal(new Set(VISUALS.map((v) => v.code)).size, 17);
 });
 
 test("V4 transaction journey: lanes by module, steps in call order, failure exits, async hand-offs as hypotheses", async () => {
@@ -289,12 +289,13 @@ test("the gallery reports what each visual needs and whether it is available", a
   const { svc, worker, revision } = await setup(undefined, demoRepo());
   const r = svc.visuals(ctx(), { revision });
   assert.ok(r.ok);
-  assert.equal(r.value.length, 16);
+  assert.equal(r.value.length, 17);
   const by = (c: string) => r.value.find((x) => x.code === c)!;
   assert.ok(by("V1").available && by("V4").available && by("V16").available);
   assert.equal(by("V6").available, false); assert.match(by("V6").reason!, /two indexed revisions/);
   assert.equal(by("V14").available, false); assert.match(by("V14").reason!, /concept cards/);
   assert.equal(by("V9").available, false); assert.match(by("V9").reason!, /reported exceptions/);
+  assert.equal(by("V17").available, false); assert.match(by("V17").reason!, /imported profile/);
   assert.ok(by("V12").available && by("V13").available, "test results and git exist in the demo repo");
   worker.close();
 });

@@ -1,7 +1,8 @@
 // C31: backup and restore, reference-counted garbage collection, and deletion that reaches everything derived.
+import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdtempSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { currentVersion, MIGRATIONS } from "./migrations.ts";
 import type { Store } from "./store.ts";
@@ -91,6 +92,11 @@ export function deleteRepository(store: Store, repoRoot: string, actor = "local-
   const claims = revIds.reduce((a, id) => a + n(store, "select count(*) n from claims where revision = ?", id), 0);
   const workspaces = revIds.reduce((a, id) => a + n(store, "select count(*) n from workspaces where revision = ?", id), 0);
   store.tx(() => {
+    // F05: this repository's trace sources anchor profile links; gather them here, before the envelopes go.
+    const traceSources = new Set(revIds.flatMap((id) => q(store, "select distinct source from rt_envelopes where revision = ?", id).map((r) => String(r.source))));
+    const linkedArtifacts = new Set(traceSources.size
+      ? q(store, `select distinct artifact_hash from profile_trace_links where trace_source in (${[...traceSources].map(() => "?").join(",")})`, ...traceSources).map((r) => String(r.artifact_hash))
+      : []);
     // Claim history, canonical identities, event-sourced workspaces, annotations and the developer-context stream are all derived from the code.
     const entityIds = new Set(revIds.flatMap((id) => q(store, "select entity_id from entities where revision = ?", id).map((r) => r.entity_id as string)));
     for (const row of q(store, "select session, seq, payload from ctx_events where payload is not null")) {
@@ -118,6 +124,19 @@ export function deleteRepository(store: Store, repoRoot: string, actor = "local-
       store.db.prepare("delete from jobs where json like ?").run(`%${id}%`);
       dropRevision(store, id);
     }
+    // F07: a task, its event log, plans, obligations, candidates, verdicts, approvals, grants and publication rows all
+    // belong to this repository's revisions. The candidate rows quote the binding, which quotes a revision, so the
+    // task rows go with it; a branch CIE pushed in its own clone is left alone (deleting a repository never touches a
+    // remote), and that is said in the report below.
+    if (revIds.length) {
+      const tasks = q(store, `select task_id from tasks where revision in (${revIds.map(() => "?").join(",")})`, ...revIds).map((r) => String(r.task_id));
+      for (const t of tasks) {
+        for (const table of ["task_events", "task_plans", "task_obligations", "task_candidates", "oracle_reviews", "task_runs", "task_verdicts", "task_approvals", "task_grants", "branch_publications"]) {
+          store.db.prepare(`delete from ${table} where task_id = ?`).run(t);
+        }
+        store.db.prepare("delete from tasks where task_id = ?").run(t);
+      }
+    }
     for (const t of ["concept_versions", "overrides", "repo_policy", "test_runs"]) store.db.prepare(`delete from ${t} where repo_root = ?`).run(repoRoot);
     // F02: the pull-request analyses, their findings, decisions, publications, waivers and policy assignment are all
     // derived from this repository's sources; nothing about it outlives the delete. Baselines are content-cache rows:
@@ -139,11 +158,36 @@ export function deleteRepository(store: Store, repoRoot: string, actor = "local-
     // Investigations over it: their hypotheses, observations, plans and payloads are derived from it. What remains is a tombstone
     // (that one existed, and when it ended), never content.
     for (const r of store.db.prepare("select id, json from c22_investigations where json like ? and deleted = 0").all(`%${repoRoot.replace(/[%_]/g, "")}%`) as { id: string; json: string }[]) purgeInvestigation(store, r.id, JSON.parse(r.json).workspaceId);
+    // F05: every table keyed by an artifact hash is derived from the collected file; artifacts whose only trace links
+    // belonged to this repository go with it (the remaining ones are content-addressed bytes, redacted at read time).
+    for (const h of linkedArtifacts) {
+      for (const t of ["profile_artifacts", "profile_sample_types", "profile_function_agg", "profile_tree"]) store.db.prepare(`delete from ${t} where artifact_hash = ?`).run(h);
+      // populations carry no artifact column; their chunk ids name the artifact they were built from
+      store.db.prepare("delete from profile_populations where chunk_ids_json like ?").run(`%${h}%`);
+      store.db.prepare("delete from profile_mappings where artifact_hash = ?").run(h);
+      store.db.prepare("delete from profile_labels where artifact_hash = ?").run(h);
+      store.db.prepare("delete from profile_trace_links where artifact_hash = ?").run(h);
+    }
+    if (traceSources.size) for (const s of traceSources) store.db.prepare("delete from profile_trace_links where trace_source = ?").run(s);
+    if (revIds.length) store.db.prepare(`delete from profile_mappings where revision is not null and revision in (${[...revIds].map(() => "?").join(",")})`).run(...revIds);
     // Receipts of replayed commands hold whole snapshots; they are derived data too.
     store.db.prepare("delete from idempotency where receipt like ?").run(`%${repoRoot.replace(/[%_]/g, "")}%`);
     for (const id of revIds) store.db.prepare("delete from idempotency where receipt like ?").run(`%${id}%`);
     // Stack traces name this repository's files and functions, so they are derived from it too.
     store.db.prepare("delete from exceptions where trace like ?").run(`%${repoRoot.replace(/[%_]/g, "")}%`);
+    // F06: the analysed history, its lineages, scores, co-change edges, exclusions and contributor hashes are
+    // derived from this repository and are removed with it. The engine names a repository by its registry id
+    // when it has one, and by a hash of its resolved path otherwise; both are matched here.
+    const f06Ids = new Set<string>();
+    const known = q(store, "select repository_id from repositories where root = ?", repoRoot)[0];
+    if (known) f06Ids.add(String(known.repository_id));
+    f06Ids.add("repo:" + createHash("sha256").update("path:" + resolve(repoRoot)).digest("hex").slice(0, 16));
+    for (const id of f06Ids) {
+      for (const r of q(store, "select run_id from history_runs where repository_id = ?", id)) {
+        for (const t of ["hotspot_scores", "cochange_edges", "history_exclusions"]) store.db.prepare(`delete from ${t} where run_id = ?`).run(r.run_id);
+      }
+      for (const t of ["history_runs", "commit_events", "file_changes", "file_lineage", "history_contributor_names"]) store.db.prepare(`delete from ${t} where repository_id = ?`).run(id);
+    }
   });
   const redacted = store.redactAudit([repoRoot, ...revIds]);
   store.audit(actor, "repo.delete", "(deleted)", { revisions: revIds.length, claims, workspaces, auditEventsRedacted: redacted });
