@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ResolvedEvidence } from "@cie/schema";
 import type { InvestigationDetails, InvestigationSnapshot } from "../../../packages/core/src/c22/types.ts";
 import { call } from "./api.ts";
+import { Loading } from "./Skeleton.tsx";
 import { comparison, discriminates } from "./investigation.ts";
 
 const read = <T,>(op: string, body: unknown) => call<T>("C22", op, body, undefined, "v2");
@@ -130,7 +131,7 @@ export function InvestigationPanel({ revision, workspaceId, initialQuestion, ent
     {error && <p role="alert">{error}</p>}
     {pollError && <p role="alert">{pollError}</p>}
     {notice && <p role="status">{notice}</p>}
-    {id && !data && !error && !pollError && <p role="status">Loading investigation…</p>}
+    <Loading pending={!!id && !data && !error && !pollError} label="Loading investigation" rows={3} lines={2} />
     {snapshot && data && <>
       <h3>{snapshot.goal.question}</h3>
       <p className="investigation-status" role="status">{words(snapshot.execution)} · {words(snapshot.disposition)} · {snapshot.closure === "FINALIZED" ? "finalized" : "open"} · version {snapshot.version}</p>
@@ -172,7 +173,7 @@ export function InvestigationPanel({ revision, workspaceId, initialQuestion, ent
       <details><summary>Check progress ({completed}/{data.steps.length})</summary><ul>{data.steps.map((s) => <li key={s.id}>{data.checks.find((c) => c.id === s.checkId)?.description ?? (s.toolId === "internal.seed" ? "Seed competing hypotheses" : s.toolId === "internal.assess" ? "Assess evidence" : s.toolId)} — {words(s.state)}{s.unavailableReason ? `: ${s.unavailableReason}` : ""}</li>)}</ul></details>
       <details><summary>Coverage and gaps ({snapshot.coverage.missing.length})</summary><p>{words(snapshot.coverage.completeness)} coverage. A supported candidate does not prove there are no other causes.</p><ul>{snapshot.coverage.missing.map((g) => <li key={g.id}>{g.description} — {words(g.reason)}</li>)}</ul></details>
     </>}
-    {evidenceLoading && <p role="status">Loading evidence…</p>}
+    <Loading pending={evidenceLoading} label="Loading evidence" rows={4} lines={1} />
     {evidenceError && <p role="alert">{evidenceError}</p>}
     {evidence && <section className="evidence" aria-label="Investigation evidence"><h3>{evidence.file}:{evidence.startLine}</h3><p>{evidence.class} · {evidence.state}</p><pre tabIndex={0}>{evidence.snippet || "Source text unavailable."}</pre></section>}
   </section></div>;

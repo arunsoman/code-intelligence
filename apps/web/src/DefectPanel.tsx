@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DetectorFinding, JobView, ResolvedEvidence } from "@cie/schema";
 import { call } from "./api.ts";
+import { Loading } from "./Skeleton.tsx";
 import { GLOSSARY, GROUP_H, KIND_INFO, KIND_LABEL, LEVEL_INFO, ROW, RULE_HINT, SEVERITIES, STATUS_INFO, type Row, type TriageStatus,
   filterFindings, flatten, groupByFile, groupByFile as groupsOf, locationOf, offsetOf, relative, rowLabel, sevClass, severityCounts, statusOf, truncateMiddle, windowOf } from "./defect-list.ts";
 
@@ -339,7 +340,7 @@ export function DefectPanel({ revision, onClose }: { revision: string; onClose: 
               tabIndex={0}
               onScroll={(e) => { setScrollTop((e.target as HTMLElement).scrollTop); savedScroll.current = (e.target as HTMLElement).scrollTop; }}
               onKeyDown={(e) => { if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); step(1); } if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); step(-1); } }}>
-              {loading && <div className="d-empty">Loading findings…</div>}
+              <Loading pending={loading} label="Loading findings" rows={5} lines={1} />
               {!busy && !loading && !findings.length && <div className="d-empty">No candidates are recorded for this revision. This does not establish that the code is race-free, deadlock-free or optimal.</div>}
               {!loading && findings.length > 0 && !ordered.length && <div className="d-empty">No findings match the current search/filters. <button className="link" onClick={() => { setSearch(""); setSeverities(new Set()); setKindFilter(""); setStatusFilter("ALL"); }}>Reset filters</button></div>}
               {!loading && ordered.length > 0 && <div style={{ height: offsetOf(rows, rows.length), position: "relative" }}>

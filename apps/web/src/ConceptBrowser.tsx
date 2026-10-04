@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Claim, ConceptCard, ConceptStore, JobView, VerdictKind } from "@cie/schema";
 import { call } from "./api.ts";
 import { ClaimCard } from "./ClaimCard.tsx";
+import { Loading } from "./Skeleton.tsx";
 import { VERSIONING_HELP, conceptExtractions, versionInfos } from "./concept-status.ts";
 
 interface Props { revision?: string; jobs?: JobView[]; onShowJobs?: () => void; onClose: () => void; onAsk: (card: ConceptCard) => void; onVerdict: (claim: Claim, v: VerdictKind, text: string) => Promise<string | null> }
@@ -42,6 +43,7 @@ export function ConceptBrowser({ revision, jobs = [], onShowJobs, onClose, onAsk
           </div>
         )}
         {store && store.versions.length === 0 && <p className="muted">No cards yet. Use “Extract concepts” first.</p>}
+        <Loading pending={store === null && !error} label="Loading concept cards" rows={4} lines={2} />
         {store && store.versions.length > 0 && (
           <>
             <div className="row wrap">

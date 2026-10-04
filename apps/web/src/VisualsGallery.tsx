@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { call } from "./api.ts";
+import { Loading } from "./Skeleton.tsx";
 
 export interface CatalogEntry { code: string; formId: string; name: string; blurb: string; example: string; needs: string[]; available: boolean; reason?: string }
 interface Props { revision?: string; onClose: () => void; onShow: (entry: CatalogEntry, question: string) => void }
@@ -15,6 +16,7 @@ export function VisualsGallery({ revision, onClose, onShow }: Props) {
       <div className="modal wide tall" role="dialog" aria-modal="true" aria-labelledby="gal-title" tabIndex={-1} onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}>
         <h2 id="gal-title">Visuals <span className="muted small">sixteen ways to see the code; the question you ask picks one, or choose here</span></h2>
         {error && <div className="banner error" role="alert">{error}</div>}
+        <Loading pending={items === null && !error} label="Loading the visuals catalogue" rows={3} lines={2} />
         <ul className="gallery" tabIndex={0} aria-label="Visuals">
           {(items ?? []).map((it) => {
             const q = text[it.code] ?? it.example;

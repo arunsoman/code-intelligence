@@ -193,6 +193,15 @@ ul.gallery li { border: 1px solid var(--line); border-radius: 8px; padding: 10px
 .bar.indeterminate > span { width: 35%; animation: slide 1.4s ease-in-out infinite; }
 @keyframes slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
 @media (prefers-reduced-motion: reduce) { .bar.indeterminate > span { animation: none; width: 100%; opacity: .5; } .bar > span { transition: none; } }
+/* Skeletons: a named busy region with still bars for reduced motion. The shimmer is decoration only. */
+.skeleton { display: flex; flex-direction: column; gap: 8px; padding: 10px 2px; }
+.skel-row { display: flex; gap: 8px; }
+.skel-bar { flex: 1; height: 14px; border-radius: 6px; background: linear-gradient(90deg, color-mix(in srgb, var(--line) 75%, var(--panel)) 25%, color-mix(in srgb, var(--line) 30%, var(--panel)) 37%, color-mix(in srgb, var(--line) 75%, var(--panel)) 63%); background-size: 400% 100%; animation: cie-shimmer 1.4s ease infinite; }
+.skel-row > .skel-bar:nth-child(2) { flex: .7; } .skel-row > .skel-bar:nth-child(3) { flex: .45; }
+@keyframes cie-shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
+.canvas-skeleton { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; gap: 16px; padding: 6% 10%; }
+.canvas-skeleton .skel-bar { height: 26px; }
+@media (prefers-reduced-motion: reduce) { .skel-bar { animation: none; } }
 /* Source-linked defect review; browser controls only analysis, its triage state and read-only evidence.
    Fixed-height dialog with independently scrolling panes: header/toolbar/footer fixed, list and detail scroll
    (whole-dialog scroll is replaced; UX-08/13/14/17/18). Severity colours come from the audited palette and are

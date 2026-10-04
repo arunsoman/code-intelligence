@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import type { JobView, ResolvedEvidence, ViewSpec } from "@cie/schema";
 import { call } from "./api.ts";
 import { buttonFeedback } from "./button.ts";
+import { Loading } from "./Skeleton.tsx";
 import "./team.css";
 import { cumulative, plural, relative, truncateMiddle, windowByOffsets, windowOf } from "./defect-list.ts";
 
@@ -30,7 +31,7 @@ function useCall<T>() {
 }
 const Status = ({ error, busy, warnings }: { error: string | null; busy: boolean; warnings?: string[] }) => (
   <div aria-live="polite">
-    {busy && <p role="status" className="muted">Working…</p>}
+    <Loading pending={busy} label="Loading this tab" rows={3} lines={2} />
     {error && <p role="alert" className="warn-text">{error}</p>}
     {(warnings ?? []).map((w, i) => <p key={i} className="muted small">{w}</p>)}
   </div>

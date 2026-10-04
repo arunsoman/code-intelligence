@@ -4,6 +4,8 @@ import { call } from "./api.ts";
 import { buttonFeedback } from "./button.ts";
 import { Canvas } from "./Canvas.tsx";
 import { ChatPanel, type Message } from "./ChatPanel.tsx";
+import { CanvasSkeleton, Loading } from "./Skeleton.tsx";
+import { COMPOSING_CAPTION, EMPTY_NO_INDEX, canvasPhase, emptyStageCopy } from "./loading.ts";
 import { ClaimCard } from "./ClaimCard.tsx";
 import { ConceptBrowser } from "./ConceptBrowser.tsx";
 import { Outline } from "./Outline.tsx";
@@ -442,6 +444,9 @@ export function App() {
   const stepLevel = (d: number) => { setLevel((l) => Math.max(0, Math.min(MAX_LEVEL, l + d))); setFitTick((t) => t + 1); };
   const dm = (m: string) => (m === "FACT" ? "fact" : m === "INFERENCE" ? "inference" : m === "FOG" ? "fog" : "hyp");
   const providerShort = info?.provider ?? "…";
+  const pending = !!busy || jobActive;
+  const phase = canvasPhase({ hasView: !!view, pending });
+  const indexed = !!info?.revision;
 
   return (
     <div className="app">
@@ -544,7 +549,7 @@ export function App() {
 
         <section>
           <h2>Elements {view && <small>({selection.length} selected)</small>}</h2>
-          {!eff || eff.view.nodes.length === 0 ? <p className="muted">Nothing shown yet.</p> : (
+          {phase === "composing" && (!eff || eff.view.nodes.length === 0) ? <Loading pending label="Composing the element list" rows={4} lines={1} /> : !eff || eff.view.nodes.length === 0 ? <p className="muted">Nothing shown yet.</p> : (
             <ul className="elements" tabIndex={0} aria-label="Elements in this view">
               {eff.view.nodes.map((n) => (
                 <li key={n.id}>
@@ -588,7 +593,7 @@ export function App() {
           <div className="banner warn" role="alert">Source changed since this was saved ({stale.files.join(", ")}). {stale.evidence} evidence span(s) may no longer match — treat affected claims as stale.</div>
         )}
         <div className="caption">
-          {view ? view.caption : "This map is empty on purpose. Index a repository, then tell me what you're trying to understand."}
+          {view ? view.caption : phase === "composing" ? COMPOSING_CAPTION : indexed ? "" : EMPTY_NO_INDEX}
           {view?.formReason && <div className="reason muted small">{view.formReason}</div>}
           {view?.route && view.route.source !== "chosen" && (
             <div className={`readas small ${view.route.confidence}`} role="group" aria-label="How your question was read">
@@ -631,7 +636,7 @@ export function App() {
           </div>
         )}
         {view?.consequences && <Consequences items={view.consequences} onOpen={(id) => void openConsequence(id)} />}
-        <div className="stage">
+        <div className="stage" aria-busy={phase === "composing" ? "true" : undefined}>
           {view?.matrix && drawMode === "matrix" ? (
             <MatrixView matrix={eff!.view.matrix!} stale={eff!.stale} selected={new Set(cellSel)} onPick={(c, r, k, add) => void inspectCell(c, r, k, add)} />
           ) : view?.terrain ? (
@@ -656,7 +661,7 @@ export function App() {
               </span>}
             </div>
           )}
-          {!view && <div className="empty">Ask a question to compose a map.</div>}
+          {!view && (phase === "composing" ? <CanvasSkeleton label={COMPOSING_CAPTION} /> : <div className="empty">{emptyStageCopy(indexed)}</div>)}
         </div>
         <footer>
           {eff && <EpistemicSummary
