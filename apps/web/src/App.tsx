@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiResult, AuditEvent, JobView, ChangesSince, Claim, ConceptCard, ConverseResult, EditorContext, ExplainResult, MapOverlays, MatrixAxis, MatrixCell, ResolvedEvidence, RevisionInfo, SavedState, StatusInfo, VerdictKind, ViewNode, ViewSpec, WorkspaceOpen } from "@cie/schema";
 import { call } from "./api.ts";
+import { buttonFeedback } from "./button.ts";
 import { Canvas } from "./Canvas.tsx";
 import { ChatPanel, type Message } from "./ChatPanel.tsx";
 import { ClaimCard } from "./ClaimCard.tsx";
@@ -198,6 +199,10 @@ export function App() {
   const handled = useRef(new Set<string>());
   const primed = useRef(false);
   const jobActive = jobs.some((j) => j.state === "QUEUED" || j.state === "RUNNING");
+  const runningJob = (kind: string) => jobs.some((j) => j.kind === kind && (j.state === "QUEUED" || j.state === "RUNNING"));
+  const indexFb = buttonFeedback({ busy: runningJob("index") });
+  const extractFb = buttonFeedback({ className: "secondary", busy: runningJob("concepts") });
+  const saveFb = buttonFeedback({ busy: (busy ?? "").startsWith("Saving") });
   const onJobDone = async (j: JobView) => {
     if (j.state === "SUCCEEDED") {
       const warnings = j.result?.warnings ?? [];
@@ -508,9 +513,9 @@ export function App() {
           <input id="repo" value={repoPath} onChange={(e) => setRepoPath(e.target.value)} placeholder="/absolute/path/to/ts/repo" />
           <div className="row">
             <button className="secondary" onClick={() => setPicking(true)} disabled={!!busy || jobActive}>Browse…</button>
-            <button onClick={index} disabled={!repoPath || !!busy || jobActive} title="Index the selected repository">Index</button>
+            <button onClick={index} disabled={!repoPath || !!busy || jobActive} className={indexFb.className} aria-busy={indexFb["aria-busy"]} title="Index the selected repository">{indexFb.spinner && <span className="spinner" aria-hidden="true" />}Index</button>
           </div>
-          <button className="secondary" onClick={extract} disabled={!info?.revision || !!busy || jobActive} title="Extract capabilities, failure modes, invariants and workflows">Extract concepts{cards.length ? ` (${cards.length})` : ""}</button>
+          <button className={extractFb.className} onClick={extract} disabled={!info?.revision || !!busy || jobActive} aria-busy={extractFb["aria-busy"]} title="Extract capabilities, failure modes, invariants and workflows">{extractFb.spinner && <span className="spinner" aria-hidden="true" />}Extract concepts{cards.length ? ` (${cards.length})` : ""}</button>
           {info?.hosted && info.revision && (
             <div className="egress">
               <label><input type="checkbox" checked={info.allowHosted} onChange={(e) => void toggleHosted(e.target.checked)} /> Allow the hosted model for this repo</label>
@@ -558,7 +563,7 @@ export function App() {
           <h2>Investigation</h2>
           <label className="sr" htmlFor="wsn">Investigation name</label>
           <input id="wsn" value={wsName} onChange={(e) => setWsName(e.target.value)} placeholder="Payment failure investigation" />
-          <button onClick={save} disabled={!view || !!busy}>{ws.id ? `Save (v${ws.version + 1})` : "Save investigation"}</button>
+          <button onClick={save} disabled={!view || !!busy} className={saveFb.className} aria-busy={saveFb["aria-busy"]}>{saveFb.spinner && <span className="spinner" aria-hidden="true" />}{ws.id ? `Save (v${ws.version + 1})` : "Save investigation"}</button>
           <ul className="workspaces">
             {workspaces.map((w) => <li key={w.id}><button className="link" onClick={() => void withBusy("Opening…", () => resume(w.id))}>{w.name}</button> <small className="muted">v{w.version}</small></li>)}
             {workspaces.length === 0 && <li className="muted">No saved investigations.</li>}

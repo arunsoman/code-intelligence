@@ -28,7 +28,7 @@ h1 { font-size: 15px; margin: 0 8px 0 0; } h2 { font-size: 12px; text-transform:
 .side section { margin-bottom: 22px; display: flex; flex-direction: column; gap: 8px; }
 main { grid-area: m; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 input:not([type=checkbox]) { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); font: inherit; }
-button { padding: 7px 12px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); font: inherit; cursor: pointer; }
+button { padding: 7px 12px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: var(--on-accent); font: inherit; cursor: pointer; transition: background-color .12s ease, border-color .12s ease, color .12s ease, box-shadow .12s ease; }
 button:disabled { opacity: .45; cursor: not-allowed; }
 button.link { background: none; border: none; color: var(--accent); padding: 0 4px; text-decoration: underline; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -58,6 +58,18 @@ footer { padding: 8px 16px; border-top: 1px solid var(--line); background: var(-
 .tool.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .row { display: flex; gap: 8px; } .row button { flex: 1; }
 button.secondary { background: var(--panel); color: var(--ink); border-color: var(--line); }
+/* Pointer feedback. The background is mixed away from the text colour, so contrast only ever rises on hover and press. */
+button:not(:disabled):hover { background: color-mix(in srgb, var(--accent) 82%, var(--ink)); border-color: color-mix(in srgb, var(--accent) 68%, var(--ink)); }
+button:not(:disabled):active { background: color-mix(in srgb, var(--accent) 68%, var(--ink)); border-color: color-mix(in srgb, var(--accent) 55%, var(--ink)); box-shadow: inset 0 2px 4px rgba(0, 0, 0, .28); }
+button.secondary:not(:disabled):hover { background: color-mix(in srgb, var(--panel) 92%, var(--accent)); border-color: color-mix(in srgb, var(--line) 65%, var(--accent)); }
+button.secondary:not(:disabled):active { background: color-mix(in srgb, var(--panel) 86%, var(--accent)); border-color: var(--accent); box-shadow: inset 0 2px 4px rgba(0, 0, 0, .18); }
+button.link:not(:disabled):hover { color: var(--ink); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+button.link:not(:disabled):active { color: var(--ink); background: color-mix(in srgb, var(--accent) 20%, transparent); }
+/* Pending: a spinner and aria-busy, the label unchanged, and the button not merely faded. */
+button.pending:disabled { opacity: 1; cursor: progress; }
+button .spinner { display: inline-block; width: 11px; height: 11px; margin-right: 6px; vertical-align: -1px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: cie-spin .7s linear infinite; }
+@keyframes cie-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { button { transition: none; } button .spinner { animation: none; } button:not(:disabled):active { box-shadow: none; } }
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: grid; place-items: center; z-index: 10; }
 .modal { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; width: min(560px, 92vw); max-height: 80vh; display: flex; flex-direction: column; padding: 16px; gap: 10px; outline: none; }
 .crumbs { font-size: 12px; overflow-x: auto; white-space: nowrap; }

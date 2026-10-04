@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { JobView, ResolvedEvidence, ViewSpec } from "@cie/schema";
 import { call } from "./api.ts";
+import { buttonFeedback } from "./button.ts";
 import "./team.css";
 import { cumulative, plural, relative, truncateMiddle, windowByOffsets, windowOf } from "./defect-list.ts";
 
@@ -122,6 +123,7 @@ export function InsightsPanel({ revision, view, onClose, onAsk }: { revision: st
       setTab(TABS[n].id); requestAnimationFrame(() => document.getElementById(`tab-${TABS[n].id}`)?.focus());
     }
   };
+  const reindexFb = buttonFeedback({ className: "secondary small", busy: reindex.phase === "busy" });
   return (
     <div className="modal-backdrop">
       <section className="modal insights dialog" role="dialog" aria-modal="true" aria-label="Insights" tabIndex={-1} onKeyDown={onKey}
@@ -139,7 +141,7 @@ export function InsightsPanel({ revision, view, onClose, onAsk }: { revision: st
             <a className="i-fact mono" href={`vscode://file${meta?.repoRoot ?? ""}`} title="Open the repository in VS Code">{(meta?.gitHead ?? "").slice(0, 8) || "no git head"} ↗</a>
             <span className="i-fact" title={meta ? `indexed ${new Date(meta.createdAt).toLocaleString()}` : undefined}>indexed {meta ? relative(meta.createdAt) : "…"}</span>
             {meta && <span className="i-fact">{meta.files} files</span>}
-            <button className="secondary small" onClick={() => void startReindex()} disabled={!meta || reindex.phase === "busy"} title="Index the repository again. This drawer keeps showing the revision it was opened on.">Re-index</button>
+            <button className={reindexFb.className} onClick={() => void startReindex()} disabled={!meta || reindex.phase === "busy"} aria-busy={reindexFb["aria-busy"]} title="Index the repository again. This drawer keeps showing the revision it was opened on.">{reindexFb.spinner && <span className="spinner" aria-hidden="true" />}Re-index</button>
             {reindex.note && <span role="status" className={reindex.phase === "failed" ? "warn-text" : "muted"}>{reindex.note}</span>}
           </div>
         </header>

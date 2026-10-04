@@ -45,6 +45,20 @@ const MIXED_BANNER_PAIRS = [
   { fg: "ok", pct: 12, role: "success-banner text on its 12% tint" },
 ];
 
+/**
+ * Button state backgrounds. Hover and press mix the surface away from the label colour — the primary button
+ * toward --ink, the secondary button toward --accent, the link a tint of --accent over the panel — so the label
+ * keeps at least the contrast it has at rest. Each entry mirrors one color-mix() in styles.css.
+ */
+const BUTTON_STATE_PAIRS = [
+  { fg: "on-accent", a: "accent", b: "ink", pct: 82, role: "primary button text on hover" },
+  { fg: "on-accent", a: "accent", b: "ink", pct: 68, role: "primary button text while pressed" },
+  { fg: "ink", a: "panel", b: "accent", pct: 92, role: "secondary button text on hover" },
+  { fg: "ink", a: "panel", b: "accent", pct: 86, role: "secondary button text while pressed" },
+  { fg: "ink", a: "accent", b: "panel", pct: 12, role: "link button text on its hover tint" },
+  { fg: "ink", a: "accent", b: "panel", pct: 20, role: "link button text on its pressed tint" },
+] as const;
+
 export function auditMarkup(html: string): A11yFinding[] {
   const out: A11yFinding[] = [];
   const count = (re: RegExp) => [...html.matchAll(re)].length;
@@ -124,6 +138,14 @@ export function auditContrast(css: string): AuditResult {
       const bg = mix(hexToRgb(v[p.fg]), hexToRgb(v.panel), p.pct);
       const ratio = contrast(hexToRgb(v[p.fg]), bg);
       if (ratio < 4.5) findings.push({ kind: "contrast", detail: `${theme}: ${p.role} — ${ratio.toFixed(2)}:1 (needs 4.5:1)` });
+      textPairs++;
+    }
+    for (const p of BUTTON_STATE_PAIRS) {
+      if (!v[p.fg] || !v[p.a] || !v[p.b]) { findings.push({ kind: "contrast-token", detail: `${theme}: missing colour token for ${p.role}` }); continue; }
+      const bg = mix(hexToRgb(v[p.a]), hexToRgb(v[p.b]), p.pct);
+      const ratio = contrast(hexToRgb(v[p.fg]), bg);
+      if (ratio < 4.5) findings.push({ kind: "contrast", detail: `${theme}: ${p.role} — ${ratio.toFixed(2)}:1 (needs 4.5:1)` });
+      textPairs++;
     }
   }
   return { findings, textPairs, uiPairs, themes: [Object.keys(light).length && "light", Object.keys(dark).length && "dark", Object.keys(high).length && "high contrast"].filter(Boolean) as string[], light, dark };

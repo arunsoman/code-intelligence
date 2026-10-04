@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { buttonFeedback } from "./button.ts";
 
 export interface Message { role: "user" | "assistant"; text: string; at: string; error?: boolean }
 interface Props {
@@ -14,6 +15,7 @@ export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend,
   useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [messages.length, busy]);
   useEffect(() => { if (seed?.n) setText(seed.text); }, [seed?.n, seed]); // eslint-disable-line react-hooks/exhaustive-deps
   const send = () => { const t = text.trim(); if (t && !busy) { onSend(t); setText(""); } };
+  const sendFb = buttonFeedback({ busy });
   return (
     <section className="chat" aria-label="Conversation">
       <h2>Conversation</h2>
@@ -38,7 +40,7 @@ export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend,
         <label className="sr" htmlFor="chat-input">Message</label>
         <textarea id="chat-input" rows={3} value={text} placeholder={referents.length ? "Ask about the selected elements…" : "Ask a question, or paste a stack trace…"}
           onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} disabled={!canAsk} />
-        <button type="submit" disabled={!text.trim() || busy || !canAsk}>Send</button>
+        <button type="submit" className={sendFb.className} aria-busy={sendFb["aria-busy"]} disabled={!text.trim() || busy || !canAsk}>{sendFb.spinner && <span className="spinner" aria-hidden="true" />}Send</button>
       </form>
     </section>
   );
