@@ -6,7 +6,6 @@ interface Props { matrix: ViewMatrix; stale: Set<string>; selected: Set<string>;
 
 const MODE = { FACT: "Fact", INFERENCE: "Inference", HYPOTHESIS: "Hypothesis", FOG: "Fog", HIDDEN: "Hidden" } as const;
 const tint = (t: number) => `color-mix(in srgb, var(--heat-hot) ${Math.round(t * 100)}%, var(--heat-cool))`;
-const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 /**
  * The grid drawing of a many-to-many relation. It is a real table (row and column headers, one tab stop, arrow keys
@@ -31,6 +30,21 @@ export function MatrixView({ matrix, stale, selected, onPick }: Props) {
   const used = [...new Set(matrix.cells.map((c) => c.state))].filter((s) => matrix.states[s]);
   return (
     <div className="matrix">
+      {/* A compact key (one wrapping line) plus the full definitions on demand: the matrix, not the legend, gets the height. */}
+      <div id="matrix-legend" className="matrix-key">
+        <ul aria-label="Cell key">
+          {used.map((s) => <li key={s}><span className={`glyph s-${s}`} aria-hidden>{matrix.states[s].glyph}</span> <strong>{matrix.states[s].label}</strong></li>)}
+          <li><span className="glyph" aria-hidden>·</span> <strong>empty</strong></li>
+        </ul>
+        <details>
+          <summary>What the symbols mean</summary>
+          <ul>
+            {used.map((s) => <li key={s}><span className={`glyph s-${s}`} aria-hidden>{matrix.states[s].glyph}</span> <strong>{matrix.states[s].label}</strong> — {matrix.states[s].description}</li>)}
+            <li><span className="glyph" aria-hidden>·</span> <strong>empty</strong> — {matrix.emptyMeaning}</li>
+            <li className="muted small">Border: solid is a fact, dashed an inference, dotted a hypothesis. Click a cell for its evidence. Space, or Shift-click, adds cells to the question you type; the chat shows them as chips.</li>
+          </ul>
+        </details>
+      </div>
       <div className="matrix-scroll" tabIndex={-1}>
         <table role="grid" aria-label={`${matrix.rowTitle} by ${matrix.colTitle}`} aria-multiselectable="true" aria-describedby="matrix-legend" aria-rowcount={R + 1} aria-colcount={C + 1}>
           <thead>
@@ -38,7 +52,7 @@ export function MatrixView({ matrix, stale, selected, onPick }: Props) {
               <th scope="col" className="corner"><span className="sr">{matrix.rowTitle}, </span><span aria-hidden>{matrix.rowTitle} ↓ · {matrix.colTitle} →</span></th>
               {matrix.cols.map((c) => (
                 <th key={c.id} scope="col" title={`${c.label}${c.sub ? ` — ${c.sub}` : ""}`} className={`colhead ${c.role ?? ""}`}>
-                  <span className="lbl">{clip(c.label, 30)}</span>{c.sub && <small>{clip(c.sub, 40)}</small>}
+                  <span className="lbl">{c.label}</span>{c.sub && <small>{c.sub}</small>}
                 </th>
               ))}
             </tr>
@@ -47,7 +61,7 @@ export function MatrixView({ matrix, stale, selected, onPick }: Props) {
             {matrix.rows.map((row, ri) => (
               <tr key={row.id}>
                 <th scope="row" title={`${row.label}${row.sub ? ` — ${row.sub}` : ""}`} className="rowhead">
-                  <span className="lbl">{clip(row.label, 40)}</span>{row.sub && <small>{clip(row.sub, 56)}</small>}
+                  <span className="lbl">{row.label}</span>{row.sub && <small>{row.sub}</small>}
                   {row.heat && <span className="rowheat" style={{ background: tint(row.heat.value) }}>{row.heat.label}</span>}
                 </th>
                 {matrix.cols.map((col, ci) => {
@@ -74,13 +88,6 @@ export function MatrixView({ matrix, stale, selected, onPick }: Props) {
             ))}
           </tbody>
         </table>
-      </div>
-      <div id="matrix-legend" className="matrix-legend">
-        <ul>
-          {used.map((s) => <li key={s}><span className={`glyph s-${s}`} aria-hidden>{matrix.states[s].glyph}</span> <strong>{matrix.states[s].label}</strong> — {matrix.states[s].description}</li>)}
-          <li><span className="glyph" aria-hidden>·</span> <strong>empty</strong> — {matrix.emptyMeaning}</li>
-        </ul>
-        <p className="muted small">Border: solid is a fact, dashed an inference, dotted a hypothesis. Click a cell for its evidence. Space, or Shift-click, adds cells to the question you type; the chat shows them as chips.</p>
       </div>
     </div>
   );

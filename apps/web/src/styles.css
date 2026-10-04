@@ -128,8 +128,8 @@ ul.exceptions { list-style: none; margin: 0; padding: 0; } ul.exceptions li { bo
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 
 .formctl { display: flex; gap: 6px; align-items: center; padding: 6px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
-.consequences { max-height: 190px; overflow: auto; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
-.consequences h2 { margin-bottom: 4px; } .consequences ul { list-style: none; margin: 0; padding: 0; } .consequences li { padding: 3px 0; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; } .consequences .link { text-align: left; }
+.consequences { padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.consequences summary { cursor: pointer; font-weight: 600; } .consequences ul { list-style: none; margin: 6px 0 0; padding: 0; max-height: 150px; overflow: auto; } .consequences li { padding: 3px 0; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; } .consequences .link { text-align: left; }
 ul.gallery { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 10px; }
 ul.gallery li { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; } ul.gallery li.off { opacity: .72; } ul.gallery p { margin: 6px 0; font-size: 13px; } ul.gallery .row input { flex: 1; }
 .modal.tall { max-height: 88vh; }
@@ -142,11 +142,12 @@ ul.gallery li { border: 1px solid var(--line); border-radius: 8px; padding: 10px
 
 /* ---- matrix (V12, V15): a real table; borders carry how a cell is known, never colour alone */
 .matrix { position: absolute; inset: 0; display: flex; flex-direction: column; padding: 10px 16px; gap: 8px; overflow: hidden; }
-.matrix-scroll { overflow: auto; flex: 0 1 auto; min-height: 0; }
+.matrix-scroll { overflow: auto; flex: 1 1 auto; min-height: 0; }
 .matrix table { border-collapse: separate; border-spacing: 4px; font-size: 12px; }
 .matrix th { font-weight: 500; text-align: left; vertical-align: bottom; color: var(--ink); background: var(--panel); }
 .matrix th small { display: block; color: var(--muted); font-size: 10px; font-weight: 400; }
-.matrix .colhead { min-width: 92px; max-width: 120px; padding: 4px 6px; position: sticky; top: 0; z-index: 2; border-bottom: 2px solid var(--line); }
+.matrix .colhead { min-width: 92px; max-width: 150px; padding: 4px 6px; position: sticky; top: 0; z-index: 2; border-bottom: 2px solid var(--line); }
+.matrix .colhead .lbl, .matrix .rowhead .lbl { white-space: normal; overflow-wrap: anywhere; }
 .matrix .colhead.convention, .matrix .colhead.property { border-bottom-style: dashed; }
 .matrix .rowhead { min-width: 200px; max-width: 280px; padding: 6px 8px; position: sticky; left: 0; z-index: 1; border-right: 2px solid var(--line); }
 .matrix .corner { position: sticky; left: 0; top: 0; z-index: 3; font-size: 10px; color: var(--muted); padding: 4px 8px; background: var(--panel); }
@@ -163,8 +164,12 @@ ul.gallery li { border: 1px solid var(--line); border-radius: 8px; padding: 10px
 .mcell.s-gap { background: color-mix(in srgb, var(--hyp) 14%, var(--panel)); }
 .mcell.stale { opacity: 0.5; }
 .mcell:focus-visible, .mcell.sel { outline: 3px solid var(--accent); outline-offset: 1px; }
-.matrix-legend ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
-.matrix-legend .glyph { display: inline-block; width: 1.4em; text-align: center; font-weight: 700; }
+.matrix-key { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 12px; }
+.matrix-key ul { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.matrix-key .glyph { display: inline-block; min-width: 1.2em; text-align: center; font-weight: 700; }
+.matrix-key details { font-size: 12px; }
+.matrix-key details ul { display: block; }
+.matrix-key details li { margin: 3px 0; }
 
 .jobbar { display: grid; gap: 8px; margin-bottom: 8px; }
 .job { border: 1px solid var(--border, #c9c9c9); border-radius: 6px; padding: 6px 8px; }
