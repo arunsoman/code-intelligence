@@ -86,3 +86,56 @@ export function measure(r: Rendered & { edges: (RenderEdge & { via?: Pos[]; ambi
   }
   return { nodes: r.nodes.length, edges: lines.length, ambientEdges: r.edges.length - lines.length, nodeOverlaps, edgeThroughNode, edgeCrossings, detail };
 }
+
+/** The point halfway along a polyline, by arc length: where an edge's label is drawn. */
+export function pointAtHalf(pts: Pt[]): Pt {
+  let total = 0;
+  for (let i = 0; i + 1 < pts.length; i++) total += Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+  let want = total / 2;
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const seg = Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+    if (seg >= want) { const t = seg ? want / seg : 0; return [pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t, pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t]; }
+    want -= seg;
+  }
+  return pts[pts.length - 1] ?? [0, 0];
+}
+
+/** Approximate on-screen width of a label, in the units of the canvas stylesheet (`fontUnits` per glyph average). */
+export const labelWidth = (text: string, fontUnits: number): number => Math.max(...text.split("\n").map((l) => l.length), 0) * fontUnits * 0.62;
+
+/**
+ * Legibility, measured: an edge label whose box is crossed by a different edge (the reading is obscured even
+ * though the label is drawn on top), and a node label that cannot fit inside its box even when wrapped.
+ */
+export interface LegibilityReport { edgeLabelCollisions: number; truncatedLabels: number; detail: string[] }
+export function measureLegibility(r: Rendered & { edges: (RenderEdge & { via?: Pos[]; ambient?: boolean })[] }, size: Sizer = nodeSize, nodeFont = 11, edgeFont = 9, pad = 3): LegibilityReport {
+  const pos = new Map(r.nodes.map((n) => [n.id, n.pos]));
+  const boxes = new Map(r.nodes.map((n) => [n.id, boxOf(n.pos, size(n))]));
+  const lines = r.edges.filter((e) => !e.ambient).map((e) => ({ e, pts: polyline(e, pos, boxes) })).filter((l): l is { e: typeof l.e; pts: Pt[] } => !!l.pts);
+  const detail: string[] = [];
+  let edgeLabelCollisions = 0;
+  for (const { e, pts } of lines) {
+    if (!e.label || !e.label.trim()) continue;
+    const mid = pointAtHalf(pts);
+    const w = labelWidth(e.label, edgeFont) + 2 * pad, h = edgeFont * 1.3 + 2 * pad;
+    const lb: Box = { x1: mid[0] - w / 2, y1: mid[1] - h / 2, x2: mid[0] + w / 2, y2: mid[1] + h / 2 };
+    for (const other of lines) {
+      if (other.e.id === e.id) continue;
+      if (other.e.from === e.from || other.e.from === e.to || other.e.to === e.from || other.e.to === e.to) continue; // sharing an end is not an overlap
+      let hit = false;
+      for (let i = 0; i + 1 < other.pts.length && !hit; i++) hit = segHitsBox(other.pts[i], other.pts[i + 1], lb);
+      if (hit) { edgeLabelCollisions++; if (detail.length < 8) detail.push(`edge label “${e.label}” under ${other.e.from} → ${other.e.to}`); break; }
+    }
+  }
+  let truncatedLabels = 0;
+  for (const n of r.nodes) {
+    if (n.kind !== "node") continue;
+    const s = size(n);
+    const maxChars = Math.max(1, Math.floor((s.w - 10) / (nodeFont * 0.62)));
+    // `text-wrap: wrap` breaks at spaces and, within `text-max-width`, inside a long word too.
+    const wrapped = n.label.split("\n").reduce((acc, line) => acc + Math.max(1, Math.ceil(line.length / maxChars)), 0);
+    const fits = wrapped * nodeFont * 1.25 <= s.h - 4;
+    if (!fits) { truncatedLabels++; if (detail.length < 12) detail.push(`label does not fit: ${n.label}`); }
+  }
+  return { edgeLabelCollisions, truncatedLabels, detail };
+}

@@ -262,6 +262,64 @@ export function laneGrid(items: Item[], laneOf: Map<string, string>, links: Link
   });
 }
 
+// ------------------------------------------------------------------ lane gutters
+/**
+ * The vertical extent of each swim lane: its centre and half-height, derived from the nodes the form placed
+ * in it. Used to route an edge that crosses lanes through free space instead of diagonally over a lane.
+ */
+export interface LaneBand { lane: string; y: number; half: number }
+export function laneBands(items: Item[], laneOf: Map<string, string>): Map<string, LaneBand> {
+  const by = new Map<string, Item[]>();
+  for (const i of items) { const l = laneOf.get(i.id); if (l !== undefined) by.set(l, [...(by.get(l) ?? []), i]); }
+  const out = new Map<string, LaneBand>();
+  for (const [lane, L] of by) out.set(lane, { lane, y: (Math.min(...L.map((i) => i.y)) + Math.max(...L.map((i) => i.y))) / 2, half: Math.max(...L.map((i) => i.h)) / 2 + 24 });
+  return out;
+}
+
+/**
+ * Route an edge that crosses lanes along the vertical gutter between the two end nodes' columns, so the long
+ * segment runs in free space rather than diagonally across other lanes and their titles. The caller keeps a
+ * route only if it clears every node; anything else falls back to the generic router.
+ */
+export function gutterRoutes(items: Item[], laneOf: Map<string, string>, links: Link[]): Map<string, Pos[]> {
+  const at = new Map(items.map((i) => [i.id, i]));
+  // Candidate vertical corridors: the free gap between each pair of adjacent columns.
+  const xs = [...new Set(items.map((i) => i.x))].sort((a, b) => a - b);
+  const gaps: number[] = [];
+  for (let i = 0; i + 1 < xs.length; i++) {
+    const left = Math.max(...items.filter((it) => it.x === xs[i]).map((it) => it.x + it.w / 2));
+    const right = Math.min(...items.filter((it) => it.x === xs[i + 1]).map((it) => it.x - it.w / 2));
+    if (right - left >= 12) gaps.push((left + right) / 2);
+  }
+  if (!gaps.length) return new Map();
+  const ccw = (a: Pt, b: Pt, c: Pt) => (c[1] - a[1]) * (b[0] - a[0]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const segX = (a: Pt, b: Pt, c: Pt, d: Pt) => ((ccw(a, b, c) > 0 && ccw(a, b, d) < 0) || (ccw(a, b, c) < 0 && ccw(a, b, d) > 0)) && ((ccw(c, d, a) > 0 && ccw(c, d, b) < 0) || (ccw(c, d, a) < 0 && ccw(c, d, b) > 0));
+  const out = new Map<string, Pos[]>();
+  for (const l of links) {
+    const a = at.get(l.from), b = at.get(l.to);
+    if (!a || !b) continue;
+    const la = laneOf.get(l.from), lb = laneOf.get(l.to);
+    if (la === undefined || lb === undefined || la === lb) continue;
+    // Straighter neighbours (endpoints not shared) that this route must not cross more than the straight line does.
+    const others: Pt[][] = [];
+    for (const o of links) {
+      if (o === l || o.from === l.from || o.from === l.to || o.to === l.from || o.to === l.to) continue;
+      const p = at.get(o.from), q = at.get(o.to);
+      if (p && q) others.push([[p.x, p.y], [q.x, q.y]]);
+    }
+    let best: { x: number; cross: number; off: number } | null = null;
+    for (const x of gaps) {
+      const pts: Pt[] = [[a.x, a.y], [x, a.y], [x, b.y], [b.x, b.y]];
+      let cross = 0;
+      for (const seg of others) { let hit = false; for (let i = 0; i + 1 < pts.length && !hit; i++) for (let j = 0; j + 1 < seg.length && !hit; j++) hit = segX(pts[i], pts[i + 1], seg[j], seg[j + 1]); if (hit) cross++; }
+      const off = Math.abs(x - (a.x + b.x) / 2);
+      if (!best || cross < best.cross || (cross === best.cross && off < best.off)) best = { x, cross, off };
+    }
+    if (best) out.set(`${l.from}\u0001${l.to}`, [{ x: best.x, y: a.y }, { x: best.x, y: b.y }]);
+  }
+  return out;
+}
+
 // ------------------------------------------------------------------ wrapping tall columns
 /**
  * A column with more than `maxRows` nodes becomes several side-by-side sub-columns (a column of 36 files is a strip

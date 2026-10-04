@@ -5,7 +5,7 @@
 // then every edge that would cross a node is routed around it. Selection, claims and evidence are untouched: only
 // positions and edge waypoints change, so provenance is never affected by layout.
 import type { ViewSpec } from "@cie/schema";
-import { callDepth, forceLayout, laneGrid, layered, pathClear, orderColumns, marginArcs, orderLanes, routeEdges, separate, wrapColumns, type Item } from "./layout.ts";
+import { callDepth, forceLayout, gutterRoutes, laneGrid, layered, pathClear, orderColumns, marginArcs, orderLanes, routeEdges, separate, wrapColumns, type Item } from "./layout.ts";
 import type { Pos, Rendered } from "./graph.ts";
 import { nodeSize } from "./layoutmetrics.ts";
 import { columnFlow } from "./layout.ts";
@@ -22,6 +22,8 @@ export function arrange(r: Rendered, view: ViewSpec, level: number): Rendered {
   const aggregated = r.nodes.some((n) => n.kind === "agg" || n.kind === "ext");
   const layeredForm = !aggregated && view.nodes.some((n) => n.layer != null) && !view.nodes.every((n) => n.pos);
   const hasFileGroups = !aggregated && view.groups.some((g) => g.kind === "file");
+  const laneOf = new Map<string, string>();
+  for (const g of view.groups) if (g.kind === "lane") for (const c of g.childNodeIds) laneOf.set(c, g.id);
   let via = new Map<string, Pos[]>();
 
   if (aggregated) {
@@ -34,8 +36,6 @@ export function arrange(r: Rendered, view: ViewSpec, level: number): Rendered {
     via = res.via;
     separate(items, 12); // same-layer neighbours already clear; this only guards ghost/ext nodes
   } else {
-    const laneOf = new Map<string, string>();
-    for (const g of view.groups) if (g.kind === "lane") for (const c of g.childNodeIds) laneOf.set(c, g.id);
     const flow = !hasFileGroups && laneOf.size === 0 && view.formId !== "Ownership" ? columnFlow(items, links) : null;
     if (flow) {
       // Columns that edges flow across are layers of a layered graph: full Sugiyama, columns become layers.
@@ -58,6 +58,8 @@ export function arrange(r: Rendered, view: ViewSpec, level: number): Rendered {
   }
   const key = (e: { from: string; to: string }) => `${e.from}\u0001${e.to}`;
   const keyed = r.edges.map((e) => ({ from: e.from, to: e.to, key: key(e) }));
+  // Edges that cross swim lanes run along the gutter between the columns, not diagonally over another lane.
+  if (!aggregated && laneOf.size > 0) via = new Map([...via, ...gutterRoutes(items, laneOf, links)]);
   const arcs = aggregated ? new Map<string, Pos[]>() : marginArcs(items, keyed);
   // Waypoints from the layered pass are kept only where they clear every node; the rest go to the router.
   const given = new Map([...via, ...arcs]);

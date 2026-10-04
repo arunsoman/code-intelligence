@@ -2,7 +2,7 @@ import cytoscape from "cytoscape";
 import { useEffect, useRef, useState } from "react";
 import { describeNode, MAX_LEVEL, nextByDirection, viaToSegments, type Dir, type RenderEdge, type RenderNode, type Rendered } from "./graph.ts";
 import type { OverlayMark } from "./mapoverlays.ts";
-import { POLICY, fontPx, levelMove, panFor, planTransition, pullInside, resolveAnchor, visibility, zoomAfterSwitch, type AnchorNode, type Move } from "./legibility.ts";
+import { POLICY, fontPx, levelMove, panFor, planTransition, pullInside, readableFitZoom, resolveAnchor, visibility, zoomAfterSwitch, type AnchorNode, type Move } from "./legibility.ts";
 import { detailPolicyFor, type DetailPolicy, type SemanticAnchor } from "./detail.ts";
 import { renderedLevelFromGraph } from "./rendered-level.ts";
 import "./zoom.css";
@@ -42,7 +42,7 @@ const css = (n: string) => getComputedStyle(document.documentElement).getPropert
 function style(): cytoscape.StylesheetJson {
   const heatCool = css("--heat-cool"), heatHot = css("--heat-hot"), fact = css("--fact"), inf = css("--inference"), fog = css("--fog"), hyp = css("--hyp"), warn = css("--warn"), ok = css("--ok"), ink = css("--ink"), muted = css("--muted"), panel = css("--panel"), accent = css("--accent");
   return [
-    { selector: "node", style: { label: "data(label)", "min-zoomed-font-size": POLICY.hardMinPx, "font-size": 11, color: ink, "text-valign": "center", "text-halign": "center", "text-wrap": "ellipsis", "text-max-width": "136px", width: 150, height: 28, shape: "round-rectangle", "background-color": panel, "border-width": 2, "border-color": fact } },
+    { selector: "node", style: { label: "data(label)", "min-zoomed-font-size": POLICY.hardMinPx, "font-size": 11, color: ink, "text-valign": "center", "text-halign": "center", "text-wrap": "wrap", "text-max-width": "146px", "text-background-color": panel, "text-background-opacity": 0.9, "text-background-padding": "2px", width: 150, height: 28, shape: "round-rectangle", "background-color": panel, "border-width": 2, "border-color": fact } },
     { selector: "node[tier = 'CRITICAL']", style: { "border-width": 3, "font-weight": 700 } },
     { selector: "node[tier = 'CONTEXT']", style: { opacity: 0.8, "border-width": 1 } },
     { selector: "node[display = 'INFERENCE']", style: { "border-style": "dashed", "border-color": inf } },
@@ -77,7 +77,7 @@ function style(): cytoscape.StylesheetJson {
     { selector: "node.stale", style: { opacity: 0.45, "border-style": "dotted", "border-color": muted } },
     { selector: ":parent", style: { "text-valign": "top", "text-halign": "center", "background-opacity": 0.06, "background-color": ink, "border-width": 1, "border-style": "solid", "border-color": muted, "font-size": 11, color: muted, padding: "14px", shape: "round-rectangle", "font-weight": 400 } },
     { selector: "node[group = 'concept']", style: { "border-style": "dashed", "border-color": inf, "background-color": inf, "background-opacity": 0.06, "font-size": 12 } },
-    { selector: "edge", style: { "min-zoomed-font-size": POLICY.hardMinPx, width: 2, "line-color": fact, "target-arrow-color": fact, "target-arrow-shape": "triangle", "curve-style": "bezier", "arrow-scale": 0.9, label: "data(label)", "font-size": 9, color: muted, "text-background-color": panel, "text-background-opacity": 1, "text-background-padding": "2px" } },
+    { selector: "edge", style: { "min-zoomed-font-size": POLICY.hardMinPx, width: 2, "line-color": fact, "target-arrow-color": fact, "target-arrow-shape": "triangle", "curve-style": "bezier", "arrow-scale": 0.9, label: "data(label)", "font-size": 9, color: muted, "text-background-color": panel, "text-background-opacity": 1, "text-background-padding": "3px", "text-border-width": 1, "text-border-color": panel, "text-border-opacity": 1 } },
     { selector: "edge[display = 'INFERENCE']", style: { "line-style": "dashed", "line-color": inf, "target-arrow-color": inf, color: inf } },
     { selector: "edge[display = 'HYPOTHESIS']", style: { "line-style": "dotted", width: 3, "line-color": hyp, "target-arrow-color": hyp, color: hyp } },
     { selector: "edge[display = 'FOG']", style: { "line-style": "dotted", "line-color": fog, "target-arrow-color": fog } },
@@ -112,12 +112,15 @@ function focusEdges(c: cytoscape.Core, focusId: string | null) {
 }
 
 /**
- * Fit the whole map, never larger than 1.4. It is never cropped: when the fit leaves labels too small to read, the caller moves to a coarser level
- * (new views), and below the hard minimum the labels are simply not drawn (Cytoscape `min-zoomed-font-size`), so the drawing is whole and honest.
+ * Fit the whole map, never larger than 1.4. A form that can coarsen (the semantic map) is fitted whole and then moves to a
+ * level whose labels are readable. A form that cannot coarsen further (a swim-lane journey has one drawing) is instead
+ * raised to the readable floor, so its steps are not left at microscopic text; the off-screen notice then says what is out of view.
  */
-function fitReadable(c: cytoscape.Core) {
+function fitReadable(c: cytoscape.Core, readableFloor = false) {
   c.resize(); c.fit(undefined, 40);
-  if (c.zoom() > 1.4) { c.zoom(1.4); c.center(); }
+  const z = readableFloor ? readableFitZoom(c.zoom()) : Math.min(c.zoom(), 1.4);
+  if (z !== c.zoom()) c.zoom(z);
+  c.center();
 }
 const reduceMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -167,6 +170,7 @@ export function Canvas(p: Props) {
   const lastZoom = useRef(1);
   const pointer = useRef<{ x: number; y: number } | null>(null);
   const [hint, setHint] = useState<{ off: number; total: number; labelsHidden: boolean }>({ off: 0, total: 0, labelsHidden: false });
+  const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null);
   const lockZoom = useRef<number | null>(null);
   const timer = useRef<number | null>(null);
   const lastViewKey = useRef("");
@@ -184,6 +188,11 @@ export function Canvas(p: Props) {
     c.on("tap", "node", (e) => { if (e.target.isParent()) return; const n = cb.current.rendered.nodes.find((x) => x.id === e.target.id()); if (n) cb.current.onTapNode(n); });
     c.on("dbltap", "node", (e) => { const n = cb.current.rendered.nodes.find((x) => x.id === e.target.id()); if (n) cb.current.onExpand(n); });
     c.on("tap", "edge", (e) => { const ed = cb.current.rendered.edges.find((x) => x.id === e.target.id()); if (ed) cb.current.onTapEdge(ed); });
+    // A wrapped or shortened label still has its full text: show it on hover, and the text outline (O) keeps every name too.
+    const showTip = (e: cytoscape.EventObject, text: string | undefined) => { if (!text) return; const rp = e.target.renderedPosition(); setTip({ x: rp.x, y: rp.y - 12, text }); };
+    c.on("mouseover", "node", (e) => showTip(e, cb.current.rendered.nodes.find((x) => x.id === e.target.id())?.label));
+    c.on("mouseover", "edge", (e) => showTip(e, cb.current.rendered.edges.find((x) => x.id === e.target.id())?.label));
+    c.on("mouseout", "node, edge", () => setTip(null));
     // What the person can see: how many elements are outside the viewport, and whether labels are too small to be drawn.
     let raf = 0;
     const refresh = () => {
@@ -299,7 +308,7 @@ export function Canvas(p: Props) {
     } else if (p.viewKey !== lastViewKey.current || pend?.kind === "fit") {
       lastViewKey.current = p.viewKey;
       pending.current = null;
-      quietly(c, () => fitReadable(c));
+      quietly(c, () => fitReadable(c, !cb.current.semanticLevels));
       lockZoom.current = null;
       // A new view starts at the finest level that fits with readable labels: if these are too small, try the next coarser level (the effect runs again).
       if (cb.current.semanticLevels && fontPx(c.zoom()) < POLICY.aggregateBelowPx && p.level > 0) {
@@ -380,7 +389,7 @@ export function Canvas(p: Props) {
       quietly(c, () => c.viewport(plan.camera));
       lockZoom.current = plan.camera.zoom;
     } else {
-      quietly(c, () => fitReadable(c));
+      quietly(c, () => fitReadable(c, !p.semanticLevels));
       lockZoom.current = c.zoom();
     }
     refreshRef.current();
@@ -447,6 +456,7 @@ export function Canvas(p: Props) {
         {hint.labelsHidden && <span>Labels are hidden at this zoom: zoom in, or open the text outline (O).</span>}
       </div>
     )}
+    {tip && <div className="canvas-tip" role="tooltip" style={{ left: tip.x, top: tip.y }}>{tip.text}</div>}
     </>
   );
 }

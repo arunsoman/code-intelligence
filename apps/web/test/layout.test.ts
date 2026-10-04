@@ -10,8 +10,8 @@ import { VISUALS } from "../../../packages/core/src/visuals.ts";
 import { ctx, demoRepo, setup, traceFor } from "../../../packages/core/test/helpers.ts";
 import { arrange } from "../src/arrange.ts";
 import { basePositions, effectiveView, render } from "../src/graph.ts";
-import { callDepth, columnFlow, forceLayout, geometricCrossings, layered, marginArcs, orderColumns, pathClear, routeEdges, separate, wrapColumns, type Item } from "../src/layout.ts";
-import { SIZES, measure } from "../src/layoutmetrics.ts";
+import { callDepth, columnFlow, forceLayout, geometricCrossings, gutterRoutes, laneBands, layered, marginArcs, orderColumns, pathClear, routeEdges, separate, wrapColumns, type Item } from "../src/layout.ts";
+import { SIZES, measure, measureLegibility } from "../src/layoutmetrics.ts";
 
 const item = (id: string, x: number, y: number, w = 150, h = 28): Item => ({ id, x, y, w, h });
 const overlapping = (items: Item[], gap = 0) => { let n = 0; for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) { const a = items[i], b = items[j]; if (Math.abs(a.x - b.x) < (a.w + b.w) / 2 + gap && Math.abs(a.y - b.y) < (a.h + b.h) / 2 + gap) n++; } return n; };
@@ -107,9 +107,12 @@ test("the sizes the metric assumes are the sizes the stylesheet draws", () => {
 // ---- every form, every level -------------------------------------------------------------------------------
 /** Crossings no layout removed, per form (largest over levels 1, 3, 5, 6) on the demo repository. A ratchet. */
 const CROSSING_CEILING: Record<string, number> = {
-  SemanticMap: 0, HypothesisGraph: 7, CausalGraph: 0, TransactionJourney: 2, DataLineage: 7, SemanticDiff: 0, Archaeology: 0,
+  SemanticMap: 0, HypothesisGraph: 7, CausalGraph: 0, TransactionJourney: 0, DataLineage: 7, SemanticDiff: 0, Archaeology: 0,
   TrustBoundary: 2, RuntimeOverlay: 0, RaceWindow: 2, Counterfactual: 4, TestConfidence: 1, Ownership: 6, ConceptAtlas: 3, PolicyMap: 6,
 };
+/** Edge labels may still have a line running beneath them; Canvas draws each with an opaque halo, so it stays legible. This
+ *  ratchet holds how many remain, and is zero for the journey, whose long cross-lane edges are routed through gutters. */
+const EDGE_LABEL_CEILING: Record<string, number> = { PolicyMap: 2, TestConfidence: 1, HypothesisGraph: 3 };
 
 test("every form at every level: no node overlaps and no edge through an unrelated node; crossings stay under the form's ceiling", async () => {
   const repo = demoRepo();
@@ -137,20 +140,58 @@ test("every form at every level: no node overlaps and no edge through an unrelat
 
   const problems: string[] = [];
   const worst: Record<string, number> = {};
+  const worstTruncated: Record<string, number> = {};
+  const worstEdgeLabel: Record<string, number> = {};
   for (const { form, view: raw, claims: cs } of views) {
     const claims = Object.fromEntries(cs.map((c: any) => [c.draft.id, c]));
     const { view, stale } = effectiveView(raw, claims);
     for (const level of [0, 1, 2, 3, 4, 5, 6]) {
-      const m = measure(arrange(render(view, level, basePositions(view), stale), view, level));
+      const drawn = arrange(render(view, level, basePositions(view), stale), view, level);
+      const m = measure(drawn);
+      const lg = measureLegibility(drawn);
       if (m.nodeOverlaps) problems.push(`${form} L${level}: ${m.nodeOverlaps} overlap(s) ${m.detail.join("; ")}`);
       if (m.edgeThroughNode) problems.push(`${form} L${level}: ${m.edgeThroughNode} edge(s) through a node ${m.detail.join("; ")}`);
+      if (lg.edgeLabelCollisions) worstEdgeLabel[form] = Math.max(worstEdgeLabel[form] ?? 0, lg.edgeLabelCollisions);
+      worstTruncated[form] = Math.max(worstTruncated[form] ?? 0, lg.truncatedLabels);
       worst[form] = Math.max(worst[form] ?? 0, m.edgeCrossings);
     }
   }
   assert.deepEqual(problems, []);
   for (const [form, n] of Object.entries(worst)) assert.ok(n <= (CROSSING_CEILING[form] ?? 0), `${form}: ${n} crossings exceeds its ceiling of ${CROSSING_CEILING[form] ?? 0}`);
+  // A label that cannot fit its box is a silent truncation; every form's labels must fit once wrapped.
+  for (const [form, n] of Object.entries(worstTruncated)) assert.equal(n, 0, `${form}: ${n} label(s) do not fit their node`);
+  for (const [form, n] of Object.entries(worstEdgeLabel)) assert.ok(n <= (EDGE_LABEL_CEILING[form] ?? 0), `${form}: ${n} edge label(s) under an edge exceeds its ceiling of ${EDGE_LABEL_CEILING[form] ?? 0}`);
   assert.equal(views.length, 16, "all sixteen canvas forms were checked (the terrain view is not a node-link drawing)");
   worker.close();
+});
+
+test("gutterRoutes: a lane-crossing edge is routed through the free corridor between columns, a same-lane edge is left straight", () => {
+  const laneOf = new Map([["a", "L1"], ["b", "L2"], ["c", "L1"], ["d", "L1"]]);
+  // Column 1: a above, c/d below; column 2: b. `a→b` crosses lanes, `c→d` does not.
+  const items = [item("a", 0, 0), item("c", 0, 160), item("d", 0, 220), item("b", 300, 160)];
+  const links = [{ from: "a", to: "b" }, { from: "c", to: "d" }];
+  const routes = gutterRoutes(items, laneOf, links);
+  const key = `${links[0].from}\u0001${links[0].to}`;
+  assert.ok(routes.has(key), "the cross-lane edge has a corridor route");
+  const via = routes.get(key)!;
+  assert.equal(via.length, 2, "two waypoints: into the corridor and back out");
+  assert.equal(via[0].x, via[1].x, "the vertical run is in one corridor");
+  assert.ok(via[0].x > 75 && via[0].x < 225, `corridor sits between the column boxes (got ${via[0].x})`);
+  assert.ok(pathClear(items, links[0].from, links[0].to, via), "the corridor route clears every node");
+  assert.equal(routes.has(`${links[1].from}\u0001${links[1].to}`), false, "a same-lane edge is not touched");
+  assert.equal(laneBands(items, laneOf).get("L1")!.y, (0 + 220) / 2, "a lane band is centred on its nodes");
+});
+
+test("the canvas draws labels so they are readable: nodes wrap and carry a halo, edges carry a halo, and the full text is on hover", () => {
+  const src = readFileSync(join(import.meta.dirname, "../src/Canvas.tsx"), "utf8");
+  const nodeStyle = src.split("\n").find((l) => l.includes('selector: "node", style'))!;
+  assert.ok(/"text-wrap": "wrap"/.test(nodeStyle), "node labels wrap instead of being ellipsised");
+  assert.ok(/"text-background-color"/.test(nodeStyle), "node labels sit on a background so lane fills do not wash them out");
+  const edgeStyle = src.split("\n").find((l) => l.includes('selector: "edge", style'))!;
+  assert.ok(/"text-background-color"/.test(edgeStyle) && /"text-border-width"/.test(edgeStyle), "edge labels sit on an opaque halo");
+  assert.ok(/mouseover/.test(src) && /canvas-tip/.test(src), "the full label is shown on hover");
+  assert.ok(/readableFitZoom/.test(src), "a fit clamps to the readable floor");
+  assert.equal(CROSSING_CEILING.TransactionJourney, 0, "gutter routing removed the journey's crossings");
 });
 
 test("forceLayout: nodes with no links stay near the rest instead of drifting away", () => {

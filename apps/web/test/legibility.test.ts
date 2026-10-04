@@ -2,7 +2,7 @@
 // camera ends up where the person was looking.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { POLICY, fontPx, levelMove, panFor, pullInside, resolveAnchor, visibility, zoomAfterSwitch, zoomForPx } from "../src/legibility.ts";
+import { MIN_READABLE_PX, POLICY, fontPx, levelMove, panFor, pullInside, readableFitZoom, resolveAnchor, visibility, zoomAfterSwitch, zoomForPx } from "../src/legibility.ts";
 
 function rng(seed: number) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32); }
 
@@ -168,5 +168,14 @@ test("planTransition reports ANCHOR_UNRESOLVED when the anchor entity is gone", 
   const plan = planTransition({ currentCamera: { zoom: 1, pan: { x: 0, y: 0 } }, viewport, anchor, candidate: c, policy, kind: "EXPLICIT_LEVEL" });
   assert.equal(plan.resolvedAnchor, null);
   assert.ok(plan.unmetConstraints.includes("ANCHOR_UNRESOLVED"));
+});
+
+// F43: a fit that would leave labels below the readable floor is raised to it, so a journey is never drawn at microscopic text.
+test("readableFitZoom raises an unreadable fit to the floor and still caps an over-large one", () => {
+  assert.equal(readableFitZoom(0.5), zoomForPx(MIN_READABLE_PX), "0.5 would render 5.5 px text; raised to 11 px");
+  assert.equal(readableFitZoom(0.9), zoomForPx(MIN_READABLE_PX));
+  assert.equal(readableFitZoom(1.2), 1.2, "a fit between the floor and the cap is left alone");
+  assert.equal(readableFitZoom(3), 1.4, "a tiny drawing is not blown up past the cap");
+  assert.equal(readableFitZoom(0.2, 2, 16), zoomForPx(16, 11), "the floor and cap are parameters");
 });
 

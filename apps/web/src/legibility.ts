@@ -15,6 +15,8 @@
 
 /** Size of an essential node label in the drawing, in the units of the Canvas stylesheet (`font-size: 11`). */
 export const FONT_UNITS = 11;
+/** The smallest on-screen size an essential label may be left at by a fit: below this the drawing is unreadable. */
+export const MIN_READABLE_PX = 11;
 /** `landingMinPx` is the smallest size a switch may leave labels at: a little above `aggregateBelowPx`, so the next tick of the same gesture does not switch again. */
 export const POLICY = { aggregateBelowPx: 10, hardMinPx: 9, landingMinPx: 10.5, targetPx: 11.5, expandAbovePx: 16 } as const;
 export type Policy = typeof POLICY;
@@ -122,6 +124,15 @@ export function measureLabels(level: RenderedLevel, zoom: number): { class: stri
 
 /** Zoom at which a font of `fontUnits` measures `px` CSS pixels. */
 export const zoomForFontPx = (px: number, fontUnits: number): number => (fontUnits > 0 ? px / fontUnits : 1);
+
+/**
+ * The zoom a "fit" should land on. Fitting a large drawing can leave its labels below the readable floor;
+ * rather than silently crop them away, raise the zoom to the floor. A fit larger than `maxZoom` is still capped,
+ * so a tiny drawing is not blown up past the point of usefulness.
+ */
+export function readableFitZoom(zFit: number, maxZoom = 1.4, minPx = MIN_READABLE_PX, fontUnits = FONT_UNITS): number {
+  return Math.max(Math.min(zFit, maxZoom), zoomForFontPx(minPx, fontUnits));
+}
 
 /** The essential font size (in units) for a level, defaulting to 11. */
 function essentialFontUnits(level: RenderedLevel): number {
