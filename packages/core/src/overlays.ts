@@ -5,7 +5,7 @@ import type { Store } from "./store.ts";
 import { testFactsFor } from "./testartifacts.ts";
 
 /** Decorations for requested entities; never compiles or rearranges a ViewSpec. */
-export function mapOverlays(store: Store, revision: string, ids: string[], window: MapOverlays["window"]): MapOverlays {
+export function mapOverlays(store: Store, revision: string, ids: string[], window: MapOverlays["window"], layers: { tests: boolean; runtime: boolean }): MapOverlays {
   const rev = store.revision(revision)!;
   const access = policyFor(store, rev.repoRoot);
   const all = new Map(store.entities(revision).map((e) => [e.entityId, e]));
@@ -19,23 +19,26 @@ export function mapOverlays(store: Store, revision: string, ids: string[], windo
     if (!allowed(r.from) || !allowed(r.to)) continue;
     incoming.set(r.to, [...(incoming.get(r.to) ?? []), { from: r.from, evidenceIds: r.evidence.map((e) => e.id).filter(evidenceAllowed) }]);
   }
-  const records = new Runtime(store).queryWindow(revision, window);
+  const records = layers.runtime ? new Runtime(store).queryWindow(revision, window) : [];
   const rows: MapOverlayEntity[] = [];
   const unique = [...new Set(ids)];
   for (const id of unique.filter(allowed)) {
-    const found = new Set<string>(), paths = new Set<string>(), seen = new Set([id]);
-    if (all.get(id)?.kind === "test") found.add(id);
-    let frontier = [id];
-    for (let depth = 0; depth < 3 && frontier.length; depth++) {
-      const next: string[] = [];
-      for (const target of frontier) for (const r of incoming.get(target) ?? []) {
-        if (seen.has(r.from)) continue;
-        seen.add(r.from); r.evidenceIds.forEach((e) => paths.add(e));
-        if (all.get(r.from)?.kind === "test") found.add(r.from); else next.push(r.from);
+    const found = new Set<string>(), paths = new Set<string>();
+    if (layers.tests) {
+      const seen = new Set([id]);
+      if (all.get(id)?.kind === "test") found.add(id);
+      let frontier = [id];
+      for (let depth = 0; depth < 3 && frontier.length; depth++) {
+        const next: string[] = [];
+        for (const target of frontier) for (const r of incoming.get(target) ?? []) {
+          if (seen.has(r.from)) continue;
+          seen.add(r.from); r.evidenceIds.forEach((e) => paths.add(e));
+          if (all.get(r.from)?.kind === "test") found.add(r.from); else next.push(r.from);
+        }
+        frontier = next;
       }
-      frontier = next;
     }
-    const coverage = testFactsFor(store, revision, id).coverage;
+    const coverage = layers.tests ? testFactsFor(store, revision, id).coverage : null;
     const coverageIds = coverage?.evidenceIds.filter(evidenceAllowed) ?? [];
     const percent = coverage && coverageIds.length ? coverage.percent : null;
     let failed = 0;
@@ -60,14 +63,14 @@ export function mapOverlays(store: Store, revision: string, ids: string[], windo
     if (!runtime.spans) { runtime.exact = false; runtime.notes.push("No matching recorded spans in this window; this does not show that the code did not execute."); }
     runtime.notes = [...new Set(runtime.notes)];
     rows.push({ entityId: id, label: all.get(id)!.name, tests: {
-      state: failed ? "FAILING" : percent !== null ? "MEASURED" : found.size && evidenceIds.size ? "LINKED" : "UNKNOWN",
+      state: !layers.tests ? "UNKNOWN" : failed ? "FAILING" : percent !== null ? "MEASURED" : found.size && evidenceIds.size ? "LINKED" : "UNKNOWN",
       coveragePercent: percent, reachingTests: found.size, failedTests: failed, evidenceIds: [...evidenceIds],
       notes: [percent === null ? "No accessible line-coverage measurement." : `${percent}% measured line coverage; this does not establish behavioral correctness.`,
         `${found.size} test(s) found within three static caller hops; unresolved and indirect calls may be missing.`,
         ...(failed ? ["A reaching test has a recorded failure; this does not establish that this code caused it."] : [])],
     }, runtime });
   }
-  return { revision, window, entities: rows, withheld: unique.length - rows.length, gaps: [
+  return { revision, window, entities: rows, withheld: rows.length < unique.filter((id) => all.has(id)).length, gaps: [
     "Layers describe the pinned revision. Test reports may predate the source; inspect citations before relying on them.",
     "Runtime uses ingested envelopes in the selected window, not live telemetry, pasted exceptions or indexed aggregate trace exports.",
   ] };

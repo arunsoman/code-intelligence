@@ -29,9 +29,18 @@ test("insights screens: security, configuration, identity, changes, runtime, sou
     await b.tabTo(`el.id === 'pols'`); await press(b, "Analyze");
     await b.waitFor(() => `document.querySelectorAll('[role=tabpanel] .card').length >= 3`, 15_000, "findings");
     const sec = await text(b, "[role=tabpanel]");
-    assert.match(sec, /No finding does not mean safe/); assert.match(sec, /registerUser logs req\.body\.email, req\.body\.password/); assert.match(sec, /deleteAccountHandler reaches removeAccount/); assert.match(sec, /Counter-argument/);
+    assert.match(sec, /No finding does not mean safe/); assert.match(sec, /Counter-argument/); assert.match(sec, /State change without an authorisation check/);
     assert.ok(!/alarm \(gate satisfied\)/.test(sec), "nothing is an alarm before the gate");
-    await press(b, "Check the alarm gate");
+    // The list is focusable; the arrow keys move the selection and the summary reads out in the detail pane.
+    // The opening selection is set by an effect after the rows render, so wait for it before seeking rows.
+    await b.waitFor(() => `!!document.querySelector('[role=option][aria-selected=true]') && !!document.querySelector('[role=tabpanel] .i-detail')`, 8000, "initial selection and detail pane");
+    await b.tabTo(`el.getAttribute('role') === 'listbox' && el.getAttribute('aria-label') === 'Security findings by rule'`);
+    const detailHas = (re: RegExp) => b.eval(`new RegExp(${JSON.stringify(re.source)}).test(document.querySelector('[role=tabpanel] .i-detail')?.innerText ?? "")`);
+    for (let i = 0; i < 4 && !(await detailHas(/registerUser logs req\.body\.email, req\.body\.password/)); i++) { await b.key("ArrowDown"); await new Promise((r) => setTimeout(r, 150)); }
+    assert.ok(await detailHas(/registerUser logs req\.body\.email, req\.body\.password/), "the PII finding is reachable by keys and its summary reads out");
+    for (let i = 0; i < 5 && !(await detailHas(/deleteAccountHandler reaches removeAccount/)); i++) { await b.key("ArrowUp"); await new Promise((r) => setTimeout(r, 150)); }
+    assert.ok(await detailHas(/deleteAccountHandler reaches removeAccount/), "the authorisation finding is reachable by keys");
+    await press(b, "Start confirmation");
     await b.waitFor(() => `!!document.querySelector('[role=tabpanel] .card [role=status]')`, 8000, "gate result");
     await tab(b, "config");
     await b.waitFor(() => `/Routes/.test(document.querySelector('[role=tabpanel]').innerText)`, 8000);

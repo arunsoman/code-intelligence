@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ApiResult, AuditEvent, JobView, ChangesSince, Claim, ConceptCard, ConverseResult, EditorContext, ExplainResult, MatrixAxis, MatrixCell, ResolvedEvidence, RevisionInfo, SavedState, StatusInfo, VerdictKind, ViewNode, ViewSpec, WorkspaceOpen } from "@cie/schema";
+import type { ApiResult, AuditEvent, JobView, ChangesSince, Claim, ConceptCard, ConverseResult, EditorContext, ExplainResult, MapOverlays, MatrixAxis, MatrixCell, ResolvedEvidence, RevisionInfo, SavedState, StatusInfo, VerdictKind, ViewNode, ViewSpec, WorkspaceOpen } from "@cie/schema";
 import { call } from "./api.ts";
 import { Canvas } from "./Canvas.tsx";
 import { ChatPanel, type Message } from "./ChatPanel.tsx";
@@ -15,6 +15,7 @@ import { FolderPicker } from "./FolderPicker.tsx";
 import { DefectPanel } from "./DefectPanel.tsx";
 import { InsightsPanel } from "./InsightsPanel.tsx";
 import { InvestigationPanel } from "./InvestigationPanel.tsx";
+import { overlayMarks } from "./mapoverlays.ts";
 import { RuntimeReplay, type ReplayFrame } from "./RuntimeReplay.tsx";
 import { EpistemicSummary } from "./EpistemicSummary.tsx";
 import { arrange } from "./arrange.ts";
@@ -34,6 +35,13 @@ const EXAMPLES = ["Show me how authentication works", "Show me everything that c
 export function App() {
   const [highContrast, setHighContrast] = useState(() => { try { return localStorage.getItem("cie-high-contrast") === "true"; } catch { return false; } });
   const [replay, setReplay] = useState<ReplayFrame | null>(null);
+  const [showTestOverlay, setShowTestOverlay] = useState(false);
+  const [showRuntimeOverlay, setShowRuntimeOverlay] = useState(false);
+  const [overlayWindowName, setOverlayWindowName] = useState<"24h" | "7d" | "30d">("7d");
+  const [overlayRefresh, setOverlayRefresh] = useState(0);
+  const [overlays, setOverlays] = useState<MapOverlays | null>(null);
+  const [overlayError, setOverlayError] = useState<string | null>(null);
+  const [overlayBusy, setOverlayBusy] = useState(false);
   useEffect(() => {
     document.documentElement.dataset.contrast = highContrast ? "high" : "normal";
     try { localStorage.setItem("cie-high-contrast", String(highContrast)); } catch { /* Preferences can still work without storage. */ }
@@ -65,6 +73,9 @@ export function App() {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [defectsOpen, setDefectsOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
+  const [chatSeed, setChatSeed] = useState<{ text: string; n: number } | null>(null);
+  /** "Ask about this finding" (UX-57): close the drawer, fill the composer, put the focus there. */
+  const askFromInsights = (question: string) => { setInsightsOpen(false); setChatSeed({ text: question, n: Date.now() }); requestAnimationFrame(() => document.getElementById("chat-input")?.focus()); };
   const [investigationsOpen, setInvestigationsOpen] = useState(false);
   const [drawMode, setDrawMode] = useState<"matrix" | "graph">("matrix");
   const [cellSel, setCellSel] = useState<string[]>([]); // matrix cells chosen as "these" for the next message
@@ -115,6 +126,21 @@ export function App() {
   }, [eff, level, positions, changedIds]);
   const selectedRender = useMemo(() => selectedAggregates(rendered, selection), [rendered, selection]);
   const nodeById = useMemo(() => new Map((view?.nodes ?? []).map((n) => [n.id, n])), [view]);
+  const overlayNodes = useMemo(() => overlayMarks(rendered, nodeById, overlays?.revision === view?.revision ? overlays : null, showTestOverlay, showRuntimeOverlay), [rendered, nodeById, overlays, view, showTestOverlay, showRuntimeOverlay]);
+  const overlayEntityIds = useMemo(() => [...new Set((view?.nodes ?? []).flatMap((n) => n.entityRefs))].slice(0, 2000), [view]);
+  const viewKey = view ? `${view.id}:${view.version}:${view.revision}` : "";
+  useEffect(() => {
+    let live = true;
+    if (!view || (!showTestOverlay && !showRuntimeOverlay)) { setOverlays(null); setOverlayError(null); setOverlayBusy(false); return; }
+    const to = Date.now(), duration = overlayWindowName === "24h" ? 86_400_000 : overlayWindowName === "7d" ? 7 * 86_400_000 : 30 * 86_400_000;
+    setOverlayBusy(true); setOverlayError(null); setOverlays(null);
+    void call<MapOverlays>("C19", "overlays", { revision: view.revision, entityIds: overlayEntityIds, window: { from: Math.max(0, to - duration), to }, layers: { tests: showTestOverlay, runtime: showRuntimeOverlay } }).then((r) => {
+      if (!live) return;
+      setOverlayBusy(false);
+      if (r.ok) setOverlays(r.value); else { setOverlays(null); setOverlayError(r.error.message); }
+    });
+    return () => { live = false; };
+  }, [viewKey, overlayEntityIds, showTestOverlay, showRuntimeOverlay, overlayWindowName, overlayRefresh]);
   const replayNodes = useMemo(() => {
     const entities = new Map((replay?.entities ?? []).map((e) => [e.entityId, e]));
     return new Map((view?.nodes ?? []).flatMap((n) => {
@@ -136,7 +162,6 @@ export function App() {
   const referents = [...mapReferents, ...cellReferents, ...cardReferents, ...editorReferents];
   const cellIds = [...new Set(cellReferents.flatMap((r) => cells.get(r.id)!.ids))];
   const pins = selection.length ? [] : [...new Set([...cellIds, ...(cardPins?.ids ?? []), ...editorReferents.map((r) => r.id.slice(7))])].slice(0, 12);
-  const viewKey = view ? `${view.id}:${view.version}:${view.revision}` : "";
 
   async function withBusy<T>(label: string, fn: () => Promise<T>) {
     setBusy(label); setError(null); setNotice(null);
@@ -256,7 +281,9 @@ export function App() {
     await openNodeDrawer(n.node!);
   };
   const openNodeDrawer = async (vn: ViewNode) => {
-    setDrawer({ kind: "inspect", title: vn.label, sub: `${vn.role ?? vn.kind}${vn.file ? ` · ${vn.file}` : ""}`, notes: vn.notes ?? [], factors: vn.factors, claimIds: vn.claimIds, evidence: await evidence(vn.evidenceIds), entityId: vn.entityRefs[0] });
+    const mark = [...overlayNodes.entries()].flatMap(([renderId, value]) => rendered.nodes.find((n) => n.id === renderId)?.members.some((id) => nodeById.get(id)?.entityRefs.some((entity) => vn.entityRefs.includes(entity))) ? [value] : [])[0];
+    const evidenceIds = [...new Set([...vn.evidenceIds, ...(mark?.evidenceIds ?? [])])];
+    setDrawer({ kind: "inspect", title: vn.label, sub: `${vn.role ?? vn.kind}${vn.file ? ` · ${vn.file}` : ""}`, notes: [...(vn.notes ?? []), ...(mark ? [mark.summary, ...mark.notes] : [])], factors: vn.factors, claimIds: vn.claimIds, evidence: await evidence(evidenceIds), entityId: vn.entityRefs[0] });
     log("INSPECT", vn.label);
   };
   const askForm = async (question: string, form: string, subject?: string, kind?: string) => {
@@ -408,7 +435,7 @@ export function App() {
       )}
       <header>
         {defectsOpen && revision && <DefectPanel revision={revision} onClose={() => setDefectsOpen(false)} />}
-        {insightsOpen && revision && <InsightsPanel revision={revision} view={view} onClose={() => setInsightsOpen(false)} />}
+        {insightsOpen && revision && <InsightsPanel revision={revision} view={view} onClose={() => setInsightsOpen(false)} onAsk={askFromInsights} />}
         {investigationsOpen && revision && <InvestigationPanel key={`${revision}:${ws.id ?? "repo"}`} revision={revision} workspaceId={ws.id ?? `repo:${info?.revision?.repoRoot ?? repoPath}`} initialQuestion={view?.question ?? ""} entityRefs={[...new Set(selection.flatMap((id) => nodeById.get(id)?.entityRefs ?? []))]} onClose={() => setInvestigationsOpen(false)} />}
         <h1>Code Intelligence</h1>
         <span className="chip" title="Model provider">{providerShort}{info?.hosted ? " · hosted" : ""}</span>
@@ -524,6 +551,18 @@ export function App() {
           </div>
         )}
         {view?.formId === "RuntimeOverlay" && <RuntimeReplay key={viewKey} revision={view.revision} onFrame={setReplay} />}
+        {view && !view.matrix && !view.terrain && <div className="formctl map-overlays" role="group" aria-label="Map overlays">
+          <span className="muted small">Overlay</span>
+          <button className={`secondary small ${showTestOverlay ? "on" : ""}`} aria-pressed={showTestOverlay} onClick={() => setShowTestOverlay((v) => !v)}>Test confidence</button>
+          <button className={`secondary small ${showRuntimeOverlay ? "on" : ""}`} aria-pressed={showRuntimeOverlay} onClick={() => setShowRuntimeOverlay((v) => !v)}>Recorded runtime</button>
+          {showRuntimeOverlay && <label className="small">Window <select aria-label="Overlay runtime window" value={overlayWindowName} onChange={(e) => setOverlayWindowName(e.target.value as typeof overlayWindowName)}><option value="24h">24 hours</option><option value="7d">7 days</option><option value="30d">30 days</option></select></label>}
+          {(showTestOverlay || showRuntimeOverlay) && <button className="link small" disabled={overlayBusy} onClick={() => setOverlayRefresh((n) => n + 1)}>Refresh overlays</button>}
+          {overlayBusy && <span className="muted small" role="status">Loading overlay data…</span>}
+          {overlayError && <span className="warn-text small" role="alert">{overlayError}</span>}
+          {showTestOverlay && <span className="overlay-legend" aria-label="Test overlay legend"><span className="test-low">Low line coverage</span> · <span className="test-covered">Coverage measured</span> · <span className="test-failing">Mapped test failing</span> · no data is grey</span>}
+          {showRuntimeOverlay && <span className="overlay-legend" aria-label="Runtime overlay legend"><span className="runtime-observed">Recorded spans</span> · <span className="runtime-errors">Recorded errors</span> · no matching spans is grey</span>}
+          {(showTestOverlay || showRuntimeOverlay) && overlays && <span className="muted small">Signal markings decorate drawn nodes. Inspect a node for counts and evidence. {overlays.withheld ? "Some overlay information was withheld or unavailable under current access." : ""}</span>}
+        </div>}
         {view?.formId === "ChangeRisk" && (
           <div className="formctl" role="group" aria-label="Kind of change">
             <span className="muted small">Weighted for</span>
@@ -546,7 +585,7 @@ export function App() {
               onPick={(id) => { const vn = view.nodes.find((n) => n.id === id); if (vn) { setSelection([id]); void openNodeDrawer(vn); } }}
               onToggle={(id) => setSelection((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]))} />
           ) : (
-          <Canvas rendered={rendered} replayNodes={replayNodes} viewKey={viewKey} level={level} fitTick={fitTick} semanticLevels={levelsApply} selected={selectedRender} boxSelect={boxSelect} caption={view?.caption ?? ""}
+          <Canvas rendered={rendered} replayNodes={replayNodes} overlayNodes={overlayNodes} viewKey={viewKey} level={level} fitTick={fitTick} semanticLevels={levelsApply} selected={selectedRender} boxSelect={boxSelect} caption={view?.caption ?? ""}
             onSelectNodes={(ids) => setSelection([...new Set(rendered.nodes.filter((n) => ids.includes(n.id)).flatMap((n) => n.members))])}
             onTapNode={inspectNode} onTapEdge={inspectEdge} onExpand={expand} onZoomLevel={setLevel}
             onToggleNode={(n) => setSelection((sel) => (n.members.every((m) => sel.includes(m)) ? sel.filter((x) => !n.members.includes(x)) : [...new Set([...sel, ...n.members])]))}
@@ -579,7 +618,7 @@ export function App() {
       </main>
 
       <aside className="right">
-        <ChatPanel messages={messages} referents={referents} busy={!!busy} canAsk={!!info?.revision} examples={EXAMPLES} onSend={(t) => void send(t)} onDropReferent={(id) => (id.startsWith("cell:") ? setCellSel(cellSel.filter((x) => x !== id)) : id === "card:pins" ? setCardPins(null) : id.startsWith("editor:") ? setDismissed(new Set([...dismissed, id.slice(7)])) : setSelection(selection.filter((x) => x !== id)))} />
+        <ChatPanel messages={messages} referents={referents} busy={!!busy} canAsk={!!info?.revision} examples={EXAMPLES} seed={chatSeed ?? undefined} onSend={(t) => void send(t)} onDropReferent={(id) => (id.startsWith("cell:") ? setCellSel(cellSel.filter((x) => x !== id)) : id === "card:pins" ? setCardPins(null) : id.startsWith("editor:") ? setDismissed(new Set([...dismissed, id.slice(7)])) : setSelection(selection.filter((x) => x !== id)))} />
         <section className="drawer" aria-label="Evidence">
           {code && (
             <div className="codecard">

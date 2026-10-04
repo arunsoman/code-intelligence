@@ -7,7 +7,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { BudgetController, runModel, StubProvider, type GatewayFailure, type GatewayResult } from "@cie/model";
 import type {
   AnalysisBatch, ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptStore, ConceptsOutput, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceRef, ExplainResult, ExplanationOutput,
-  HypothesesOutput, ModelProvider, ModelRequest, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec,
+  HypothesesOutput, ModelProvider, ModelRequest, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec, SourceSpan,
   DefectDetectionInput, DetectorFinding, BenchmarkPolicy, BenchmarkResult,
 } from "@cie/schema";
 import { SCHEMA_CHALLENGE, SCHEMA_CONCEPTS, SCHEMA_EXPLANATION, SCHEMA_HYPOTHESES, SCHEMA_REPRESENTATION } from "@cie/schema";
@@ -1193,10 +1193,40 @@ export class Service {
     return ok(ctx, this.resolveEvidence(rev, ev), { revision: rev.id });
   }
 
-  overlays(ctx: CallContext, req: { revision: string; entityIds: string[]; window: { from: number; to: number } }) {
+  /** One read op for a list surface that needs a location per row: hundreds of single reads per screen render would not be affordable. Non-mutating. */
+  evidenceBatch(ctx: CallContext, req: { revision: string; evidenceIds: string[] }): ApiResult<ResolvedEvidence[]> {
+    if (!req || typeof req.revision !== "string" || !Array.isArray(req.evidenceIds) || req.evidenceIds.some((id) => typeof id !== "string") || req.evidenceIds.length > 2000) return fail(ctx, { code: "INVALID_SCHEMA", message: "evidenceBatch requires a revision and at most 2000 evidence IDs", retryable: false });
+    const rev = this.store.revision(req.revision);
+    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "unknown revision", retryable: false });
+    return ok(ctx, this.resolveMany(rev, [], req.evidenceIds), { revision: rev.id });
+  }
+
+  /** File/line for spans that are recorded on findings (the detector's fact location, before any evidence was resolved). */
+  locateSpans(ctx: CallContext, req: { revision: string; spans: SourceSpan[] }): ApiResult<{ file: string; absPath?: string; startLine: number; endLine: number; state: "CURRENT" | "STALE" | "UNAVAILABLE" | "ACCESS_REVOKED" }[]> {
+    if (!req || typeof req.revision !== "string" || !Array.isArray(req.spans) || req.spans.length > 2000 || req.spans.some((s) => !s || typeof s !== "object" || typeof s.sourceId !== "string" || typeof s.contentHash !== "string" || !Number.isInteger(s.startByte) || !Number.isInteger(s.endByteExclusive))) return fail(ctx, { code: "INVALID_SCHEMA", message: "locateSpans requires a revision and at most 2000 source spans", retryable: false });
+    const rev = this.store.revision(req.revision);
+    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "unknown revision", retryable: false });
+    const acc = policyFor(this.store, rev.repoRoot);
+    return ok(ctx, req.spans.map((s) => {
+      if (acc.denied(s.sourceId)) return { file: "(not shown)", startLine: 0, endLine: 0, state: "ACCESS_REVOKED" as const };
+      const path = resolve(rev.repoRoot, s.sourceId);
+      const rel = relative(rev.repoRoot, path);
+      if (rel.startsWith("..") || isAbsolute(rel) || !existsSync(path)) return { file: s.sourceId, startLine: 0, endLine: 0, state: "UNAVAILABLE" as const };
+      try {
+        const buf = readFileSync(path);
+        const stale = createHash("sha256").update(buf).digest("hex") !== s.contentHash;
+        const startLine = buf.subarray(0, s.startByte).toString("utf8").split("\n").length;
+        const endLine = startLine + buf.subarray(s.startByte, s.endByteExclusive).toString("utf8").split("\n").length - 1;
+        return { file: s.sourceId, absPath: path, startLine, endLine, state: stale ? "STALE" : "CURRENT" };
+      } catch { return { file: s.sourceId, startLine: 0, endLine: 0, state: "UNAVAILABLE" as const };
+      }
+    }), { revision: rev.id });
+  }
+
+  overlays(ctx: CallContext, req: { revision: string; entityIds: string[]; window: { from: number; to: number }; layers?: { tests?: boolean; runtime?: boolean } }) {
     if (!req || typeof req.revision !== "string" || !Array.isArray(req.entityIds) || req.entityIds.length > 2000 || req.entityIds.some((id) => typeof id !== "string") || !req.window || !Number.isFinite(req.window.from) || !Number.isFinite(req.window.to) || req.window.from < 0 || req.window.to <= req.window.from || req.window.to > 8.64e15) return fail(ctx, { code: "INVALID_SCHEMA", message: "overlays require a revision, at most 2000 entity IDs and a valid time window", retryable: false });
     if (!this.store.revision(req.revision)) return fail(ctx, { code: "NOT_FOUND", message: "unknown revision", retryable: false });
-    return ok(ctx, mapOverlays(this.store, req.revision, req.entityIds, req.window), { revision: req.revision });
+    return ok(ctx, mapOverlays(this.store, req.revision, req.entityIds, req.window, { tests: req.layers?.tests !== false, runtime: req.layers?.runtime !== false }), { revision: req.revision });
   }
 
   /** Read a span from the repo root of `rev`, refusing paths outside it and hashing to detect drift. */
@@ -1378,6 +1408,7 @@ export class Service {
       revision: rev.id, files: ents.filter((e) => e.kind === "file").length,
       symbols: ents.filter((e) => ["function", "method", "class"].includes(e.kind)).length,
       diagnostics: rev.diagnostics.map((d) => d.message),
+      repoRoot: rev.repoRoot, gitHead: rev.gitHead, createdAt: rev.createdAt,
     }, { revision: rev.id });
   }
 

@@ -23,14 +23,14 @@ test("a11y audit: the audit process itself runs cleanly", () => {
 });
 
 test("a11y audit: rendered markup keeps structure, accessible names, labels and the live region", () => {
-  assert.equal(run.markupFindings?.length ?? 1, 0, `markup findings:\n${(run.markupFindings ?? []).map((f) => `${f.kind}: ${f.detail}`).join("\n")}`);
+  assert.equal(run.markupFindings?.length ?? 1, 0, `markup findings:\n${(run.markupFindings ?? []).map((f: { kind: string; detail: string }) => `${f.kind}: ${f.detail}`).join("\n")}`);
 });
 
 test("a11y audit: WCAG contrast of every text and display-mode colour pair in light, dark and high contrast", () => {
   const audit = run.contrastFindings ?? {};
   assert.deepEqual(audit.themes, ["light", "dark", "high contrast"]);
   assert.ok(audit.textPairs >= 27 && audit.uiPairs >= 12, `all themes scored in full (text ${audit.textPairs}, ui ${audit.uiPairs})`);
-  assert.equal(audit.findings?.length ?? 1, 0, `contrast findings:\n${(audit.findings ?? []).map((f) => f.detail).join("\n")}`);
+  assert.equal(audit.findings?.length ?? 1, 0, `contrast findings:\n${(audit.findings ?? []).map((f: { detail: string }) => f.detail).join("\n")}`);
 });
 
 test("index.html declares a language, a title and a viewport", () => {

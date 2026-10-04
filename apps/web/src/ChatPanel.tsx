@@ -4,12 +4,15 @@ export interface Message { role: "user" | "assistant"; text: string; at: string;
 interface Props {
   messages: Message[]; referents: { id: string; label: string; source?: "map" | "editor" | "cell" }[]; busy: boolean; canAsk: boolean;
   examples: string[]; onSend: (text: string) => void; onDropReferent: (id: string) => void;
+  /** Seeded from other panels (e.g. "ask about this finding"); a new `n` replaces the composer's text. */
+  seed?: { text: string; n: number };
 }
 
-export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend, onDropReferent }: Props) {
+export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend, onDropReferent, seed }: Props) {
   const [text, setText] = useState("");
   const end = useRef<HTMLDivElement>(null);
   useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [messages.length, busy]);
+  useEffect(() => { if (seed?.n) setText(seed.text); }, [seed?.n, seed]); // eslint-disable-line react-hooks/exhaustive-deps
   const send = () => { const t = text.trim(); if (t && !busy) { onSend(t); setText(""); } };
   return (
     <section className="chat" aria-label="Conversation">

@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const webRoot = join(here, "..");
 
-const result = { markupFindings: [], contrastFindings: [], textPairs: 0, uiPairs: 0, indexHtml: "", readme: "", renderError: null };
+const result: { markupFindings: unknown[]; contrastFindings: unknown; textPairs: number; uiPairs: number; indexHtml: string; readme: string; renderError: string | null } = { markupFindings: [], contrastFindings: [], textPairs: 0, uiPairs: 0, indexHtml: "", readme: "", renderError: null };
 try {
   const tmp = mkdtempSync(join(tmpdir(), "a11y-"));
   await esbuild.build({
@@ -23,8 +23,7 @@ try {
     loader: { ".css": "empty" },
   });
   await esbuild.stop();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { App, auditContrast, auditMarkup, renderApp } = (await import(pathToFileURL(join(tmp, "audit.js")).href)) as any;
+  const { App, auditContrast, auditMarkup, renderApp } = (await import(pathToFileURL(join(tmp, "audit.js")).href)) as { App: unknown; auditContrast: (css: string) => unknown; auditMarkup: (html: unknown) => unknown[]; renderApp: (app: unknown) => string };
   result.markupFindings = auditMarkup(renderApp(App));
   result.contrastFindings = auditContrast(readFileSync(join(webRoot, "src/styles.css"), "utf8"));
   rmSync(tmp, { recursive: true, force: true });

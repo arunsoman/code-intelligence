@@ -18,7 +18,7 @@ export interface MapOverlayEntity {
   runtime: { spans: number; errors: number; exact: boolean; evidenceIds: string[]; notes: string[] };
 }
 export interface MapOverlays {
-  revision: string; window: { from: number; to: number }; entities: MapOverlayEntity[]; withheld: number; gaps: string[];
+  revision: string; window: { from: number; to: number }; entities: MapOverlayEntity[]; withheld: boolean; gaps: string[];
 }
 
 export interface SourceSpan {

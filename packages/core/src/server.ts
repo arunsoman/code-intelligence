@@ -82,6 +82,8 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
     "C15/whyShown": { mutating: false, run: (c, b) => svc.whyShown(c, b) },
     "C15/whyHidden": { mutating: false, run: (c, b) => svc.whyHidden(c, b) },
     "C18/evidence": { mutating: false, run: (c, b) => svc.evidenceFor(c, b) },
+    "C18/evidenceBatch": { mutating: false, run: (c, b) => svc.evidenceBatch(c, b) },
+    "C26/locateSpans": { mutating: false, run: (c, b) => svc.locateSpans(c, b) },
     "C18/claims": { mutating: false, run: (c, b) => svc.claims(c, b) },
     "C18/verdict": { mutating: true, run: (c, b) => svc.verdict(c, b) },
     "C13/saveWorkspace": { mutating: true, run: (c, b) => svc.saveWorkspace(c, b) },
