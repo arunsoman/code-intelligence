@@ -1,0 +1,53 @@
+{
+  "C26": {
+    "title": "Performance profile (task 2.M)",
+    "items": [
+      {
+        "item": "S11 statistics, population check and risk predicate",
+        "tests": [
+          "S11 statistics",
+          "PF-027/044 risk predicate"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "AT-17..21 benchmark evaluation states and UNVALIDATED reasons",
+        "tests": [
+          "AT-17/18/19/20/21",
+          "PF-028/029",
+          "AT-18/P5/budget",
+          "benchmark input validation"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "P4 baseline cache and P5 exclusive lease with fencing",
+        "tests": [
+          "PF-030 P4",
+          "AT-19/AT-24"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "2.J integration, handlers, registry and real run",
+        "tests": [
+          "evaluatePerformance records",
+          "2.M inside 2.J",
+          ".cie/perf.json registry",
+          "C26/assessPerformanceRisk",
+          "PF-029 a real run",
+          "an invalid .cie/perf.json"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "WITHIN_BUDGET needs a representative environment that the host must declare; otherwise UNVALIDATED",
+        "tests": [
+          "AT-19/AT-24"
+        ],
+        "state": "blocked",
+        "needs": "a host-declared representative performance environment"
+      }
+    ]
+  }
+}

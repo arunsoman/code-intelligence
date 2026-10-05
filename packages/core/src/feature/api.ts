@@ -94,7 +94,7 @@ export const OPS: OpSpec[] = [
   op("C32/assessOperationalReadiness", false, "3.S"), op("C27/queryValidationResults", false, "2.J"), op("C23/queryRelatedTests", false, "3.P"),
   op("C16/verifyFeature", true, "2.J"), op("C28/exportFeaturePatch", true, "3.Q", "renamed from the spec's exportPatch: C28/exportPatch already exists for change proposals"), op("C28/checkPatchDestination", false, "3.Q"), op("C28/applyPatchCandidate", true, "3.Q"),
   op("C30/publishFeaturePR", true, "3.R"), op("C29/ingestReviewFeedback", true, "3.R"), op("C23/scopeRevalidation", false, "3.R"),
-  op("C30/bindRequestIssue", true, "2.O"), op("C30/syncRequestMilestones", true, "2.O"), op("C30/syncCapabilityRelations", true, "3.T"), op("C23/getMutationOrigins", false, "3.T"),
+  op("C30/previewIssueProjection", false, "2.O", "added by 2.O: the exact text that would leave this machine, so a person can review it before binding"), op("C30/bindRequestIssue", true, "2.O"), op("C30/syncRequestMilestones", true, "2.O"), op("C30/syncCapabilityRelations", true, "3.T"), op("C23/getMutationOrigins", false, "3.T"),
   op("C07/reserveMutationSurfaces", true, "3.T"), op("C23/assessConcurrentChanges", false, "3.T"), op("C07/cancelFeature", true, "1.F"),
   op("C14/recordModelInvocation", true, "1.G"), op("C17/evaluateBuilderVersion", true, "3.U"),
   op("C01/openFeatureWorkspace", false, "1.H"), op("C02/advanceWizard", true, "1.H"), op("C19/compileChangeGraph", false, "2.N"),

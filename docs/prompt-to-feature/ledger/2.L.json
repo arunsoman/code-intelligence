@@ -1,0 +1,41 @@
+{
+  "C27": {
+    "title": "Browser validation harness (task 2.L)",
+    "items": [
+      {
+        "item": "AT-14 plan validation and PF-025 journeys with real interaction, assertions and accessibility; screenshots alone never pass",
+        "tests": [
+          "AT-14 plan validation",
+          "PF-025 journeys",
+          "a screenshot or an exit code"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "CDP adapter, audited-runner-only execution, .cie/browser.json",
+        "tests": [
+          "the CDP adapter configures",
+          "runBrowserValidation",
+          ".cie/browser.json is strict"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "AT-14/AT-84 against a real Chrome; Chrome is detectable not hidden",
+        "tests": [
+          "AT-14/AT-84 against a real Chrome",
+          "the e2e Chrome helper"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Running browser journeys needs an audited container/VM runner; the local runner is refused by design",
+        "tests": [
+          "runBrowserValidation"
+        ],
+        "state": "blocked",
+        "needs": "an audited container or VM runner (the local runner is deliberately refused)"
+      }
+    ]
+  }
+}

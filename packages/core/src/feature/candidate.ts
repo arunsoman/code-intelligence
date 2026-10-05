@@ -23,6 +23,7 @@ import { asSet, canonHash, contentRoot, defineSchema, entriesFromDirectory, type
 import { FeatureError } from "./errors.ts";
 import { eventFor, transition } from "./lifecycle.ts";
 import { snapshotOf } from "./intake.ts";
+import { alreadySupported } from "./overlap.ts";
 import type { SqliteFeatureStore } from "./store.ts";
 import type { CandidateRecord, FileMutation, Hash, Id, Outcome, PatchBinding, Snapshot } from "./types.ts";
 
@@ -141,6 +142,8 @@ export function materializeCandidate(d: CandidateDeps, actor: Id, i: Materialize
   if (rec.mode === "PLAN") throw new FeatureError("FORBIDDEN", "this request was made in PLAN mode; it produces a plan, not a candidate");
   if (rec.state !== "CONTRACTING" && rec.state !== "IMPLEMENTING" && rec.state !== "VALIDATING" && rec.state !== "REVIEW_READY") throw new FeatureError("ILLEGAL_TRANSITION", `a candidate cannot be built while the request is ${rec.state}`);
   if (!rec.contract) throw new FeatureError("BLOCKED", "there is no contract yet; a candidate is always bound to one (requirements are normalised in task 2.I)");
+  const supported = alreadySupported(rec);
+  if (supported) throw new FeatureError("FORBIDDEN", `this request is already supported by ${supported.entryPoint || "an existing capability"} (verified); nothing needs to change. Open the existing feature, report a discrepancy, or change its behaviour instead`);
   if (rec.blockers.length) throw new FeatureError("BLOCKED", `${rec.blockers.length} open item(s) must be resolved first: ${rec.blockers.map((b) => b.id).join(", ")}`);
   if (rec.issue.syncState === "TRACKING_BLOCKED") throw new FeatureError("BLOCKED", "issue tracking is mandatory for this request and no issue is bound yet; bind one before anything is built");
 
@@ -301,9 +304,10 @@ function splitDiff(a: string | null, b: string | null): string {
   return JSON.stringify(rows);
 }
 
-export function readCandidateFile(d: CandidateDeps, i: { candidateHash: Hash; path: string; range?: [number, number]; representation: Representation }): Outcome<{ sourceArtifactRef: Id; content: string; complete: boolean }> {
+export function readCandidateFile(d: CandidateDeps, i: { candidateHash: Hash; path: string; range?: [number, number]; representation: Representation; download?: boolean }): Outcome<{ sourceArtifactRef: Id; content: string; complete: boolean; startLine?: number; nextLine?: number; totalLines?: number }> {
   const cand = d.fs.getCandidateByBinding(i.candidateHash);
   if (!cand) throw new FeatureError("NOT_FOUND", "no such candidate");
+  if (!["CANDIDATE", "BASELINE", "UNIFIED_DIFF", "SPLIT_DIFF"].includes(i.representation)) throw new FeatureError("INVALID_SCHEMA", "unknown file representation");
   const rec = d.fs.getRequest(cand.requestId);
   if (!rec) throw new FeatureError("NOT_FOUND", "the candidate's request no longer exists");
   if (typeof i.path !== "string" || !i.path || i.path.includes("\0")) throw new FeatureError("INVALID_SCHEMA", "a path is required");
@@ -323,12 +327,16 @@ export function readCandidateFile(d: CandidateDeps, i: { candidateHash: Hash; pa
   if (candidateText === null && i.representation === "CANDIDATE") throw new FeatureError("NOT_FOUND", `${rel} is deleted in this candidate`);
   if (baseText === null && i.representation === "BASELINE") throw new FeatureError("NOT_FOUND", `${rel} does not exist in the base`);
   let content = i.representation === "CANDIDATE" ? candidateText! : i.representation === "BASELINE" ? baseText! : i.representation === "UNIFIED_DIFF" ? diffText(rel, baseText, candidateText) : splitDiff(baseText, candidateText);
-  let complete = true;
-  if (i.range && i.representation !== "SPLIT_DIFF") {
-    const [from, to] = i.range;
-    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to < from) throw new FeatureError("INVALID_SCHEMA", "range is [firstLine, lastLine], 1-based and ordered");
-    const lines = content.split("\n"); complete = from === 1 && to >= lines.length; content = lines.slice(from - 1, to).join("\n");
+  const lines: unknown[] = i.representation === "SPLIT_DIFF" ? JSON.parse(content) : content.split("\n");
+  const [from, to] = i.download ? [1, lines.length] : i.range ?? [1, 400];
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to < from) throw new FeatureError("INVALID_SCHEMA", "range is [firstLine, lastLine], 1-based and ordered");
+  let complete = from === 1 && to >= lines.length;
+  const page = lines.slice(from - 1, to);
+  content = i.representation === "SPLIT_DIFF" ? JSON.stringify(page) : page.join("\n");
+  if (i.download && content.length > MAX_TOTAL_BYTES) throw new FeatureError("RESOURCE_LIMIT", "authorized file download exceeds the 4 MiB limit");
+  if (!i.download && content.length > MAX_READ_CHARS) {
+    if (i.representation === "SPLIT_DIFF") throw new FeatureError("RESOURCE_LIMIT", "split diff page is too large; request a narrower range");
+    content = content.slice(0, MAX_READ_CHARS); complete = false;
   }
-  if (content.length > MAX_READ_CHARS) { content = content.slice(0, MAX_READ_CHARS); complete = false; }
-  return { status: complete ? "COMPLETE" : "PARTIAL", value: { sourceArtifactRef: `${cand.bindingHash}:${rel}:${i.representation}`, content, complete }, evidenceIds: [cand.id], diagnostics: complete ? [] : ["the content was cut; ask for a narrower range"] };
+  return { status: complete ? "COMPLETE" : "PARTIAL", value: { sourceArtifactRef: `${cand.bindingHash}:${rel}:${i.representation}`, content, complete, startLine: from, totalLines: lines.length, ...(to < lines.length ? { nextLine: to + 1 } : {}) }, evidenceIds: [cand.id], diagnostics: complete ? [] : ["partial file view; load another page or download the authorized full file"] };
 }

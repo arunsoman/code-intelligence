@@ -47,7 +47,7 @@ export function captureOutcomes(run: RunResult, check: ValidationCheck): { outco
       if (tap) outcomes.push({ name: tap[2].trim(), state: tap[3]?.toUpperCase() === "SKIP" ? "SKIP" : tap[3]?.toUpperCase() === "TODO" ? "TODO" : tap[1] === "ok" ? "PASS" : "FAIL" });
       else if (spec) outcomes.push({ name: spec[2].trim(), state: spec[1] === "✔" ? "PASS" : spec[1] === "✖" ? "FAIL" : spec[1] === "﹣" ? "TODO" : "SKIP" });
     }
-  } else if (check.report === "EXIT" && run.status === "PASSED") outcomes.push({ name: check.id, state: "PASS" });
+  } else if (check.report === "EXIT" && (run.status === "PASSED" || run.status === "FAILED")) outcomes.push({ name: check.id, state: run.status === "PASSED" ? "PASS" : "FAIL" }); // a clean non-zero exit is a complete FAIL (issue #81)
   // Browser reports are validated by the browser harness, not an exit code or a screenshot.
   else if (check.report === "BROWSER_JSON") {
     try {
@@ -83,7 +83,7 @@ const role = (r: RunResult, outcomes: CheckOutcome[], which: RoleRunRecord["role
   outcomes: outcomes.map((o) => ({ name: o.name, state: ["PASS", "FAIL", "SKIP", "TODO", "FLAKY"].includes(o.state) ? o.state as "PASS" | "FAIL" | "SKIP" | "TODO" | "FLAKY" : "SKIP" })),
   output: "Raw output retained by hash; see full outcome population.", omissions: r.omissions });
 
-export type ValidationDependencies = { store: FeatureStore; runner: Runner; /** Trusted project-specific driver (e.g. 2.L) using the same Runner boundary. */ runCheck?: (check: ValidationCheck, root: string, signal?: AbortSignal) => Promise<RunResult> };
+export type ValidationDependencies = { store: FeatureStore; runner: Runner; /** Trusted project-specific driver (e.g. 2.L) using the same Runner boundary. */ runCheck?: (check: ValidationCheck, root: string, signal?: AbortSignal) => Promise<RunResult | undefined>; /** Called before every evidence write; throw to stop (e.g. a fenced-out job). */ beforeSave?: () => void };
 export async function runFeatureValidation(d: ValidationDependencies, i: { candidateId: string; plan: ValidationPlan; actor: string; wallMs: number; signal?: AbortSignal }): Promise<EvidenceRecord[]> {
   assertPlan(i.plan);
   if (!Number.isSafeInteger(i.wallMs) || i.wallMs < 1 || i.wallMs > 1800000) throw new FeatureError("INVALID_SCHEMA", "validation wall budget is out of range");
@@ -92,7 +92,7 @@ export async function runFeatureValidation(d: ValidationDependencies, i: { candi
   if (!request.contract || i.plan.contractHash !== request.contract.hash || candidate.binding.contractHash !== request.contract.hash || candidate.status !== "MATERIALIZED" || request.workspace.candidateHash !== candidate.bindingHash) throw new FeatureError("STALE_REVISION", "validation requires the current contract and candidate");
   const deadline = Date.now() + i.wallMs; const planHash = validationPlanHash(i.plan); const records: EvidenceRecord[] = [];
   const root = makeScratch("pf-validation-base-");
-  let baseReady = false; let blockedPhase = false;
+  let baseReady = false; let blockedAt = Number.POSITIVE_INFINITY; // earliest phase index with a mandatory non-pass (issue #82)
   try {
     // Copy/hash operations never execute repository code. Check both roots before any runner call.
     try { copyTree(request.repositoryId, root); baseReady = contentRoot(entriesFromDirectory(root, { exclude: [] })) === candidate.binding.baseContentHash; } catch { baseReady = false; }
@@ -107,13 +107,13 @@ export async function runFeatureValidation(d: ValidationDependencies, i: { candi
       else if (!baseReady) { status = "STALE"; gaps.push("base content no longer matches the candidate binding"); }
       else if (i.signal?.aborted || Date.now() >= deadline) gaps.push(i.signal?.aborted ? "validation cancelled" : "validation budget exhausted");
       else if (check.applicability === "NOT_APPLICABLE") { status = "NOT_APPLICABLE"; gaps.push(check.rationale!); }
-      else if (blockedPhase && phases.indexOf(check.phase) > 0) { status = "NOT_RUN"; gaps.push("earlier mandatory stage did not pass"); }
+      else if (phases.indexOf(check.phase) > blockedAt) { status = "NOT_RUN"; gaps.push("earlier mandatory stage did not pass"); }
       else if (!check.argv && !d.runCheck) gaps.push("validation adapter unavailable");
       else {
         const scratch = makeScratch("pf-validation-check-");
         try {
           const runAt = async (path: string): Promise<RunResult> => {
-            if (d.runCheck) return d.runCheck(check, path, i.signal);
+            if (d.runCheck) { const handled = await d.runCheck(check, path, i.signal); if (handled) return handled; } // undefined: this driver does not own the check, so the default runner does
             const argv = !i.plan.coverageKnown && check.phase === "REGRESSION" ? check.fullSuiteArgv : check.argv;
             if (!argv?.length) return { status: "REFUSED", exitCode: null, stdout: "", stderr: "", truncated: false, isolation: d.runner.isolation, omissions: [...d.runner.omissions], usage: { wallMs: 0 }, reason: "unknown regression coverage requires a full-suite command" };
             return d.runner.run({ cwd: path, argv, capabilities: { commands: [argv], readRoots: [path], writeRoots: [path], network: "DENY", secretRefs: [], limits: { wallMs: Math.max(1, deadline - Date.now()), outputBytes: 1048576, memoryBytes: 536870912, cpuMs: i.wallMs, processes: 32 } } }, i.signal);
@@ -139,7 +139,7 @@ export async function runFeatureValidation(d: ValidationDependencies, i: { candi
       }
       const latest = d.store.getCandidate(candidate.id); const current = d.store.getRequest(request.requestId)!;
       if (latest?.status !== "MATERIALIZED" || current.contract?.hash !== candidate.binding.contractHash || current.workspace.candidateHash !== candidate.bindingHash || ["CANCELLED", "FAILED"].includes(current.state)) { status = "STALE"; gaps.push("result became stale before persistence"); }
-      if (check.mandatory && !["PASS", "NOT_APPLICABLE"].includes(status)) blockedPhase = true;
+      if (check.mandatory && !["PASS", "NOT_APPLICABLE"].includes(status)) blockedAt = Math.min(blockedAt, phases.indexOf(check.phase));
       const manifest: RunManifest = { id: runId, contractHash: candidate.binding.contractHash, contentHash: candidate.binding.candidateContentHash,
         buildHash: validationHash("pf.BuildScope", i.plan.targets), harnessHash: planHash, fixtureHash: i.plan.testData.fixtureHash, workloadHash: i.plan.workloadHash,
         environmentHash: i.plan.environment.hash, toolchainHash: i.plan.toolchainHash, oracleHash: candidate.binding.candidateOracleHash,
@@ -154,6 +154,7 @@ export async function runFeatureValidation(d: ValidationDependencies, i: { candi
         toolVersions: { node: process.version }, coverage: { state: complete ? "COMPLETE_WITHIN_SCOPE" : "PARTIAL", gaps }, outcomeRef: manifest.outcomesArtifactHash, createdAt: manifest.completedAt!,
         validation: { planHash, checkId: check.id, phase: check.phase, baselineHealth, outcomes, roleRuns, runState: run?.status ?? status, environmentHash: i.plan.environment.hash, fixtureHash: i.plan.testData.fixtureHash, workloadHash: i.plan.workloadHash, isolationOmissions: run?.omissions ?? [...d.runner.omissions], reportComplete: complete } };
       for (const r of results) r.evidenceIds = [record.id];
+      d.beforeSave?.();
       d.store.putEvidence(record, { schemaVersion: 1, eventId: randomUUID(), requestId: request.requestId, type: "ValidationCompleted", actor: i.actor, producer: "C27", requirementIds: [], decisionIds: [], after: candidate.bindingHash, result: status === "PASS" ? "OK" : "BLOCKED", rationale: `${check.id}: ${status}`, at: record.createdAt }); records.push(record);
     }
     const current = d.store.getRequest(request.requestId)!;
@@ -211,7 +212,7 @@ export function computeEligibility(i: { request: FeatureRecord; candidate: Candi
       }
     }
   }
-  const eligibility = blocked ? "BLOCKED" : reasons.length ? "REVIEW_ONLY_INCOMPLETE" : "VERIFIED_WITHIN_SCOPE";
+  const eligibility: PublicationDecision["eligibility"] = blocked ? "BLOCKED" : reasons.length ? "REVIEW_ONLY_INCOMPLETE" : "VERIFIED_WITHIN_SCOPE";
   const evidenceSetHash = validationHash("pf.EvidenceSet", [...i.evidence].sort((a, b) => a.id.localeCompare(b.id)));
   const payload = { purpose: i.purpose ?? "REVIEW", contractHash: contract?.hash ?? "", patchBindingHash: c.bindingHash, evidenceSetHash,
     authorityScopeHash: validationHash("pf.ValidationAuthority", { policy: contract?.authorityPolicyHash ?? "", waivers: activeWaivers }), manifestHash: planHash,

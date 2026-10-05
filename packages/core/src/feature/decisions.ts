@@ -9,6 +9,7 @@ import { authorityPolicyHash, authorize, SCOPES, type AuthorityConfig } from "./
 import { FeatureError } from "./errors.ts";
 import { eventFor } from "./lifecycle.ts";
 import type { SqliteFeatureStore } from "./store.ts";
+import { applyBlocking } from "./findings.ts";
 import type { Assumption, DecisionRecord, FeatureContract, FeatureRecord, Id, Outcome } from "./types.ts";
 
 export const contractIdOf = (requestId: Id): Id => `contract:${requestId}`;
@@ -70,7 +71,24 @@ export function recordDecision(fs: SqliteFeatureStore, auth: AuthorityConfig, ac
       break;
     } catch (e) { if (!(e instanceof FeatureError) || e.code !== "VERSION_CONFLICT" || attempt) throw e; }
   }
+  // The answer resolves the finding behind the question (PF-014); the tasks it was holding are released once its blocker is gone.
+  resolveFindingFor(fs, rec.requestId, i.questionId, saved);
   return saved;
+}
+
+/** A finding is closed by the decision that answers its question: RESOLVED, or DISMISSED when the answer says to dismiss it. */
+function resolveFindingFor(fs: SqliteFeatureStore, requestId: Id, questionId: Id, decision: DecisionRecord): void {
+  for (let attempt = 0; ; attempt++) {
+    const cur = fs.getRequest(requestId); if (!cur) return;
+    const f = (cur.findings ?? []).find((x) => x.id === questionId || questionId === `q:${x.id.split(":").pop()}`);
+    if (!f || (f.status !== "POTENTIAL" && f.status !== "CONFIRMED")) return;
+    const status = /^\s*dismiss/i.test(decision.answer) ? "DISMISSED" as const : "RESOLVED" as const;
+    try {
+      fs.updateRequest(requestId, cur.version, { ...cur, findings: (cur.findings ?? []).map((x) => (x.id === f.id ? { ...x, status, decisionId: decision.id, blockingTaskIds: [] } : x)), workspace: { ...cur.workspace, workspaceVersion: cur.workspace.workspaceVersion + 1 } },
+        eventFor(cur, "DecisionRecorded", decision.actorId, { decisionIds: [decision.id], requirementIds: f.requirementIds, rationale: `finding ${f.id} ${status.toLowerCase()} by decision ${decision.id}` }));
+      applyBlocking(fs, requestId, decision.actorId); return;
+    } catch (e) { if (!(e instanceof FeatureError) || e.code !== "VERSION_CONFLICT" || attempt) throw e; }
+  }
 }
 
 export const SCOPE_LIST = SCOPES;

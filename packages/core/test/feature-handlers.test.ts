@@ -29,11 +29,11 @@ const must = <T,>(r: ApiResult<T>): T => { assert.ok(r.ok, r.ok ? "" : `${r.erro
 const settle = async (svc: any, id: string) => { const j = await svc.jobs.settled(id); return j; };
 
 test("the Wave 1 operations are registered; the rest still answer as stubs naming their task", () => {
-  const keys = ["C02/submitFeature", "C10/discoverFeatureContext", "C02/resumeRequest", "C02/recordDecision", "C15/reviseContract", "C28/materializeCandidate", "C28/readCandidateFile", "C07/cancelFeature", "C01/openFeatureWorkspace", "C02/advanceWizard", "C14/recordModelInvocation"];
+  const keys = ["C02/submitFeature", "C10/discoverFeatureContext", "C02/resumeRequest", "C02/recordDecision", "C15/reviseContract", "C28/materializeCandidate", "C28/readCandidateFile", "C07/cancelFeature", "C01/openFeatureWorkspace", "C02/advanceWizard", "C14/recordModelInvocation", "C28/planFeatureChange", "C28/planReuseChange"];
   const opKeys = new Set(OPS.map((o) => o.key));
   for (const k of keys) assert.ok(opKeys.has(k), k);
   const wave1Left = OPS.filter((o) => !keys.includes(o.key) && /^1\./.test(o.owner)).map((o) => o.key).sort();
-  assert.deepEqual(wave1Left, ["C28/planFeatureChange", "C28/planReuseChange"], "Wave 1 operations still unregistered: the two plan operations consume task 2.I's impact assessment");
+  assert.deepEqual(wave1Left, [], "every Wave 1 operation is registered: the two plan operations were completed with task 2.I");
 });
 
 test("end to end through the handlers: submit → discover → decide → revise → build as a job → read → advance → cancel", async () => {
@@ -181,5 +181,17 @@ test("C14/recordModelInvocation: owner-only, idempotent per key, UNKNOWN revisio
     const other = await b.call("C14/recordModelInvocation", as("mallory", "r2"), body); assert.ok(!other.ok && other.error.code === "NOT_FOUND");
     const bad = await b.call("C14/recordModelInvocation", as("arun", "r3"), { requestId: rid }); assert.ok(!bad.ok && bad.error.code === "INVALID_SCHEMA");
     const noKey = await b.call("C14/recordModelInvocation", as("arun", ""), body); assert.ok(!noKey.ok);
+  } finally { b.close(); }
+});
+
+test("every operation owned by a Wave 1 or Wave 2 task is registered with the full wiring; only later waves still answer as stubs", async () => {
+  const b = await boot();
+  try {
+    const stubs: string[] = [];
+    for (const o of OPS.filter((x) => /^[12]\./.test(x.owner))) {
+      const r = await b.call(o.key, as("arun"), {});
+      if (!r.ok && /is not implemented yet/.test(r.error.message)) stubs.push(o.key);
+    }
+    assert.deepEqual(stubs, []);
   } finally { b.close(); }
 });

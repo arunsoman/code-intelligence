@@ -1,0 +1,36 @@
+{
+  "C27": {
+    "title": "Validation orchestrator (task 2.J)",
+    "items": [
+      {
+        "item": "per-target evidence bound to candidate, environment, fixtures, workload and oracle; single pure computeEligibility",
+        "tests": [
+          "2.J full per-target evidence",
+          "AT-21/22/77",
+          "AT-12 generated code",
+          "2.J omitted mandatory gates"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "AT-63..65/74..76 waivers, baselines, protected fixtures, build failure, skipped tests never become PASS",
+        "tests": [
+          "AT-74 frontend build",
+          "AT-75/76",
+          "AT-63 a scoped waiver",
+          "AT-64 baseline",
+          "AT-65 protected",
+          "2.J unknown test coverage"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "#87 a fenced-out validation job stops writing evidence",
+        "tests": [
+          "2.J (#87)"
+        ],
+        "state": "done"
+      }
+    ]
+  }
+}

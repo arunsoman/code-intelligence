@@ -181,7 +181,8 @@ export class FeatureModelAdapter {
     fail(lastCode);
   }
 
-  async generate(input: { prompt: string; context?: ContextArtifact[]; authorityPolicyHash: string; actor: string; signal?: AbortSignal }): Promise<Outcome<GeneratedFeature>> {
+  /** `draftOnly` stops after the contract stage: requirements and criteria without an edit plan (task 2.I normalisation). The default runs all three stages. */
+  async generate(input: { prompt: string; context?: ContextArtifact[]; authorityPolicyHash: string; actor: string; signal?: AbortSignal; draftOnly?: boolean }): Promise<Outcome<GeneratedFeature>> {
     const initial = this.request();
     if (input.actor !== initial.createdBy) fail("FORBIDDEN");
     const invocations: ModelInvocation[] = [];
@@ -213,6 +214,13 @@ export class FeatureModelAdapter {
         acceptance: proposal.acceptance.map((a) => ({ ...a, oracleOrigin: "GENERATED_UNREVIEWED" as const, oracleSourceRefs: [], validationKinds: ["UNIT" as const] })),
         assumptions: proposal.assumptions.map((a) => ({ ...a, sourceRefs: [], state: "PROPOSED" as const })) };
       const draft: FeatureContractDraft = { schemaVersion: 1, id: `draft:${randomUUID()}`, contract: { ...value, hash: identity("pf.GeneratedContractDraft", jsonValue(value)) }, findingIds: [] };
+      if (input.draftOnly) {
+        const current = this.request();
+        if (current.state === "CANCELLED" || current.state === "FAILED") fail("REQUEST_INACTIVE");
+        if (current.contractVersion !== initial.contractVersion || current.promptRef.contentHash !== initial.promptRef.contentHash || JSON.stringify(current.source) !== JSON.stringify(initial.source)) fail("STALE_REQUEST");
+        return { status: "COMPLETE", value: { draft, edits: [], invocationIds: invocations.map((i) => i.id), generationProvenanceHash: identity("pf.GenerationProvenance", invocations.map(modelInvocationHash)) }, evidenceIds: invocations.map((i) => i.id),
+          diagnostics: ["Draft only: generated requirements and oracles require review.", ...flagged.map((f) => `Instruction-shaped text in context (${f}); it was passed as data only.`), ...(invocations.some((i) => i.resolvedVersion === "UNKNOWN") ? ["Resolved model version UNKNOWN; C17 builder evaluation required."] : [])] };
+      }
       const plan = await this.stage<{ edits: PlannedEdit[] }>("EDIT_PLAN", jsonValue({ sources, contract: draft.contract }), [...refs, contract.invocation.outputHash], input.actor, input.signal);
       invocations.push(plan.invocation);
       for (const edit of plan.output.edits) {

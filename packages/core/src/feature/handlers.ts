@@ -6,7 +6,7 @@ import type { Service } from "../service.ts";
 import { PRIORITY } from "../jobs.ts";
 import { loadAuthority, type AuthorityConfig } from "./authority.ts";
 import { cancelFeature } from "./cancel.ts";
-import { materializeCandidate, readCandidateFile, type CandidateDeps, type FeatureEdit } from "./candidate.ts";
+import { materializeCandidate, readCandidateFile, refreshStaleness, type CandidateDeps, type FeatureEdit } from "./candidate.ts";
 import { loadFeatureConfig, type FeatureConfig } from "./config.ts";
 import { recordDecision, requestIdOf, reviseContract } from "./decisions.ts";
 import { FeatureError, guarded } from "./errors.ts";
@@ -15,12 +15,18 @@ import { discoverFeatureContext, submitFeature, type IntakeDeps } from "./intake
 import { advanceStage, reconcileAll, resumeRequest } from "./lifecycle.ts";
 import type { Handlers } from "./routes.ts";
 import { SqliteFeatureStore } from "./store.ts";
+import { compileChangeGraph, featureReview } from "./presentation.ts";
+import { validationHandlers } from "./validation-handlers.ts";
+import { gateDriverFor, securityHandlers, type GateHooks } from "./security-handlers.ts";
+import { perfHandlers, type PerfHooks } from "./perf-handlers.ts";
+import { issueHandlers, type IssueHooks } from "./issue-handlers.ts";
+import { requirementHandlers, type RequirementHooks } from "./requirement-handlers.ts";
 import type { FeatureRecord, FeatureWorkspace, Id, Outcome } from "./types.ts";
 
 const str = (v: unknown, what: string): string => { if (typeof v !== "string" || !v) throw new FeatureError("INVALID_SCHEMA", `${what} is required`); return v; };
 const obj = (b: unknown): Record<string, any> => { if (!b || typeof b !== "object" || Array.isArray(b)) throw new FeatureError("INVALID_SCHEMA", "the request body must be an object"); return b as Record<string, any>; };
 
-export function featureHandlers(svc: Service): Handlers {
+export function featureHandlers(svc: Service, opts: { gates?: GateHooks; perf?: PerfHooks; issues?: IssueHooks; requirements?: RequirementHooks } = {}): Handlers {
   const fs = new SqliteFeatureStore(svc.store);
   const isActive = (id: string) => { const j = svc.store.job(id); return !!j && (j.state === "QUEUED" || j.state === "RUNNING"); };
   try { reconcileAll(fs, "system", isActive); } catch { /* a closed or older database: nothing to reconcile */ }
@@ -37,6 +43,17 @@ export function featureHandlers(svc: Service): Handlers {
   const who = (c: CallContext) => c.actor.principalId;
 
   return {
+    ...validationHandlers(svc, fs, owned, gateDriverFor(opts.gates ?? {}, fs)),
+    ...perfHandlers(svc, fs, owned, opts.perf ?? {}),
+    ...issueHandlers(svc, fs, owned, opts.issues ?? {}),
+    ...requirementHandlers(svc, fs, owned, opts.requirements ?? {}),
+    ...securityHandlers(svc, fs, owned, opts.gates ?? {}),
+    "C19/compileChangeGraph": (c, b) => guarded(c, () => {
+      const x = obj(b); const rec = owned(x.requestId, who(c));
+      const cand = x.candidateHash ? fs.getCandidateByBinding(x.candidateHash) : null;
+      if (x.candidateHash && (!cand || cand.requestId !== rec.requestId)) throw new FeatureError("NOT_FOUND", "no such candidate for this request");
+      return compileChangeGraph(rec, featureReview(fs, rec, cand, svc.store).files, { candidateHash: x.candidateHash, filters: x.filters, cursor: x.cursor, budget: x.budget ?? { nodes: 90 } });
+    }),
     "C02/submitFeature": (c, b) => guarded(c, () => { const x = obj(b); return submitFeature(intake, who(c), { inputRefs: x.inputRefs ?? [], text: x.text, repositoryId: str(x.repositoryId, "repositoryId"), mode: x.mode, budget: x.budget, idempotencyKey: c.idempotencyKey }); }),
     "C10/discoverFeatureContext": (c, b) => guarded(c, () => { const x = obj(b); owned(x.requestId, who(c)); return discoverFeatureContext(intake, who(c), { requestId: x.requestId, snapshot: x.snapshot ?? fs.getRequest(x.requestId)!.source, retrievalBudget: x.retrievalBudget }); }),
     "C02/resumeRequest": (c, b) => guarded(c, () => { const x = obj(b); owned(x.requestId, who(c)); return resumeRequest(fs, x.requestId, who(c), isActive); }),
@@ -67,7 +84,7 @@ export function featureHandlers(svc: Service): Handlers {
     "C28/readCandidateFile": (c, b) => guarded(c, () => {
       const x = obj(b); const cand = fs.getCandidateByBinding(str(x.candidateHash, "candidateHash"));
       if (!cand) throw new FeatureError("NOT_FOUND", "no such candidate"); const rec = owned(cand.requestId, who(c));
-      return readCandidateFile({ fs, store: svc.store, auth: authOf(rec.repositoryId) }, { candidateHash: x.candidateHash, path: x.path, range: x.range, representation: x.representation ?? "CANDIDATE" });
+      return readCandidateFile({ fs, store: svc.store, auth: authOf(rec.repositoryId) }, { candidateHash: x.candidateHash, path: x.path, range: x.range, representation: x.representation ?? "CANDIDATE", download: x.download === true });
     }),
     // 1.G's frozen C14 signature, bound to the caller's own request by the adapter.
     "C14/recordModelInvocation": (c, b) => guarded(c, () => {
@@ -79,10 +96,11 @@ export function featureHandlers(svc: Service): Handlers {
     "C07/cancelFeature": (c, b) => guarded(c, () => { const x = obj(b); owned(x.requestId, who(c)); return cancelFeature(fs, svc.jobs, who(c), { requestId: x.requestId, reason: x.reason }); }),
     // Version-gated read (plan P6): a caller that already has `sinceWorkspaceVersion` gets NOT_MODIFIED instead of the whole workspace.
     "C01/openFeatureWorkspace": (c, b) => guarded(c, (): Outcome<FeatureWorkspace> => {
-      const x = obj(b); const rec = owned(x.requestId, who(c));
+      const x = obj(b); let rec = owned(x.requestId, who(c));
+      if (rec.workspace.candidateHash && refreshStaleness({ fs, store: svc.store, auth: authOf(rec.repositoryId) }, who(c), rec.requestId).length) rec = fs.updateRequest(rec.requestId, rec.version, { ...rec, workspace: { ...rec.workspace, workspaceVersion: rec.workspace.workspaceVersion + 1 } });
       if (x.sinceWorkspaceVersion === rec.workspace.workspaceVersion) return { status: "COMPLETE", evidenceIds: [], diagnostics: ["NOT_MODIFIED"] };
       const cand = rec.workspace.candidateHash ? fs.getCandidateByBinding(rec.workspace.candidateHash) : null;
-      return { status: "COMPLETE", evidenceIds: [], diagnostics: [], value: { ...rec.workspace, contractVersion: rec.contractVersion, state: rec.state, mode: rec.mode, candidateStatus: cand?.status, issueRef: rec.issue.number ? `${rec.issue.repository}#${rec.issue.number}` : undefined } };
+      return { status: "COMPLETE", evidenceIds: [], diagnostics: [], value: { ...rec.workspace, contractVersion: rec.contractVersion, state: rec.state, mode: rec.mode, candidateStatus: cand?.status, issueRef: rec.issue.number ? `${rec.issue.repository}#${rec.issue.number}` : undefined, review: featureReview(fs, rec, cand, svc.store) } };
     }),
     "C02/advanceWizard": (c, b) => guarded(c, (): Outcome<FeatureWorkspace> => {
       const x = obj(b); owned(x.requestId, who(c));

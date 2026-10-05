@@ -34,6 +34,7 @@ export type Requirement = {
   id: Id; source: SourceRef; text: string; origin: RequirementOrigin; type: RequirementType;
   actorIds: Id[]; action?: string; resourceScope?: string; conditions: string[]; authorityBindingId?: Id;
   dependsOn: Id[]; acceptanceIds: Id[]; status: "ACTIVE" | "SUPERSEDED" | "PROPOSED";
+  /** 2.I: how well the text is supported by the source it cites (0..1), computed by code; below the grounding threshold the requirement stays a PROPOSED assumption. */ grounding?: number;
 };
 /** Plan S6: where the expected result came from. A criterion backed only by GENERATED_UNREVIEWED cannot be verified. */
 export type OracleOrigin = "USER_EXAMPLE" | "POLICY" | "EXISTING_TEST" | "REVIEWED_FIXTURE" | "GENERATED_UNREVIEWED";
@@ -57,12 +58,14 @@ export type ResolutionOption = { id: Id; description: string; impacts: string[];
 export type RequirementFinding = {
   id: Id; kind: FindingKind; requirementIds: Id[]; sourceRefs: SourceRef[]; scope: string; explanation: string; witness?: string;
   status: "POTENTIAL" | "CONFIRMED" | "RESOLVED" | "DISMISSED"; blockingTaskIds: Id[]; options: ResolutionOption[]; decisionId?: Id;
+  /** 2.I: who found it and by which rule. Only a DETERMINISTIC finding with a witness can be CONFIRMED; a model's concern stays POTENTIAL. */
+  detector?: "DETERMINISTIC" | "MODEL"; rule?: string; impact?: "HIGH" | "MEDIUM" | "LOW";
 };
 
 // ------------------------------------------------------------------------------------------------ discovery (§30.1)
 
 export type CoverageState = "COMPLETE_WITHIN_SCOPE" | "PARTIAL" | "UNSUPPORTED" | "NOT_SEARCHED" | "FAILED";
-export type DiscoveryDomain = "LANGUAGES" | "BUILD" | "TESTS" | "STARTUP" | "UI" | "API_CONVENTIONS" | "PERMISSIONS" | "TENANCY" | "DATA_ACCESS" | "WORKERS" | "MIGRATIONS" | "INTEGRATIONS" | "OBSERVABILITY";
+export type DiscoveryDomain = "CAPABILITIES" | "LANGUAGES" | "BUILD" | "TESTS" | "STARTUP" | "UI" | "API_CONVENTIONS" | "PERMISSIONS" | "TENANCY" | "DATA_ACCESS" | "WORKERS" | "MIGRATIONS" | "INTEGRATIONS" | "OBSERVABILITY";
 export type CoverageRecord = {
   domain: DiscoveryDomain; state: CoverageState; searchedRoots: string[]; excluded: { root: string; reason: string }[];
   tools: string[]; found: "FOUND" | "NOT_FOUND_WITHIN_SEARCHED_SCOPE"; artifacts: string[]; unsupported: string[]; unresolved: string[];
@@ -81,7 +84,13 @@ export type RequestState = "RECEIVED" | "DISCOVERING" | "CONTRACTING" | "IMPLEME
 export type FeatureTaskState = "READY" | "RUNNING" | "BLOCKED" | "COMPLETE" | "FAILED" | "CANCELLED" | "STALE";
 export type WizardStage = "DESCRIBE" | "CLARIFY" | "PLAN" | "CHANGES" | "VALIDATE" | "DELIVER";
 
-export type IssueBinding = { repository: string; number?: number; nodeId?: string; syncState: "UNBOUND" | "TRACKING_BLOCKED" | "UNSYNCED" | "SYNCED"; lastSyncedSequence: number; projectionRevision: number };
+export type IssueBinding = {
+  repository: string; number?: number; nodeId?: string; syncState: "UNBOUND" | "TRACKING_BLOCKED" | "UNSYNCED" | "SYNCED" | "DIVERGED"; lastSyncedSequence: number; projectionRevision: number;
+  /** 2.O: true when CIE opened the issue (only then may it close it); the destination's visibility decides how much is projected. */
+  createdByCie?: boolean; visibility?: "PRIVATE" | "PUBLIC_OR_UNKNOWN"; projectionHash?: string; labels?: string[];
+  /** Outbox pacing: the last comment time, and the earliest next attempt after a rate limit or outage. */
+  lastSyncAt?: string; retryAfter?: string; failures?: number;
+};
 export type FeatureTask = { id: Id; componentId: string; requirementIds: Id[]; dependencyTaskIds: Id[]; obligationIds: Id[]; plannedEdits: string[]; capabilityIds: Id[]; state: FeatureTaskState; evidenceIds: Id[] };
 export type FeatureWorkspace = {
   requestId: Id; stage: WizardStage; contractHash?: Hash; candidateHash?: Hash; issueRef?: string; blockers: Id[]; runningJobIds: Id[];
@@ -96,8 +105,10 @@ export type FeatureRecord = {
   schemaVersion: 1; requestId: Id; repositoryId: Id; mode: OutcomeMode; state: RequestState; tier?: Tier;
   promptRef: { artifactId: Id; contentHash: Hash; redactedPreview: string; /** The full prompt, kept for the owner only; the issue projection uses `redactedPreview`. */ text?: string };
   inputRefs: SourceRef[]; source: Snapshot; contractVersion: number; contract?: FeatureContract;
-  tasks: FeatureTask[]; blockers: { id: Id; kind: "QUESTION" | "FINDING" | "DEPENDENCY" | "TRACKING"; requirementIds: Id[]; text: string; /** Authority scope needed to resolve it (default "business"). */ scope?: string }[];
+  tasks: FeatureTask[]; blockers: { id: Id; kind: "QUESTION" | "FINDING" | "DEPENDENCY" | "TRACKING"; requirementIds: Id[]; text: string; /** Authority scope needed to resolve it (default "business"). */ scope?: string; /** 2.I: answering these question ids first unblocks this child question (§7.2). */ dependsOn?: Id[] }[];
   issue: IssueBinding; workspace: FeatureWorkspace; version: number; createdBy: Id; createdAt: Timestamp; updatedAt: Timestamp;
+  /** 2.I: findings raised against the current contract (§8), deterministic first, model-proposed second. */ findings?: RequirementFinding[];
+  /** 2.I: the stored overlap/reuse assessment (§37), set by compareRequestedBehaviour. */ overlap?: OverlapAssessment;
   /** 1.G: append-only invocation snapshots, including intent persisted before provider calls. */
   modelInvocations?: ModelInvocation[];
   /** Set by discovery (1.C). */ assessment?: RepositoryAssessment;
@@ -186,9 +197,31 @@ export type PerformanceBudget = {
   errorConstraints: string[]; measurementPlanHash: Hash; authorityBindingId?: Id;
 };
 export type PerfCase = "P0" | "P1" | "P2" | "P3";
+/** One side of one pf-perf-core-v1 case: the complete outcome population (errors kept) plus per-metric samples. */
+export type PerfOutcomeClass = "SUCCESS" | "ERROR" | "TIMEOUT" | "CANCELLED";
+export type PerfCaseRun = {
+  side: "BASELINE" | "CANDIDATE"; case: PerfCase; manifestId: Id; repetitions: number; completed: number;
+  population: Record<PerfOutcomeClass, number>;
+  metrics: Record<string, { samples: number[]; p50: number; p95: number; p99: number }>;
+};
+/** S11 verdict for one budget metric over one paired comparison. */
+export type PerfBudgetVerdict = {
+  budgetId: Id; state: PerformanceState; metric: string; comparison: string;
+  repetitions: number; baselineP50: number; candidateP50: number; baselineP95: number; candidateP95: number;
+  deltaP50: number; ciLow: number; ciHigh: number; limit?: number; reasons: string[];
+};
 export type PairedExperiment = {
   id: Id; profile: "pf-perf-core-v1"; baselineManifestIds: Id[]; candidateManifestIds: Id[]; populationHash: Hash; budgetIds: Id[];
   analysisPolicyHash: Hash; state: PerformanceState; cases: PerfCase[]; promotedBy: string[]; contended: boolean;
+  /** 2.M additions (all optional). */
+  requestId?: Id; candidateId?: Id; bindingHash?: Hash;
+  createdAt?: Timestamp; measurementPlanHash?: Hash; workloadHash?: Hash; environmentHash?: Hash;
+  /** False when no representative environment was recorded for the run (AT-19). */
+  environmentRepresentative?: boolean;
+  measurements?: Partial<Record<PerfCase, { baseline?: PerfCaseRun; candidate?: PerfCaseRun }>>;
+  /** Cases the budget could not finish, with concrete reasons (AT-34; cost limits constrain execution, not truth). */
+  caseStates?: Partial<Record<PerfCase, "COMPLETE" | "INCOMPLETE">>;
+  incompleteReasons?: string[];
 };
 export type PublicationEligibility = "VERIFIED_WITHIN_SCOPE" | "REVIEW_ONLY_INCOMPLETE" | "BLOCKED";
 export type PublicationDecision = {
@@ -209,7 +242,13 @@ export type ReuseStrategy = "NO_CHANGE" | "CONFIGURE" | "EXTEND" | "COMPOSE" | "
 export type OverlapAssessment = {
   id: Id; contractHash: Hash; comparedSnapshots: Snapshot[]; relationship: OverlapRelationship; strategy: ReuseStrategy;
   mappings: BehaviourMapping[]; alternatives: string[]; unresolvedIds: Id[]; decisionId?: Id;
+  /** 2.I: what the comparison rests on (static observations of source, tests and configuration), the capabilities compared and the dimensions that differed. */
+  observations?: OverlapObservation[]; capabilities?: CapabilityRef[]; differences?: { acceptanceId: Id; dimension: string; detail: string }[];
+  /** Set by verifyOverlap: true only when every REUSED mapping has verified evidence; the policy the verification used. */
+  verified?: boolean; policyHash?: Hash; regressionObligations?: string[]; reasons?: string[];
 };
+/** A fact read from the repository (or a recorded decision) that a mapping cites. Staleness is detectable from `contentHash`. */
+export type OverlapObservation = { id: Id; kind: "ENTRY_POINT" | "TEST_REFERENCE" | "CONFIG_FLAG" | "ACCESS_CHECK" | "TENANT_SCOPE" | "SIDE_EFFECT" | "FAILURE_HANDLING" | "SKIPPED_TEST" | "DECISION"; path: string; line?: number; detail: string; contentHash: Hash };
 export type RequestRelation = { fromRequestId: Id; toRequestId: Id; relationship: "DUPLICATES" | "DEPENDS_ON" | "EXTENDS" | "CONFLICTS_WITH"; sourceRefs: SourceRef[]; state: "PROPOSED" | "VERIFIED" | "SUPERSEDED" };
 export type MutationLease = { id: Id; requestId: Id; surfaceIds: Id[]; expectedRevision: Hash; fencingToken: number; expiresAt: Timestamp };
 
@@ -224,25 +263,25 @@ export type PublicationReceipt = { id: Id; kind: "DRAFT_PR" | "ISSUE_SYNC" | "PA
 type Placeholder = { schemaVersion: 1; id: Id };
 export type FeatureRequest = Placeholder & { requestId: Id; state: RequestState; replayed: boolean; mode?: OutcomeMode; warnings?: string[] }; // OWNED BY 1.C
 export type FeatureContractDraft = Placeholder & { contract: FeatureContract; findingIds: Id[] };                 // OWNED BY 1.G / 2.I
-export type ImpactAssessment = Placeholder & { affectedIds: Id[]; staleIds: Id[] };                               // OWNED BY 2.I
-export type QuestionBatch = Placeholder & { questions: { id: Id; text: string; choices: string[]; whyNeeded: string; blocks: Id[] }[] }; // OWNED BY 2.I
+export type ImpactAssessment = Placeholder & { affectedIds: Id[]; staleIds: Id[]; reasons?: string[]; regressionObligations?: string[]; consumers?: string[]; gaps?: string[] };                               // OWNED BY 2.I
+export type QuestionBatch = Placeholder & { questions: { id: Id; text: string; choices: string[]; whyNeeded: string; blocks: Id[]; scope?: string; dependsOn?: Id[] }[]; assumptions?: Id[]; deferred?: Id[]; independentTaskIds?: Id[] }; // OWNED BY 2.I
 export type FeaturePlan = Placeholder & { tasks: FeatureTask[]; tier: Tier; reuse: BehaviourMapping[] };          // OWNED BY 2.I / 1.E
-export type PerformanceRiskAssessment = Placeholder & { applicable: boolean; triggers: string[] };                // OWNED BY 2.M
-export type PerformanceAssessment = Placeholder & { state: PerformanceState; reasons: string[] };                 // OWNED BY 2.M
+export type PerformanceRiskAssessment = Placeholder & { applicable: boolean; triggers: string[]; rationale?: string[]; contractHash?: Hash; patchBindingHash?: Hash }; // OWNED BY 2.M
+export type PerformanceAssessment = Placeholder & { state: PerformanceState; reasons: string[]; pairedExperimentId?: Id; evidenceIds?: Id[]; verdicts?: PerfBudgetVerdict[] }; // OWNED BY 2.M
 export type DependencyReview = Placeholder & { status: "PASS" | "BLOCKED" | "INCOMPLETE"; findings: string[] };   // OWNED BY 2.K
 export type SecurityAssessment = Placeholder & { status: "PASS" | "BLOCKED" | "INCOMPLETE"; findings: string[] }; // OWNED BY 2.K
 export type OperationalAssessment = Placeholder & { status: "PASS" | "INCOMPLETE" | "NOT_APPLICABLE"; gaps: string[] }; // OWNED BY 3.S
 export type ReviewFeedback = Placeholder & { classification: "REQUIREMENT" | "CORRECTION" | "PREFERENCE" | "POLICY"; headHash: Hash }; // OWNED BY 3.R
 export type RevalidationPlan = Placeholder & { rerun: ValidationKind[]; reuse: Id[]; broaderBecause: string[] };  // OWNED BY 3.R
 export type BuilderEvaluation = Placeholder & { modelIdentityHash: Hash; suiteHash: Hash; passed: boolean };      // OWNED BY 3.U
-export type IssueBindingReceipt = Placeholder & { issue: IssueBinding };                                           // OWNED BY 2.O
-export type IssueSyncReceipt = Placeholder & { throughSequence: number; remoteIds: string[] };                    // OWNED BY 2.O
+export type IssueBindingReceipt = Placeholder & { issue: IssueBinding; created?: boolean; labelsApplied?: string[]; warnings?: string[] };                                           // OWNED BY 2.O
+export type IssueSyncReceipt = Placeholder & { throughSequence: number; remoteIds: string[]; deferredUntil?: string; skipped?: number; sent?: number; state?: IssueBinding["syncState"]; warnings?: string[] };                    // OWNED BY 2.O
 export type MutationLineage = Placeholder & { path: string; origins: { requestId: Id; eventId: Id; commit?: Hash }[] }; // OWNED BY 3.T
 export type InvestigationPlan = Placeholder & { steps: string[] };                                                 // OWNED BY 3.S (schema only in slice 1)
 export type ApplicationAssessment = Placeholder & { applies: boolean; conflicts: string[]; dirty: string[] };    // OWNED BY 3.Q
 export type ApplicationReceipt = Placeholder & { applied: string[]; notApplied: string[]; resultContentHash?: Hash }; // OWNED BY 3.Q
 export type IntegrationAssessment = Placeholder & { compatible: boolean; conflicts: string[] };                  // OWNED BY 3.T
-export type OverlapEvidence = Placeholder & { evidenceIds: Id[] };                                                // OWNED BY 2.I
+export type OverlapEvidence = Placeholder & { evidenceIds: Id[]; observations?: OverlapObservation[]; stepsUsed?: number; unresolvedIds?: Id[] };                                                // OWNED BY 2.I
 export type VerifiedOverlapAssessment = Placeholder & { assessment: OverlapAssessment; verified: boolean };      // OWNED BY 2.I
 export type ValidationPage = { results: ValidationResult[]; nextCursor?: string; coverage: { state: CoverageState; gaps: string[] } }; // OWNED BY 2.J
 export type CancellationReceipt = Placeholder & { requestId: Id; stoppedJobIds: Id[]; externalEffects: string[] };// OWNED BY 1.F

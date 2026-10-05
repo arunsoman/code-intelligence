@@ -11,12 +11,14 @@ import { canonHash, defineSchema, type Canon } from "./canon.ts";
 import type { CoverageRecord, CoverageState, DiscoveryDomain, Id, RepositoryAssessment, Snapshot } from "./types.ts";
 
 export interface DiscoveryBudget { files: number; tokens: number }
-export const DOMAINS: readonly DiscoveryDomain[] = ["LANGUAGES", "BUILD", "TESTS", "STARTUP", "UI", "API_CONVENTIONS", "PERMISSIONS", "TENANCY", "DATA_ACCESS", "WORKERS", "MIGRATIONS", "INTEGRATIONS", "OBSERVABILITY"];
+/** The repository-wide domains discovery covers; CAPABILITIES is recorded separately by the overlap search (task 2.I). */
+export type RepoDomain = Exclude<DiscoveryDomain, "CAPABILITIES">;
+export const DOMAINS: readonly RepoDomain[] = ["LANGUAGES", "BUILD", "TESTS", "STARTUP", "UI", "API_CONVENTIONS", "PERMISSIONS", "TENANCY", "DATA_ACCESS", "WORKERS", "MIGRATIONS", "INTEGRATIONS", "OBSERVABILITY"];
 const MAX_READ_BYTES = 256 * 1024, MAX_ARTIFACTS = 20;
 const TOOLS = ["file-walk", "package-manifest", "content-scan", "entity-index"];
 
-interface Walked { files: string[]; truncated: boolean; deniedCount: number }
-function walk(root: string, limit: number, denied: (rel: string) => boolean): Walked {
+export interface Walked { files: string[]; truncated: boolean; deniedCount: number }
+export function walk(root: string, limit: number, denied: (rel: string) => boolean): Walked {
   const files: string[] = []; let truncated = false, deniedCount = 0;
   readdirSync(root); // an unreadable or missing root must fail the whole walk, not look like an empty repository
   const visit = (dir: string): void => {
@@ -36,8 +38,8 @@ function walk(root: string, limit: number, denied: (rel: string) => boolean): Wa
   return { files, truncated, deniedCount };
 }
 
-const SRC = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|rb|php|cs|swift)$/;
-const readText = (root: string, rel: string): string => { try { const b = readFileSync(join(root, rel)); return b.subarray(0, MAX_READ_BYTES).toString("utf8"); } catch { return ""; } };
+export const SRC = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|rb|php|cs|swift)$/;
+export const readText = (root: string, rel: string): string => { try { const b = readFileSync(join(root, rel)); return b.subarray(0, MAX_READ_BYTES).toString("utf8"); } catch { return ""; } };
 
 export interface PackageInfo { present: boolean; scripts: Record<string, string>; deps: Set<string>; main?: string; bin?: string[]; invalid?: string }
 export function readPackage(root: string): PackageInfo {
@@ -78,7 +80,7 @@ const hasDep = (pkg: PackageInfo, names: string[]) => names.filter((n) => pkg.de
 const pathHits = (files: string[], re: RegExp) => files.filter((f) => re.test(f));
 const contentHits = (srcs: { rel: string; text: string }[], re: RegExp) => srcs.filter((s) => re.test(s.text)).map((s) => s.rel);
 
-const FINDERS: Record<DiscoveryDomain, Finder> = {
+const FINDERS: Record<RepoDomain, Finder> = {
   LANGUAGES: ({ files }) => { const c = new Map<string, number>(); for (const f of files) { const e = /\.([A-Za-z0-9]+)$/.exec(f)?.[1]?.toLowerCase(); if (e && SRC.test(f)) c.set(e, (c.get(e) ?? 0) + 1); } return { artifacts: [...c].sort((a, b) => b[1] - a[1]).map(([e, n]) => `${e}: ${n} files`) }; },
   BUILD: ({ files, pkg }) => ({ artifacts: [...pathHits(files, /(^|\/)(tsconfig[^/]*\.json|Cargo\.toml|go\.mod|pom\.xml|build\.gradle(\.kts)?|Makefile|vite\.config\.[jt]s|webpack\.config\.[jt]s)$/), ...(pkg.scripts.build ? ["package.json#scripts.build"] : [])] }),
   TESTS: ({ files, pkg }) => ({ artifacts: [...(pkg.scripts.test ? ["package.json#scripts.test"] : []), ...hasDep(pkg, ["jest", "vitest", "mocha", "playwright", "@playwright/test", "cypress"]).map((d) => `dependency ${d}`), ...pathHits(files, /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|_test\.(go|rs|py)$/).slice(0, 8)] }),
