@@ -1,4 +1,5 @@
 import type { WizardStage } from "./stages.ts";
+import type { FeatureReview } from "../../../../packages/core/src/feature/presentation.ts";
 
 // Wizard-shell logic for the Build feature panel (spec §43.1, §30.2; plan tasks 1.H).
 // Pure and fixture-driven: the shapes mirror the frozen contracts in packages/core/src/feature/types.ts
@@ -23,7 +24,7 @@ export type WizardTask = {
   waiting?: "USER" | "PROVIDER" | "QUEUED";
 };
 
-export type CriterionStatus = "PASS" | "FAIL" | "INCOMPLETE" | "NOT_RUN" | "NOT_APPLICABLE";
+export type CriterionStatus = "PASS" | "PASS_UNREVIEWED_ORACLE" | "FAIL" | "INCOMPLETE" | "STALE" | "NOT_RUN" | "NOT_APPLICABLE";
 export type WizardCriterion = { id: string; text: string; implemented: boolean; mandatory: boolean; validation: CriterionStatus };
 
 export type WizardDecision = {
@@ -62,6 +63,7 @@ export type WizardWorkspace = {
   /** Persistent mock labels (§30.2: mocks are always labelled). */
   mocked: string[];
   updatedAt: string;
+  review?: FeatureReview;
 };
 
 /**
@@ -124,6 +126,7 @@ export function stageGate(ws: WizardWorkspace, stage: WizardStage): StageGate {
         ? { stage, primaryEnabled: true, disabledReason: null, visibleBlockers: visible }
         : { stage, primaryEnabled: false, disabledReason: ws.candidate ? `The candidate is ${ws.candidate.status.toLowerCase()}; run validation against the exact current binding only.` : "No candidate to validate.", visibleBlockers: visible };
     case "DELIVER": {
+      if (ws.review) return { stage, primaryEnabled: ws.review.decision?.eligibility === "VERIFIED_WITHIN_SCOPE", disabledReason: ws.review.decision?.eligibility === "VERIFIED_WITHIN_SCOPE" ? null : ws.review.decision?.reasons.join("; ") || "Validation eligibility has not been computed.", visibleBlockers: visible };
       const open = ws.criteria.filter((c) => c.mandatory && c.validation !== "PASS" && c.validation !== "NOT_APPLICABLE");
       return {
         stage,
@@ -174,6 +177,7 @@ export function groupTasks(tasks: WizardTask[]): TaskGroups {
  */
 export function statusBanners(ws: WizardWorkspace): string[] {
   const banners: string[] = [];
+  if (ws.review?.decision) banners.push(ws.review.decision.eligibility.replaceAll("_", " "));
   const implemented = ws.criteria.filter((c) => c.implemented);
   const validated = ws.criteria.filter((c) => c.validation === "PASS");
   if (ws.candidate && implemented.length > 0 && validated.length < ws.criteria.filter((c) => c.mandatory).length) {
@@ -188,7 +192,7 @@ export function statusBanners(ws: WizardWorkspace): string[] {
   const staleEvidence = ws.evidence.filter((e) => e.status === "STALE").length;
   if (staleEvidence > 0) banners.push(`STALE — ${staleEvidence} evidence record(s) no longer match the current contract (v${ws.contractVersion}).`);
   for (const m of ws.mocked) banners.push(`MOCKED — ${m}: results under this label are fixture-backed, not real integration evidence.`);
-  if (banners.length === 0) banners.push("No blockers recorded. Progress above is fixture data until the intake backend lands (task 1.C).");
+  if (banners.length === 0) banners.push(ws.review ? "No blockers recorded. Validation evidence is shown within its recorded scope." : "No blockers recorded. Progress above is fixture data until the intake backend lands (task 1.C).");
   return banners;
 }
 

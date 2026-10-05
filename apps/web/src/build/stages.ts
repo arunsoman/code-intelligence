@@ -1,7 +1,7 @@
 // Build feature wizard: stage list and the rule that navigation is not execution (spec §43.1). Pure, so tests cover it.
 export type WizardStage = "DESCRIBE" | "CLARIFY" | "PLAN" | "CHANGES" | "VALIDATE" | "DELIVER";
 export const STAGES: { id: WizardStage; label: string; primary: string }[] = [
-  { id: "DESCRIBE", label: "Describe", primary: "Analyse request" },
+  { id: "DESCRIBE", label: "Describe", primary: "Start analysis" },
   { id: "CLARIFY", label: "Clarify", primary: "Continue with ready work" },
   { id: "PLAN", label: "Plan", primary: "Build candidate" },
   { id: "CHANGES", label: "Changes", primary: "Request revision" },
