@@ -229,3 +229,56 @@ export function matchName<T extends { name: string }>(want: string, items: T[]):
   }
   return best?.item ?? (w.size === 0 ? items[0] ?? null : null);
 }
+
+// Structured generation is separate from label selection: feature callers validate the returned JSON
+// and authorize each attempt. The transport never retries or chooses another provider itself.
+export interface GenerationRequest {
+  system: string; user: string; schema: Record<string, unknown>; maxInputTokens: number; maxOutputTokens: number;
+  maxOutputBytes: number; signal: AbortSignal;
+}
+export interface GenerationResponse {
+  text: string; resolvedVersion?: string; weightDigest?: string; tokenizerDigest?: string;
+  inputTokens?: number; outputTokens?: number;
+}
+export interface GenerationRouter {
+  readonly provider: string; readonly model: string; readonly endpoint: string;
+  readonly hosted: boolean; readonly requestedVersion?: string;
+  generate(req: GenerationRequest): Promise<GenerationResponse>;
+}
+
+export class OllamaGenerationRouter implements GenerationRouter {
+  readonly provider = "ollama";
+  readonly model: string;
+  readonly endpoint: string;
+  readonly hosted: boolean;
+  constructor(opts: { model?: string; baseUrl?: string } = {}) {
+    this.model = opts.model ?? DEFAULT_ROUTER_MODEL;
+    this.endpoint = (opts.baseUrl ?? "http://127.0.0.1:11434").replace(/\/$/, "");
+    this.hosted = /[:-]cloud$/i.test(this.model);
+  }
+  async generate(req: GenerationRequest): Promise<GenerationResponse> {
+    const res = await fetch(`${this.endpoint}/api/chat`, {
+      method: "POST", redirect: "error", signal: req.signal, headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: this.model, stream: false, think: false, format: req.schema,
+        options: { temperature: 0, num_predict: req.maxOutputTokens, num_ctx: req.maxInputTokens + req.maxOutputTokens },
+        messages: [{ role: "system", content: req.system }, { role: "user", content: req.user }] }),
+    });
+    if (!res.ok || !res.body) { await res.body?.cancel(); throw new Error("generation provider unavailable"); }
+    const reader = res.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read(); if (done) break;
+        size += value.length;
+        // Bound the entire response, including envelope/usage fields, before parsing it.
+        if (size > req.maxOutputBytes + 8192) throw new Error("generation response exceeds limit");
+        chunks.push(value);
+      }
+    } finally { await reader.cancel(); }
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+      message?: { content?: string }; prompt_eval_count?: number; eval_count?: number;
+    };
+    if (typeof body.message?.content !== "string" || Buffer.byteLength(body.message.content) > req.maxOutputBytes) throw new Error("invalid generation response");
+    // Ollama's model tag is not a resolved revision. Do not relabel it as one.
+    return { text: body.message.content, inputTokens: body.prompt_eval_count, outputTokens: body.eval_count };
+  }
+}

@@ -93,6 +93,8 @@ export type FeatureRecord = {
   inputRefs: SourceRef[]; source: Snapshot; contractVersion: number; contract?: FeatureContract;
   tasks: FeatureTask[]; blockers: { id: Id; kind: "QUESTION" | "FINDING" | "DEPENDENCY" | "TRACKING"; requirementIds: Id[]; text: string }[];
   issue: IssueBinding; workspace: FeatureWorkspace; version: number; createdBy: Id; createdAt: Timestamp; updatedAt: Timestamp;
+  /** 1.G: append-only invocation snapshots, including intent persisted before provider calls. */
+  modelInvocations?: ModelInvocation[];
 };
 
 /** 2/5. Questions and answers, authority binding, waivers and dispositions. Immutable; supersession is a new record. */
@@ -111,6 +113,9 @@ export type ModelInvocation = {
   id: Id; provider: string; model: string; requestedVersion?: string; resolvedVersion: string | "UNKNOWN"; weightDigest?: Hash;
   parameters: Record<string, string | number | boolean>; toolSchemaVersions: string[]; promptTemplateHash: Hash; inputRefs: Hash[];
   outputHash: Hash; seed?: number; egress: EgressPolicy; startedAt: Timestamp; interrupted?: boolean;
+  schemaVersion?: 1; identityHash?: Hash; inputHash?: Hash; tokenizerDigest?: Hash;
+  stage?: "REQUIREMENTS" | "CONTRACT" | "EDIT_PLAN";
+  status?: "STARTED" | "COMPLETE" | "FAILED"; supersedesId?: Id; completedAt?: Timestamp; failureCode?: string;
 };
 export type PatchBinding = {
   repositoryId: Id; baseCommitHash: Hash; baseContentHash: Hash; candidateContentHash: Hash; diffHash: Hash; contractHash: Hash;
