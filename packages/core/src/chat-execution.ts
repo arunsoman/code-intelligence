@@ -5,6 +5,7 @@ import type { RevisionRow } from "./store.ts";
 import { projectDescription, projectProfile } from "./profile.ts";
 import { isNonProductionFile, moduleTests } from "./module-tests.ts";
 import { redactBuilt } from "./redact.ts";
+import { analysisMessage, analysisThinking, withAnswer } from "./answer.ts";
 import { policyFor } from "./access.ts";
 
 /** Execute a validated plan against one revision. Completed results survive a
@@ -28,20 +29,25 @@ export async function executeChatPlan(svc: Service, ctx: CallContext, rev: Revis
     const subject = dependency?.subject ?? step.subject ?? (step.tool === "tests" ? currentSubject : undefined);
     try {
       if (step.tool === "tests" && subject) {
-        const built = redactBuilt(svc.store, rev, moduleTests(svc.store, rev, step.question, subject));
+        const built = withAnswer(redactBuilt(svc.store, rev, moduleTests(svc.store, rev, step.question, subject)));
         record.view = built.view; record.claims = built.claims; record.subject = built.view.params?.subject as string;
         const links = built.view.nodes.filter((n) => n.role === "test");
-        record.message = [built.view.caption, ...links.slice(0, 12).map((n) => `• ${n.file}${n.kind !== "file" ? ` — ${n.label}` : ""} (${n.badge})`), ...(links.length > 12 ? [`Open the Tests view for ${links.length - 12} more displayed links.`] : []), ...built.view.gaps].join("\n");
+        const trail = [...links.slice(0, 12).map((n) => `• ${n.file}${n.kind !== "file" ? ` — ${n.label}` : ""} (${n.badge})`), ...(links.length > 12 ? [`Open the Tests view for ${links.length - 12} more displayed links.`] : []), ...built.view.gaps];
+        record.message = [built.view.answer ?? built.view.caption, ...trail].join("\n");
+        if (built.view.answer) record.thinking = [built.view.caption, ...trail].join("\n");
       } else {
         const r = await svc.ask(ctx, { question: step.question, revision: rev.id, form: step.tool === "overview" ? "SemanticMap" : step.tool === "risk" ? "ChangeRisk" : step.tool === "tests" ? "TestConfidence" : step.form, kind: step.kind, subject, pins, ...(step.tool === "overview" ? { level: 1, overview: true } : {}) });
         if (!r.ok) throw new Error(r.error.message);
         warnings.push(...r.metadata.warnings);
         record.view = r.value.view; record.claims = r.value.claims;
-        record.message = r.value.view.caption;
+        const hasAnswer = !!r.value.view.answer;
+        record.message = r.value.view.answer ?? r.value.view.caption;
+        if (hasAnswer) record.thinking = [r.value.view.formReason, r.value.view.caption].filter(Boolean).join(" ");
         if (step.tool === "overview") {
           // Profile prose includes folder names, so run it through the same access
           // redaction as the visual before adding it to the conversation.
           const profile = redactBuilt(svc.store, rev, { view: { ...r.value.view, caption: [projectDescription(svc.store, rev.repoRoot), projectProfile(svc.store, rev.id).text].filter(Boolean).join("\n") }, claims: [...r.value.claims] });
+          if (hasAnswer) record.thinking = `${profile.view.caption}\n${r.value.view.caption}\n${r.value.view.gaps.join("\n")}`;
           record.message = `${profile.view.caption}\n${record.message}\n${r.value.view.gaps.join("\n")}`;
         }
         if (step.tool === "risk") {
@@ -67,5 +73,8 @@ export async function executeChatPlan(svc: Service, ctx: CallContext, rev: Revis
     }
   }
   const partial = results.some((r) => r.status !== "complete" || r.view?.gaps.length);
-  return { ok: true, value: { kind: "analysis", results, message: results.map((r, i) => `${i + 1}. ${r.title}${r.status !== "complete" ? ` (${r.status})` : ""}\n${r.message}`).join("\n\n") }, metadata: { requestId: ctx.requestId, revision: rev.id, completeness: partial ? "PARTIAL" : "COMPLETE", warnings: [...new Set(warnings)] } };
+  const message = analysisMessage(results);
+  // The trace (what each step's raw facts were, stacked the old way) is kept only when it says something the answer doesn't.
+  const thinking = analysisThinking(results.map((r) => ({ ...r, message: r.thinking ?? r.message })));
+  return { ok: true, value: { kind: "analysis", results, message, ...(thinking !== analysisThinking(results) ? { thinking } : {}) }, metadata: { requestId: ctx.requestId, revision: rev.id, completeness: partial ? "PARTIAL" : "COMPLETE", warnings: [...new Set(warnings)] } };
 }

@@ -94,6 +94,9 @@ test("invalid planning falls back visibly and deadline prevents tool execution",
     const r = await svc.converse(ctx(), { text: "how does authentication work", revision });
     assert.ok(r.ok && r.value.kind === "view");
     assert.ok(r.metadata.warnings.some((w) => w.includes("single-question route")));
+    // The reply answers in words as well as drawing the map.
+    assert.ok(r.value.view.answer, "view carries a prose answer");
+    assert.ok(r.value.message.startsWith(r.value.view.answer!), "the chat message leads with the answer");
     svc.router = new ScriptRouter({ [QUESTION]: PLAN });
     const expired = await svc.converse({ ...ctx(), deadlineMs: Date.now() - 1 }, { text: QUESTION, revision });
     assert.ok(expired.ok && expired.value.kind === "analysis");

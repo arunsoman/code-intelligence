@@ -115,11 +115,19 @@ export function compileView(inp: CompileInput): { view: ViewSpec; claims: Claim[
       if (t.replaced) gaps.push("the model's caption was replaced: it claimed certainty or carried a link, which only evidence and the gates may do");
       return t.text;
     })();
+  // A model's written answer passes the same text gate as the caption. Without one, the grounded answer is composed
+  // from the finished view (answer.ts), so it never says more than the map shows.
+  let answer: string | undefined;
+  if (!empty && inp.representation?.answer?.trim()) {
+    const t = modelText(inp.representation.answer.trim(), "");
+    if (t.replaced) gaps.push("the model's answer was replaced: it claimed certainty or carried a link, which only evidence and the gates may do");
+    answer = t.text || undefined;
+  }
   const id = "view:" + createHash("sha256").update(bundle.id + inp.question).digest("hex").slice(0, 12);
   return {
     claims,
     view: {
-      id, version: inp.version ?? 1, revision: bundle.revision, taskId: "task:" + id, formId: "SemanticMap", caption, question: inp.question,
+      id, version: inp.version ?? 1, revision: bundle.revision, taskId: "task:" + id, formId: "SemanticMap", caption, ...(answer ? { answer } : {}), question: inp.question,
       level: 5, nodes, edges, groups, legend: LEGEND, cameraPolicy: { behavior: "PRESERVE" }, gaps, system,
     },
   };

@@ -34,7 +34,7 @@ import { GitHubCheckPublisher, newGrant } from "./pr-publish.ts";
 import { githubRemote } from "./gh.ts";
 import type { PrAnalysisView } from "@cie/schema";
 import { overviewSeeds } from "./overview.ts";
-import { projectProfile } from "./profile.ts";
+import { projectDescription, projectProfile } from "./profile.ts";
 import { Registry } from "./registry.ts";
 import { WorkspaceLog } from "./workspaces.ts";
 import { Journal, type CommitReceipt } from "./journal.ts";
@@ -46,6 +46,7 @@ import { revisionIndex, scoreEntity, WEIGHTS } from "./salience.ts";
 import { DeltaBaseError, type RevisionRow, type Store } from "./store.ts";
 import { entityAt, fingerprint, locateFrames, looksLikeTrace, parseTrace } from "./trace.ts";
 import { compileView } from "./viewspec.ts";
+import { viewMessage, withAnswer } from "./answer.ts";
 import { catalog, ensureEdgeClaims, visualByForm, type CatalogEntry } from "./visuals.ts";
 import { fileHistory, headOf, isGitRepo } from "./gitinfo.ts";
 import { ensureGhForgeConnector } from "./gh.ts";
@@ -1526,7 +1527,14 @@ export class Service {
     return (intent as { type: "ask"; route: ViewRoute }).route; // with forms only, the reading is always a view
   }
 
-  async ask(ctx: CallContext, req: { question: string; route?: ViewRoute; revision?: string; pins?: string[]; seeds?: string[]; overview?: boolean; level?: number; form?: string; kind?: "failure" | "invariant"; subject?: string; lens?: string }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
+  /** Every question gets both: the picture, and the written answer composed from the same view (after access redaction, so it never says more). */
+  async ask(ctx: CallContext, req: Parameters<Service["askView"]>[1]): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
+    const r = await this.askView(ctx, req);
+    if (r.ok) withAnswer(r.value);
+    return r;
+  }
+
+  private async askView(ctx: CallContext, req: { question: string; route?: ViewRoute; revision?: string; pins?: string[]; seeds?: string[]; overview?: boolean; level?: number; form?: string; kind?: "failure" | "invariant"; subject?: string; lens?: string }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
     const question = (req.question ?? "").trim();
     if (!question || question.length > 1000) return fail(ctx, { code: "INVALID_SCHEMA", message: "question must be 1–1000 characters", retryable: false });
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
@@ -1594,7 +1602,7 @@ export class Service {
     this.persist(built.claims);
     this.store.audit(actor(ctx), "investigate", rev.id, { suspects: built.view.nodes.filter((n) => n.role === "suspect").length });
     redactBuilt(this.store, rev, built);
-    return ok(ctx, built, { revision: rev.id, completeness: built.view.gaps.length ? "PARTIAL" : "COMPLETE" });
+    return ok(ctx, withAnswer(built), { revision: rev.id, completeness: built.view.gaps.length ? "PARTIAL" : "COMPLETE" });
   }
 
   /** The catalogue of visuals, with whether each can be shown for the current repository and why not. */
@@ -1645,7 +1653,7 @@ export class Service {
     this.persist(built.claims);
     this.store.audit(actor(ctx), `steer.${req.action.toLowerCase()}`, req.entityId, { version: built.view.version });
     redactBuilt(this.store, rev, built);
-    return ok(ctx, built, { revision: rev.id });
+    return ok(ctx, withAnswer(built), { revision: rev.id });
   }
 
   // ---------------------------------------------------------------- explanations
@@ -1995,8 +2003,11 @@ export class Service {
     const entityIds = selected.flatMap((n) => n.entityRefs);
     const revision = view?.revision ?? req.revision;
     // A steering turn adjusts the current view, so it does not repeat why that kind of view was chosen.
-    const asView = (r: ApiResult<{ view: ViewSpec; claims: Claim[] }>, lead: string, steering = false): ApiResult<ConverseResult> =>
-      r.ok ? ok(ctx, { kind: "view", view: r.value.view, claims: r.value.claims, message: `${lead} ${steering ? "" : r.value.view.formReason ?? ""} ${r.value.view.caption}`.replace(/\s+/g, " ").trim() }, { ...r.metadata, warnings: [...r.metadata.warnings, ...(plannerWarning ? [plannerWarning] : [])] }) : (r as ApiResult<never>);
+    const asView = (r: ApiResult<{ view: ViewSpec; claims: Claim[] }>, lead: string, steering = false): ApiResult<ConverseResult> => {
+      if (!r.ok) return r as ApiResult<never>;
+      const { message, thinking } = viewMessage(r.value.view, lead, steering);
+      return ok(ctx, { kind: "view", view: r.value.view, claims: r.value.claims, message, ...(thinking ? { thinking } : {}) }, { ...r.metadata, warnings: [...r.metadata.warnings, ...(plannerWarning ? [plannerWarning] : [])] });
+    };
     const asExplain = (r: ApiResult<ExplainResult>, lead = ""): ApiResult<ConverseResult> =>
       r.ok ? ok(ctx, { kind: "explanation", explanation: r.value, message: `${lead}${r.value.summary}`.trim() }, r.metadata) : (r as ApiResult<never>);
     const needsView = () => fail<ConverseResult>(ctx, { code: "INVALID_SCHEMA", message: "Ask a question first, then I can talk about what's on the map.", retryable: false });
@@ -2007,6 +2018,8 @@ export class Service {
         const r = await this.ask(ctx, { question: question || "Give me an overview of the whole project", revision: rev.id, overview: true, form: "SemanticMap", level: 1 });
         const profile = projectProfile(this.store, rev.id);
         if (r.ok) { r.value.view.formReason = "Representative code across languages and source modules, grouped by responsibility. Zoom in for detail."; r.value.view.gaps.unshift(profile.text); }
+        // The answer to "what is this project" is its profile, then what the map shows.
+        if (r.ok) { r.value.view.answer = undefined; withAnswer(r.value); const lead = [projectDescription(this.store, rev.repoRoot), profile.text].filter(Boolean).join(" "); r.value.view.answer = redactBuilt(this.store, rev, { view: { ...r.value.view, answer: [lead, r.value.view.answer].filter(Boolean).join(" ") }, claims: [] }).view.answer; }
         return asView(r, `${lead} ${profile.text}`);
     };
     switch (intent.type) {

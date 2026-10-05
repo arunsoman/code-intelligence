@@ -48,6 +48,7 @@ export function redactBuilt<T extends { view: ViewSpec; claims: Claim[] }>(store
   if (v.gaps.length < before && !v.gaps.includes(GENERIC_GAP)) v.gaps.push(GENERIC_GAP);
   const noticeAt = v.gaps.length;
   if (mentions(v.caption)) v.caption = "This view leaves out code you do not have access to.";
+  if (mentions(v.answer)) v.answer = undefined;
   if (mentions(v.formReason)) v.formReason = undefined;
   if (v.route && (mentions(v.route.because) || mentions(v.route.name))) v.route = { ...v.route, because: "The question was read from its wording." };
   if (v.system) v.system = { ...v.system, externals: v.system.externals.filter((x) => !mentions(x.name)) };

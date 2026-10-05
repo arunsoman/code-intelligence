@@ -198,6 +198,8 @@ export interface ViewRoute {
 }
 export interface ViewSpec {
   id: Id; version: number; revision: RevisionId; taskId: Id; formId: FormId; caption: string;
+  /** Prose that answers the question in words (maps only); the map and caption stay the visual part. */
+  answer?: string;
   question: string; level: number; nodes: ViewNode[]; edges: ViewEdge[]; groups: ViewGroup[];
   legend: { label: string; displayMode: DisplayMode; description: string }[];
   cameraPolicy: { behavior: "PRESERVE" }; gaps: string[];
@@ -234,6 +236,8 @@ export const SCHEMA_HYPOTHESES = "hypotheses.v1";
 
 export const RepresentationOutput = z.object({
   caption: z.string().max(400),
+  /** A short prose answer to the question itself, shown above the map. Optional: without it, the answer is assembled from the groups. */
+  answer: z.string().max(1500).optional(),
   groups: z.array(z.object({
     label: z.string().max(80), memberEntityIds: z.array(z.string()).max(200),
     rationale: z.string().max(400), evidenceIds: z.array(z.string()).max(50),
@@ -371,13 +375,18 @@ export interface ChatAnalysisResult {
   title: string;
   status: "complete" | "failed" | "skipped";
   message: string;
+  /** This step's pre-answer text (the raw facts it assembled), kept as a trace once `message` carries the composed answer. */
+  thinking?: string;
   subject?: string;
   view?: ViewSpec;
   claims: Claim[];
 }
 export type ConverseResult =
-  | { kind: "analysis"; results: ChatAnalysisResult[]; message: string }
-  | { kind: "view"; view: ViewSpec; claims: Claim[]; message: string }
+  // `thinking`: the old-style, pre-answer text (why this form, the caption) — kept for the trace, not meant as the reply.
+  // `message` is the composed answer; with no grounded answer available, `message` falls back to that same text and
+  // `thinking` is omitted rather than duplicated.
+  | { kind: "analysis"; results: ChatAnalysisResult[]; message: string; thinking?: string }
+  | { kind: "view"; view: ViewSpec; claims: Claim[]; message: string; thinking?: string }
   | { kind: "explanation"; explanation: ExplainResult; message: string }
   | { kind: "resume"; workspaceId: Id; message: string }
   | { kind: "zoom"; direction: "in" | "out" | "overview"; message: string }

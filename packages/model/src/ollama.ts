@@ -36,6 +36,7 @@ function task(req: ModelRequest): string {
     return `Question: ${JSON.stringify(req.question)}
 Compose a map for this question.
 - caption: one sentence on what the map shows, noting that dashed edges are inferred.
+- answer: 2-5 plain sentences that directly answer the question in words (how it works, in order, naming the key functions), using only what the bundle shows. Do not describe the map itself and do not claim certainty.
 - groups: 2-6 conceptual groups (by responsibility, not just directory) covering the symbols; each lists memberEntityIds, a short rationale, and evidenceIds copied from "contains" relationships of its members. When there are 4 or more groups, also set "cluster" on each group to a short higher-level domain name (e.g. "Payments", "Identity"); groups in the same domain share the same cluster name, and use at least 2 distinct domains.
 - inferredEdges: only multi-hop relationships that matter for the question and are NOT already direct "calls" edges; each cites the evidenceIds of every direct edge it is built from and lists the intermediate entities in viaEntityIds.`;
   }

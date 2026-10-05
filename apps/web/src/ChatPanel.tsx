@@ -2,7 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { buttonFeedback } from "./button.ts";
 import type { ChatAnalysisResult } from "@cie/schema";
 
-export interface Message { role: "user" | "assistant"; text: string; at: string; error?: boolean; results?: ChatAnalysisResult[] }
+export interface Message {
+  role: "user" | "assistant"; text: string; at: string; error?: boolean; results?: ChatAnalysisResult[];
+  /** The pre-answer trace (why this form, the bare caption) kept once `text` carries the composed answer; shown collapsed. */
+  thinking?: string;
+}
 interface Props {
   messages: Message[]; referents: { id: string; label: string; source?: "map" | "editor" | "cell" }[]; busy: boolean; canAsk: boolean;
   examples: string[]; onSend: (text: string) => void; onDropReferent: (id: string) => void;
@@ -29,6 +33,7 @@ export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend,
           </div>
         )}
         {messages.map((m, i) => <div key={i} className={`msg ${m.role} ${m.error ? "err" : ""}`}><span className="who">{m.role === "user" ? "You" : "Assistant"}</span><p>{m.text}</p>
+          {m.thinking && <details className="thinking"><summary>How this was found</summary><p className="muted small">{m.thinking}</p></details>}
           {m.results && <div className="chat-results" role="group" aria-label="Analysis views">{m.results.filter((r) => r.view).map((r, j) => <button key={j} className="secondary small" disabled={busy} onClick={() => onShowResult?.(r)}>Show {r.title}</button>)}</div>}
         </div>)}
         {busy && <div className="msg assistant"><span className="who">Assistant</span><p className="muted">Working…</p></div>}

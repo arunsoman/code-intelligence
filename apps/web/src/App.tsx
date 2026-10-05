@@ -109,7 +109,7 @@ export function App() {
   const [audit, setAudit] = useState<{ events: AuditEvent[]; chain: { ok: boolean } } | null>(null);
 
   const log = useCallback((kind: string, detail?: string) => setEvents((e) => [...e, { kind, at: now(), detail }].slice(-200)), []);
-  const say = useCallback((role: Message["role"], text: string, isError = false) => setMessages((m) => [...m, { role, text, at: now(), error: isError }].slice(-200)), []);
+  const say = useCallback((role: Message["role"], text: string, isError = false, thinking?: string) => setMessages((m) => [...m, { role, text, at: now(), error: isError, ...(thinking ? { thinking } : {}) }].slice(-200)), []);
   const mergeClaims = useCallback((cs: Claim[]) => setClaimMap((m) => ({ ...m, ...Object.fromEntries(cs.map((c) => [c.draft.id, c])) })), []);
 
   const refresh = useCallback(async () => {
@@ -292,11 +292,11 @@ export function App() {
           for (const result of shown) mergeClaims(result.claims);
           const last = shown.at(-1);
           if (last?.view) adoptView(last.view, last.claims, false);
-          setMessages((m) => [...m, { role: "assistant", text: v.message, at: now(), results: v.results } as Message].slice(-200));
+          setMessages((m) => [...m, { role: "assistant", text: v.message, at: now(), results: v.results, ...(v.thinking ? { thinking: v.thinking } : {}) } as Message].slice(-200));
           log("ASK", text.slice(0, 80));
           break;
         }
-        case "view": adoptView(v.view, v.claims, !!view && view.id === v.view.id); say("assistant", v.message); log("ASK", text.slice(0, 80)); break;
+        case "view": adoptView(v.view, v.claims, !!view && view.id === v.view.id); say("assistant", v.message, false, v.thinking); log("ASK", text.slice(0, 80)); break;
         case "explanation": mergeClaims(v.explanation.claims); setDrawer({ kind: "explain", data: v.explanation }); say("assistant", v.message); log("EXPLAIN", text.slice(0, 80)); break;
         case "zoom": setLevel((l) => v.direction === "overview" ? 1 : Math.max(0, Math.min(MAX_LEVEL, l + (v.direction === "in" ? 1 : -1)))); setFitTick((t) => t + 1); say("assistant", v.message); break;
         case "resume": say("assistant", v.message); await resume(v.workspaceId); break;
