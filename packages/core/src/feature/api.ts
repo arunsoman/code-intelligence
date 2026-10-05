@@ -85,7 +85,7 @@ export const OPS: OpSpec[] = [
   op("C02/submitFeature", true, "1.C"), op("C10/discoverFeatureContext", false, "1.C"), op("C02/resumeRequest", false, "1.B"),
   op("C15/normalizeRequirements", true, "2.I"), op("C15/detectSemanticConflicts", false, "2.I"), op("C25/checkRequirementConstraints", false, "2.I"),
   op("C23/assessFeatureImpact", false, "2.I"), op("C22/planClarifications", false, "2.I"),
-  op("C02/recordDecision", true, "1.D"), op("C15/reviseContract", true, "1.D"),
+  op("C02/recordDecision", true, "1.D"), op("C15/reviseContract", true, "1.D"), op("C15/confirmAcceptance", true, "4.1", "added by 4.1: a person confirms generated expected outcomes, making them a reviewed oracle (plan S6)"),
   op("C10/findRelatedCapabilities", false, "2.I"), op("C15/compareRequestedBehaviour", false, "2.I"), op("C22/investigateOverlap", true, "2.I"),
   op("C23/assessReuseImpact", false, "2.I"), op("C16/verifyOverlap", false, "2.I"),
   op("C28/planFeatureChange", true, "1.E"), op("C28/planReuseChange", true, "1.E"), op("C28/materializeCandidate", true, "1.E"), op("C28/readCandidateFile", false, "1.E"),

@@ -1,0 +1,11 @@
+{
+  "name": "transactions-app",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A small multi-tenant transactions service used to demonstrate prompt-to-feature end to end. It has a real build check and real tests.",
+  "scripts": {
+    "build": "node scripts/check.mjs",
+    "test": "node --test tests/*.test.ts"
+  }
+}

@@ -300,3 +300,19 @@ Decisions to know about:
 - A repair candidate is compared with the previous candidate's tests as well as the repository's: weakening a test the earlier candidate added is a property change (`REPAIR_*` kinds) and blocks verification.
 - `checkPatchDestination` accepts a snapshot without `contentRootHash` ("as it is now"); the assessment id binds the result to that root and apply refuses any other.
 - Honest gaps are in the ledger fragments (`ledger/3.*.json`, state `blocked` with what each needs): binary files, lease enforcement at candidate commit, no operation that validates an integrated candidate, no real model or GitHub exercised, no browser e2e of the new stages.
+
+## 13. Wave 4 progress: the slice runs (2026-10-05)
+
+Blockers found before starting 4.1, and what changed:
+
+| Blocker | Resolution |
+|---|---|
+| Nothing ran the steps in order or moved the request through its states | `feature/pipeline.ts`: `runFeaturePipeline` records every step, stops at the first open question, and reports the eligibility function's own word |
+| `fixtures/payments-repo` has no `package.json` and its test file has no runner, so it has no build or test targets | New buildable fixture `fixtures/transactions-app` (real `build` and `test` scripts); `scripts_make_demo_repo.sh <dir> <fixture>` accepts a fixture name |
+| No container-class runner; the plan's CONTAINER profile was unimplemented | `feature/docker-runner.ts` (`DockerRunner`) with its own audit probes: non-root, read-only root, pid and memory limits, no network, same flag/env refusals as `LocalRunner` |
+| A generated oracle can never become a reviewed one, so nothing could be verified | `feature/acceptance.ts`: a person confirms expected outcomes by a recorded decision (`C15/confirmAcceptance`) |
+| Plan builder declared the environment `UNKNOWN`, so eligibility could only be BLOCKED or REVIEW ONLY | `validationPlanFor`: uses the repository's own scripts and takes the environment, test data and performance applicability as explicit declarations (never upgraded by the driver) |
+
+Result: with `DockerRunner` the demo reaches `VERIFIED_WITHIN_SCOPE` (build and tests run in `node:24-alpine` on the candidate's exact bytes, baseline HEALTHY, user's tree untouched). That run **declares performance not applicable and the report says the change was not measured**. Without that declaration the only open gap is performance. `.cie/security.json` in the fixture sets `requireExternalSast: false` (a repository decision; the pattern rules still run).
+
+Still open for Wave 4: performance measurement on the demo, browser gate on a UI feature, an operation exposing the driver (4.1); the AT-01–84 traceability map and run (4.2); README, spec fixes and measured numbers (4.3). See `ledger/4.1.json` and issues #88–#90.

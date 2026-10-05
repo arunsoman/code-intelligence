@@ -5,6 +5,7 @@ import type { CallContext } from "@cie/schema";
 import type { Service } from "../service.ts";
 import { PRIORITY } from "../jobs.ts";
 import { loadAuthority, type AuthorityConfig } from "./authority.ts";
+import { confirmAcceptance } from "./acceptance.ts";
 import { cancelFeature } from "./cancel.ts";
 import { materializeCandidate, readCandidateFile, refreshStaleness, type CandidateDeps, type FeatureEdit } from "./candidate.ts";
 import { loadFeatureConfig, type FeatureConfig } from "./config.ts";
@@ -75,6 +76,10 @@ export function featureHandlers(svc: Service, opts: { gates?: GateHooks; perf?: 
       const x = obj(b); const requestId = requestIdOf(str(x.contractId, "contractId")); const rec = owned(requestId, who(c));
       if (!Array.isArray(x.decisionIds)) throw new FeatureError("INVALID_SCHEMA", "decisionIds must be a list");
       return reviseContract(fs, authOf(rec.repositoryId), who(c), { requestId, expectedVersion: x.expectedVersion, decisionIds: x.decisionIds });
+    }),
+    "C15/confirmAcceptance": (c, b) => guarded(c, () => {
+      const x = obj(b); const requestId = requestIdOf(str(x.contractId, "contractId")); const rec = owned(requestId, who(c));
+      return confirmAcceptance(fs, authOf(rec.repositoryId), who(c), { requestId, expectedVersion: x.expectedVersion, criteria: x.criteria, rationale: x.rationale, idempotencyKey: c.idempotencyKey });
     }),
     // Long operation: returns a durable job id at once; the job result is the PatchBinding (spec §19).
     "C28/materializeCandidate": (c, b) => guarded(c, () => {

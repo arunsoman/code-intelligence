@@ -18,7 +18,7 @@ const MAX_WALL_MS = 30 * 60_000, MAX_OUTPUT = 16 * 1024 * 1024, MAX_SCAN = 100_0
 const FORBIDDEN_ENV = /^(NODE_OPTIONS|NODE_PATH|NODE_EXTRA_CA_CERTS|LD_.*|DYLD_.*|BASH_ENV|ENV|PYTHON.*|RUBY.*|PERL.*|GIT_.*|SSH_.*|HOME|PATH|SHELL|IFS)$/;
 const SECRETISH = /(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE|API[_-]?KEY|AUTH)/i;
 /** Node flags a caller may put before the script. Anything that widens a permission or loads code is refused. */
-const NODE_FLAG_OK = [/^--test$/, /^--test-isolation=(none|process)$/, /^--test-name-pattern=.{1,200}$/, /^--no-warnings$/, /^--enable-source-map$/, /^--experimental-strip-types$/, /^--experimental-transform-types$/, /^--stack-trace-limit=\d{1,3}$/];
+export const NODE_FLAG_OK = [/^--test$/, /^--test-isolation=(none|process)$/, /^--test-name-pattern=.{1,200}$/, /^--no-warnings$/, /^--enable-source-map$/, /^--experimental-strip-types$/, /^--experimental-transform-types$/, /^--stack-trace-limit=\d{1,3}$/];
 
 export interface RunnerOptions {
   /** Called with a request's fencing token before the run and again after it; false means the lease was lost (AT-24, AT-57). */
@@ -217,12 +217,29 @@ export async function auditRunner(runner: Runner): Promise<AuditReport> {
     record("host environment variables are not visible", r.stdout.includes("ENV=undefined"), r.stdout.trim().slice(0, 80));
     r = await run(script("net.js", `const s = require("net").connect(${port}, "127.0.0.1"); s.on("error", (e) => { console.log("DENIED " + e.code); process.exit(0) }); s.on("connect", () => { console.log("CONNECTED"); process.exit(0) }); setTimeout(() => process.exit(0), 3000)`));
     record("network connections are denied", /DENIED/.test(r.stdout) && !hit, r.stdout.trim().slice(0, 80));
-    r = await run(script("child.js", `try { require("child_process").execSync("id"); console.log("SPAWNED") } catch (e) { console.log("DENIED " + e.code) }`));
-    record("starting child processes is denied", /DENIED/.test(r.stdout), r.stdout.trim().slice(0, 80));
-    r = await run(script("worker.js", `try { new (require("worker_threads").Worker)("1", { eval: true }); console.log("SPAWNED") } catch (e) { console.log("DENIED " + e.code) }`));
-    record("starting worker threads is denied", /DENIED/.test(r.stdout), r.stdout.trim().slice(0, 80));
-    r = await run(script("link.js", `try { require("fs").symlinkSync(${JSON.stringify(join(outside, "secret.txt"))}, ${JSON.stringify(join(scratch, "made"))}); console.log("MADE") } catch (e) { console.log("DENIED " + e.code) }`));
-    record("a node run cannot create a symlink", /DENIED/.test(r.stdout) && !existsSync(join(scratch, "made")), r.stdout.trim().slice(0, 80));
+    if (runner.isolation !== "CONTAINER") {
+      r = await run(script("child.js", `try { require("child_process").execSync("id"); console.log("SPAWNED") } catch (e) { console.log("DENIED " + e.code) }`));
+      record("starting child processes is denied", /DENIED/.test(r.stdout), r.stdout.trim().slice(0, 80));
+      r = await run(script("worker.js", `try { new (require("worker_threads").Worker)("1", { eval: true }); console.log("SPAWNED") } catch (e) { console.log("DENIED " + e.code) }`));
+      record("starting worker threads is denied", /DENIED/.test(r.stdout), r.stdout.trim().slice(0, 80));
+      r = await run(script("link.js", `try { require("fs").symlinkSync(${JSON.stringify(join(outside, "secret.txt"))}, ${JSON.stringify(join(scratch, "made"))}); console.log("MADE") } catch (e) { console.log("DENIED " + e.code) }`));
+      record("a node run cannot create a symlink", /DENIED/.test(r.stdout) && !existsSync(join(scratch, "made")), r.stdout.trim().slice(0, 80));
+    } else {
+      // A container ALLOWS processes (inside it) and symlink creation (inside the scratch mount), so the node-permission probes above do not apply.
+      // What must hold instead: it is not root, it cannot write its own root filesystem, a fork bomb and a runaway allocation are stopped, and a
+      // symlink that points outside the granted roots still fails the run (the host scans for it afterwards).
+      r = await run(script("user.js", `console.log("UID=" + process.getuid())`));
+      record("the process does not run as root", /UID=(?!0\b)\d+/.test(r.stdout), r.stdout.trim().slice(0, 80));
+      r = await run(script("rofs.js", `try { require("fs").writeFileSync("/usr/x", "x"); console.log("WROTE") } catch (e) { console.log("DENIED " + e.code) }`));
+      record("the root filesystem is read-only", /DENIED/.test(r.stdout), r.stdout.trim().slice(0, 80));
+      r = await run(script("bomb.js", `const cp = require("child_process"); let fail = 0, ok = 0; for (let i = 0; i < 300; i++) { const c = cp.spawn("sleep", ["5"]); c.on("error", () => { fail++; }); c.on("spawn", () => { ok++; }); } setTimeout(() => { console.log(fail > 0 ? "DENIED " + ok + " started, " + fail + " refused" : "SPAWNED " + ok); process.exit(0); }, 1500)`), { processes: 32, wallMs: 20000 });
+      record("a fork bomb is stopped by the process limit", /DENIED/.test(r.stdout), r.stdout.trim().slice(0, 80) || r.status);
+      r = await run(script("mem.js", `const a = []; for (let i = 0; i < 40; i++) { a.push(Buffer.alloc(20 * 1024 * 1024, 1)); } console.log("ALLOCATED " + a.length)`), { memoryBytes: 128 * 1048576, wallMs: 20000 });
+      record("a runaway allocation is killed by the memory limit", r.status !== "PASSED" && !/ALLOCATED/.test(r.stdout), `${r.status} ${r.reason ?? ""}`.trim());
+      r = await run(script("link.js", `try { require("fs").symlinkSync(${JSON.stringify(join(outside, "secret.txt"))}, ${JSON.stringify(join(scratch, "made"))}); console.log("MADE") } catch (e) { console.log("DENIED " + e.code) }`));
+      record("a symlink made in the scratch root that leaves the roots fails the run", r.status === "FAILED" && !!r.violations?.length, `${r.status}: ${r.reason ?? ""}`.slice(0, 100));
+      try { rmSync(join(scratch, "made"), { force: true }); } catch { /* best effort */ }
+    }
     symlinkSync(join(outside, "secret.txt"), join(root, "escape.txt"));
     r = await run("sanity.js");
     record("a symlink that leaves the roots refuses the run", r.status === "REFUSED" && /symlink/.test(r.reason ?? ""), r.reason ?? r.status);

@@ -16,7 +16,7 @@ const tmp = () => mkdtempSync(join(tmpdir(), "pf-"));
 
 test("PF-041 scaffold: every operation has a unique key, an owner task and a typed NOT_FOUND stub that names it", async () => {
   assert.equal(new Set(OPS.map((o) => o.key)).size, OPS.length);
-  assert.ok(OPS.every((o) => /^C\d\d\/[A-Za-z]+$/.test(o.key) && /^[0-3]\.[A-Z]$|^[0-3]\.[A-Z]$/.test(o.owner)), "keys look like C28/op and owners like 1.E");
+  assert.ok(OPS.every((o) => /^C\d\d\/[A-Za-z]+$/.test(o.key) && /^[0-4]\.[A-Z0-9]$/.test(o.owner)), "keys look like C28/op and owners like 1.E");
   const ops = featureOps();
   assert.equal(Object.keys(ops).length, OPS.length);
   const r = await ops["C02/submitFeature"].run(ctx(), {});

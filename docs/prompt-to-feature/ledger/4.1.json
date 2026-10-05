@@ -1,0 +1,97 @@
+{
+  "C02": {
+    "title": "Pipeline driver and the demo slice (plan 4.1)",
+    "items": [
+      {
+        "item": "the driver runs submit \u2192 discover \u2192 normalise \u2192 constraints \u2192 clarify \u2192 confirm \u2192 overlap \u2192 plan \u2192 generate \u2192 candidate \u2192 validate \u2192 decide \u2192 export \u2192 publish and records every step",
+        "tests": [
+          "4.1 the driver runs the whole slice on the transactions demo"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "with every declared gate satisfied the driver reports VERIFIED_WITHIN_SCOPE, and the export says what it does not claim",
+        "tests": [
+          "4.1 when every declared gate is satisfied"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "a generated oracle caps the result at review-only until a person confirms it",
+        "tests": [
+          "4.1 without a person's confirmation the generated oracle caps"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "confirmAcceptance: a person turns generated expected outcomes into a reviewed oracle by a recorded decision; contract versioned, candidate staled (S6)",
+        "tests": [
+          "S6 confirming generated outcomes is a recorded decision"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PLAN mode stops after the plan; a repeated run with the same key builds nothing twice",
+        "tests": [
+          "4.1 PLAN mode stops after the plan"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "the driver never answers for a person: an open question stops it and the caller's answer continues it",
+        "tests": [
+          "4.1 the driver never answers for a person"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "a failing check blocks and nothing is exported",
+        "tests": [
+          "4.1 a failing check blocks"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "the draft-PR step needs a bound issue and a forge; with both, one draft PR results",
+        "tests": [
+          "4.1 the draft-PR step needs a bound issue"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "REAL: build and tests run in a container on the candidate's exact bytes and the slice reaches VERIFIED_WITHIN_SCOPE; the user's tree is untouched",
+        "tests": [
+          "4.1 REAL: build and tests run inside a container"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "a container-class Runner with its own audit (non-root, read-only root, pid and memory limits, no network, same flag and env refusals)",
+        "tests": [
+          "1.F the container runner passes the audit written for it",
+          "1.F the container runner runs a real command",
+          "1.F the container runner stops a run at the wall limit"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "performance measurement on the demo (pf-perf-core-v1)",
+        "tests": [],
+        "state": "blocked",
+        "needs": "a .cie/perf.json with a workload, a measurement plan and budgets bound to an authority, and a runner for the repetitions; the verified runs declare performance not applicable and say the change was not measured"
+      },
+      {
+        "item": "browser gate on a UI feature in a container",
+        "tests": [],
+        "state": "blocked",
+        "needs": "a Chromium image and the audited browser runner; the demo change touches no UI file so the gate is not applicable"
+      },
+      {
+        "item": "an operation that exposes the driver to the web app and CLI",
+        "tests": [],
+        "state": "blocked",
+        "needs": "a C02/runFeaturePipeline gateway operation (long job) and its UI entry; the driver is a library call today"
+      }
+    ]
+  }
+}
