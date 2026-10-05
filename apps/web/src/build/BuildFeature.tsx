@@ -53,6 +53,7 @@ export function BuildFeature({ onClose, store, api }: { onClose: () => void; sto
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remote?.requestId]);
+  const refreshRemote = async () => { if (!remote) return; const o = await openRemote(remote.call, { ...ws, workspaceVersion: -1 }, remote.requestId); if (o.ok && !o.unchanged) commit(o.value); };
   const move = (target: WizardStage) => {
     if (remote) {
       void advanceRemote(remote.call, ws, target).then((r) => {
@@ -210,6 +211,9 @@ export function BuildFeature({ onClose, store, api }: { onClose: () => void; sto
             <h3>{STAGES[at].label}</h3>
             {gate.disabledReason && ws.stage !== "DESCRIBE" && ws.stage !== "CLARIFY" && <p className="muted small">Not ready for its main action: {gate.disabledReason}</p>}
 
+            {ws.review && remote && ws.stage === "CLARIFY" && <ClarifyReview review={ws.review} version={ws.contractVersion} requestId={remote.requestId} call={remote.call} refresh={refreshRemote} notify={setNote} />}
+            {ws.review && remote && ws.stage === "PLAN" && <PlanReview review={ws.review} />}
+            {ws.review && remote && ws.stage === "CHANGES" && <ChangeReview review={ws.review} requestId={remote.requestId} candidateHash={ws.candidate?.hash} call={remote.call} />}
             {ws.stage === "DESCRIBE" && (
               <div className="bf-stack">
                 {ws.candidate && <p className="bf-banner warn">This request already has a candidate ({STATUS_WORDS[ws.candidate.status]}). Editing it here and starting analysis again creates a <strong>new</strong> candidate draft; the current one is kept until then.</p>}
@@ -226,7 +230,7 @@ export function BuildFeature({ onClose, store, api }: { onClose: () => void; sto
               </div>
             )}
 
-            {ws.stage === "CLARIFY" && (
+            {ws.stage === "CLARIFY" && !(ws.review && remote) && (
               <div className="bf-stack">
                 {oq.map((q, i) => (
                   <div key={q.id} className="bf-item" role="group" aria-label={`Question ${q.id}`}>
@@ -264,7 +268,7 @@ export function BuildFeature({ onClose, store, api }: { onClose: () => void; sto
               </div>
             )}
 
-            {ws.stage === "PLAN" && (
+            {ws.stage === "PLAN" && !(ws.review && remote) && (
               <div className="bf-stack">
                 <p className="muted">Acceptance criteria and planned work. Passing counts describe progress, not proof.</p>
                 <ul className="bf-list">
@@ -275,7 +279,7 @@ export function BuildFeature({ onClose, store, api }: { onClose: () => void; sto
               </div>
             )}
 
-            {ws.stage === "CHANGES" && (
+            {ws.stage === "CHANGES" && !(ws.review && remote) && (
               <div className="bf-stack">
                 {ws.candidate
                   ? <p>The current candidate is <strong>{STATUS_WORDS[ws.candidate.status]}</strong>. The file list, change graph and code view arrive with task 2.N; looking at them will never approve anything.</p>
