@@ -267,3 +267,16 @@ test("a repository's own security policy changes the plan hash and is enforced; 
     void rawHash; void dirname;
   } finally { b.close(); }
 });
+
+test("#79 SEC007 ignores SRI integrity strings but still flags other high-entropy literals", () => {
+  const rule = SECRET_RULES.find((r) => r.id === "SEC007")!;
+  assert.equal(rule.test(`integrity: "sha512-Zm9vYmFyYmF6cXV4Y29yZ2VncmF1bHRnYXJwbHlmcmVkcGx1Z2h4eg"`), null);
+  assert.ok(rule.test(`const k = "Zm9vYmFyYmF6cXV4Y29yZ2VncmF1bHRnYXJwbHlmcmVkcGx1Z2h4eg";`));
+  assert.equal(rule.test(`"0123456789abcdef0123456789abcdef"`), null);
+});
+
+test("#80 SAST002 flags child_process commands built from text and not RegExp.exec or literals", () => {
+  const rule = SAST_RULES.find((r) => r.id === "SAST002")!;
+  for (const l of [`exec("ls " + dir)`, `child_process.exec('ls ' + dir)`, "execSync(`ls ${dir}`)", `execSync(cmd)`, `cp.execFile(cmd, args)`, `spawn(cmd, { shell: true })`]) assert.ok(rule.test(l), l);
+  for (const l of [`const m = re.exec(value)`, `const r = pattern.exec(input);`, `exec('ls')`, `/a/g.exec(x)`, `spawn("ls", ["-l"])`, `execFile("ls", [dir])`]) assert.equal(rule.test(l), null, l);
+});

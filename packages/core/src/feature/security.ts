@@ -79,12 +79,24 @@ export const SECRET_RULES: LineRule[] = [
   { id: "SEC008", cls: "SECRET", severity: "CRITICAL", message: "an API key (sk-…)", test: re(/\bsk-[A-Za-z0-9_-]{20,}\b/) },
   { id: "SEC009", cls: "SECRET", severity: "HIGH", message: "a connection string with an embedded password", test: (l) => { const m = /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:([^\s@/]{3,})@/i.exec(l); return m && !PLACEHOLDER.test(m[1]!) && !/^\$\{|^%|^<|^\{\{/.test(m[1]!) ? m[0] : null; } },
   { id: "SEC006", cls: "SECRET", severity: "HIGH", message: "a hard-coded credential assignment", test: (l) => { const m = /\b(?:password|passwd|pwd|secret|token|api[_-]?key|private[_-]?key|client[_-]?secret|auth)\w*\s*[:=]\s*(["'`])([^"'`\s]{8,})\1/i.exec(l); return m && !PLACEHOLDER.test(m[2]!) && !/process\.env|import\.meta\.env/.test(l) ? m[0] : null; } },
-  { id: "SEC007", cls: "SECRET", severity: "MEDIUM", message: "a long high-entropy string literal", test: (l) => { for (const m of l.matchAll(/(["'`])([A-Za-z0-9+/_=-]{32,})\1/g)) { const v = m[2]!; if (!/^[0-9a-f]+$/i.test(v) && entropy(v) >= 4.3 && !/^(sha\d+-|[A-Za-z0-9+/]+={0,2}$)/.test("") ) return m[0]; } return null; } },
+  { id: "SEC007", cls: "SECRET", severity: "MEDIUM", message: "a long high-entropy string literal", test: (l) => { for (const m of l.matchAll(/(["'`])([A-Za-z0-9+/_=-]{32,})\1/g)) { const v = m[2]!; if (!/^[0-9a-f]+$/i.test(v) && entropy(v) >= 4.3 && !/^sha(?:1|256|384|512)-/.test(v) ) return m[0]; } return null; } },
 ];
 
+/** SAST002: a child_process call (bare exec/execSync, or through child_process/cp) whose command is not a plain literal; RegExp.exec and other receivers are not shell calls. */
+function shellCommandFromText(l: string): string | null {
+  const call = /(?:(?<![\w$.])|\b(?:child_process|childProcess|cp)\.)(exec|execSync|execFile|execFileSync|spawn|spawnSync)\s*\(\s*/g;
+  for (const m of l.matchAll(call)) {
+    const fn = m[1]!; const rest = l.slice(m.index! + m[0].length);
+    const literal = /^(["'])(?:\\.|(?!\1).)*\1\s*(?=[,)])/.test(rest) || /^`[^`$]*`\s*(?=[,)])/.test(rest);
+    if (literal) continue;
+    if (/^(?:exec|execSync)$/.test(fn)) return m[0] + rest.slice(0, 20);
+    if (/\bshell\s*:\s*true\b/.test(rest) || fn === "execFile" || fn === "execFileSync") return m[0] + rest.slice(0, 20);
+  }
+  return null;
+}
 export const SAST_RULES: LineRule[] = [
   { id: "SAST001", cls: "SAST", severity: "HIGH", message: "dynamic code evaluation (eval / new Function)", test: re(/\beval\s*\(|\bnew\s+Function\s*\(/) },
-  { id: "SAST002", cls: "SAST", severity: "HIGH", message: "a shell command built from non-literal text", test: (l) => { const m = /\b(?:exec|execSync)\s*\(\s*(`[^`]*\$\{|[^"'`\s)][^)]*\+|[A-Za-z_$][\w$.]*\s*[,)])/.exec(l); return m && !/\bregex\b|\.exec\(\s*(?:str|line|text)\b/.test(l) && /child_process|exec(Sync)?\(\s*[`A-Za-z_$]/.test(l) && !/\/[^/]+\/\w*\.exec\(/.test(l) ? m[0] : null; } },
+  { id: "SAST002", cls: "SAST", severity: "HIGH", message: "a shell command built from non-literal text", test: (l) => shellCommandFromText(l) },
   { id: "SAST003", cls: "SAST", severity: "HIGH", message: "TLS certificate verification disabled", test: re(/rejectUnauthorized\s*:\s*false|NODE_TLS_REJECT_UNAUTHORIZED\s*=\s*["']?0/) },
   { id: "SAST004", cls: "SAST", severity: "MEDIUM", message: "unsafe HTML insertion", test: re(/\.(?:innerHTML|outerHTML)\s*=[^=]|dangerouslySetInnerHTML|document\.write\s*\(/) },
   { id: "SAST005", cls: "SAST", severity: "HIGH", message: "SQL built by string concatenation or interpolation", test: re(/\b(?:query|execute|exec|raw|all|get|run)\s*\(\s*(?:`[^`]*\b(?:select|insert|update|delete)\b[^`]*\$\{|["'][^"']*\b(?:select|insert|update|delete)\b[^"']*["']\s*\+)/i) },
