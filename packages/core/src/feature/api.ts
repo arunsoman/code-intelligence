@@ -95,7 +95,7 @@ export const OPS: OpSpec[] = [
   op("C16/verifyFeature", true, "2.J"), op("C28/exportFeaturePatch", true, "3.Q", "renamed from the spec's exportPatch: C28/exportPatch already exists for change proposals"), op("C28/checkPatchDestination", false, "3.Q"), op("C28/applyPatchCandidate", true, "3.Q"),
   op("C30/publishFeaturePR", true, "3.R"), op("C29/ingestReviewFeedback", true, "3.R"), op("C23/scopeRevalidation", false, "3.R"),
   op("C30/previewIssueProjection", false, "2.O", "added by 2.O: the exact text that would leave this machine, so a person can review it before binding"), op("C30/bindRequestIssue", true, "2.O"), op("C30/syncRequestMilestones", true, "2.O"), op("C30/syncCapabilityRelations", true, "3.T"), op("C23/getMutationOrigins", false, "3.T"),
-  op("C07/reserveMutationSurfaces", true, "3.T"), op("C23/assessConcurrentChanges", false, "3.T"), op("C07/cancelFeature", true, "1.F"),
+  op("C07/reserveMutationSurfaces", true, "3.T"), op("C07/relateRequests", true, "3.T", "added by 3.T: records DUPLICATES / DEPENDS_ON / EXTENDS / CONFLICTS_WITH between a person's own requests"), op("C23/assessConcurrentChanges", false, "3.T"), op("C23/assessRetirement", false, "3.T", "added by 3.T: replacement/retirement checklist with the unknown-consumer gap (PF-065)"), op("C07/cancelFeature", true, "1.F"),
   op("C14/recordModelInvocation", true, "1.G"), op("C17/evaluateBuilderVersion", true, "3.U"),
   op("C01/openFeatureWorkspace", false, "1.H"), op("C02/advanceWizard", true, "1.H"), op("C19/compileChangeGraph", false, "2.N"),
   op("C22/investigateProductionAnomaly", true, "3.S", "schema only in slice 1 (PF-050)"),

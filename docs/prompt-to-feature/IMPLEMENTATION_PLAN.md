@@ -2,6 +2,8 @@
 
 Source: `Prompt-to-feature.md` v1.3 (80 requirements PF-001–080, 84 scenarios AT-01–84). Reviewed 2026-10-05 against the repo at `cf06dc0`.
 
+> **Wave 3 status (2026-10-05, uncommitted): 3.P–3.U implemented with tests; see §12.**
+>
 > **Wave 0 status (2026-10-05, branch `feature/prompt-to-feature`, uncommitted): T0.1–T0.4 done. See §11 for what the audit changed.**
 
 ## 1. Verdict
@@ -278,3 +280,23 @@ The first pass missed `execution.ts`, the F07 task→candidate→validate→draf
 - **Vectors:** digests were computed independently (Python `hashlib`), but the canonical strings were written by the implementer and no human has reviewed them. `readiness.json` therefore keeps PF-042 at IMPLEMENTED_UNVALIDATED. The plan (T0.3) asked for review before freezing; that review is still open.
 - `feature_records` is keyed by `request_id` with a unique `(created_by, idempotency_key)` index; events are unique by `event_id` and by `(request_id, sequence)`.
 - **Operation rename:** the spec's `C28.exportPatch` collides with the existing change-proposal operation `C28/exportPatch`, so the feature version is `C28/exportFeaturePatch` (task 3.Q). A first full-suite run caught this: 8 gateway tests failed because my stub registration shadowed it, and my own "no collisions" test had only checked literal keys in `server.ts`. The test now calls every feature operation through the real gateway and requires it to answer with its own owning task.
+
+## 12. Wave 3 result (2026-10-05)
+
+Node suite: 1147 tests, all passing; `npm run typecheck` clean. The Chrome e2e suite and `cargo test` were not re-run for this wave.
+
+| Task | What exists | Tests |
+|---|---|---|
+| 3.Q | `feature/patch-export.ts`: export bound to a decision recomputed now (REVIEW ONLY label when incomplete), git/plain/bundle formats, unsafe-path/NUL/case/VCS blocks, destination dry run, apply into a NEW copy on an exact base | `feature-delivery.test.ts` |
+| 3.R | `feature/publish.ts` (draft only, push from CIE's own clone, find-before-create, same-PR update under a lease, deterministic commits so a crash retry adopts), `feature/review-feedback.ts` (fixed-rule classification, redaction, idempotent, older/unknown head, scoped revalidation) | `feature-publish.test.ts` |
+| 3.S | `feature/operations.ts`: static operational checks (basis stated), release-plan rules by tier, OPERATIONAL gate driver, revert planning, schema-only post-deploy | `feature-operations.test.ts` |
+| 3.T | migration 34, `feature/coordination.ts` (leases with fencing tokens, relations, concurrent-candidate assessment, origins, retirement), `feature/relation-sync.ts` | `feature-coordination.test.ts` |
+| 3.U | `feature/builder-eval.ts`: conformance suite, per-identity evaluations (persisted), `unevaluatedModels` gap in `computeEligibility`, drift impact, detector report on `fixtures/conflict-eval` | `feature-builder.test.ts` |
+| 3.P | `feature/test-links.ts`, `feature/dashboard.ts` (Validate/Deliver read models in `FeatureReview`), repair-weakening guard in `candidate.ts`, `apps/web/src/build/DeliverStages.tsx` + `deliver-view.ts` | `feature-dashboard.test.ts`, `build-deliver*.test.ts` |
+
+Decisions to know about:
+- Operations added beyond the frozen list: `C07/relateRequests`, `C23/assessRetirement`. Job kind `feature-apply` added to the schema.
+- `computeEligibility` gained an optional `unevaluatedModels` input, threaded through every caller. Candidates with no model invocations are unaffected.
+- A repair candidate is compared with the previous candidate's tests as well as the repository's: weakening a test the earlier candidate added is a property change (`REPAIR_*` kinds) and blocks verification.
+- `checkPatchDestination` accepts a snapshot without `contentRootHash` ("as it is now"); the assessment id binds the result to that root and apply refuses any other.
+- Honest gaps are in the ledger fragments (`ledger/3.*.json`, state `blocked` with what each needs): binary files, lease enforcement at candidate commit, no operation that validates an integrated candidate, no real model or GitHub exercised, no browser e2e of the new stages.

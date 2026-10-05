@@ -33,6 +33,7 @@ import { Tasks, TaskError } from "./execution.ts";
 import { GitHubCheckPublisher, newGrant } from "./pr-publish.ts";
 import { githubRemote } from "./gh.ts";
 import type { PrAnalysisView } from "@cie/schema";
+import { overviewSeeds } from "./overview.ts";
 import { projectProfile } from "./profile.ts";
 import { Registry } from "./registry.ts";
 import { WorkspaceLog } from "./workspaces.ts";
@@ -1525,7 +1526,7 @@ export class Service {
     return (intent as { type: "ask"; route: ViewRoute }).route; // with forms only, the reading is always a view
   }
 
-  async ask(ctx: CallContext, req: { question: string; route?: ViewRoute; revision?: string; pins?: string[]; seeds?: string[]; level?: number; form?: string; kind?: "failure" | "invariant"; subject?: string; lens?: string }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
+  async ask(ctx: CallContext, req: { question: string; route?: ViewRoute; revision?: string; pins?: string[]; seeds?: string[]; overview?: boolean; level?: number; form?: string; kind?: "failure" | "invariant"; subject?: string; lens?: string }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
     const question = (req.question ?? "").trim();
     if (!question || question.length > 1000) return fail(ctx, { code: "INVALID_SCHEMA", message: "question must be 1–1000 characters", retryable: false });
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
@@ -1556,12 +1557,15 @@ export class Service {
 
     // Hybrid retrieval: exact names, semantic closeness, concept cards and the graph, over only what this caller may see, cut to the model's budget.
     const semantic = await semanticScores(this.store, rev.id, question, this.embedder).catch(() => undefined);
-    const { bundle, tiers, scored, hidden, inaccessible, truncation } = retrieveForQuestion(this.store, rev.id, question, { lens: req.lens, pins: new Set(req.pins ?? []), extraSeeds: [...(req.pins ?? []), ...(req.seeds ?? [])], semantic, access: policyFor(this.store, rev.repoRoot), tokenBudget: chunkTokenBudget() });
+    const retrievalOptions = { overview: req.overview, lens: req.lens, pins: new Set(req.pins ?? []), extraSeeds: [...(req.pins ?? []), ...(req.overview ? overviewSeeds(this.store, rev.id) : req.seeds ?? [])], semantic, access: policyFor(this.store, rev.repoRoot) };
+    const { bundle, tiers, scored, hidden, inaccessible, truncation } = retrieveForQuestion(this.store, rev.id, question, { ...retrievalOptions, tokenBudget: req.overview ? undefined : chunkTokenBudget() });
+    // The model receives bounded evidence; its budget must not erase overview coverage.
+    const modelBundle = req.overview ? retrieveForQuestion(this.store, rev.id, question, { ...retrievalOptions, tokenBudget: chunkTokenBudget() }).bundle : bundle;
     const diagnostics = rev.diagnostics.filter((d) => d.code === "PARSE_ERRORS").map((d) => d.message);
     let representation: RepresentationOutput | undefined, run;
     const warnings: string[] = [];
     if (bundle.entities.length > 0) {
-      const { result, note } = await this.callModel<RepresentationOutput>(ctx, rev, { purpose: "REPRESENT", schemaId: SCHEMA_REPRESENTATION, question, bundle });
+      const { result, note } = await this.callModel<RepresentationOutput>(ctx, rev, { purpose: "REPRESENT", schemaId: SCHEMA_REPRESENTATION, question, bundle: modelBundle });
       if (note) warnings.push(note);
       if (result.ok) { representation = result.value; run = result.run; }
       else { warnings.push(`model unavailable (${result.error.code}); showing deterministic facts only`); diagnostics.push(`model output unavailable: ${result.error.code}`); }
@@ -1571,6 +1575,7 @@ export class Service {
     // by the reading itself (route.because), so the two never disagree.
     view.formReason = route.source !== "default" ? choice.reason : undefined;
     view.route = route;
+    if (req.overview) { view.params = { ...view.params, overview: true }; view.gaps.push("Overview samples code across languages and source modules; it is not a complete file listing."); }
     if (req.level !== undefined) view.level = req.level;
     view.hidden = hidden;
     if (inaccessible) view.gaps.push(`${inaccessible} match(es) are in code you do not have access to and were left out.`);
@@ -1621,7 +1626,7 @@ export class Service {
     if (!v) return fail(ctx, { code: "INVALID_SCHEMA", message: "no view", retryable: false });
     const r = v.investigation
       ? await this.investigate(ctx, { trace: v.investigation.trace, revision: v.revision, ignored: v.investigation.ignored })
-      : await this.ask(ctx, { question: v.question, revision: v.revision, form: v.formId, subject: typeof v.params?.subject === "string" ? v.params.subject : undefined });
+      : await this.ask(ctx, { question: v.question, revision: v.revision, form: v.formId, overview: v.params?.overview === true, subject: typeof v.params?.subject === "string" ? v.params.subject : undefined });
     if (r.ok) r.value.view.version = v.version + 1;
     return r;
   }
@@ -1999,13 +2004,9 @@ export class Service {
     const overview = async (lead: string, question = text): Promise<ApiResult<ConverseResult>> => {
         const rev = revision ? this.store.revision(revision) : this.store.latestRevision();
         if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index a repository first", retryable: false });
-        // The most connected code is what a newcomer should see first; the map starts zoomed out to the domains.
-        const idx = revisionIndex(this.store, rev.id);
-        const kinds = new Set(["function", "method", "class"]);
-        const seeds = this.store.entities(rev.id).filter((e) => kinds.has(e.kind)).sort((a, b) => (idx.degree.get(b.entityId) ?? 0) - (idx.degree.get(a.entityId) ?? 0) || a.entityId.localeCompare(b.entityId)).slice(0, 30).map((e) => e.entityId);
-        const r = await this.ask(ctx, { question: question || "Give me an overview of the whole project", revision: rev.id, seeds, level: 1 });
+        const r = await this.ask(ctx, { question: question || "Give me an overview of the whole project", revision: rev.id, overview: true, form: "SemanticMap", level: 1 });
         const profile = projectProfile(this.store, rev.id);
-        if (r.ok) { r.value.view.formReason = "The most connected code in the repository, grouped by responsibility. Zoom in for detail."; r.value.view.gaps.unshift(profile.text); }
+        if (r.ok) { r.value.view.formReason = "Representative code across languages and source modules, grouped by responsibility. Zoom in for detail."; r.value.view.gaps.unshift(profile.text); }
         return asView(r, `${lead} ${profile.text}`);
     };
     switch (intent.type) {

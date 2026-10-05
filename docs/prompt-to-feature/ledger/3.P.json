@@ -1,0 +1,65 @@
+{
+  "C23": {
+    "title": "Validate and Deliver (task 3.P)",
+    "items": [
+      {
+        "item": "related tests with a named basis, never observed coverage (PF-074, AT-72)",
+        "tests": [
+          "PF-074/AT-72 related tests carry their basis"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Validate dashboard: baseline vs candidate per target, per-test origin and status, gates, diagnostics with guidance, stale banner (PF-073/076)",
+        "tests": [
+          "PF-073/076 the Validate dashboard"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "a repair that weakens a test the previous candidate added is a property change and blocks verification (PF-076)",
+        "tests": [
+          "PF-076 a repair that weakens a test"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Deliver view enables each effectful action only when its own preconditions hold, with the reason otherwise (PF-073/079)",
+        "tests": [
+          "PF-073/079 the Deliver view enables each effectful action"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "only a real PASS looks like a pass in the UI; filters, targets, export names, destination syntax",
+        "tests": [
+          "PF-073/AT-74-77 only a real PASS looks like a pass",
+          "PF-073 the test list filters",
+          "PF-073 a target line shows the baseline",
+          "PF-077/078 export names, destination syntax"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "the Validate and Deliver stages render, with reasons on disabled actions and no stronger word than the server gave",
+        "tests": [
+          "PF-073/074 the Validate stage renders baseline beside candidate",
+          "PF-077/078/079 the Deliver stage gives each disabled action its reason"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "observed test coverage links (PF-074)",
+        "tests": [],
+        "state": "blocked",
+        "needs": "a coverage-producing runner; links are explicit or static only"
+      },
+      {
+        "item": "browser end-to-end of the new stages (AT-14)",
+        "tests": [],
+        "state": "blocked",
+        "needs": "a Chrome-driven e2e of Validate and Deliver against a live server; covered here by server-rendered markup only"
+      }
+    ]
+  }
+}

@@ -55,7 +55,7 @@ test("through the real gateway: every feature operation is reachable as a typed 
 test("migration 33 creates the five record families, is reversible, and leaves older tables alone", () => {
   const store = new Store(":memory:"); const db = store.db; // the store creates the base tables and runs every migration
   const names = (db.prepare("select name from sqlite_master where type='table' and name like 'feature_%' order by name").all() as { name: string }[]).map((r) => r.name);
-  assert.deepEqual(names, ["feature_candidates", "feature_decisions", "feature_events", "feature_evidence", "feature_records"]);
+  assert.deepEqual(names, ["feature_candidates", "feature_decisions", "feature_evaluations", "feature_events", "feature_evidence", "feature_fence", "feature_leases", "feature_records", "feature_relations"]);
   assert.equal(currentVersion(db), Math.max(...MIGRATIONS.map((m) => m.version)));
   db.prepare("insert into feature_records(request_id,repository_id,state,version,schema_version,json,created_by,created_at,updated_at) values ('r','repo','RECEIVED',0,1,'{}','u','t','t')").run();
   db.prepare("insert into feature_events(request_id,sequence,event_id,type,actor,schema_version,json,at) values ('r',1,'e1','FeatureSubmitted','u',1,'{}','t')").run();

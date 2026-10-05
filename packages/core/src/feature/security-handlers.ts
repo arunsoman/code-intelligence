@@ -13,6 +13,7 @@ import { loadSecurityPolicy, securityPolicyHash, type SecurityTools } from "./se
 import type { SqliteFeatureStore } from "./store.ts";
 import type { CandidateRecord, FeatureRecord, Outcome, Runner } from "./types.ts";
 import { browserRunCheck } from "./browser-gate.ts";
+import { operationalRunCheck } from "./operations.ts";
 import { perfRunCheck } from "./perf-handlers.ts";
 
 /** Injectable tools. Empty by default: with none configured the gates say INCOMPLETE rather than pretend. */
@@ -27,7 +28,7 @@ export function gateContextFor(hooks: GateHooks, candidate: CandidateRecord, req
 }
 
 /** The driver 2.J passes to runFeatureValidation for this candidate. */
-export const gateDriverFor = (hooks: GateHooks, fs: SqliteFeatureStore) => (candidate: CandidateRecord, request: FeatureRecord): RunCheck => composeRunChecks(gateRunCheck(gateContextFor(hooks, candidate, request)), browserRunCheck(request.repositoryId, hooks.browserRunner), perfRunCheck(fs, candidate, request));
+export const gateDriverFor = (hooks: GateHooks, fs: SqliteFeatureStore) => (candidate: CandidateRecord, request: FeatureRecord): RunCheck => composeRunChecks(operationalRunCheck(candidate, request), gateRunCheck(gateContextFor(hooks, candidate, request)), browserRunCheck(request.repositoryId, hooks.browserRunner), perfRunCheck(fs, candidate, request));
 
 export function securityHandlers(svc: Service, fs: SqliteFeatureStore, owned: (id: string, actor: string) => FeatureRecord, hooks: GateHooks = {}): Handlers {
   const bound = (hash: unknown, actor: string) => {

@@ -6,7 +6,7 @@
 //   * Event sequences are dense per request, starting at 1.
 import { asSet, canonHash, defineSchema, type Canon } from "./canon.ts";
 import { FeatureError } from "./errors.ts";
-import type { CandidateRecord, DecisionRecord, EventRecord, EvidenceRecord, FeatureRecord, FeatureStore, Id } from "./types.ts";
+import type { BuilderEvaluation, CandidateRecord, DecisionRecord, EventRecord, EvidenceRecord, FeatureRecord, FeatureStore, Id } from "./types.ts";
 import type { Store } from "../store.ts";
 
 type NewEvent = Omit<EventRecord, "sequence" | "sync">;
@@ -128,6 +128,14 @@ export class SqliteFeatureStore implements FeatureStore {
   getCandidateByBinding(bindingHash: string): CandidateRecord | null { const r = this.db.prepare("select json from feature_candidates where binding_hash = ? order by created_at desc limit 1").get(bindingHash) as { json: string } | undefined; return r ? JSON.parse(r.json) as CandidateRecord : null; }
   listCandidates(requestId: Id): CandidateRecord[] { return (this.db.prepare("select json from feature_candidates where request_id = ? order by ordinal").all(requestId) as { json: string }[]).map((r) => JSON.parse(r.json) as CandidateRecord); }
   nextOrdinal(requestId: Id): number { return (this.db.prepare("select coalesce(max(ordinal),0)+1 n from feature_candidates where request_id = ?").get(requestId) as { n: number }).n; }
+
+  // ------------------------------------------------------------------ builder evaluations (3.U)
+  putEvaluation(e: BuilderEvaluation): BuilderEvaluation {
+    this.db.prepare("insert into feature_evaluations(identity_hash, suite_hash, passed, json, created_at) values (?,?,?,?,?) on conflict(identity_hash, suite_hash) do update set passed = excluded.passed, json = excluded.json, created_at = excluded.created_at")
+      .run(e.modelIdentityHash, e.suiteHash, e.passed ? 1 : 0, JSON.stringify(e), now());
+    return e;
+  }
+  getEvaluation(identityHash: string, suiteHash: string): BuilderEvaluation | null { const r = this.db.prepare("select json from feature_evaluations where identity_hash = ? and suite_hash = ?").get(identityHash, suiteHash) as { json: string } | undefined; return r ? JSON.parse(r.json) as BuilderEvaluation : null; }
 
   // ------------------------------------------------------------------ evidence
   putEvidence(rec: EvidenceRecord, event?: NewEvent): EvidenceRecord {

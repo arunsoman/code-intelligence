@@ -875,6 +875,23 @@ export const MIGRATIONS: Migration[] = [
     `),
     down: (db) => db.exec("drop table feature_events; drop table feature_evidence; drop table feature_candidates; drop table feature_decisions; drop table feature_records;"),
   },
+  {
+    version: 34, name: "prompt-to-feature-coordination",
+    up: (db) => db.exec(`
+      create table if not exists feature_leases(
+        repository_id text not null, surface text not null, lease_id text not null, request_id text not null, fencing_token integer not null,
+        expected_revision text not null, expires_at integer not null, primary key(repository_id, surface));
+      create index if not exists feature_leases_request on feature_leases(request_id);
+      create table if not exists feature_fence(repository_id text primary key, token integer not null);
+      create table if not exists feature_relations(
+        id text primary key, from_request text not null, to_request text not null, relationship text not null, state text not null,
+        created_by text not null, json text not null, created_at text not null, unique(from_request, to_request, relationship));
+      create index if not exists feature_relations_to on feature_relations(to_request);
+      create table if not exists feature_evaluations(
+        identity_hash text not null, suite_hash text not null, passed integer not null, json text not null, created_at text not null, primary key(identity_hash, suite_hash));
+    `),
+    down: (db) => db.exec("drop table feature_evaluations; drop table feature_relations; drop table feature_fence; drop table feature_leases;"),
+  },
 ];
 export function currentVersion(db: DatabaseSync): number {
   db.exec("create table if not exists schema_version(version integer not null, name text not null, applied_at text not null)");

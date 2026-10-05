@@ -2,7 +2,6 @@ import type { ApiResult, CallContext, ChatAnalysisResult, ConverseResult } from 
 import type { ChatPlan } from "./chat-plan.ts";
 import type { Service } from "./service.ts";
 import type { RevisionRow } from "./store.ts";
-import { revisionIndex } from "./salience.ts";
 import { projectDescription, projectProfile } from "./profile.ts";
 import { isNonProductionFile, moduleTests } from "./module-tests.ts";
 import { redactBuilt } from "./redact.ts";
@@ -34,12 +33,7 @@ export async function executeChatPlan(svc: Service, ctx: CallContext, rev: Revis
         const links = built.view.nodes.filter((n) => n.role === "test");
         record.message = [built.view.caption, ...links.slice(0, 12).map((n) => `• ${n.file}${n.kind !== "file" ? ` — ${n.label}` : ""} (${n.badge})`), ...(links.length > 12 ? [`Open the Tests view for ${links.length - 12} more displayed links.`] : []), ...built.view.gaps].join("\n");
       } else {
-        let seeds: string[] | undefined;
-        if (step.tool === "overview") {
-          const idx = revisionIndex(svc.store, rev.id);
-          seeds = svc.store.entities(rev.id).filter((e) => ["function", "method", "class"].includes(e.kind) && !access.denied(e.file)).sort((a, b) => (idx.degree.get(b.entityId) ?? 0) - (idx.degree.get(a.entityId) ?? 0) || a.entityId.localeCompare(b.entityId)).slice(0, 30).map((e) => e.entityId);
-        }
-        const r = await svc.ask(ctx, { question: step.question, revision: rev.id, form: step.tool === "overview" ? "SemanticMap" : step.tool === "risk" ? "ChangeRisk" : step.tool === "tests" ? "TestConfidence" : step.form, kind: step.kind, subject, seeds, pins, ...(step.tool === "overview" ? { level: 1 } : {}) });
+        const r = await svc.ask(ctx, { question: step.question, revision: rev.id, form: step.tool === "overview" ? "SemanticMap" : step.tool === "risk" ? "ChangeRisk" : step.tool === "tests" ? "TestConfidence" : step.form, kind: step.kind, subject, pins, ...(step.tool === "overview" ? { level: 1, overview: true } : {}) });
         if (!r.ok) throw new Error(r.error.message);
         warnings.push(...r.metadata.warnings);
         record.view = r.value.view; record.claims = r.value.claims;

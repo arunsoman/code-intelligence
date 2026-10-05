@@ -1,0 +1,49 @@
+{
+  "C28": {
+    "title": "Patch export and destination (task 3.Q)",
+    "items": [
+      {
+        "item": "export bound to a decision recomputed now; incomplete candidates export as REVIEW ONLY, blocked/stale/forged exports nothing (PF-077)",
+        "tests": [
+          "PF-077 export is bound to a decision recomputed now",
+          "PF-077 a stale candidate or a decision made before the contract changed exports nothing"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "git-apply-accepted patch with renames and deletions, plain diff and bundle (PF-077)",
+        "tests": [
+          "PF-077 the exported git patch is accepted by git apply",
+          "PF-077 file patches handle missing trailing newlines"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "unsafe paths, VCS metadata, NUL bytes, case collisions and submodule paths block an export (PF-078)",
+        "tests": [
+          "PF-078 unsafe paths, VCS metadata"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "destination dry run lists conflicts and dirty paths; apply only on an exact base, into a new copy, and the destination is untouched (PF-078, AT-78-82)",
+        "tests": [
+          "PF-078/AT-78-82 the destination check is a dry run"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "binary and symlink files in a candidate (AT-80)",
+        "tests": [],
+        "state": "blocked",
+        "needs": "a binary-capable candidate engine: 1.E stores text only, so export and apply are text-only and refuse anything else"
+      },
+      {
+        "item": "a dedicated receipt comment on the issue for export and apply",
+        "tests": [],
+        "state": "blocked",
+        "needs": "2.O milestone sync already carries PatchExported/PatchApplied as events; no test asserts the issue comment for them yet"
+      }
+    ]
+  }
+}

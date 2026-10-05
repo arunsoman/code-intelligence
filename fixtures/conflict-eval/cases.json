@@ -1,0 +1,16 @@
+[
+  { "id": "export-never-vs-all", "statements": [ { "id": "a", "text": "Admins must export all transactions." }, { "id": "b", "text": "Admins must never export transactions." } ], "conflicts": [["a", "b"]] },
+  { "id": "scope-all-vs-own", "statements": [ { "id": "a", "text": "Members can see all invoices in the workspace." }, { "id": "b", "text": "Members can only see their own invoices in the workspace." } ], "conflicts": [["a", "b"]] },
+  { "id": "retry-attempts", "statements": [ { "id": "a", "text": "Failed payments are retried for 3 attempts." }, { "id": "b", "text": "Failed payments are retried for 5 attempts." } ], "conflicts": [["a", "b"]] },
+  { "id": "retry-times-unit-less", "statements": [ { "id": "a", "text": "Retry failed payments 3 times." }, { "id": "b", "text": "Retry failed payments 5 times." } ], "conflicts": [["a", "b"]] },
+  { "id": "different-tenants", "statements": [ { "id": "a", "text": "Tenant acme must retain exports." }, { "id": "b", "text": "Tenant globex must not retain exports." } ], "conflicts": [] },
+  { "id": "unrelated", "statements": [ { "id": "a", "text": "Users can reset their passwords." }, { "id": "b", "text": "Exports are generated nightly." } ], "conflicts": [] },
+  { "id": "different-periods", "statements": [ { "id": "a", "text": "In Q1 reports must include refunds." }, { "id": "b", "text": "In Q2 reports must not include refunds." } ], "conflicts": [] },
+  { "id": "encryption", "statements": [ { "id": "a", "text": "The export must be encrypted at rest." }, { "id": "b", "text": "The export must not be encrypted at rest so support can read it." } ], "conflicts": [["a", "b"]] },
+  { "id": "support-emails", "statements": [ { "id": "a", "text": "Support agents may view customer emails." }, { "id": "b", "text": "Support agents must not view customer emails." } ], "conflicts": [["a", "b"]] },
+  { "id": "semantic-not-lexical", "statements": [ { "id": "a", "text": "Exports are available immediately after the request." }, { "id": "b", "text": "Exports are produced by a nightly batch job." } ], "conflicts": [["a", "b"]] },
+  { "id": "forever-vs-90-days", "statements": [ { "id": "a", "text": "Audit logs must be kept forever." }, { "id": "b", "text": "Audit logs are deleted after 90 days." } ], "conflicts": [["a", "b"]] },
+  { "id": "rows-all-vs-filtered", "statements": [ { "id": "a", "text": "Admins can export all rows." }, { "id": "b", "text": "Admins can export only filtered rows." } ], "conflicts": [["a", "b"]] },
+  { "id": "two-restrictions", "statements": [ { "id": "a", "text": "Staff must not delete invoices after approval." }, { "id": "b", "text": "Staff must not delete invoices after payment." } ], "conflicts": [] },
+  { "id": "approvers", "statements": [ { "id": "a", "text": "Only admins may approve refunds." }, { "id": "b", "text": "Managers may approve refunds for their own team." } ], "conflicts": [["a", "b"]] }
+]

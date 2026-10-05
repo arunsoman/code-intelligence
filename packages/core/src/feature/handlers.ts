@@ -20,13 +20,18 @@ import { validationHandlers } from "./validation-handlers.ts";
 import { gateDriverFor, securityHandlers, type GateHooks } from "./security-handlers.ts";
 import { perfHandlers, type PerfHooks } from "./perf-handlers.ts";
 import { issueHandlers, type IssueHooks } from "./issue-handlers.ts";
+import { patchHandlers } from "./delivery-handlers.ts";
+import { builderHandlers } from "./builder-handlers.ts";
+import { coordinationHandlers } from "./coordination-handlers.ts";
+import { opsHandlers } from "./ops-handlers.ts";
+import { publishHandlers, type PublishHooks } from "./publish-handlers.ts";
 import { requirementHandlers, type RequirementHooks } from "./requirement-handlers.ts";
 import type { FeatureRecord, FeatureWorkspace, Id, Outcome } from "./types.ts";
 
 const str = (v: unknown, what: string): string => { if (typeof v !== "string" || !v) throw new FeatureError("INVALID_SCHEMA", `${what} is required`); return v; };
 const obj = (b: unknown): Record<string, any> => { if (!b || typeof b !== "object" || Array.isArray(b)) throw new FeatureError("INVALID_SCHEMA", "the request body must be an object"); return b as Record<string, any>; };
 
-export function featureHandlers(svc: Service, opts: { gates?: GateHooks; perf?: PerfHooks; issues?: IssueHooks; requirements?: RequirementHooks } = {}): Handlers {
+export function featureHandlers(svc: Service, opts: { gates?: GateHooks; perf?: PerfHooks; issues?: IssueHooks; requirements?: RequirementHooks; publish?: PublishHooks; builder?: { routes?: readonly import("../llm-router.ts").GenerationRouter[] } } = {}): Handlers {
   const fs = new SqliteFeatureStore(svc.store);
   const isActive = (id: string) => { const j = svc.store.job(id); return !!j && (j.state === "QUEUED" || j.state === "RUNNING"); };
   try { reconcileAll(fs, "system", isActive); } catch { /* a closed or older database: nothing to reconcile */ }
@@ -48,6 +53,11 @@ export function featureHandlers(svc: Service, opts: { gates?: GateHooks; perf?: 
     ...issueHandlers(svc, fs, owned, opts.issues ?? {}),
     ...requirementHandlers(svc, fs, owned, opts.requirements ?? {}),
     ...securityHandlers(svc, fs, owned, opts.gates ?? {}),
+    ...patchHandlers(svc, fs, owned),
+    ...opsHandlers(svc, fs, owned),
+    ...builderHandlers(svc, fs, opts.builder),
+    ...coordinationHandlers(svc, fs, { forge: opts.issues?.forge }),
+    ...publishHandlers(svc, fs, opts.publish ?? {}),
     "C19/compileChangeGraph": (c, b) => guarded(c, () => {
       const x = obj(b); const rec = owned(x.requestId, who(c));
       const cand = x.candidateHash ? fs.getCandidateByBinding(x.candidateHash) : null;

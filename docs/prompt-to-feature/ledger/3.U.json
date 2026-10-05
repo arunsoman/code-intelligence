@@ -1,0 +1,55 @@
+{
+  "C17": {
+    "title": "Builder drift and model evaluation (task 3.U)",
+    "items": [
+      {
+        "item": "conformance suite passes a faithful builder and names the property each broken builder loses (PF-052, AT-41)",
+        "tests": [
+          "PF-052/AT-41 the suite passes a faithful builder"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "suite budget and cancellation report which cases did not run",
+        "tests": [
+          "PF-052 a budget stops the suite"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "evaluation is per identity and per suite, persists, gates eligibility, does not carry to a new or unknown version (PF-052, AT-41)",
+        "tests": [
+          "PF-052/AT-41 evaluation is per identity and per suite"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "gateway operation validates, runs as a job and reports the evaluation",
+        "tests": [
+          "PF-052 the gateway operation validates, enqueues a job"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "ModelIdentityChanged events and dependent candidates listed",
+        "tests": [
+          "PF-052 ModelIdentityChanged events are listed"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "conflict-detector precision/recall report on a labelled fixture, stated as an inventory",
+        "tests": [
+          "PF-052 the conflict-detector report counts hits and misses"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "evaluation against a real local model",
+        "tests": [],
+        "state": "blocked",
+        "needs": "a running local model; tests use a scripted route, which proves the suite's checks, not any real model's behaviour"
+      }
+    ]
+  }
+}

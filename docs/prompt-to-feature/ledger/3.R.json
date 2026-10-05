@@ -1,0 +1,68 @@
+{
+  "C30": {
+    "title": "Draft PR and review iteration (task 3.R)",
+    "items": [
+      {
+        "item": "draft PR bound to head and decision, created once, retry and new key adopt it, review-only labelled, ids not prompt wording (PF-035)",
+        "tests": [
+          "PF-035 a draft PR is created once"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "refusals: forged decision, wrong head, non-draft mode, other principal, stale base, non-draft receipt, foreign branch (PF-035, AT-22)",
+        "tests": [
+          "PF-035/AT-22 publication refuses a forged decision"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "crash between push and PR create is repaired by retry; one PR (AT-23)",
+        "tests": [
+          "AT-23 a crash after the push"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "reviewer feedback: fixed-rule classification, redaction, idempotent, older/unknown head marked (PF-051, AT-30)",
+        "tests": [
+          "PF-051 reviewer feedback is classified by fixed rules"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "scoped revalidation orders re-runs by change, widens on stated reasons, old evidence never counts (PF-051, AT-40)",
+        "tests": [
+          "PF-051/AT-30/40 scoped revalidation reruns"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "a revised candidate updates the same draft PR under a lease on our own head (PF-051)",
+        "tests": [
+          "PF-051 after review, a revised candidate updates the SAME draft PR"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "destination syntax and branch names validated",
+        "tests": [
+          "PF-035 destination and branch names are validated"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PF-036 authority-scoped publication decisions",
+        "tests": [],
+        "state": "blocked",
+        "needs": "a recorded publish authority in .cie/authority.json; today the requester publishes their own request"
+      },
+      {
+        "item": "real GitHub transport exercised end to end",
+        "tests": [],
+        "state": "blocked",
+        "needs": "a live repository and credentials; tests use a scripted forge whose remote is a real local git repository"
+      }
+    ]
+  }
+}

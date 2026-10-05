@@ -172,7 +172,7 @@ export interface ViewMatrix {
 
 // ---- Jobs (C07): long work that runs in the background and can be cancelled ----
 // "pr-analysis": F02 — a pull request's base and head are indexed, compared, analysed and gated in one background job.
-export type JobKind = "index" | "concepts" | "investigate" | "defect-detect" | "defect-experiment" | "pr-analysis" | "search-index" | "dependency-scan" | "history-analysis" | "campaign-advance" | "campaign-joint-check" | "feature-build" | "feature-validate";
+export type JobKind = "index" | "concepts" | "investigate" | "defect-detect" | "defect-experiment" | "pr-analysis" | "search-index" | "dependency-scan" | "history-analysis" | "campaign-advance" | "campaign-joint-check" | "feature-build" | "feature-validate" | "feature-apply";
 export type JobState = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 export interface JobView {
   id: Id; kind: JobKind; state: JobState;

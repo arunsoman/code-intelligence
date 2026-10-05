@@ -290,8 +290,8 @@ export function Canvas(p: Props) {
       ...rendered.groups.map((g) => ({ data: { id: g.id, label: g.label, group: g.kind, parent: g.parent && rendered.groups.some((x) => x.id === g.parent) ? g.parent : undefined } })),
       ...rendered.nodes.map((n) => {
         const bd = n.node?.badge;
-        const detail = level >= 6 && n.node ? `${n.label}\n${[n.role === "symbol" ? n.node.kind : n.role, n.node.notes?.length ? `${n.node.notes.length} note(s)` : "", n.node.unresolvedCalls ? `${n.node.unresolvedCalls} fog` : ""].filter(Boolean).join(" · ")}` : n.label;
-        const labelText = bd && level < 6 ? `${n.label}\n${bd}` : detail;
+        const detail = level >= 6 && n.node ? `${n.label}\n${[n.role === "symbol" ? n.node.kind : n.role, n.node.notes?.length ? `${n.node.notes.length} note(s)` : "", n.node.unresolvedCalls ? `${n.node.unresolvedCalls} unresolved calls` : ""].filter(Boolean).join(" · ")}` : n.label;
+        const labelText = level === 3 && n.unresolvedCalls ? `${detail}\n${n.unresolvedCalls} unresolved calls` : bd && level < 6 ? `${n.label}\n${bd}` : detail;
         return { data: { id: n.id, label: labelText, hasBadge: bd ? 1 : 0, heatv: n.node?.heat ? n.node.heat.value : -1, ghost: n.node?.ghost ? 1 : 0, inTx: n.inTx ? 1 : 0, detail: level >= 6 ? 1 : 0, testOverlaySize: 0, runtimeOverlaySize: 0, tier: n.tier, display: n.displayMode, role: n.role ?? "", kind: n.kind, parent: n.parent }, position: { ...n.pos }, classes: n.stale ? "stale" : "" };
       }),
       ...rendered.edges.map((e) => {

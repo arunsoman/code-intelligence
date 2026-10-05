@@ -37,10 +37,10 @@ test("level 4 hides context-tier symbols and their edges", () => {
   assert.deepEqual(r.edges.map((e) => e.id), ["e2"]);
 });
 
-test("level 3 collapses to files with aggregated, counted edges; worst display mode wins", () => {
+test("level 3 files are facts even when their contents include uncertain claims", () => {
   const r = render(view, 3, basePositions(view));
   assert.deepEqual(r.nodes.map((n) => n.label).sort(), ["auth/x.ts (2)", "db/y.ts (2)"]);
-  assert.equal(r.nodes.find((n) => n.label.startsWith("db/"))!.displayMode, "HYPOTHESIS");
+  assert.ok(r.nodes.every((n) => n.displayMode === "FACT"));
   assert.equal(r.edges.length, 1, "a→c and b→d merge; a→b is internal and disappears");
   assert.equal(r.edges[0].count, 2);
   assert.deepEqual(r.edges[0].edgeIds.sort(), ["e2", "e3"]);
@@ -260,4 +260,13 @@ test("levels are driven by legibility, not by a relative zoom table", () => {
   assert.doesNotMatch(src, /export function nextLevel|export const zoomForLevel/, "the relative-zoom level mechanism is gone");
   const canvas = readFileSync(join(import.meta.dirname, "../src/Canvas.tsx"), "utf8");
   assert.match(canvas, /levelMove\(/, "the canvas asks the legibility rule which way the level moves");
+});
+
+test("file identity stays factual while unresolved call coverage remains visible", () => {
+  const input = { ...view, nodes: view.nodes.map((n, i) => ({ ...n, displayMode: "FOG" as const, unresolvedCalls: i + 1 })) };
+  const r = render(input, 3, basePositions(input));
+  assert.ok(r.nodes.every((n) => n.displayMode === "FACT"));
+  assert.equal(r.nodes.reduce((sum, n) => sum + (n.unresolvedCalls ?? 0), 0), 10);
+  assert.ok(outline(r).every((n) => /fact.*unresolved call/.test(n.text)));
+  assert.ok(render(input, 2, basePositions(input)).nodes.every((n) => n.displayMode === "FOG"));
 });

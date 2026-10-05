@@ -164,7 +164,7 @@ export async function runFeatureValidation(d: ValidationDependencies, i: { candi
 }
 
 /** Pure single eligibility authority. The full plan is evaluated even for a subset/rerun of evidence. */
-export function computeEligibility(i: { request: FeatureRecord; candidate: CandidateRecord; plan: ValidationPlan; evidence: EvidenceRecord[]; decisions?: DecisionRecord[]; now?: string; purpose?: string; unresolvedFindingIds?: string[] }): PublicationDecision {
+export function computeEligibility(i: { request: FeatureRecord; candidate: CandidateRecord; plan: ValidationPlan; evidence: EvidenceRecord[]; decisions?: DecisionRecord[]; now?: string; purpose?: string; unresolvedFindingIds?: string[]; /** 3.U: model identities behind the generation that have no passing builder evaluation (see builder-eval.ts). */ unevaluatedModels?: string[] }): PublicationDecision {
   const { request, candidate: c, plan } = i; const contract = request.contract; const reasons: string[] = []; let blocked = false; let stale = false;
   const block = (s: string) => { reasons.push(s); blocked = true; }; const gap = (s: string) => reasons.push(s);
   try { assertPlan(plan); } catch { block("validation plan is invalid"); }
@@ -174,6 +174,7 @@ export function computeEligibility(i: { request: FeatureRecord; candidate: Candi
   if (!dataAllowed(plan)) block("test data lacks authorization or synthetic provenance");
   if (c.oracleState === "PROPERTY_CHANGE_PENDING_REVIEW" || (c.binding.originalOracleHash !== c.binding.candidateOracleHash && !c.binding.propertyChangeReviewId)) block("original oracle changed without property-change review");
   if (c.mutations.some((m) => m.attribution !== "COMPLETE")) gap("mutation attribution is incomplete");
+  for (const m of i.unevaluatedModels ?? []) gap(`builder not evaluated: ${m}`);
   if (plan.environment.fidelity !== "REPRESENTATIVE" || plan.environment.dependencies !== "AVAILABLE") gap("environment fidelity or dependencies are incomplete");
   const tier = classifyTier(c.mutations.flatMap((m) => [m.oldPath, m.newPath].filter((p): p is string => !!p).map((path) => ({ path, kind: m.kind })))).tier;
   const mandatoryKinds: ValidationKind[] = tier === "T0" ? ["SECURITY"] : ["BUILD", "UNIT", "SECURITY", "DEPENDENCY", "OPERATIONAL"];

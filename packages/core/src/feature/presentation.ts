@@ -2,6 +2,8 @@
 import type { ViewSpec } from "@cie/schema";
 import { policyFor } from "../access.ts";
 import type { Store } from "../store.ts";
+import { deliverView, validationDashboard } from "./dashboard.ts";
+import { unevaluatedModels } from "./builder-eval.ts";
 import { computeEligibility, defaultValidationPlan, validationHash, validationPlanHash } from "./validation.ts";
 import type { AcceptanceCriterion, CandidateRecord, ChangeGraphPage, DecisionRecord, FeatureRecord, FeatureStore, Outcome, OverlapAssessment, PublicationDecision, Requirement, ValidationResult } from "./types.ts";
 import { FeatureError } from "./errors.ts";
@@ -11,6 +13,8 @@ export type FeatureReview = {
   questions: { id: string; text: string; requirementIds: string[]; scope: string; choices: string[]; whyNeeded: string }[];
   tasks: FeatureRecord["tasks"]; overlap?: OverlapAssessment; files: ReviewFile[]; fileCounts: Record<string, number>;
   results: ValidationResult[]; decision?: PublicationDecision; validationPlanHash?: string; gaps: string[];
+  /** 3.P: the Validate and Deliver read models, derived from the same evidence and eligibility. */
+  dashboard?: import("./dashboard.ts").Dashboard; deliver?: import("./dashboard.ts").DeliverView;
 };
 export function reviewFiles(request: FeatureRecord, candidate: CandidateRecord | null): ReviewFile[] {
   const componentIds = (ids: string[]) => [...new Set(request.tasks.filter((t) => ids.includes(t.id)).map((t) => t.componentId))];
@@ -24,6 +28,10 @@ export function reviewFiles(request: FeatureRecord, candidate: CandidateRecord |
   return [...planned.values()];
 }
 export function featureReview(fs: FeatureStore, request: FeatureRecord, candidate: CandidateRecord | null, sourceStore?: Store): FeatureReview {
+  const base = featureReviewBase(fs, request, candidate, sourceStore);
+  return { ...base, dashboard: validationDashboard(fs, request, candidate, base.decision), deliver: deliverView(fs, request, candidate) };
+}
+function featureReviewBase(fs: FeatureStore, request: FeatureRecord, candidate: CandidateRecord | null, sourceStore?: Store): FeatureReview {
   const files = reviewFiles(request, candidate);
   const allowed = sourceStore ? files.filter((f) => !policyFor(sourceStore, request.repositoryId).denied(f.path) && (!f.oldPath || !policyFor(sourceStore, request.repositoryId).denied(f.oldPath))) : files;
   // Planned edits are paths too: a denied one is dropped and only counted (issue #86).
@@ -37,7 +45,7 @@ export function featureReview(fs: FeatureStore, request: FeatureRecord, candidat
     questions: request.blockers.map((b) => ({ id: b.id, text: b.text, requirementIds: b.requirementIds, scope: b.scope ?? "business", choices: [], whyNeeded: `Blocks ${b.requirementIds.join(", ") || "request progress"}; ${b.scope ?? "business"} authority is required.` })),
     tasks, overlap: request.contract?.overlap, files: allowed,
     fileCounts: Object.fromEntries(["ADDED", "MODIFIED", "DELETED", "RENAMED", "REUSED", "AFFECTED_UNCHANGED", "PLANNED"].map((k) => [k, allowed.filter((f) => f.kind === k).length])),
-    results: evidence.flatMap((e) => e.results), ...(candidate && plan ? { validationPlanHash: validationPlanHash(plan), decision: computeEligibility({ request, candidate, plan, evidence, decisions }) } : {}),
+    results: evidence.flatMap((e) => e.results), ...(candidate && plan ? { validationPlanHash: validationPlanHash(plan), decision: computeEligibility({ request, candidate, plan, evidence, decisions, unevaluatedModels: unevaluatedModels(fs as { getEvaluation?: never }, request, candidate) }) } : {}),
     gaps: [...(!request.contract ? ["No contract draft recorded."] : []), ...(!request.contract?.overlap ? ["Overlap assessment has not been recorded."] : []), ...(allowed.length !== files.length || hiddenEdits ? ["Some files are outside your source access scope; counts cover visible inventory only."] : [])] };
 }
 export function compileChangeGraph(request: FeatureRecord, files: ReviewFile[], input: { candidateHash?: string; filters?: Record<string, string>; cursor?: string; budget: { nodes: number } }): Outcome<ChangeGraphPage> {

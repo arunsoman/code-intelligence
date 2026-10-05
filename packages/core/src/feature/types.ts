@@ -109,6 +109,8 @@ export type FeatureRecord = {
   issue: IssueBinding; workspace: FeatureWorkspace; version: number; createdBy: Id; createdAt: Timestamp; updatedAt: Timestamp;
   /** 2.I: findings raised against the current contract (§8), deterministic first, model-proposed second. */ findings?: RequirementFinding[];
   /** 2.I: the stored overlap/reuse assessment (§37), set by compareRequestedBehaviour. */ overlap?: OverlapAssessment;
+  /** 3.R: reviewer feedback received on the published draft PR, one entry per external event (idempotent). */
+  reviewFeedback?: ReviewFeedback[];
   /** 1.G: append-only invocation snapshots, including intent persisted before provider calls. */
   modelInvocations?: ModelInvocation[];
   /** Set by discovery (1.C). */ assessment?: RepositoryAssessment;
@@ -180,7 +182,7 @@ export type EventType =
   | "FeatureSubmitted" | "ContractVersionCreated" | "RequirementFindingRaised" | "DecisionRecorded" | "TaskBlocked" | "CandidateCreated"
   | "ValidationCompleted" | "PerformanceAssessed" | "VerificationInvalidated" | "PublicationRequested" | "PublicationReconciled"
   | "FILE_ADDED" | "FILE_MODIFIED" | "FILE_DELETED" | "FILE_RENAMED" | "DEPENDENCY_CHANGED" | "REVIEW_APPLIED" | "PR_UPDATED" | "DEPLOYED" | "REVERTED"
-  | "WizardAdvanced" | "PatchExported" | "PatchApplied" | "Cancelled" | "ModelIdentityChanged" | "RequestReconciled" | "StateChanged";
+  | "ReviewFeedbackIngested" | "WizardAdvanced" | "PatchExported" | "PatchApplied" | "Cancelled" | "ModelIdentityChanged" | "RequestReconciled" | "StateChanged";
 /** 5/5. Request-scoped milestones. `sync` is the outbox state for the GitHub projection (plan P7/P8). */
 export type EventRecord = {
   schemaVersion: 1; eventId: Id; requestId: Id; sequence: number; type: EventType; actor: Id; producer: string;
@@ -255,8 +257,16 @@ export type MutationLease = { id: Id; requestId: Id; surfaceIds: Id[]; expectedR
 // ------------------------------------------------------------------------------------------------ wizard and delivery (§47)
 
 export type TestAssociation = { testId: Id; acceptanceIds: Id[]; fileIds: Id[]; basis: "EXPLICIT" | "STATIC_DEPENDENCY" | "OBSERVED_COVERAGE" | "REVIEWED" | "HEURISTIC"; sourceStatus: "EXISTING" | "ADDED" | "MODIFIED"; evidenceIds: Id[] };
-export type PatchExport = { id: Id; requestId: Id; patchArtifactHash: Hash; manifestHash: Hash; candidateHash: Hash; baseHash: Hash; format: string; eligibility: PublicationEligibility };
-export type PublicationReceipt = { id: Id; kind: "DRAFT_PR" | "ISSUE_SYNC" | "PATCH_APPLY"; remoteRef?: string; headHash?: Hash; decisionId: Id; at: Timestamp };
+export type PatchExport = {
+  id: Id; requestId: Id; patchArtifactHash: Hash; manifestHash: Hash; candidateHash: Hash; baseHash: Hash; format: string; eligibility: PublicationEligibility;
+  /** 3.Q: the exact bytes that leave (text only), the manifest they are bound to, the decision they were exported under and what the export may be called. */
+  patch?: string; manifest?: unknown; decisionId?: Id; reasons?: string[]; exportPolicyHash?: Hash; label?: string;
+};
+export type PublicationReceipt = {
+  id: Id; kind: "DRAFT_PR" | "ISSUE_SYNC" | "PATCH_APPLY"; remoteRef?: string; headHash?: Hash; decisionId: Id; at: Timestamp;
+  /** 3.R: where the draft PR is, the exact commit that was pushed, and what it was bound to. */
+  repository?: string; branch?: string; prNumber?: number; commit?: Hash; eligibility?: PublicationEligibility; idempotencyKey?: string; updated?: boolean; notes?: string[];
+};
 
 // ------------------------------------------------------------------------------------------------ placeholders (fields added by the owning task)
 
@@ -270,17 +280,35 @@ export type PerformanceRiskAssessment = Placeholder & { applicable: boolean; tri
 export type PerformanceAssessment = Placeholder & { state: PerformanceState; reasons: string[]; pairedExperimentId?: Id; evidenceIds?: Id[]; verdicts?: PerfBudgetVerdict[] }; // OWNED BY 2.M
 export type DependencyReview = Placeholder & { status: "PASS" | "BLOCKED" | "INCOMPLETE"; findings: string[] };   // OWNED BY 2.K
 export type SecurityAssessment = Placeholder & { status: "PASS" | "BLOCKED" | "INCOMPLETE"; findings: string[] }; // OWNED BY 2.K
-export type OperationalAssessment = Placeholder & { status: "PASS" | "INCOMPLETE" | "NOT_APPLICABLE"; gaps: string[] }; // OWNED BY 3.S
-export type ReviewFeedback = Placeholder & { classification: "REQUIREMENT" | "CORRECTION" | "PREFERENCE" | "POLICY"; headHash: Hash }; // OWNED BY 3.R
+export type OperationalAssessment = Placeholder & {
+  status: "PASS" | "INCOMPLETE" | "NOT_APPLICABLE" | "BLOCKED"; gaps: string[];
+  /** 3.S: what was checked and on what basis (static patterns on the added lines, or the declared release plan). */
+  checks?: { id: string; state: "PASS" | "GAP" | "BLOCKING" | "NOT_APPLICABLE"; detail: string; basis: "STATIC_PATTERN" | "DECLARED" | "RULE"; paths: string[] }[];
+  blocking?: string[]; tier?: Tier; rationale?: string;
+}; // OWNED BY 3.S
+export type ReviewFeedback = Placeholder & {
+  classification: "REQUIREMENT" | "CORRECTION" | "PREFERENCE" | "POLICY"; headHash: Hash;
+  /** 3.R: the external event it came from (idempotency key), the PR, a redacted excerpt, whether it targets the head now published, and where it must go next. */
+  externalEventId?: string; pullRequestId?: string; author?: string; excerpt?: string; path?: string; onCurrentHead?: boolean;
+  status?: "OPEN" | "ON_OLDER_HEAD" | "UNKNOWN_HEAD"; routing?: string; requiresAuthority?: string; receivedAt?: Timestamp;
+}; // OWNED BY 3.R
 export type RevalidationPlan = Placeholder & { rerun: ValidationKind[]; reuse: Id[]; broaderBecause: string[] };  // OWNED BY 3.R
-export type BuilderEvaluation = Placeholder & { modelIdentityHash: Hash; suiteHash: Hash; passed: boolean };      // OWNED BY 3.U
+export type BuilderEvaluation = Placeholder & {
+  modelIdentityHash: Hash; suiteHash: Hash; passed: boolean;
+  /** 3.U: one row per conformance case, the identities the route actually reported, and why it did not pass. */
+  cases?: { id: string; state: "PASS" | "FAIL" | "NOT_RUN"; detail: string }[]; observedIdentityHashes?: Hash[]; reasons?: string[]; evaluatedAt?: Timestamp;
+};      // OWNED BY 3.U
 export type IssueBindingReceipt = Placeholder & { issue: IssueBinding; created?: boolean; labelsApplied?: string[]; warnings?: string[] };                                           // OWNED BY 2.O
 export type IssueSyncReceipt = Placeholder & { throughSequence: number; remoteIds: string[]; deferredUntil?: string; skipped?: number; sent?: number; state?: IssueBinding["syncState"]; warnings?: string[] };                    // OWNED BY 2.O
 export type MutationLineage = Placeholder & { path: string; origins: { requestId: Id; eventId: Id; commit?: Hash }[] }; // OWNED BY 3.T
 export type InvestigationPlan = Placeholder & { steps: string[] };                                                 // OWNED BY 3.S (schema only in slice 1)
-export type ApplicationAssessment = Placeholder & { applies: boolean; conflicts: string[]; dirty: string[] };    // OWNED BY 3.Q
-export type ApplicationReceipt = Placeholder & { applied: string[]; notApplied: string[]; resultContentHash?: Hash }; // OWNED BY 3.Q
-export type IntegrationAssessment = Placeholder & { compatible: boolean; conflicts: string[] };                  // OWNED BY 3.T
+export type ApplicationAssessment = Placeholder & { applies: boolean; conflicts: string[]; dirty: string[]; exportId?: Id; baseExact?: boolean; destinationRoot?: Hash; blocked?: string[] };    // OWNED BY 3.Q
+export type ApplicationReceipt = Placeholder & { applied: string[]; notApplied: string[]; resultContentHash?: Hash; worktree?: string; exportId?: Id; matchesCandidate?: boolean }; // OWNED BY 3.Q
+export type IntegrationAssessment = Placeholder & {
+  compatible: boolean; conflicts: string[];
+  /** 3.T: individually verified candidates are NOT verified together; `reverify` is true whenever more than one candidate is combined, and `integratedContentHash` names the combined tree to verify. */
+  reverify?: boolean; integratedContentHash?: Hash; overlaps?: { path: string; requestIds: Id[] }[]; order?: Id[]; notes?: string[];
+};                  // OWNED BY 3.T
 export type OverlapEvidence = Placeholder & { evidenceIds: Id[]; observations?: OverlapObservation[]; stepsUsed?: number; unresolvedIds?: Id[] };                                                // OWNED BY 2.I
 export type VerifiedOverlapAssessment = Placeholder & { assessment: OverlapAssessment; verified: boolean };      // OWNED BY 2.I
 export type ValidationPage = { results: ValidationResult[]; nextCursor?: string; coverage: { state: CoverageState; gaps: string[] } }; // OWNED BY 2.J

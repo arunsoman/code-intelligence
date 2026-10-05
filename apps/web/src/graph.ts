@@ -136,7 +136,7 @@ export function basePositions(view: ViewSpec): Map<string, Pos> {
 // ------------------------------------------------------------------ semantic zoom
 export interface RenderNode {
   id: string; label: string; kind: "node" | "agg" | "ext"; evidenceIds?: string[]; members: string[]; count: number; displayMode: DisplayMode;
-  tier: ViewNode["tier"]; pos: Pos; node?: ViewNode; role?: string; parent?: string; rank?: number; stale: boolean; inTx?: boolean;
+  tier: ViewNode["tier"]; pos: Pos; node?: ViewNode; role?: string; parent?: string; rank?: number; stale: boolean; inTx?: boolean; unresolvedCalls?: number;
 }
 export interface RenderEdge { id: string; kind?: string; from: string; to: string; displayMode: DisplayMode; label: string; count: number; edgeIds: string[]; evidenceIds: string[]; stale: boolean; ghost?: boolean; ret?: boolean; via?: Pos[]; ambient?: boolean }
 export interface Rendered { nodes: RenderNode[]; edges: RenderEdge[]; groups: { id: string; label: string; kind: "file" | "concept" | "cluster" | "lane" | "region"; parent?: string }[] }
@@ -180,12 +180,13 @@ export function render(view: ViewSpec, level: number, pos: Map<string, Pos>, sta
     const a = aggs.get(id);
     const p = pos.get(n.id) ?? { x: 0, y: 0 };
     if (!a) {
-      const r: RenderNode = { id, label: k.label, kind: "agg", members: [n.id], count: 1, displayMode: n.displayMode, tier: n.tier, pos: { ...p }, stale: stale.has(n.id) };
+      const r: RenderNode = { id, label: k.label, kind: "agg", members: [n.id], count: 1, displayMode: level === 3 ? "FACT" : n.displayMode, unresolvedCalls: n.unresolvedCalls ?? 0, tier: n.tier, pos: { ...p }, stale: stale.has(n.id) };
       aggs.set(id, r); nodes.push(r);
     } else {
       a.members.push(n.id); a.count++;
+      a.unresolvedCalls = (a.unresolvedCalls ?? 0) + (n.unresolvedCalls ?? 0);
       a.pos = { x: (a.pos.x * (a.count - 1) + p.x) / a.count, y: (a.pos.y * (a.count - 1) + p.y) / a.count };
-      if (MODE_RANK[n.displayMode] > MODE_RANK[a.displayMode]) a.displayMode = n.displayMode;
+      if (level !== 3 && MODE_RANK[n.displayMode] > MODE_RANK[a.displayMode]) a.displayMode = n.displayMode;
       if (TIER_RANK[n.tier] > TIER_RANK[a.tier]) a.tier = n.tier;
       a.stale = a.stale || stale.has(n.id);
     }
@@ -264,8 +265,10 @@ export function nextByDirection(items: { id: string; x: number; y: number }[], c
 export function describeNode(n: RenderNode, r: Rendered, selected: boolean): string {
   const out = r.edges.filter((e) => e.from === n.id).length, inn = r.edges.filter((e) => e.to === n.id).length;
   const what = n.kind === "agg" ? `group of ${n.count}` : n.kind === "ext" ? "external dependency" : n.role ?? n.node?.kind ?? "element";
+  const unresolved = n.unresolvedCalls ?? n.node?.unresolvedCalls ?? 0;
+  const coverage = unresolved ? `, ${unresolved} unresolved call(s)` : "";
   const stale = n.stale ? ", stale" : "";
-  return `${n.label}, ${what}, ${modeWord(n.displayMode)}${stale}, ${out} outgoing and ${inn} incoming link${out + inn === 1 ? "" : "s"}, ${selected ? "selected" : "not selected"}`;
+  return `${n.label}, ${what}, ${modeWord(n.displayMode)}${coverage}${stale}, ${out} outgoing and ${inn} incoming link${out + inn === 1 ? "" : "s"}, ${selected ? "selected" : "not selected"}`;
 }
 
 /** A plain-text rendering of the map, so nothing in the picture is available only to people who can see it. */
@@ -273,7 +276,7 @@ export function outline(r: Rendered): { id: string; text: string; links: string[
   const label = new Map(r.nodes.map((n) => [n.id, n.label]));
   return [...r.nodes].sort((a, b) => a.pos.x - b.pos.x || a.pos.y - b.pos.y).map((n) => ({
     id: n.id,
-    text: `${n.label} — ${n.kind === "agg" ? `group of ${n.count}` : n.kind === "ext" ? "external dependency" : n.role ?? n.node?.kind ?? "element"}, ${modeWord(n.displayMode)}${n.stale ? ", stale" : ""}`,
+    text: `${n.label} — ${n.kind === "agg" ? `group of ${n.count}` : n.kind === "ext" ? "external dependency" : n.role ?? n.node?.kind ?? "element"}, ${modeWord(n.displayMode)}${(n.unresolvedCalls ?? n.node?.unresolvedCalls) ? `, ${n.unresolvedCalls ?? n.node?.unresolvedCalls} unresolved call(s)` : ""}${n.stale ? ", stale" : ""}`,
     links: [
       ...r.edges.filter((e) => e.from === n.id).map((e) => `${e.kind && e.kind !== "depends-on" ? e.kind : "→"} ${label.get(e.to) ?? e.to} (${modeWord(e.displayMode)}${e.count > 1 ? `, ${e.count} links` : ""})`),
       ...r.edges.filter((e) => e.to === n.id).map((e) => `from ${label.get(e.from) ?? e.from} (${modeWord(e.displayMode)})`),

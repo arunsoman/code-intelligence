@@ -208,7 +208,12 @@ export function materializeCandidate(d: CandidateDeps, actor: Id, i: Materialize
 
     // ---- oracle: the tests that exist in the base, and what the candidate did to them
     const baseTests = textFiles(baseDir, (rel) => isTestPath(rel) && isCode(rel)), candTests = textFiles(candDir, (rel) => isTestPath(rel) && isCode(rel));
-    const oracleChanges = detectOracleWeakening(baseTests, candTests);
+    // A repair is a later candidate of the same request: tests the EARLIER candidate added or changed are oracle too, so weakening them
+    // (to make a failing check pass) is a property change exactly like weakening a test that was already in the repository.
+    const prior = d.fs.listCandidates(rec.requestId).filter((c) => c.contents).at(-1);
+    const priorTests = new Map<string, string>(Object.entries(prior?.contents ?? {}).filter((e): e is [string, string] => e[1] !== null && isTestPath(e[0]) && isCode(e[0])));
+    const repairChanges = prior ? detectOracleWeakening(priorTests, candTests).map((c) => ({ ...c, kind: `REPAIR_${c.kind}`, detail: `${c.detail} (compared with the previous candidate)` })) : [];
+    const oracleChanges = [...detectOracleWeakening(baseTests, candTests), ...repairChanges];
     const oracleFiles = [...new Set((rec.contract.acceptance ?? []).flatMap((a) => a.oracleSourceRefs.filter((r) => r.locator.startsWith("repo:")).map((r) => normalizeRel(r.locator.slice(5)))))].filter((f) => baseTests.has(f)).sort();
     const oracleFilesAll = oracleFiles.length ? oracleFiles : [...baseTests.keys()].sort();
     const readOr = (root: string) => (rel: string) => { try { return readFileSync(safeJoin(root, rel), "utf8"); } catch { return null; } };

@@ -7,6 +7,7 @@ import { advanceWizard, recordDecision, stageGate, type WizardWorkspace } from "
 import { GLOSSARY, MODES, STATUS_WORDS, actionReasons, ago, digestOf, issueLink, landingStage, openQuestions, primaryOf, refKind, retryTask, sectionsOf, stepsOf, summaryNotes, type TaskCard } from "./view.ts";
 import "./build.css";
 import { ChangeReview, ClarifyReview, PlanReview } from "./ReviewStages.tsx";
+import { DeliverReview, ValidateReview } from "./DeliverStages.tsx";
 
 /**
  * "Build feature" (Prompt-to-feature §43, task 1.H). A modal wizard shell over a persistent per-request
@@ -287,7 +288,9 @@ export function BuildFeature({ onClose, store, api }: { onClose: () => void; sto
               </div>
             )}
 
-            {ws.stage === "VALIDATE" && (
+            {ws.review?.dashboard && remote && ws.stage === "VALIDATE" && <ValidateReview review={ws.review} candidateHash={ws.candidate?.hash} call={remote.call} refresh={refreshRemote} notify={setNote} />}
+            {ws.review?.deliver && remote && ws.stage === "DELIVER" && <DeliverReview review={ws.review} call={remote.call} refresh={refreshRemote} notify={setNote} />}
+            {ws.stage === "VALIDATE" && !(ws.review?.dashboard && remote) && (
               <div className="bf-stack">
                 <p className="muted">Per-criterion results for the current candidate. “Not run” and “incomplete” stay visible; they are never shown as passes.</p>
                 <ul className="bf-list">{ws.criteria.map((c) => <li key={c.id} className="bf-item"><span><Ref id={c.id} /> <span className="chip">{c.validation.replaceAll("_", " ").toLowerCase()}</span></span><span>{c.text}</span></li>)}</ul>
@@ -295,7 +298,7 @@ export function BuildFeature({ onClose, store, api }: { onClose: () => void; sto
               </div>
             )}
 
-            {ws.stage === "DELIVER" && (
+            {ws.stage === "DELIVER" && !(ws.review?.deliver && remote) && (
               <div className="bf-stack">
                 <p className="muted">Whether this can be published is decided by the publication check (task 2.J), which is not connected yet, so nothing here is called verified.</p>
                 <p><span className="chip warn">Review only — validation incomplete</span></p>
