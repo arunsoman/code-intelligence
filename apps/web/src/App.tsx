@@ -19,6 +19,7 @@ import { DefectPanel } from "./DefectPanel.tsx";
 import { PrPanel } from "./PrPanel.tsx";
 import { ProfilePanel } from "./ProfilePanel.tsx";
 import { TaskPanel } from "./TaskPanel.tsx";
+import { BuildFeature } from "./build/BuildFeature.tsx";
 import { CampaignPanel } from "./CampaignPanel.tsx";
 import { SearchPanel } from "./SearchPanel.tsx";
 import { HotspotPanel } from "./HotspotPanel.tsx";
@@ -87,6 +88,7 @@ export function App() {
   const [prOpen, setPrOpen] = useState(false);
   const [profilesOpen, setProfilesOpen] = useState(false);
   const [tasksOpen, setTasksOpen] = useState(false);
+  const [buildOpen, setBuildOpen] = useState(false);
   const [campaignsOpen, setCampaignsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [hotspotsOpen, setHotspotsOpen] = useState(false);
@@ -487,6 +489,7 @@ export function App() {
         {prOpen && repoPath && <PrPanel repoPath={repoPath} onClose={() => setPrOpen(false)} />}
         {profilesOpen && <ProfilePanel revision={revision} onClose={() => setProfilesOpen(false)} />}
         {tasksOpen && <TaskPanel revision={revision} onClose={() => setTasksOpen(false)} />}
+        {buildOpen && <BuildFeature onClose={() => setBuildOpen(false)} />}
         {campaignsOpen && <CampaignPanel onClose={() => setCampaignsOpen(false)} />}
         {searchOpen && repoPath && <SearchPanel repoPath={repoPath} revision={revision} onClose={() => setSearchOpen(false)} />}
         {hotspotsOpen && repoPath && <HotspotPanel repoPath={repoPath} revision={revision} onClose={() => setHotspotsOpen(false)} />}
@@ -505,6 +508,7 @@ export function App() {
         <button className="secondary small" onClick={() => setHotspotsOpen(true)} title="Historical hotspots and change coupling: ranked from the repository's own git history, rename-aware, with the excluded commits listed and every rank explained down to the commits">Hotspots</button>
         <button className="secondary small" onClick={() => setProfilesOpen(true)} title="Import a profile (V8 .cpuprofile or folded stacks), read hotspots per sample kind, correlate it to a recorded trace window, and compare under the error-population gate">Profiles</button>
         <button className="secondary small" onClick={() => setTasksOpen(true)} title="F07: turn a defect report into a candidate patch, validate it against the original oracle in an isolated run, get a second-person approval, and publish one draft pull request on a CIE-owned branch. Nothing here merges.">Tasks</button>
+        <button className="secondary small" onClick={() => setBuildOpen(true)} title="Build feature: describe a change in plain language, clarify, plan, review the exact candidate, validate and deliver (scaffold: stages are not built yet)">Build feature</button>
         <button className="secondary small" onClick={() => setCampaignsOpen(true)} title="Coordinated multi-repository changes: freeze a versioned population, plan a dependency-ordered canary rollout, review each child independently, run joint compatibility checks, and publish per-child draft PRs">Campaigns</button>
         <button className="secondary small" disabled={!revision} onClick={() => setInsightsOpen(true)}>Insights</button>
         <button className="secondary small" disabled={!revision} onClick={() => setInvestigationsOpen(true)}>Investigations</button>

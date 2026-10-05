@@ -9,6 +9,7 @@ import { createProvider } from "@cie/model";
 import type { ApiResult, CallContext } from "@cie/schema";
 import { Interactions } from "./interactions.ts";
 import { chooseRouter } from "./llm-router.ts";
+import { featureOps } from "./feature/routes.ts";
 import { Service } from "./service.ts";
 import { TenantHost } from "./tenants.ts";
 import { Store } from "./store.ts";
@@ -115,6 +116,8 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
   const TASK_MUTATING = new Set(["C02/submitTask", "C02/confirmIntent", "C02/cancelTask", "C15/draftPlan", "C22/resolveObligation", "C28/prepareChange", "C27/validatePatch", "C28/reviewPropertyChange", "C28/approveCandidate", "C30/createPublicationGrant", "C30/publishDraftPR"]);
   for (const [key, run] of Object.entries(svc.taskOps)) ops[key] = { mutating: TASK_MUTATING.has(key), run: run as any };
   for (const [key, run] of Object.entries(svc.campaignOps)) ops[key] = { mutating: !["C28/getCampaign", "C28/listCampaigns", "C28/listChildren", "C28/getCampaignPlan", "C28/clusterChildren", "C28/getDryRun"].includes(key), run: run as any };
+  // Prompt-to-feature (docs/prompt-to-feature): typed stubs until each owning task registers its handler in feature/routes.ts.
+  Object.assign(ops, featureOps({}, ops));
   return ops;
   };
   const statusFor = (r: ApiResult<unknown>) => r.ok ? 200 : ({ INVALID_SCHEMA: 400, NOT_FOUND: 404, EVIDENCE_MISSING: 404, VERSION_CONFLICT: 409, UNAUTHORIZED: 401, FORBIDDEN: 403, BUDGET_EXCEEDED: 429, DEADLINE_EXCEEDED: 504, PROVIDER_UNAVAILABLE: 503 } as Record<string, number>)[r.error.code] ?? 500;

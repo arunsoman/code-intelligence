@@ -842,6 +842,39 @@ export const MIGRATIONS: Migration[] = [
       drop index if exists task_events_idem; drop table if exists task_events;
       drop index if exists tasks_repo; drop table if exists tasks;`),
   },
+  {
+    // Prompt-to-feature: the five record families (plan §3). Immutable payloads are JSON with their pf-canon-v1 identity;
+    // mutable pointers move by compare-and-swap on `version`. No other feature tables exist without a demonstrated need.
+    version: 33, name: "prompt-to-feature-records",
+    up: (db) => db.exec(`
+      create table if not exists feature_records(
+        request_id text primary key, repository_id text not null, state text not null, version integer not null,
+        contract_version integer not null default 0, schema_version integer not null, json text not null,
+        idempotency_key text, created_by text not null, created_at text not null, updated_at text not null);
+      create unique index if not exists feature_records_idem on feature_records(created_by, idempotency_key) where idempotency_key is not null;
+      create index if not exists feature_records_repo on feature_records(repository_id, state, updated_at);
+      create table if not exists feature_decisions(
+        id text primary key, request_id text not null references feature_records(request_id) on delete cascade, kind text not null,
+        contract_version integer not null, supersedes_id text, schema_version integer not null, identity text not null, json text not null, created_at text not null);
+      create index if not exists feature_decisions_request on feature_decisions(request_id, created_at);
+      create table if not exists feature_candidates(
+        id text primary key, request_id text not null references feature_records(request_id) on delete cascade, ordinal integer not null,
+        binding_hash text not null, status text not null, schema_version integer not null, json text not null, created_at text not null,
+        unique(request_id, ordinal));
+      create index if not exists feature_candidates_binding on feature_candidates(binding_hash);
+      create table if not exists feature_evidence(
+        id text primary key, request_id text not null references feature_records(request_id) on delete cascade, candidate_id text not null,
+        binding_hash text not null, kind text not null, run_manifest_id text not null, schema_version integer not null, identity text not null, json text not null, created_at text not null);
+      create index if not exists feature_evidence_candidate on feature_evidence(candidate_id, kind);
+      create table if not exists feature_events(
+        request_id text not null references feature_records(request_id) on delete cascade, sequence integer not null, event_id text not null unique,
+        type text not null, actor text not null, schema_version integer not null, json text not null, at text not null,
+        sync_state text not null default 'PENDING', sync_remote_id text, sync_attempts integer not null default 0,
+        primary key(request_id, sequence));
+      create index if not exists feature_events_pending on feature_events(sync_state, at);
+    `),
+    down: (db) => db.exec("drop table feature_events; drop table feature_evidence; drop table feature_candidates; drop table feature_decisions; drop table feature_records;"),
+  },
 ];
 export function currentVersion(db: DatabaseSync): number {
   db.exec("create table if not exists schema_version(version integer not null, name text not null, applied_at text not null)");

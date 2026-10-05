@@ -1,0 +1,1037 @@
+{
+ "schemaVersion": 1,
+ "generatedFrom": "Prompt-to-feature.md v1.3",
+ "auditedAt": "2026-10-05",
+ "repoCommit": "cf06dc0",
+ "statusLegend": [
+  "UNASSESSED",
+  "REPORTED_PARTIAL",
+  "AUDITED_PRESENT",
+  "AUDITED_GAP",
+  "IMPLEMENTED_UNVALIDATED",
+  "VALIDATED"
+ ],
+ "baseline": {
+  "command": "npm test",
+  "result": "pass",
+  "node": {
+   "unit": 785,
+   "e2e": 16
+  },
+  "rust": {
+   "passed": 47
+  },
+  "note": "run on cf06dc0 before any change; log not committed"
+ },
+ "notes": [
+  "AUDITED_PRESENT means the substrate exists for the F07 FIX_DEFECT task flow, not that the feature path works.",
+  "No row is VALIDATED."
+ ],
+ "rows": [
+  {
+   "id": "PF-001",
+   "requirement": "Accept core prompt, brief, PRD and references",
+   "owner": "C02",
+   "supporting": "C01,C06",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/execution.ts Tasks.submitTask; TaskSpecSchema.kind is the literal FIX_DEFECT",
+   "classification": "extend",
+   "gap": "No prompt/brief/PRD/artifact intake and no BUILD_FEATURE kind",
+   "tests": [
+    "packages/core/test/task-flow.test.ts",
+    "packages/core/test/task-pure.test.ts"
+   ],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-002",
+   "requirement": "Resolve target and outcome mode",
+   "owner": "C02",
+   "supporting": "C01,C03,C04",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/execution.ts TaskSpec.repositoryId/baseRef",
+   "classification": "extend",
+   "gap": "No outcome mode (PLAN/BUILD_PREVIEW/CREATE_DRAFT_PR); no workspace-based target resolution",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-003",
+   "requirement": "Preserve source/version provenance",
+   "owner": "C18",
+   "supporting": "C06,C08,C31",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/artifacts.ts (content-addressed), journal.ts, events.ts",
+   "classification": "extend",
+   "gap": "No SourceRef/protected prompt reference; sha256 helpers are ad hoc",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-004",
+   "requirement": "Discover conventions before avoidable questions",
+   "owner": "C10",
+   "supporting": "C04\u2013C09,C12",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/retrieval.ts, indexer.ts, hotspots.ts",
+   "classification": "extend",
+   "gap": "No discovery coverage record or repository assessment",
+   "tests": [
+    "packages/core/test/retrieval.test.ts"
+   ],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-005",
+   "requirement": "Extract atomic scoped requirements",
+   "owner": "C15",
+   "supporting": "C11,C18",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No requirement normalisation",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-006",
+   "requirement": "Build versioned feature contract",
+   "owner": "C15",
+   "supporting": "C18,C31",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/execution.ts Tasks.draftPlan produces a plan, not a feature contract",
+   "classification": "new",
+   "gap": "No versioned feature contract",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-007",
+   "requirement": "Separate assumptions from approved obligations",
+   "owner": "C18",
+   "supporting": "C15,C16",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No assumption/approved-obligation separation",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-008",
+   "requirement": "Ask material focused questions",
+   "owner": "C22",
+   "supporting": "C01,C02,C15",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/execution.ts task_obligations + resolveObligation (investigation obligations)",
+   "classification": "extend",
+   "gap": "No business-question planning or batching",
+   "tests": [
+    "packages/core/test/task-flow.test.ts",
+    "packages/core/test/task-pure.test.ts"
+   ],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-009",
+   "requirement": "Continue independent work",
+   "owner": "C07",
+   "supporting": "C22,C28",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/jobs.ts",
+   "classification": "extend",
+   "gap": "One job at a time; no dependency-aware ready/blocked work",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-010",
+   "requirement": "Check direct and semantic contradictions",
+   "owner": "C15",
+   "supporting": "C25,C16,C10",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/security.ts, claims.ts (analysis of code, not requirements)",
+   "classification": "new",
+   "gap": "No requirement conflict detection",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-011",
+   "requirement": "Distinguish ambiguity/gap/tradeoff/conflict",
+   "owner": "C16",
+   "supporting": "C15,C18",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No finding classification",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-012",
+   "requirement": "Check configured scoped authority",
+   "owner": "C03",
+   "supporting": "C25,C18",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/tenants.ts, policy.ts, access.ts (path denial, egress)",
+   "classification": "extend",
+   "gap": "No scoped authority bindings or decision roles",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-013",
+   "requirement": "Explain witness and resolution options",
+   "owner": "C15",
+   "supporting": "C22,C01",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No witness/resolution options",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-014",
+   "requirement": "Record authorized resolution and propagate it",
+   "owner": "C18",
+   "supporting": "C02,C23,C28",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/execution.ts approveCandidate (expectedVersion, second approver)",
+   "classification": "extend",
+   "gap": "Approval only, no decision records with authority",
+   "tests": [
+    "packages/core/test/task-flow.test.ts",
+    "packages/core/test/task-pure.test.ts"
+   ],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-015",
+   "requirement": "Check completeness/testability/feasibility",
+   "owner": "C22",
+   "supporting": "C15,C25,C26",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No completeness/testability checks",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-016",
+   "requirement": "Enforce action/row/field access",
+   "owner": "C25",
+   "supporting": "C03,C28,C27",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/security.ts detects gates in analysed code",
+   "classification": "new",
+   "gap": "Nothing enforces access in generated code; proven only by acceptance tests of the built feature",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-017",
+   "requirement": "Preserve tenancy and background/download policy",
+   "owner": "C25",
+   "supporting": "C03,C28,C27",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/tenants.ts",
+   "classification": "new",
+   "gap": "Same as PF-016 for tenancy/background/download policy",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-018",
+   "requirement": "Separate scope/prerequisites/follow-ups",
+   "owner": "C28",
+   "supporting": "C23,C15",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/execution.ts constraints.allowedPaths/maxFilesChanged",
+   "classification": "extend",
+   "gap": "No scope/prerequisite/follow-up classification",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-019",
+   "requirement": "Invalidate affected artifacts on requirement change",
+   "owner": "C23",
+   "supporting": "C07,C16,C31",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/execution.ts generation + STALE task state",
+   "classification": "extend",
+   "gap": "Task-level staleness only; no contract-version impact closure",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-020",
+   "requirement": "Isolated exact candidate implementation",
+   "owner": "C28",
+   "supporting": "C27,C03,C06",
+   "status": "AUDITED_PRESENT",
+   "actual": "packages/core/src/execution.ts EditOperation (REPLACE_SPAN/CREATE_FILE/DELETE_FILE), admissionProblems, scratch tree, PatchBinding (packages/schema/src/task.ts)",
+   "classification": "extend",
+   "gap": "FIX_DEFECT only; protected-path rule blocks test/CI/lockfile edits unless allowTestEdits; allowNewDependencies is literal false",
+   "tests": [
+    "packages/core/test/task-flow.test.ts",
+    "packages/core/test/task-pure.test.ts"
+   ],
+   "isolation": "LOCAL_PERMISSION_MODEL: node --permission, scrubbed env, wall-clock kill; no CPU/memory/pid limit, no kernel boundary (execution.ts header)"
+  },
+  {
+   "id": "PF-021",
+   "requirement": "Preserve original oracle and review property changes",
+   "owner": "C28",
+   "supporting": "C16,C17,C18",
+   "status": "AUDITED_PRESENT",
+   "actual": "packages/core/src/execution.ts detectOracleWeakening, reviewPropertyChange, originalOracleHash/candidateOracleHash",
+   "classification": "extend",
+   "gap": "Assertion-diff heuristics only (spec accepts that)",
+   "tests": [
+    "packages/core/test/task-flow.test.ts",
+    "packages/core/test/task-pure.test.ts"
+   ],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-022",
+   "requirement": "Specify migration/history/compatibility",
+   "owner": "C23",
+   "supporting": "C28,C25,C27",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/migrations.ts (CIE's own schema)",
+   "classification": "new",
+   "gap": "Nothing for a target app's migrations",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-023",
+   "requirement": "Bind integrations and label mocks",
+   "owner": "C04",
+   "supporting": "C28,C27,C16",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/connectors.ts",
+   "classification": "new",
+   "gap": "No integration contract binding or mock labelling",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-024",
+   "requirement": "Validate independently per criterion",
+   "owner": "C27",
+   "supporting": "C17,C16,C18",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/execution.ts validatePatch roles BASELINE/ORACLE_ORIGINAL_ON_CANDIDATE/CANDIDATE_SUITE/STATIC_CHECK/ORACLE_PRESERVATION",
+   "classification": "extend",
+   "gap": "Roles, not per-criterion validation",
+   "tests": [
+    "packages/core/test/task-flow.test.ts",
+    "packages/core/test/task-pure.test.ts"
+   ],
+   "isolation": "LOCAL_PERMISSION_MODEL: node --permission, scrubbed env, wall-clock kill; no CPU/memory/pid limit, no kernel boundary (execution.ts header)"
+  },
+  {
+   "id": "PF-025",
+   "requirement": "Execute actual browser checks for UI",
+   "owner": "C27",
+   "supporting": "C17,C01",
+   "status": "AUDITED_GAP",
+   "actual": "apps/web/test/e2e/harness.ts, cdp.ts (drives CIE's own UI)",
+   "classification": "extend",
+   "gap": "No browser validation of a target application",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-026",
+   "requirement": "Capture full outcome populations",
+   "owner": "C27",
+   "supporting": "C26,C16",
+   "status": "AUDITED_PRESENT",
+   "actual": "packages/core/src/execution.ts OracleRunResult.outcomes PASS/FAIL/SKIP/TODO/FLAKY; omissions disclosed",
+   "classification": "extend",
+   "gap": "Population check for benchmarks is separate (PF-029)",
+   "tests": [
+    "packages/core/test/task-flow.test.ts",
+    "packages/core/test/task-pure.test.ts"
+   ],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-027",
+   "requirement": "Discover performance workload and budgets",
+   "owner": "C26",
+   "supporting": "C24,C22",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/defect-performance.ts, profiling.ts",
+   "classification": "extend",
+   "gap": "No budget discovery or workload capture for features",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-028",
+   "requirement": "Identify static performance risks",
+   "owner": "C26",
+   "supporting": "C05,C09,C23",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/defect-performance.ts (static detectors)",
+   "classification": "extend",
+   "gap": "Detectors target defects, not changed feature code",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-029",
+   "requirement": "Run paired equivalent experiments",
+   "owner": "C27",
+   "supporting": "C26,C24",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/defect-benchmark.ts, twin-experiment.ts",
+   "classification": "extend",
+   "gap": "No paired baseline/candidate harness with equivalence and population checks",
+   "tests": [
+    "packages/core/test/defect-perf.test.ts"
+   ],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-030",
+   "requirement": "Measure shared-resource interference",
+   "owner": "C26",
+   "supporting": "C27,C24",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No interference measurement",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-031",
+   "requirement": "Report uncertainty/unvalidated performance",
+   "owner": "C16",
+   "supporting": "C26,C19,C20",
+   "status": "AUDITED_GAP",
+   "actual": "twin-validation.ts (model certificates)",
+   "classification": "new",
+   "gap": "No INCONCLUSIVE/UNVALIDATED performance states for features",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-032",
+   "requirement": "Bound builder cost and resource contention",
+   "owner": "C07",
+   "supporting": "C14,C31,C32",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/jobs.ts, packages/model/src/budget.ts",
+   "classification": "extend",
+   "gap": "No runner caps or builder contention control",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-033",
+   "requirement": "Provide usable role-aware preview",
+   "owner": "C01",
+   "supporting": "C19,C20,C27",
+   "status": "AUDITED_GAP",
+   "actual": "apps/web/src/TaskPanel.tsx",
+   "classification": "extend",
+   "gap": "No role-aware preview",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-034",
+   "requirement": "Separate implementation/validation status",
+   "owner": "C18",
+   "supporting": "C16,C19,C20",
+   "status": "AUDITED_PRESENT",
+   "actual": "packages/core/src/execution.ts VerdictState/OracleState; apps/web/src/TaskPanel.tsx copy rules (\u00a712.2)",
+   "classification": "extend",
+   "gap": "Single verdict axis; no implementation-vs-validation per criterion",
+   "tests": [
+    "packages/core/test/task-flow.test.ts",
+    "packages/core/test/task-pure.test.ts"
+   ],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-035",
+   "requirement": "Bind publication to exact contract/patch/evidence",
+   "owner": "C16",
+   "supporting": "C28,C30",
+   "status": "AUDITED_PRESENT",
+   "actual": "packages/core/src/execution.ts createGrant/pushCandidate/publishDraftPR bound to bindingHash",
+   "classification": "extend",
+   "gap": "Binds task candidate, not contract+evidence set",
+   "tests": [
+    "packages/core/test/task-flow.test.ts",
+    "packages/core/test/task-pure.test.ts"
+   ],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-036",
+   "requirement": "Separate PR/merge/deploy authority",
+   "owner": "C03",
+   "supporting": "C30,C02",
+   "status": "AUDITED_PRESENT",
+   "actual": "packages/core/src/gh-forge.ts (draft-only, cannot merge)",
+   "classification": "reuse",
+   "gap": "No deploy gating (deployment is out of slice)",
+   "tests": [
+    "packages/core/test/gh.test.ts"
+   ],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-037",
+   "requirement": "Recover idempotently from crash/partial publication",
+   "owner": "C07",
+   "supporting": "C30,C31",
+   "status": "AUDITED_PRESENT",
+   "actual": "packages/core/src/gh-forge.ts find-before-create; failpoint.ts",
+   "classification": "reuse",
+   "gap": "Idempotency proven for PR creation only",
+   "tests": [
+    "packages/core/test/gh.test.ts"
+   ],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-038",
+   "requirement": "Cancel and fence late work",
+   "owner": "C07",
+   "supporting": "C27,C28,C31",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/jobs.ts cancel with commit point; Tasks.cancelTask",
+   "classification": "extend",
+   "gap": "No fencing tokens for late results",
+   "tests": [
+    "packages/core/test/jobs.test.ts"
+   ],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-039",
+   "requirement": "Retain traceability and decision history",
+   "owner": "C18",
+   "supporting": "C08,C31",
+   "status": "AUDITED_GAP",
+   "actual": "events.ts, task_events (seq, idempotency key)",
+   "classification": "extend",
+   "gap": "No requirement\u2192task\u2192edit\u2192test\u2192evidence lineage index",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-040",
+   "requirement": "Prevent retrieved instructions expanding authority",
+   "owner": "C03",
+   "supporting": "C10,C14,C15",
+   "status": "AUDITED_GAP",
+   "actual": "none verified",
+   "classification": "new",
+   "gap": "No test that retrieved text cannot widen tool authority",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-041",
+   "requirement": "Enforce minimal Phase 0\u20132 schema and audit register",
+   "owner": "C28",
+   "supporting": "",
+   "status": "IMPLEMENTED_UNVALIDATED",
+   "actual": "packages/core/src/feature/types.ts, migrations.ts v33, docs/prompt-to-feature/readiness.json",
+   "classification": "new",
+   "gap": "Five families and the register exist; enforcement and the \"no framework prerequisite\" check arrive with Wave 1 and task 4.2",
+   "tests": [
+    "packages/core/test/feature-scaffold.test.ts"
+   ],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-042",
+   "requirement": "Version canonical identity and cross-runtime vectors",
+   "owner": "C06",
+   "supporting": "",
+   "status": "IMPLEMENTED_UNVALIDATED",
+   "actual": "packages/core/src/feature/canon.ts; crates/worker/src/canon.rs; fixtures/canon/canon-vectors.json",
+   "classification": "new",
+   "gap": "Vectors pass in Node and Rust. Digests come from an independent Python run, but the canonical strings were written by the implementer and have not had human review; not VALIDATED until they do",
+   "tests": [
+    "packages/core/test/feature-canon.test.ts",
+    "crates/worker canon::tests",
+    "scripts/canon-parity.mjs"
+   ],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-043",
+   "requirement": "Explicit discovery coverage and blocked/progress visibility",
+   "owner": "C10 / C01",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/feature/types.ts (CoverageRecord type only)",
+   "classification": "new",
+   "gap": "No discovery coverage producer or UI",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-044",
+   "requirement": "Minimum performance profile and risk-driven escalation",
+   "owner": "C26 / C27",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No pf-perf-core-v1",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-045",
+   "requirement": "Mandatory applicable SAST/secret scanning",
+   "owner": "C25 / C27",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/policy.ts detectSecret",
+   "classification": "extend",
+   "gap": "No SAST/secret gate on candidates",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-046",
+   "requirement": "Dependency diff, provenance and licence review gate",
+   "owner": "C25",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/deps/ (inventory, purl, versions)",
+   "classification": "extend",
+   "gap": "No dependency-diff gate, advisories or licence policy",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-047",
+   "requirement": "Generated-content provenance and known attribution obligations",
+   "owner": "C18 / C25",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No generated-content provenance",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-048",
+   "requirement": "Operational applicability and instrumentation acceptance",
+   "owner": "C32",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No operational applicability",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-049",
+   "requirement": "Release/flag/revert plan and scoped deployment authority",
+   "owner": "C28 / C03",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No release plan",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-050",
+   "requirement": "Production anomaly links and evidence applicability updates",
+   "owner": "C24 / C16",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "Schema only in slice 1",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-051",
+   "requirement": "Iterative same-PR review and scoped revalidation",
+   "owner": "C29 / C23",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No review feedback ingestion",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-052",
+   "requirement": "Model invocation identity and builder regression evaluation",
+   "owner": "C14 / C17",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/llm-router.ts (intent routing only), packages/model",
+   "classification": "extend",
+   "gap": "No ModelInvocation provenance record",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-053",
+   "requirement": "Provider failure recovery without unauthorized egress",
+   "owner": "C14 / C03",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/policy.ts LOCAL_ONLY_PREDICATES; C03/setEgress",
+   "classification": "extend",
+   "gap": "No provider-fallback egress rule",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-054",
+   "requirement": "Root GitHub issue binding for mutation requests",
+   "owner": "C30",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/gh.ts, gh-forge.ts (PR only)",
+   "classification": "extend",
+   "gap": "No issue creation or binding",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-055",
+   "requirement": "Prompt/action/file provenance and unattributed-change gate",
+   "owner": "C18 / C28",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/execution.ts PatchBinding.changes (file kind + counts)",
+   "classification": "extend",
+   "gap": "No attribution to prompt/requirement/action",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-056",
+   "requirement": "Redacted idempotent issue sync and truthful closure state",
+   "owner": "C30 / C03",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/redact.ts (view redaction)",
+   "classification": "extend",
+   "gap": "No issue projection or sync",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-057",
+   "requirement": "Compare requested behaviours with existing capabilities before planning",
+   "owner": "C10 / C15",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "retrieval.ts, graph.ts",
+   "classification": "new",
+   "gap": "No capability comparison",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-058",
+   "requirement": "Verify overlap with scoped behavioural evidence and coverage",
+   "owner": "C16 / C22",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No overlap verification",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-059",
+   "requirement": "Select justified reuse/extension/composition/configuration strategy",
+   "owner": "C28 / C23",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No strategy selection",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-060",
+   "requirement": "Preserve access, contracts and existing behaviour during reuse",
+   "owner": "C25 / C23",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No reuse regression obligations",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-061",
+   "requirement": "Show overlap report and record capability/issue lineage",
+   "owner": "C01 / C18 / C30",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No overlap report",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-062",
+   "requirement": "Detect disabled/unavailable/configured versus missing capability",
+   "owner": "C04 / C10",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No availability states",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-063",
+   "requirement": "Reconcile overlapping active requests and integrated candidates",
+   "owner": "C07 / C23",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "jobs.ts",
+   "classification": "new",
+   "gap": "No mutation leases or relations",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-064",
+   "requirement": "Assess UX/accessibility/localization and update documentation",
+   "owner": "C01 / C28",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No UX/a11y/doc assessment of generated UI",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-065",
+   "requirement": "Govern replacement/deprecation/flag retirement",
+   "owner": "C23 / C28",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No retirement governance",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-066",
+   "requirement": "Keep applicability/waivers distinct from actual PASS evidence",
+   "owner": "C16 / C03",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No applicability/waiver model",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-067",
+   "requirement": "Bind environment fidelity, baseline health and authorized test data",
+   "owner": "C27",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No baseline-health classification for feature runs",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-068",
+   "requirement": "Enforce effectful tool scope and unknown-outcome reconciliation",
+   "owner": "C03 / C28",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/isolated-exec.ts (symlink refusal, no shell, permission model)",
+   "classification": "extend",
+   "gap": "No command allowlist/network policy object; no unknown-outcome reconciliation beyond forge",
+   "tests": [
+    "packages/core/test/task-pure.test.ts"
+   ],
+   "isolation": "LOCAL_PERMISSION_MODEL: node --permission, scrubbed env, wall-clock kill; no CPU/memory/pid limit, no kernel boundary (execution.ts header)"
+  },
+  {
+   "id": "PF-069",
+   "requirement": "Dedicated persistent six-stage Build feature wizard",
+   "owner": "C01 / C13",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "apps/web/src/build/BuildFeature.tsx (scaffold)",
+   "classification": "new",
+   "gap": "Stages not built; app uses modal panels, not tabs, so \"tab\" is a header button + panel",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-070",
+   "requirement": "Explicit action boundaries, backward edits and stale-impact feedback",
+   "owner": "C02 / C16",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No stale-impact feedback on backward edits",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-071",
+   "requirement": "Requirement/component/file change graph and accessible list",
+   "owner": "C19 / C20",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "apps/web/src/arrange.ts, Canvas.tsx",
+   "classification": "extend",
+   "gap": "No change graph",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-072",
+   "requirement": "Exact full candidate code and baseline/split/unified diff",
+   "owner": "C28 / C20",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/changes.ts unifiedDiff",
+   "classification": "extend",
+   "gap": "No candidate file viewer",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-073",
+   "requirement": "Per-criterion and per-file test associations with honest coverage basis",
+   "owner": "C23 / C18",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No test associations",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-074",
+   "requirement": "Baseline/current build and validation dashboard",
+   "owner": "C27 / C01",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "apps/web/src/TaskPanel.tsx role rows",
+   "classification": "extend",
+   "gap": "No baseline-vs-candidate dashboard",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-075",
+   "requirement": "Visible existing/added/modified test source and assertion changes",
+   "owner": "C28 / C20",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "detectOracleWeakening",
+   "classification": "extend",
+   "gap": "No UI for assertion changes",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-076",
+   "requirement": "Bound diagnostics, repair/rerun and explicit incomplete states",
+   "owner": "C27 / C16",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No diagnostics/repair UX",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-077",
+   "requirement": "Diff/patch/manifest delivery with current scoped eligibility",
+   "owner": "C28 / C16",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "packages/core/src/exports.ts, changes.ts patchHash",
+   "classification": "extend",
+   "gap": "No manifest bundle or eligibility states",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-078",
+   "requirement": "Destination check, safe application/reconciliation and revalidation",
+   "owner": "C28 / C27",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No destination check/apply",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-079",
+   "requirement": "Bounded/redacted UI artifacts and readable responsive interactions",
+   "owner": "C20 / C03",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "apps/web/src/loading.ts, Skeleton.tsx",
+   "classification": "extend",
+   "gap": "No bounded log/graph artifacts",
+   "tests": [],
+   "isolation": "n/a"
+  },
+  {
+   "id": "PF-080",
+   "requirement": "Record wizard/export/application milestones in issue lineage",
+   "owner": "C02 / C30",
+   "supporting": "",
+   "status": "AUDITED_GAP",
+   "actual": "none",
+   "classification": "new",
+   "gap": "No wizard milestones in issue lineage",
+   "tests": [],
+   "isolation": "n/a"
+  }
+ ]
+}
