@@ -95,6 +95,7 @@ button.dir { background: none; border: none; color: var(--ink); text-align: left
 .msg.user { background: color-mix(in srgb, var(--accent) 10%, var(--panel)); align-self: flex-end; max-width: 92%; }
 .msg.err { border-color: var(--warn); color: var(--warn); }
 .msg .who { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.chat-results { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .examples { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 .examples button.link { text-align: left; padding: 0; }
 .referents { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 0 0; align-items: center; }

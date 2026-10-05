@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { HashEmbedder, cosine } from "./embeddings.ts";
 import { EXEMPLARS, INTENT_EXEMPLARS } from "./route-exemplars.ts";
 import { VISUALS } from "./visuals.ts";
+import { CHAT_PLAN_SCHEMA, chatPlanPrompt, validateChatPlan, type ChatPlan, type ChatPlanRequest } from "./chat-plan.ts";
 
 export type Intent =
   | { type: "resume"; name: string }
@@ -28,7 +29,11 @@ export interface IntentContext { hasView: boolean; viewForm?: string; selectionC
 export interface RouterRequest { system: string; user: string; labels: string[] }
 export interface RouterAnswer { label: string; target: string }
 /** Anything that can pick one label from a closed list: a local Ollama model in production, a scripted one in tests. */
-export interface RouterModel { readonly name: string; choose(req: RouterRequest): Promise<RouterAnswer | null> }
+export interface RouterModel {
+  readonly name: string;
+  choose(req: RouterRequest): Promise<RouterAnswer | null>;
+  plan?(req: ChatPlanRequest): Promise<ChatPlan | null>;
+}
 
 export const FORM_LABELS: Record<string, string> = {
   SemanticMap: "how one feature or module is built and how its parts fit together",
@@ -102,6 +107,19 @@ export class OllamaRouter implements RouterModel {
     this.name = opts.model ?? DEFAULT_ROUTER_MODEL;
     if (/(:|-)cloud$/.test(this.name)) throw new Error(`router model "${this.name}" is hosted; the router only runs models on this machine`);
   }
+  async plan(req: ChatPlanRequest): Promise<ChatPlan | null> {
+    const base = this.opts.baseUrl ?? process.env.CIE_OLLAMA_URL ?? "http://127.0.0.1:11434";
+    try {
+      const r = await fetch(`${base}/api/chat`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        signal: AbortSignal.timeout(this.opts.timeoutMs ?? 30_000),
+        body: JSON.stringify({ model: this.name, stream: false, think: false, keep_alive: "30m", options: { temperature: 0, num_predict: 800, num_ctx: 8192 }, format: CHAT_PLAN_SCHEMA, messages: chatPlanPrompt(req) }),
+      });
+      if (!r.ok) return null;
+      const body = await r.json() as { message?: { content?: string } };
+      return validateChatPlan(JSON.parse(body.message?.content ?? "null"));
+    } catch { return null; }
+  }
   async choose(req: RouterRequest): Promise<RouterAnswer | null> {
     const base = this.opts.baseUrl ?? process.env.CIE_OLLAMA_URL ?? "http://127.0.0.1:11434";
     const body = {
@@ -128,14 +146,18 @@ export const DEFAULT_ROUTER_MODEL = "qwen3:0.6b";
  */
 export class ScriptRouter implements RouterModel {
   readonly name = "scripted";
-  private script: Record<string, RouterAnswer>;
-  constructor(script: Record<string, string | RouterAnswer>) {
+  private script: Record<string, RouterAnswer | ChatPlan>;
+  constructor(script: Record<string, string | RouterAnswer | ChatPlan>) {
     this.script = Object.fromEntries(Object.entries(script).map(([q, v]) => [q, typeof v === "string" ? { label: v, target: "" } : v]));
+  }
+  async plan(req: ChatPlanRequest): Promise<ChatPlan | null> {
+    const hit = this.script[req.text] ?? this.script[req.text.toLowerCase()];
+    return hit && "steps" in hit ? validateChatPlan(hit) : { steps: [] };
   }
   async choose(req: RouterRequest): Promise<RouterAnswer | null> {
     const q = req.user.replace(/^Q: /, "").replace(/\nA:$/, "").trim();
     const hit = this.script[q] ?? this.script[q.toLowerCase()] ?? this.script[q.replace(/\?+$/, "").toLowerCase()];
-    if (!hit || !req.labels.includes(hit.label)) return null;
+    if (!hit || !("label" in hit) || !req.labels.includes(hit.label)) return null;
     return { label: hit.label, target: hit.target.slice(0, 120) };
   }
 }
@@ -143,7 +165,7 @@ export class ScriptRouter implements RouterModel {
 /** A `ScriptRouter` when `CIE_ROUTER_SCRIPT` names a readable JSON file, else null. */
 export function scriptRouterFromEnv(env: Record<string, string | undefined> = process.env): ScriptRouter | null {
   if (!env.CIE_ROUTER_SCRIPT) return null;
-  const raw = JSON.parse(readFileSync(env.CIE_ROUTER_SCRIPT, "utf8")) as Record<string, string | RouterAnswer>;
+  const raw = JSON.parse(readFileSync(env.CIE_ROUTER_SCRIPT, "utf8")) as Record<string, string | RouterAnswer | ChatPlan>;
   return new ScriptRouter(raw);
 }
 

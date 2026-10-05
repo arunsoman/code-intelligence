@@ -366,7 +366,17 @@ export interface ChangesSince {
   commits: { file: string; subject: string; author: string; date: string }[];
   summary: string;
 }
+export interface ChatAnalysisResult {
+  tool: "overview" | "view" | "risk" | "tests";
+  title: string;
+  status: "complete" | "failed" | "skipped";
+  message: string;
+  subject?: string;
+  view?: ViewSpec;
+  claims: Claim[];
+}
 export type ConverseResult =
+  | { kind: "analysis"; results: ChatAnalysisResult[]; message: string }
   | { kind: "view"; view: ViewSpec; claims: Claim[]; message: string }
   | { kind: "explanation"; explanation: ExplainResult; message: string }
   | { kind: "resume"; workspaceId: Id; message: string }

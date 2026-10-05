@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { buttonFeedback } from "./button.ts";
+import type { ChatAnalysisResult } from "@cie/schema";
 
-export interface Message { role: "user" | "assistant"; text: string; at: string; error?: boolean }
+export interface Message { role: "user" | "assistant"; text: string; at: string; error?: boolean; results?: ChatAnalysisResult[] }
 interface Props {
   messages: Message[]; referents: { id: string; label: string; source?: "map" | "editor" | "cell" }[]; busy: boolean; canAsk: boolean;
   examples: string[]; onSend: (text: string) => void; onDropReferent: (id: string) => void;
   /** Seeded from other panels (e.g. "ask about this finding"); a new `n` replaces the composer's text. */
   seed?: { text: string; n: number };
+  onShowResult?: (result: ChatAnalysisResult) => void;
 }
 
-export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend, onDropReferent, seed }: Props) {
+export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend, onDropReferent, seed, onShowResult }: Props) {
   const [text, setText] = useState("");
   const end = useRef<HTMLDivElement>(null);
   useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [messages.length, busy]);
@@ -26,7 +28,9 @@ export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend,
             {canAsk && <ul className="examples">{examples.map((x) => <li key={x}><button className="link" onClick={() => onSend(x)} disabled={busy}>{x}</button></li>)}</ul>}
           </div>
         )}
-        {messages.map((m, i) => <div key={i} className={`msg ${m.role} ${m.error ? "err" : ""}`}><span className="who">{m.role === "user" ? "You" : "Assistant"}</span><p>{m.text}</p></div>)}
+        {messages.map((m, i) => <div key={i} className={`msg ${m.role} ${m.error ? "err" : ""}`}><span className="who">{m.role === "user" ? "You" : "Assistant"}</span><p>{m.text}</p>
+          {m.results && <div className="chat-results" role="group" aria-label="Analysis views">{m.results.filter((r) => r.view).map((r, j) => <button key={j} className="secondary small" disabled={busy} onClick={() => onShowResult?.(r)}>Show {r.title}</button>)}</div>}
+        </div>)}
         {busy && <div className="msg assistant"><span className="who">Assistant</span><p className="muted">Working…</p></div>}
         <div ref={end} />
       </div>

@@ -282,11 +282,20 @@ export function App() {
     say("user", text);
     setBusy("Thinking…"); setError(null); setNotice(null);
     try {
-      const r = await call<ConverseResult>("C15", "converse", { text, view, selection, revision: info?.revision?.id, pins });
+      const r = await call<ConverseResult>("C15", "converse", { text, view, selection, revision: info?.revision?.id, pins, history: messages.slice(-6).map(({ role, text }) => ({ role, text })) });
       if (!r.ok) { say("assistant", failMsg(r), true); return; }
       const v = r.value;
       for (const w of r.metadata.warnings) say("assistant", `Note: ${w}`);
       switch (v.kind) {
+        case "analysis": {
+          const shown = v.results.filter((r) => r.view);
+          for (const result of shown) mergeClaims(result.claims);
+          const last = shown.at(-1);
+          if (last?.view) adoptView(last.view, last.claims, false);
+          setMessages((m) => [...m, { role: "assistant", text: v.message, at: now(), results: v.results } as Message].slice(-200));
+          log("ASK", text.slice(0, 80));
+          break;
+        }
         case "view": adoptView(v.view, v.claims, !!view && view.id === v.view.id); say("assistant", v.message); log("ASK", text.slice(0, 80)); break;
         case "explanation": mergeClaims(v.explanation.claims); setDrawer({ kind: "explain", data: v.explanation }); say("assistant", v.message); log("EXPLAIN", text.slice(0, 80)); break;
         case "zoom": setLevel((l) => v.direction === "overview" ? 1 : Math.max(0, Math.min(MAX_LEVEL, l + (v.direction === "in" ? 1 : -1)))); setFitTick((t) => t + 1); say("assistant", v.message); break;
@@ -689,7 +698,7 @@ export function App() {
       </main>
 
       <aside className="right">
-        <ChatPanel messages={messages} referents={referents} busy={!!busy} canAsk={!!info?.revision} examples={EXAMPLES} seed={chatSeed ?? undefined} onSend={(t) => void send(t)} onDropReferent={(id) => (id.startsWith("cell:") ? setCellSel(cellSel.filter((x) => x !== id)) : id === "card:pins" ? setCardPins(null) : id.startsWith("editor:") ? setDismissed(new Set([...dismissed, id.slice(7)])) : setSelection(selection.filter((x) => x !== id)))} />
+        <ChatPanel onShowResult={(r) => { if (r.view) adoptView(r.view, r.claims, false); }} messages={messages} referents={referents} busy={!!busy} canAsk={!!info?.revision} examples={EXAMPLES} seed={chatSeed ?? undefined} onSend={(t) => void send(t)} onDropReferent={(id) => (id.startsWith("cell:") ? setCellSel(cellSel.filter((x) => x !== id)) : id === "card:pins" ? setCardPins(null) : id.startsWith("editor:") ? setDismissed(new Set([...dismissed, id.slice(7)])) : setSelection(selection.filter((x) => x !== id)))} />
         <section className="drawer" aria-label="Evidence">
           {code && (
             <div className="codecard">

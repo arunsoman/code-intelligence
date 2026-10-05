@@ -1,4 +1,21 @@
 {
   "how are these connected?": "connected",
-  "What has been going wrong lately?": "RuntimeOverlay"
+  "What has been going wrong lately?": "RuntimeOverlay",
+  "Explain this project, identify its riskiest module, and show me the tests covering it.": {
+    "steps": [
+      {
+        "tool": "overview",
+        "question": "Explain this project"
+      },
+      {
+        "tool": "risk",
+        "question": "Identify its riskiest module"
+      },
+      {
+        "tool": "tests",
+        "question": "Show me the tests covering it",
+        "fromStep": 1
+      }
+    ]
+  }
 }

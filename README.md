@@ -16,6 +16,18 @@ Built from `Unified_Code_Intelligence_Product_Specification` (the S5 MVP definit
 | "why are you showing this?" / "why isn't X shown?" | The salience factors, or the specific reason X was left out |
 | "continue the payment investigation" | Restores the saved investigation (including the conversation) and reports what changed in the repository since |
 
+Chat can also compose several analyses in one message. For example: **“Explain this project, identify its riskiest module, and show me the tests covering it.”** The local router proposes a validated plan of up to six read-only steps: project overview, change-risk ranking, test lookup, or any visual analysis from the catalogue. Steps can consume an earlier result's subject, so the tests are looked up for the file actually selected by the risk analysis. The combined answer keeps each result, with buttons to reopen its view. Recent conversation text and the selected file provide context for follow-up questions.
+
+The overview includes an attributed README description when available. Risk currently ranks source **files**, excludes test/example/fixture paths from the winner selection, and reports a weighted heuristic rather than a probability. Test lookup distinguishes parsed call paths (up to four calls deep), import-only links, and recorded line coverage; it does not execute tests. Failed steps are reported individually, their dependents are skipped, and completed views remain available. If planning is unavailable or invalid, chat explicitly falls back to the existing single-question route. Existing map controls, stack traces and saved-investigation commands still use their original handlers. Editing, publishing, and arbitrary API calls are not tools in this analysis planner.
+
+To run that query against this checkout through the same HTTP endpoint as the chatbox, with a fresh in-memory index:
+
+```sh
+node scripts/run-chat-analysis.ts
+# Optional arguments: repository, question, output JSON path.
+# Default full response: /tmp/cie-chat-analysis-result.json
+```
+
 The **Investigations** button opens the C22 hypothesis board. Create an investigation with a question and optional stack trace, then use **Run next checks** to run a bounded wave of read-only checks. The board compares observations against hypotheses, highlights discriminating evidence, shows assessment reasons and source citations, and updates every 1.5 seconds. Pause/resume controls and saved investigations are available in the same panel. Investigations belong to the current saved workspace, or to the repository when no workspace is open, and remain pinned to their original code revision. Priority is not probability; missing, stale, rejected and retracted assessments are labeled separately from contradictions. Hypothesis editing, evidence attachment, scope steering and finalization remain API operations.
 
 ## The sixteen visuals
