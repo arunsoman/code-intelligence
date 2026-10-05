@@ -8,7 +8,7 @@ import { LENSES, protectedTier } from "./context.ts";
 import { revisionIndex, scoreEntity, tierOf, WEIGHTS, type SalienceContext, type Scored, type Weights } from "./salience.ts";
 import type { Store } from "./store.ts";
 
-const STOP = new Set(["show", "how", "does", "the", "what", "why", "work", "works", "working", "can", "could", "would", "and", "for", "are", "this", "that", "with", "from", "everything", "about", "me", "all", "is", "do", "of", "in", "to", "a", "an", "it", "my", "which"]);
+const STOP = new Set(["show", "how", "does", "the", "what", "why", "work", "works", "working", "can", "could", "would", "and", "for", "are", "this", "that", "with", "from", "everything", "about", "me", "all", "is", "do", "of", "in", "to", "a", "an", "it", "my", "which", "give", "overview", "whole", "tell", "explain", "describe", "list", "find"]);
 // Crude suffix stripping so "authentication" matches `auth/`. Heuristic, not linguistics.
 const SUFFIXES = ["entication", "orization", "ication", "ization", "ation", "ments", "ment", "ing", "ion", "ers", "er", "ed", "es", "s"];
 
@@ -149,7 +149,7 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
     if (isDenied(c.id)) { inaccessible++; continue; }
     if (opts.ignored?.has(c.id)) { hidden.push({ entityId: c.id, label, reason: "you asked to ignore it" }); continue; }
     if (picked.length >= maxNodes) { hidden.push({ entityId: c.id, label, reason: `matched, but ranked below the top ${maxNodes}` }); continue; }
-    if (c.tier === "HIDDEN") { hidden.push({ entityId: c.id, label, reason: "matched weakly; relevance below the display threshold" }); continue; }
+    if (c.tier === "HIDDEN" && !(opts.extraSeeds ?? []).includes(c.id)) { hidden.push({ entityId: c.id, label, reason: "matched weakly; relevance below the display threshold" }); continue; }
     picked.push(c.id);
     const e = byId.get(c.id)!, nm = e.name.toLowerCase(), pth = e.file.toLowerCase();
     if (terms.some((t) => nm.includes(t) || pth.includes(t))) note(c.id, "lexical");

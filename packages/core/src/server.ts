@@ -17,6 +17,7 @@ import { WorkerClient } from "./worker.ts";
 const PORT = Number(process.env.PORT ?? 4317);
 const HOST = "127.0.0.1";
 const MAX_BODY = 8 * 1024 * 1024; // saved views and pasted traces can be large
+class BodyTooLargeError extends Error { constructor() { super("body too large"); } }
 const WEB_DIST = fileURLToPath(new URL("../../../apps/web/dist/", import.meta.url));
 const MIME: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json" };
 
@@ -123,7 +124,7 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
   };
   const readBody = (req: IncomingMessage) => new Promise<string>((resolve, reject) => {
     let n = 0; const chunks: Buffer[] = [];
-    req.on("data", (c: Buffer) => { n += c.length; if (n > MAX_BODY) { reject(new Error("body too large")); req.destroy(); } else chunks.push(c); });
+    req.on("data", (c: Buffer) => { n += c.length; if (n > MAX_BODY) { reject(new BodyTooLargeError()); req.destroy(); } else chunks.push(c); });
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
@@ -154,7 +155,10 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
       if (!fn || req.method !== "POST") return send(res, fn ? 405 : 404, { ok: false, error: { code: "NOT_FOUND", message: "unknown operation", retryable: false } });
       if (!(req.headers["content-type"] ?? "").startsWith("application/json")) return send(res, 415, { ok: false, error: { code: "INVALID_SCHEMA", message: "content-type must be application/json", retryable: false } });
       let body: any;
-      try { body = JSON.parse((await readBody(req)) || "{}"); } catch { return send(res, 400, { ok: false, error: { code: "INVALID_SCHEMA", message: "invalid JSON body", retryable: false } }); }
+      try { body = JSON.parse((await readBody(req)) || "{}"); } catch (e) {
+        if (e instanceof BodyTooLargeError) return send(res, 413, { ok: false, error: { code: "PAYLOAD_TOO_LARGE", message: "request body exceeds the maximum allowed size", retryable: false } });
+        return send(res, 400, { ok: false, error: { code: "INVALID_SCHEMA", message: "invalid JSON body", retryable: false } });
+      }
       const idem = String(req.headers["idempotency-key"] ?? "");
       const mutating = !(v2[1] === "C22" ? ["get", "list", "getCompletion", "getBoard", "getDetails", "readEvents"] : ["getSnapshot", "readUpdates", "querySlice", "traceAncestors", "checkOrder", "explainRelation", "criticalPath", "getCoverage", "replayPlayback"]).includes(op);
       if (mutating && !idem) return send(res, 400, { ok: false, error: { code: "INVALID_SCHEMA", message: "Idempotency-Key header required", retryable: false } });
@@ -169,7 +173,10 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
       if (!op || req.method !== "POST") return send(res, op ? 405 : 404, { ok: false, error: { code: "NOT_FOUND", message: "unknown operation", retryable: false } });
       if (!(req.headers["content-type"] ?? "").startsWith("application/json")) return send(res, 415, { ok: false, error: { code: "INVALID_SCHEMA", message: "content-type must be application/json", retryable: false } });
       let body: any;
-      try { body = JSON.parse((await readBody(req)) || "{}"); } catch { return send(res, 400, { ok: false, error: { code: "INVALID_SCHEMA", message: "invalid JSON body", retryable: false } }); }
+      try { body = JSON.parse((await readBody(req)) || "{}"); } catch (e) {
+        if (e instanceof BodyTooLargeError) return send(res, 413, { ok: false, error: { code: "PAYLOAD_TOO_LARGE", message: "request body exceeds the maximum allowed size", retryable: false } });
+        return send(res, 400, { ok: false, error: { code: "INVALID_SCHEMA", message: "invalid JSON body", retryable: false } });
+      }
       const idem = String(req.headers["idempotency-key"] ?? "");
       if (op.mutating && !idem) return send(res, 400, { ok: false, error: { code: "INVALID_SCHEMA", message: "Idempotency-Key header required", retryable: false } });
       const ctx = mk(idem);
@@ -189,6 +196,14 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
         const result = await op.run(ctx, body);
         return send(res, statusFor(result), result);
       } catch (e) {
+        if (e instanceof BodyTooLargeError) return send(res, 413, { ok: false, error: { code: "PAYLOAD_TOO_LARGE", message: "request body exceeds the maximum allowed size", retryable: false } });
+        const err = e as Error;
+        const msg = err.message ?? String(e);
+        if (e instanceof TypeError || /Cannot read properties of|is not a function|must be/.test(msg)) {
+          console.error("schema error mapped to 400:", msg);
+          return send(res, 400, { ok: false, error: { code: "INVALID_SCHEMA", message: `request body field has the wrong type: ${msg}`, retryable: false } });
+        }
+        console.error("internal error:", e);
         return send(res, 500, { ok: false, error: { code: "STORAGE_FAILURE", message: "internal error", retryable: true } });
       }
     }

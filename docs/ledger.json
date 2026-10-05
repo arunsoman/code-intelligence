@@ -1960,7 +1960,7 @@
         "item": "F07-A4: a crash or restart resumes without duplicate branches or PRs",
         "tests": [
           "A4: a crash after the push or after the PR is created resumes without a duplicate",
-          "A4b: a real SIGKILL mid-publication resumes without a duplicate branch or PR"
+          "A4b: a real SIGKILL after the PR is created resumes without a duplicate branch or PR"
         ],
         "state": "done"
       },
@@ -2082,6 +2082,12 @@
         "tests": [],
         "state": "blocked",
         "needs": "a flaky fixture repository and a keyboard-only browser test for the task panel (create, confirm, review, approve, publish)"
+      },
+      {
+        "item": "F07-D6 branch allowlist and WP-08 model proposer: the egress boundary (consent, preview, secret scrubbing, audit-by-hash) is implemented and tested, but no command calls a model to produce edit operations yet, and the branch-prefix allowlist is enforced in the publisher without its own test",
+        "tests": [],
+        "state": "blocked",
+        "needs": "a `C15/proposeEdits` command that calls the configured provider through the existing egress gate and returns edit operations, plus a branch-prefix test that asserts a non-`cie/` name is refused at the publisher"
       }
     ]
   }

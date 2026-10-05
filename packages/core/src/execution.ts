@@ -17,8 +17,8 @@
 // with its omissions, and candidates are refused outright when the task demands an audited container profile
 // (`requireAuditedIsolation`). The engine never falls back to running a candidate outside the boundary it recorded.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { EditOperationSchema, TaskSpecSchema, type EditOperation, type TaskSpec } from "@cie/schema";
 export type { TaskSpec, EditOperation };
 import { applyTextEdits, copyTree, hashTree, makeScratch, removeScratch, runTestsIn, safeJoin, sha256, treeDiff, typecheckDir, walkFiles, type TreeChange } from "./isolated-exec.ts";
@@ -1162,4 +1162,3 @@ export function isolationRecord(cls: IsolationClass, audited: boolean): { profil
 
 export { TASK_LIMITS };
 export type { TreeChange };
-export const _unused = { relative, statSync };

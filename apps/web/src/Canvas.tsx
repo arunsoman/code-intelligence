@@ -90,7 +90,8 @@ function style(): cytoscape.StylesheetJson {
     { selector: "node.kbfocus", style: { "overlay-color": accent, "overlay-opacity": 0.28, "overlay-padding": 9, "border-width": 4, "border-color": accent } },
     { selector: "node.replay-observed", style: { "underlay-color": accent, "underlay-opacity": 0.3, "underlay-padding": 10 } },
     { selector: "node.replay-error", style: { "underlay-color": warn, "underlay-opacity": 0.45, "underlay-padding": 12 } },
-    { selector: "node", style: { "pie-size": "100%", "pie-1-background-color": muted, "pie-1-background-size": "data(testOverlaySize)", "pie-2-background-color": inf, "pie-2-background-size": "data(runtimeOverlaySize)" } },
+    { selector: "node[testOverlaySize]", style: { "pie-size": "100%", "pie-1-background-color": muted, "pie-1-background-size": "data(testOverlaySize)" } },
+    { selector: "node[runtimeOverlaySize]", style: { "pie-2-background-color": inf, "pie-2-background-size": "data(runtimeOverlaySize)" } },
     { selector: "node.test-overlay-failing", style: { "pie-1-background-color": warn } },
     { selector: "node.runtime-overlay-errors", style: { "pie-2-background-color": warn } },
     { selector: "node.test-overlay-covered", style: { "pie-1-background-color": ok } },
@@ -291,7 +292,7 @@ export function Canvas(p: Props) {
         const bd = n.node?.badge;
         const detail = level >= 6 && n.node ? `${n.label}\n${[n.role === "symbol" ? n.node.kind : n.role, n.node.notes?.length ? `${n.node.notes.length} note(s)` : "", n.node.unresolvedCalls ? `${n.node.unresolvedCalls} fog` : ""].filter(Boolean).join(" · ")}` : n.label;
         const labelText = bd && level < 6 ? `${n.label}\n${bd}` : detail;
-        return { data: { id: n.id, label: labelText, hasBadge: bd ? 1 : 0, heatv: n.node?.heat ? n.node.heat.value : -1, ghost: n.node?.ghost ? 1 : 0, inTx: n.inTx ? 1 : 0, detail: level >= 6 ? 1 : 0, tier: n.tier, display: n.displayMode, role: n.role ?? "", kind: n.kind, parent: n.parent }, position: { ...n.pos }, classes: n.stale ? "stale" : "" };
+        return { data: { id: n.id, label: labelText, hasBadge: bd ? 1 : 0, heatv: n.node?.heat ? n.node.heat.value : -1, ghost: n.node?.ghost ? 1 : 0, inTx: n.inTx ? 1 : 0, detail: level >= 6 ? 1 : 0, testOverlaySize: 0, runtimeOverlaySize: 0, tier: n.tier, display: n.displayMode, role: n.role ?? "", kind: n.kind, parent: n.parent }, position: { ...n.pos }, classes: n.stale ? "stale" : "" };
       }),
       ...rendered.edges.map((e) => {
         const at = (id: string) => nodePos.get(id);
@@ -449,6 +450,7 @@ export function Canvas(p: Props) {
   return (
     <>
     <div className="canvas" ref={host} tabIndex={0} role="application" aria-label={`Map. ${p.caption || "Empty."}`} aria-describedby="canvas-help" onKeyDown={onKeyDown}
+      onMouseDown={() => host.current?.focus()}
       onFocus={() => { if (!focusId.current && cb.current.rendered.nodes.length) { const c = cy.current!; const first = [...cb.current.rendered.nodes].sort((a, b) => { const qa = c.getElementById(a.id).position(), qb = c.getElementById(b.id).position(); return qa.x - qb.x || qa.y - qb.y; })[0]; setFocus(first.id); } }} />
     {(hint.off > 0 || hint.labelsHidden) && (
       <div className="canvas-hint" role="status">

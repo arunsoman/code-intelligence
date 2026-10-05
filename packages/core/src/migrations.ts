@@ -822,10 +822,13 @@ export const MIGRATIONS: Migration[] = [
         base_hash text not null, head_hash text not null, push_state text not null,
         pr_number integer, pr_url text, receipt_draft integer, idempotency_key text not null unique, updated_at text not null);
       create index if not exists branch_publications_task on branch_publications(task_id, updated_at);
+      create table if not exists task_flags(enabled integer not null, model integer not null, publish integer not null);
+      insert or ignore into task_flags(enabled, model, publish) values (1, 0, 0);
       create table if not exists task_isolations(
         profile_id text primary key, class text not null, audited integer not null, properties_json text not null,
         omissions_json text not null, checked_at text not null);`),
     down: (db) => db.exec(`
+      drop table if exists task_flags;
       drop table if exists task_isolations;
       drop index if exists branch_publications_task; drop table if exists branch_publications;
       drop index if exists task_grants_lookup; drop table if exists task_grants;

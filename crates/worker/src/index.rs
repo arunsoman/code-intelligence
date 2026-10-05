@@ -40,7 +40,7 @@ const CACHE_LIMIT: usize = 4096; // the old entry cap; kept to size the byte bud
 const CACHE_BYTE_LIMIT: usize = CACHE_LIMIT * 256 * 1024; // ~1 GiB of estimated parser memory
 const PARSE_MEMORY_FACTOR: usize = 50; // README measures ~0.2 MB of parser memory per ~4 KB of source
 #[derive(PartialEq, Eq, Hash, Clone)]
-struct CacheKey(String, String);
+struct CacheKey(String, String, String); // repo_root, rel, content_hash
 struct CacheEntry { raw: RawFile, bytes: usize }
 struct ParseCache { entries: HashMap<CacheKey, CacheEntry>, order: std::collections::VecDeque<CacheKey>, bytes: usize }
 static PARSE_CACHE: std::sync::OnceLock<std::sync::Mutex<ParseCache>> = std::sync::OnceLock::new();
@@ -50,12 +50,12 @@ static PARSE_CACHE: std::sync::OnceLock<std::sync::Mutex<ParseCache>> = std::syn
 fn parse_cache() -> std::sync::MutexGuard<'static, ParseCache> {
     PARSE_CACHE.get_or_init(|| std::sync::Mutex::new(ParseCache { entries: HashMap::new(), order: std::collections::VecDeque::new(), bytes: 0 })).lock().unwrap_or_else(|e| e.into_inner())
 }
-fn cache_get(rel: &str, hash: &str) -> Option<RawFile> {
-    parse_cache().entries.get(&CacheKey(rel.to_string(), hash.to_string())).map(|e| e.raw.clone())
+fn cache_get(root: &str, rel: &str, hash: &str) -> Option<RawFile> {
+    parse_cache().entries.get(&CacheKey(root.to_string(), rel.to_string(), hash.to_string())).map(|e| e.raw.clone())
 }
-fn cache_put(rel: &str, hash: &str, raw: &RawFile, src_len: usize) {
+fn cache_put(root: &str, rel: &str, hash: &str, raw: &RawFile, src_len: usize) {
     let mut c = parse_cache();
-    let key = CacheKey(rel.to_string(), hash.to_string());
+    let key = CacheKey(root.to_string(), rel.to_string(), hash.to_string());
     if let Some(prev) = c.entries.remove(&key) { c.bytes = c.bytes.saturating_sub(prev.bytes); c.order.retain(|k| k != &key); }
     let bytes = (src_len * PARSE_MEMORY_FACTOR).max(1);
     c.entries.insert(key.clone(), CacheEntry { raw: raw.clone(), bytes });
@@ -291,9 +291,9 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>, base: Option<&BaseRe
     }
     for (p, rel, hash, src) in read_files {
         // Same content hash as the caller's previous revision: the parse is content-identical, reuse it.
-        // The cache is keyed by (path, content hash) and the hash was just computed from the bytes read, so a hit is exactly an unchanged file:
-        // the caller does not need to tell us what it thinks changed.
-        if let Some(raw) = cache_get(&rel, &hash) {
+        // The cache is keyed by (repo root, relative path, content hash) so concurrent tests with the same
+        // relative names do not share entries; in production one worker run holds one repository at a time.
+        if let Some(raw) = cache_get(&batch.repo_root, &rel, &hash) {
             reused += 1;
             sources.push((rel.clone(), hash.clone()));
             recs.push(FileRec { rel, hash, src, raw, ids: vec![] });
@@ -315,7 +315,7 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>, base: Option<&BaseRe
                 retryable: false,
             });
         }
-        cache_put(&rel, &hash, &raw, src.len());
+        cache_put(&batch.repo_root, &rel, &hash, &raw, src.len());
         sources.push((rel.clone(), hash.clone()));
         recs.push(FileRec { rel, hash, src, raw, ids: vec![] });
     }
@@ -1200,7 +1200,8 @@ mod delta_tests {
         let unique = format!("export const marker{} = 1;\n", std::process::id());
         std::fs::write(dir.join("unique-marker.ts"), &unique).unwrap();
         let with_marker = index_repo(&dir, None, None).unwrap();
-        let key = CacheKey("unique-marker.ts".to_string(), sha(unique.as_bytes()));
+        let root_key = dir.canonicalize().unwrap().to_string_lossy().to_string();
+        let key = CacheKey(root_key, "unique-marker.ts".to_string(), sha(unique.as_bytes()));
         assert!(parse_cache().entries.remove(&key).is_some(), "the full index cached the parse");
         let again = index_repo(&dir, None, Some(&base_of(&with_marker))).unwrap();
         assert_eq!(again.mode, "unchanged");

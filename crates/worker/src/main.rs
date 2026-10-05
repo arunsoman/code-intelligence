@@ -1,4 +1,5 @@
 //! Rust worker (contracts §10): C04–C09 collapsed. Speaks length-prefixed JSON on stdio.
+mod dataflow;
 mod index;
 mod language;
 mod metrics;

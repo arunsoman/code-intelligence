@@ -267,9 +267,11 @@ describe("F07 task execution", () => {
     worker.close();
   });
 
-  test("A4b: a real SIGKILL mid-publication resumes without a duplicate branch or PR", { timeout: 180_000 }, async () => {
+  test("A4b: a real SIGKILL after the PR is created resumes without a duplicate branch or PR", { timeout: 180_000 }, async () => {
     const child = fileURLToPath(new URL("./fixtures/task-child.ts", import.meta.url));
-    for (const point of ["task-after-branch-push", "task-after-pr-create"]) {
+    // The in-process test above covers the earlier interruption shapes; this one kills a real process at the worst
+    // point — the PR exists on the forge but no receipt reached the database.
+    for (const point of ["task-after-pr-create"]) {
       const work = join(RUN, `crash-${point}`);
       mkdirSync(work, { recursive: true });
       const repo = makeRepo(`crash-${point}-repo`);
@@ -280,7 +282,7 @@ describe("F07 task execution", () => {
       const prsAfterCrash = existsSync(forgePath) ? (JSON.parse(readFileSync(forgePath, "utf8")) as unknown[]) : [];
       assert.ok(prsAfterCrash.length <= 1, `${point}: at most one PR before the resume`);
       // The branch really is on the remote (CIE's own clone pushed to the fixture origin), if the crash point is after it.
-      if (point === "task-after-pr-create") assert.strictEqual(prsAfterCrash.length, 1);
+      assert.strictEqual(prsAfterCrash.length, 1, `${point}: the PR exists on the forge before the resume`);
       const resumed = spawnSync(process.execPath, [child, "resume", dbPath, repo, forgePath, clonesDir], { env: { ...process.env, TMPDIR: RUN }, encoding: "utf8" });
       assert.strictEqual(resumed.status, 0, `${point}: resume failed: ${resumed.stderr.slice(-400)}`);
       const out = JSON.parse(resumed.stdout.trim().split("\n").pop()!) as { prNumber: number; alreadyPublished: boolean };
@@ -401,7 +403,13 @@ describe("F07 command surface", () => {
     const plain = await call("C02/submitTask", { spec: { ...specFor("fixtures/discount", false), title: "No oracle" } });
     assert.strictEqual(plain.ok, true);
     assert.match(((plain.value as { restatement: { oracleNote: string } }).restatement.oracleNote), /never be called a verified fix/);
-    // Without a GitHub transport, publication is refused rather than simulated.
+    // The rollout switch is off by default: publication is refused before any GitHub transport is even considered.
+    const off = await call("C30/publishDraftPR", { taskId: view.taskId, repositoryId: "fixtures/discount", baseBranch: "main", branchName: "cie/x", grantId: "grant:none" });
+    assert.strictEqual(off.ok, false);
+    assert.strictEqual(off.error!.code, "FORBIDDEN");
+    assert.match(off.error!.message, /switched off/);
+    // With the switch on but no transport configured, it still refuses rather than simulating a draft PR.
+    store.db.prepare("update task_flags set publish = 1").run();
     const refused = await call("C30/publishDraftPR", { taskId: view.taskId, repositoryId: "fixtures/discount", baseBranch: "main", branchName: "cie/x", grantId: "grant:none" });
     assert.strictEqual(refused.ok, false);
     assert.strictEqual(refused.error!.code, "PROVIDER_UNAVAILABLE");

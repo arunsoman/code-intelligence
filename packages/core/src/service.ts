@@ -231,7 +231,7 @@ export class Service {
     "C26/profileEndpoints": (c, b) => this.profileWrap(c, () => this.profiles.endpointStats({ traceSourceId: b?.traceSourceId, window: b?.window, artifactHash: b?.artifactHash, viewRevision: b?.viewRevision })),
     "C26/profileWaterfall": (c, b) => this.profileWrap(c, () => this.profiles.waterfall({ traceSourceId: b?.traceSourceId, traceId: b?.traceId, window: b?.window })),
     "C26/listProfilePopulations": (c, b) => this.profileWrap(c, () => this.profiles.listPopulations({ traceSourceId: b?.traceSourceId, artifactHash: b?.artifactHash, limit: b?.limit })),
-    "C04/listProfileArtifacts": (c, b) => this.profileWrap(c, () => this.profiles.listArtifacts({ traceSourceId: b?.traceSourceId, limit: b?.limit })),
+    "C04/listProfileArtifacts": (c, b) => this.profileWrap(c, async () => ({ artifacts: this.profiles.listArtifacts({ traceSourceId: b?.traceSourceId, limit: b?.limit }) })),
     "C19/compileProfileView": (c, b) => this.profileWrap(c, () => this.profiles.compileProfileView(b ?? {})),
     "C16/verifyMetricPresentation": (c, b) => this.profileWrap(c, () => this.profiles.verifyPresentation(b?.items ?? [], b?.revision ?? this.store.latestRevision() ?? "")),
   };
@@ -1978,14 +1978,14 @@ export class Service {
       r.ok ? ok(ctx, { kind: "explanation", explanation: r.value, message: `${lead}${r.value.summary}`.trim() }, r.metadata) : (r as ApiResult<never>);
     const needsView = () => fail<ConverseResult>(ctx, { code: "INVALID_SCHEMA", message: "Ask a question first, then I can talk about what's on the map.", retryable: false });
 
-    const overview = async (lead: string): Promise<ApiResult<ConverseResult>> => {
+    const overview = async (lead: string, question = text): Promise<ApiResult<ConverseResult>> => {
         const rev = revision ? this.store.revision(revision) : this.store.latestRevision();
         if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index a repository first", retryable: false });
         // The most connected code is what a newcomer should see first; the map starts zoomed out to the domains.
         const idx = revisionIndex(this.store, rev.id);
         const kinds = new Set(["function", "method", "class"]);
         const seeds = this.store.entities(rev.id).filter((e) => kinds.has(e.kind)).sort((a, b) => (idx.degree.get(b.entityId) ?? 0) - (idx.degree.get(a.entityId) ?? 0) || a.entityId.localeCompare(b.entityId)).slice(0, 30).map((e) => e.entityId);
-        const r = await this.ask(ctx, { question: "Give me an overview of the whole project", revision: rev.id, seeds, level: 1 });
+        const r = await this.ask(ctx, { question: question || "Give me an overview of the whole project", revision: rev.id, seeds, level: 1 });
         const profile = projectProfile(this.store, rev.id);
         if (r.ok) { r.value.view.formReason = "The most connected code in the repository, grouped by responsibility. Zoom in for detail."; r.value.view.gaps.unshift(profile.text); }
         return asView(r, `${lead} ${profile.text}`);

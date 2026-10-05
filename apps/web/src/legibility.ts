@@ -71,10 +71,15 @@ export function boxesCoveragePct(boxes: Box[], w: number, h: number): number {
   return area > 0 ? (ix * iy) / area : 1;
 }
 export function visibility(boxes: Box[], w: number, h: number): Visibility {
-  let inView = 0, clipped = 0;
+  let inView = 0, offscreen = 0, clipped = 0;
   for (const b of boxes) {
     const outside = b.x2 <= 0 || b.x1 >= w || b.y2 <= 0 || b.y1 >= h;
-    if (outside) continue;
+    if (outside) { offscreen++; continue; }
+    const iw = Math.max(0, Math.min(b.x2, w) - Math.max(b.x1, 0));
+    const ih = Math.max(0, Math.min(b.y2, h) - Math.max(b.y1, 0));
+    const visibleArea = iw * ih;
+    const boxArea = (b.x2 - b.x1) * (b.y2 - b.y1);
+    if (boxArea > 0 && visibleArea < boxArea * 0.5) { offscreen++; continue; }
     inView++;
     if (b.x1 < 0 || b.y1 < 0 || b.x2 > w || b.y2 > h) clipped++;
   }
@@ -85,7 +90,7 @@ export function visibility(boxes: Box[], w: number, h: number): Visibility {
     const ix = Math.max(0, Math.min(x2, w) - Math.max(x1, 0)), iy = Math.max(0, Math.min(y2, h) - Math.max(y1, 0));
     pct = area > 0 ? Math.round((100 * ix * iy) / area) : 100;
   }
-  return { total: boxes.length, inView, offscreen: boxes.length - inView, clipped, drawingInViewPct: pct };
+  return { total: boxes.length, inView, offscreen, clipped, drawingInViewPct: pct };
 }
 
 /**
