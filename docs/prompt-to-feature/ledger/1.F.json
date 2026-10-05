@@ -1,0 +1,73 @@
+{
+  "C07": {
+    "title": "Runner, scheduling and cancel (task 1.F)",
+    "items": [
+      {
+        "item": "PF-020/PF-038 runner audit: reads/writes outside roots, environment leak, network, child processes, workers, symlink escape, runaway output and wall time are all stopped",
+        "tests": [
+          "PF-020/038 audit: every negative probe is stopped by the local runner, and the omissions are disclosed with the report"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "The runner validates roots, cwd, limits, flags and environment before anything starts; node flags that widen permissions or load code are refused",
+        "tests": [
+          "a request cannot widen the boundary: roots, cwd and limits are validated before anything starts"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Symlink escape is refused before a run and fails a run that created one",
+        "tests": [
+          "symlink escape: refused before the run, and a link created during a run that had write access fails it"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Wall clock kills the whole process group, output is capped, abort cancels",
+        "tests": [
+          "limits: wall clock kills the whole group, output is capped, abort cancels"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Network DENY is never silently dropped; omissions are disclosed with every result",
+        "tests": [
+          "network DENY is never silently dropped: a command it cannot isolate is refused when the host has no namespace",
+          "a passing run reports PASSED with its output and the runner's omissions",
+          "a failing run is FAILED with the exit code; a missing binary is INFRA_ERROR, not a test failure"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "S12 runner lane and priority classes in jobs.ts",
+        "tests": [
+          "S12 jobs: runner-lane jobs run in a bounded pool beside the parser slot; priority classes order the queue",
+          "S12 jobs: a higher priority class jumps the queue within a lane"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "AT-24/AT-57 fencing tokens: a stale holder cannot start, commit or keep its result",
+        "tests": [
+          "AT-24/57 a fencing token that is no longer current refuses the run, and one lost mid-run discards its result",
+          "AT-24/57 jobs: a job fenced out by a newer holder of the same key cannot commit and ends CANCELLED"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "cancelFeature stops running jobs, ends the request and reports what it could not undo",
+        "tests": [
+          "cancelling a request stops its running job and reports what it could not undo"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "CPU, memory and process limits are partial: cpu via prlimit when present, memory bounds the V8 heap only, no container or VM class",
+        "tests": [],
+        "state": "blocked",
+        "needs": "a container or VM runner profile (defect-isolation.ts docker) behind the same Runner interface"
+      }
+    ]
+  }
+}

@@ -41,7 +41,9 @@ test("through the real gateway: every feature operation is reachable as a typed 
   await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
   try {
     const base = `http://127.0.0.1:${(srv.address() as import("node:net").AddressInfo).port}`;
-    for (const o of OPS) {
+    const { featureHandlers } = await import("../src/feature/handlers.ts");
+    const implemented = new Set(Object.keys(featureHandlers(svc)));
+    for (const o of OPS.filter((x) => !implemented.has(x.key))) {
       const res = await fetch(`${base}/api/v1/components/${o.key}`, { method: "POST", headers: { "content-type": "application/json", "idempotency-key": "k" }, body: "{}" });
       assert.equal(res.status, 404, o.key);
       const body = await res.json() as any;

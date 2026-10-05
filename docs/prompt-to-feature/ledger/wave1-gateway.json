@@ -1,0 +1,67 @@
+{
+  "C02": {
+    "title": "Wave 1 operations over the gateway",
+    "items": [
+      {
+        "item": "PF-016 ownership: another principal cannot see, change or cancel a request; absent and not-yours read the same",
+        "tests": [
+          "PF-016 ownership: another principal cannot see, change or cancel a request, and probing an id reads as absent"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "End to end through the handlers: submit, discover, decide, revise, build as a job, read, advance, cancel",
+        "tests": [
+          "end to end through the handlers: submit \u2192 discover \u2192 decide \u2192 revise \u2192 build as a job \u2192 read \u2192 advance \u2192 cancel"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Typed errors for bad input and the gateway contract (idempotency header)",
+        "tests": [
+          "bad input is a typed INVALID_SCHEMA, never a crash",
+          "through the real gateway: submitFeature needs the idempotency header and answers with a typed result"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Wiring: repository text given to the model is quoted as data and flagged (PF-040)",
+        "tests": [
+          "PF-040 repository text reaches the model quoted as data"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Wiring: generated edits become byte-exact feature edits for the candidate engine",
+        "tests": [
+          "generated edits become byte-exact feature edits"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Wiring: C14/recordModelInvocation is owner-only, idempotent and queues an identity event for an UNKNOWN revision",
+        "tests": [
+          "C14/recordModelInvocation: owner-only"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Wiring: the Build feature wizard follows a real request (open, version-checked advance, conflict message) and labels what is still sample data",
+        "tests": [
+          "server-owned fields replace the sample ones",
+          "openRemote asks only for what changed",
+          "advanceRemote sends the expected version",
+          "a stale version is a readable conflict"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "F07 prepareChange materialises CREATE_FILE",
+        "tests": [
+          "a CREATE_FILE operation is materialised into the candidate"
+        ],
+        "state": "done"
+      }
+    ]
+  }
+}

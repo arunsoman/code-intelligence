@@ -71,6 +71,8 @@ export type CoverageRecord = {
 export type RepositoryAssessment = {
   schemaVersion: 1; id: Id; snapshot: Snapshot; coverage: CoverageRecord[]; conventions: string[];
   supportMatrix: { stack: string; supported: boolean; reason?: string }[]; existingDefects: string[]; uncovered: string[];
+  /** Indexed entities whose names match the request's words (retrieval, not a claim of relevance). */
+  relatedEntities?: { id: Id; name: string; file: string }[];
 };
 
 // ------------------------------------------------------------------------------------------------ the five record families
@@ -84,17 +86,23 @@ export type FeatureTask = { id: Id; componentId: string; requirementIds: Id[]; d
 export type FeatureWorkspace = {
   requestId: Id; stage: WizardStage; contractHash?: Hash; candidateHash?: Hash; issueRef?: string; blockers: Id[]; runningJobIds: Id[];
   validationSummaryRef?: Id; workspaceVersion: number;
+  /** Read-model extras filled in by openFeatureWorkspace; never stored. */
+  contractVersion?: number; state?: RequestState; mode?: OutcomeMode; candidateStatus?: CandidateRecord["status"];
+  review?: import("./presentation.ts").FeatureReview;
 };
 
 /** 1/5. Request, contract, requirements, criteria, blockers, issue binding, overlap and release payloads. */
 export type FeatureRecord = {
   schemaVersion: 1; requestId: Id; repositoryId: Id; mode: OutcomeMode; state: RequestState; tier?: Tier;
-  promptRef: { artifactId: Id; contentHash: Hash; redactedPreview: string };
+  promptRef: { artifactId: Id; contentHash: Hash; redactedPreview: string; /** The full prompt, kept for the owner only; the issue projection uses `redactedPreview`. */ text?: string };
   inputRefs: SourceRef[]; source: Snapshot; contractVersion: number; contract?: FeatureContract;
-  tasks: FeatureTask[]; blockers: { id: Id; kind: "QUESTION" | "FINDING" | "DEPENDENCY" | "TRACKING"; requirementIds: Id[]; text: string }[];
+  tasks: FeatureTask[]; blockers: { id: Id; kind: "QUESTION" | "FINDING" | "DEPENDENCY" | "TRACKING"; requirementIds: Id[]; text: string; /** Authority scope needed to resolve it (default "business"). */ scope?: string }[];
   issue: IssueBinding; workspace: FeatureWorkspace; version: number; createdBy: Id; createdAt: Timestamp; updatedAt: Timestamp;
   /** 1.G: append-only invocation snapshots, including intent persisted before provider calls. */
   modelInvocations?: ModelInvocation[];
+  /** Set by discovery (1.C). */ assessment?: RepositoryAssessment;
+  budget?: { modelTokens: number; wallMs: number };
+  validationPlan?: import("./validation.ts").ValidationPlan;
 };
 
 /** 2/5. Questions and answers, authority binding, waivers and dispositions. Immutable; supersession is a new record. */
@@ -127,6 +135,13 @@ export type CandidateRecord = {
   schemaVersion: 1; id: Id; requestId: Id; ordinal: number; binding: PatchBinding; bindingHash: Hash;
   mutations: FileMutation[]; invocationIds: Id[]; status: "PLANNED" | "MATERIALIZED" | "STALE" | "SUPERSEDED"; createdAt: Timestamp;
   exports?: PatchExport[]; publication?: PublicationReceipt;
+  /** 1.E: text of every changed file as the candidate has it (null = deleted) and as the base had it, so review never depends on a tree that may have moved. */
+  contents?: Record<string, string | null>; baseContents?: Record<string, string | null>;
+  /** The live repository's content root when the candidate was built; a different value later means the candidate is stale. */
+  baseSnapshotRoot?: Hash;
+  oracleState?: "ORIGINAL_PRESERVED" | "PROPERTY_CHANGE_PENDING_REVIEW" | "NO_ORACLE";
+  oracleChanges?: { kind: string; file: string; testCase: string; detail: string }[];
+  notes?: string[];
 };
 
 export type ValidationKind = "BUILD" | "TYPECHECK" | "STATIC" | "UNIT" | "INTEGRATION" | "BROWSER" | "SECURITY" | "DEPENDENCY" | "MIGRATION" | "PERFORMANCE" | "OPERATIONAL" | "REAL_PROVIDER";
@@ -140,19 +155,21 @@ export type ValidationStatus = "PASS" | "PASS_UNREVIEWED_ORACLE" | "FAIL" | "INC
 export type ValidationResult = {
   id: Id; acceptanceId?: Id; kind: ValidationKind; target?: string; runManifestId: Id; status: ValidationStatus; evidenceIds: Id[]; gaps: string[];
   notApplicableRationale?: string;
+  checkId?: Id; runState?: string; baselineHealth?: string; waivedBy?: Id[];
 };
 /** 4/5. A validation, security, dependency, performance or operational result bound to an exact candidate. */
 export type EvidenceRecord = {
   schemaVersion: 1; id: Id; requestId: Id; candidateId: Id; bindingHash: Hash; kind: ValidationKind; manifest: RunManifest;
   results: ValidationResult[]; toolVersions: Record<string, string>; coverage: { state: CoverageState; gaps: string[] }; outcomeRef: Id;
   createdAt: Timestamp; performance?: PairedExperiment; verdict?: PublicationDecision;
+  validation?: import("./validation.ts").ValidationEvidence;
 };
 
 export type EventType =
   | "FeatureSubmitted" | "ContractVersionCreated" | "RequirementFindingRaised" | "DecisionRecorded" | "TaskBlocked" | "CandidateCreated"
   | "ValidationCompleted" | "PerformanceAssessed" | "VerificationInvalidated" | "PublicationRequested" | "PublicationReconciled"
   | "FILE_ADDED" | "FILE_MODIFIED" | "FILE_DELETED" | "FILE_RENAMED" | "DEPENDENCY_CHANGED" | "REVIEW_APPLIED" | "PR_UPDATED" | "DEPLOYED" | "REVERTED"
-  | "WizardAdvanced" | "PatchExported" | "PatchApplied" | "Cancelled" | "ModelIdentityChanged";
+  | "WizardAdvanced" | "PatchExported" | "PatchApplied" | "Cancelled" | "ModelIdentityChanged" | "RequestReconciled" | "StateChanged";
 /** 5/5. Request-scoped milestones. `sync` is the outbox state for the GitHub projection (plan P7/P8). */
 export type EventRecord = {
   schemaVersion: 1; eventId: Id; requestId: Id; sequence: number; type: EventType; actor: Id; producer: string;
@@ -205,7 +222,7 @@ export type PublicationReceipt = { id: Id; kind: "DRAFT_PR" | "ISSUE_SYNC" | "PA
 // ------------------------------------------------------------------------------------------------ placeholders (fields added by the owning task)
 
 type Placeholder = { schemaVersion: 1; id: Id };
-export type FeatureRequest = Placeholder & { requestId: Id; state: RequestState; replayed: boolean };            // OWNED BY 1.C
+export type FeatureRequest = Placeholder & { requestId: Id; state: RequestState; replayed: boolean; mode?: OutcomeMode; warnings?: string[] }; // OWNED BY 1.C
 export type FeatureContractDraft = Placeholder & { contract: FeatureContract; findingIds: Id[] };                 // OWNED BY 1.G / 2.I
 export type ImpactAssessment = Placeholder & { affectedIds: Id[]; staleIds: Id[] };                               // OWNED BY 2.I
 export type QuestionBatch = Placeholder & { questions: { id: Id; text: string; choices: string[]; whyNeeded: string; blocks: Id[] }[] }; // OWNED BY 2.I
@@ -244,6 +261,10 @@ export type RunResult = {
   status: RunStatus; exitCode: number | null; stdout: string; stderr: string; truncated: boolean; isolation: IsolationClass;
   /** Guarantees the runner does NOT provide (e.g. no cpu/memory limit); always disclosed with the result. */
   omissions: string[]; usage: { wallMs: number; peakRssBytes?: number };
+  /** Boundary violations found around the run (for example a symlink that escapes the roots). A run with violations is never a pass. */
+  violations?: string[];
+  /** Why the runner refused or stopped the run, when it did. */
+  reason?: string;
 };
 /** OWNED BY 1.F. Generated code only ever runs through this interface; nothing falls back to an unrecorded boundary. */
 export interface Runner { readonly isolation: IsolationClass; readonly omissions: readonly string[]; run(req: RunRequest, signal?: AbortSignal): Promise<RunResult> }

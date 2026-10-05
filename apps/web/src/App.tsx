@@ -489,7 +489,7 @@ export function App() {
         {prOpen && repoPath && <PrPanel repoPath={repoPath} onClose={() => setPrOpen(false)} />}
         {profilesOpen && <ProfilePanel revision={revision} onClose={() => setProfilesOpen(false)} />}
         {tasksOpen && <TaskPanel revision={revision} onClose={() => setTasksOpen(false)} />}
-        {buildOpen && <BuildFeature onClose={() => setBuildOpen(false)} />}
+        {buildOpen && <BuildFeature onClose={() => setBuildOpen(false)} api={info?.revision?.repoRoot ? { repositoryId: info.revision.repoRoot, call: call as never } : undefined} />}
         {campaignsOpen && <CampaignPanel onClose={() => setCampaignsOpen(false)} />}
         {searchOpen && repoPath && <SearchPanel repoPath={repoPath} revision={revision} onClose={() => setSearchOpen(false)} />}
         {hotspotsOpen && repoPath && <HotspotPanel repoPath={repoPath} revision={revision} onClose={() => setHotspotsOpen(false)} />}

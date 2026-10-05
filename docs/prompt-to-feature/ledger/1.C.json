@@ -1,0 +1,79 @@
+{
+  "C02": {
+    "title": "Intake (task 1.C)",
+    "items": [
+      {
+        "item": "PF-001/PF-002 submitFeature validates input, binds the request to a pf-canon-v1 repository snapshot, keeps the prompt with a redacted preview, and is idempotent",
+        "tests": [
+          "PF-001 submit records a request bound to the repository snapshot, with the prompt kept and a redacted preview",
+          "PF-002 idempotent: same key and prompt replays; same key with a different prompt or repository is a conflict",
+          "input validation: empty, oversized, bad mode, missing key, unindexed repository, bad references"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PF-043/S13 outcome-mode resolution (draft PR needs a git remote, otherwise lowered with the reason) and tracking mode (mandatory tracking blocks mutation, not reading)",
+        "tests": [
+          "S13/PF-043 tracking and mode: draft PR needs a git remote else it is lowered with the reason; mandatory tracking blocks mutation, not reading"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "AT-35/AT-44 private-prompt redaction for previews",
+        "tests": [
+          "AT-35/44 the private-prompt redaction masks secrets, personal data and opaque blobs before a preview can leave"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Plan tier is classified from the actual change set and recorded once",
+        "tests": [
+          "classifyPlan records the tier once and never from prompt text"
+        ],
+        "state": "done"
+      }
+    ]
+  },
+  "C10": {
+    "title": "Discovery (task 1.C)",
+    "items": [
+      {
+        "item": "AT-01/PF-004 discovery produces a coverage record for every domain (searched roots, exclusions, tools, FOUND / NOT_FOUND_WITHIN_SEARCHED_SCOPE) and advances the request",
+        "tests": [
+          "AT-01/PF-004 discovery produces a coverage record for every domain and moves the request on"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PF-043 a truncated walk or unreadable root is PARTIAL/FAILED with the remainder stated, never COMPLETE",
+        "tests": [
+          "PF-043 a truncated walk is PARTIAL with the unsearched remainder stated, never COMPLETE"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Access: denied paths are left out, counted in the gap and never named",
+        "tests": [
+          "access: denied paths are left out of coverage and entities, counted in the gap, and never named"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "AT-33/S17 repository support matrix: unsupported stacks are reported with a concrete reason and block build modes, not plans",
+        "tests": [
+          "AT-33 unsupported stacks are reported with a concrete reason: a build mode is blocked with it, a plan is not",
+          "S17 stack detection: npm test script, bare node tests, invalid manifest, and unknown",
+          "the demo repo (no package.json) is a supported TypeScript/Node stack that tests with node --test, and the plan's npm-test assumption is recorded"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Stale snapshot, non-owner and wrong-state discovery are refused without changing the request",
+        "tests": [
+          "discovery refuses a stale snapshot, a non-owner, bad budgets and a request in the wrong state"
+        ],
+        "state": "done"
+      }
+    ]
+  }
+}

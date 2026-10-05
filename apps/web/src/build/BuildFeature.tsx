@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { EFFECTFUL_ACTIONS, STAGES, type WizardStage } from "./stages.ts";
 import { FIXTURE_REQUEST_ID, buildFixtureWorkspace, localStore, type WizardStore } from "./fixture.ts";
+import { advanceRemote, openRemote, type RemoteCall } from "./remote.ts";
 import { advanceWizard, groupTasks, recordDecision, stageGate, statusBanners, type WizardTask, type WizardWorkspace } from "./wizard.ts";
 
 /**
@@ -10,7 +11,13 @@ import { advanceWizard, groupTasks, recordDecision, stageGate, statusBanners, ty
  * contents); navigation never runs anything, and no stage claims "verified" — that wording belongs to
  * the eligibility function (task 2.J), which does not exist yet.
  */
-export function BuildFeature({ onClose, store }: { onClose: () => void; store?: WizardStore }) {
+const KEY = (repo: string) => `cie.build.request.${repo}`;
+const MODE_OUT: Record<string, string> = { PLAN_ONLY: "PLAN", BUILD_AND_PREVIEW: "BUILD_PREVIEW", DRAFT_PR: "CREATE_DRAFT_PR" };
+const uid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
+
+export function BuildFeature({ onClose, store, api }: { onClose: () => void; store?: WizardStore; /** The server and repository to build against; without it the shell runs on sample data only. */ api?: { repositoryId: string; call: RemoteCall } }) {
+  const [requestId, setRequestId] = useState<string | null>(() => { try { return api ? localStorage.getItem(KEY(api.repositoryId)) : null; } catch { return null; } });
+  const remote = api && requestId ? { requestId, call: api.call } : undefined;
   const persistence = store ?? localStore();
   const [ws, setWs] = useState<WizardWorkspace>(() => persistence.load(FIXTURE_REQUEST_ID) ?? buildFixtureWorkspace());
   const [note, setNote] = useState<string | null>(null);
@@ -30,13 +37,42 @@ export function BuildFeature({ onClose, store }: { onClose: () => void; store?: 
   ];
 
   const commit = (next: WizardWorkspace) => { persistence.save(next); setWs(next); };
+  useEffect(() => {
+    if (!remote) return;
+    let live = true;
+    void openRemote(remote.call, ws, remote.requestId).then((r) => { if (!live) return; if (r.ok) { if (!r.unchanged) commit(r.value); } else setNote(r.message); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remote?.requestId]);
   const move = (target: WizardStage) => {
+    if (remote) {
+      void advanceRemote(remote.call, ws, target).then((r) => {
+        if (r.ok) { setNote(null); setImpact(null); commit(r.value); return; }
+        setNote(r.message);
+        if (r.conflict) void openRemote(remote.call, { ...ws, workspaceVersion: -1 }, remote.requestId).then((o) => { if (o.ok && !o.unchanged) commit(o.value); });
+      });
+      return;
+    }
     const r = advanceWizard(ws, target, ws.workspaceVersion);
     if (!r.ok) { setNote(r.error.message); return; }
     setNote(null); setImpact(null);
     commit(r.value);
   };
-  const analyse = () => move("CLARIFY");
+  const analyse = async () => {
+    if (!api || requestId) { move("CLARIFY"); return; }
+    const key = uid();
+    const sub = await api.call<{ requestId: string; warnings?: string[] }>("C02", "submitFeature", { text: ws.prompt, repositoryId: api.repositoryId, mode: MODE_OUT[ws.outcomeMode] ?? "PLAN" }, key);
+    if (!sub.ok) { setNote(sub.error.message); return; }
+    const found = await api.call("C10", "discoverFeatureContext", { requestId: sub.value.requestId, retrievalBudget: { tokens: 8000, files: 5000 } }, uid());
+    try { localStorage.setItem(KEY(api.repositoryId), sub.value.requestId); } catch { /* a private window: the request still exists on the server */ }
+    setRequestId(sub.value.requestId);
+    setNote(found.ok ? (sub.value.warnings ?? []).join(" ") || null : `Request saved, but discovery failed: ${found.error.message}`);
+    const o = await openRemote(api.call, { ...ws, requestId: sub.value.requestId, workspaceVersion: -1 }, sub.value.requestId);
+    if (!o.ok || o.unchanged) return;
+    commit(o.value);
+    const a = await advanceRemote(api.call, o.value, "CLARIFY");
+    if (a.ok) commit(a.value); else setNote(a.message);
+  };
   const answer = (questionId: string, question: string, stage: WizardStage) => {
     const text = (draftAnswer[questionId] ?? "").trim();
     if (!text) return;
@@ -97,7 +133,7 @@ export function BuildFeature({ onClose, store }: { onClose: () => void; store?: 
                   </select>
                 </label>
                 <p className="muted small">Analysing stores the request in a local workspace and moves to Clarify. Analysis itself is fixture-backed until intake lands (task 1.C) — that label stays on every result.</p>
-                <button className="btn primary" disabled={!gate.primaryEnabled} onClick={analyse}>Analyse request</button>
+                <button className="btn primary" disabled={!gate.primaryEnabled} onClick={() => void analyse()}>Analyse request</button>
               </div>
             )}
 

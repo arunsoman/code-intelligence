@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 import { OllamaGenerationRouter, type GenerationRouter, type GenerationResponse } from "../llm-router.ts";
+import { guardRetrievedText } from "./authority.ts";
 import { canonHash, defineSchema, parseStrictJson, rawHash, type Canon } from "./canon.ts";
 import type { FeatureApi } from "./api.ts";
 import type { EgressPolicy, FeatureContractDraft, FeatureRecord, FeatureStore, ModelInvocation, Outcome, Requirement, SourceRef } from "./types.ts";
@@ -188,7 +189,10 @@ export class FeatureModelAdapter {
       const context = input.context ?? [];
       if (rawHash(input.prompt) !== initial.promptRef.contentHash || context.some((c) => rawHash(c.text) !== c.ref.contentHash)) fail("INPUT_HASH_MISMATCH");
       const promptRef: SourceRef = { artifactId: initial.promptRef.artifactId, contentHash: initial.promptRef.contentHash, version: "1", locator: "prompt" };
-      const sources = [{ ref: promptRef, text: input.prompt }, ...context];
+      // Repository text reaches the model quoted as untrusted data, with instruction-shaped passages flagged (PF-040); the hashes
+      // above and the edit checks below still use the exact original bytes.
+      const flagged: string[] = [];
+      const sources = [{ ref: promptRef, text: input.prompt }, ...context.map((c) => { const g = guardRetrievedText(c.ref.locator, c.text); for (const f of g.flagged) flagged.push(`${c.ref.locator}: ${f.reason}`); return { ref: c.ref, text: g.text }; })];
       const refs = sources.map((s) => s.ref.contentHash);
       const req = await this.stage<{ requirements: { id: string; text: string; type: Requirement["type"]; sourceIndex: number; actorIds: string[]; conditions: string[]; dependsOn: string[] }[] }>("REQUIREMENTS", jsonValue({ sources }), refs, input.actor, input.signal);
       invocations.push(req.invocation);
@@ -226,7 +230,7 @@ export class FeatureModelAdapter {
       if (current.contractVersion !== initial.contractVersion || current.promptRef.contentHash !== initial.promptRef.contentHash || JSON.stringify(current.source) !== JSON.stringify(initial.source)) fail("STALE_REQUEST");
       return { status: "COMPLETE", value: { draft, edits: plan.output.edits, invocationIds: invocations.map((i) => i.id),
         generationProvenanceHash: identity("pf.GenerationProvenance", invocations.map(modelInvocationHash)) }, evidenceIds: invocations.map((i) => i.id),
-        diagnostics: ["Draft only: generated requirements and oracles require review.", ...(invocations.some((i) => i.resolvedVersion === "UNKNOWN") ? ["Resolved model version UNKNOWN; C17 builder evaluation required."] : [])] };
+        diagnostics: ["Draft only: generated requirements and oracles require review.", ...flagged.map((f) => `Instruction-shaped text in context (${f}); it was passed as data only.`), ...(invocations.some((i) => i.resolvedVersion === "UNKNOWN") ? ["Resolved model version UNKNOWN; C17 builder evaluation required."] : [])] };
     } catch (error) {
       const code = input.signal?.aborted ? "CANCELLED" : error instanceof ModelGenerationError ? error.code : "GENERATION_FAILED";
       return { status: code === "CANCELLED" ? "CANCELLED" : code === "STALE_REQUEST" ? "STALE" : "FAILED", evidenceIds: invocations.map((i) => i.id),

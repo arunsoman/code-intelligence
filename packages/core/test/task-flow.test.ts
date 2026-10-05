@@ -374,6 +374,19 @@ describe("F07 task execution", () => {
   });
 });
 
+describe("F07 new files", () => {
+  test("a CREATE_FILE operation is materialised into the candidate instead of failing on the missing file", { timeout: 120_000 }, async () => {
+    const { tasks, repoRoot, worker } = await world("create1");
+    try {
+      const { taskId, candidateIndex } = runToCandidate(tasks, specFor("fixtures/discount"), [...fixOp(repoRoot), { op: "CREATE_FILE", file: "src/extra.ts", content: "export const extra = 1;\n", why: "new helper" }], "fixtures/discount");
+      const cand = tasks.getTask(taskId);
+      assert.strictEqual(cand.candidateIndex, candidateIndex);
+      const row = (tasks as any).store.db.prepare("select changed_files_json from task_candidates where task_id = ? and candidate_index = ?").get(taskId, candidateIndex) as { changed_files_json: string };
+      assert.strictEqual(JSON.parse(row.changed_files_json)["src/extra.ts"], "export const extra = 1;\n");
+    } finally { worker.close(); }
+  });
+});
+
 describe("F07 projection", () => {
   test("D9: replaying the event log reproduces the stored projection, and canonical JSON ignores key order", () => {
     assert.strictEqual(canonicalJson({ b: 1, a: [2, { d: 3, c: 4 }] }), canonicalJson({ a: [2, { c: 4, d: 3 }], b: 1 }));
