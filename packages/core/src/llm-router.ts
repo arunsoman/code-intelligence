@@ -110,10 +110,11 @@ export function buildRequest(question: string, labels: string[]): RouterRequest 
 export class OllamaRouter implements RouterModel {
   readonly name: string;
   readonly hosted: boolean;
-  private opts: { model?: string; baseUrl?: string; timeoutMs?: number };
-  constructor(opts: { model?: string; baseUrl?: string; timeoutMs?: number } = {}) {
+  private opts: { model: string; baseUrl?: string; timeoutMs?: number };
+  constructor(opts: { model: string; baseUrl?: string; timeoutMs?: number }) {
+    if (!opts.model) throw new Error("OllamaRouter requires a model; there is no default one");
     this.opts = opts;
-    this.name = opts.model ?? DEFAULT_ROUTER_MODEL;
+    this.name = opts.model;
     this.hosted = /(:|-)cloud$/.test(this.name);
   }
   async plan(req: ChatPlanRequest): Promise<ChatPlan | null> {
@@ -167,9 +168,9 @@ export class OllamaRouter implements RouterModel {
     } catch { return null; }
   }
 }
-/** Hosted: questions, and the code excerpts the chat tools read, are sent through the local daemon to ollama.com. */
-export const DEFAULT_ROUTER_MODEL = "glm-5.3:cloud";
-/** Feature generation keeps its own local default; moving it off the machine is a separate decision. */
+/** Prompt-to-feature's own code-generation pipeline (OllamaGenerationRouter below), not the chat router or the status
+ * chip's provider: a separate subsystem with its own budgets and fallback routes, out of the one-model selection
+ * this file otherwise defers to the caller for. Moving it onto the same selection is a separate decision. */
 export const DEFAULT_GENERATION_MODEL = "qwen3:0.6b";
 
 /**
@@ -204,46 +205,16 @@ export function scriptRouterFromEnv(env: Record<string, string | undefined> = pr
   return new ScriptRouter(raw);
 }
 
-/** CIE_ROUTER=off turns the model router off (the general map is used); CIE_ROUTER_MODEL names another local model;
- * CIE_ROUTER_SCRIPT makes it deterministic for tests and demos. */
-export function routerFromEnv(env: Record<string, string | undefined> = process.env): RouterModel | null {
+/**
+ * The chat router for one already-resolved model name: `CIE_ROUTER_SCRIPT` makes it deterministic for tests and
+ * demos; `CIE_ROUTER=off` or no model at all turns it off (the general map is used); otherwise it is the single
+ * model this installation has selected (see `resolveModel` in @cie/model — chosen from `ollama list`, never a
+ * name baked into this file).
+ */
+export function routerFor(model: string | null, env: Record<string, string | undefined> = process.env): RouterModel | null {
   const scripted = scriptRouterFromEnv(env);
   if (scripted) return scripted;
-  return env.CIE_ROUTER === "off" ? null : new OllamaRouter({ model: env.CIE_ROUTER_MODEL, baseUrl: env.CIE_OLLAMA_URL });
-}
-
-/** The model named on the command line: `--router-model <name>` or `--router-model=<name>` (`off` disables). */
-export function routerArg(argv: string[]): string | undefined {
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--router-model") return argv[i + 1];
-    if (argv[i].startsWith("--router-model=")) return argv[i].slice("--router-model=".length);
-  }
-  return undefined;
-}
-
-const installedModels = async (base: string): Promise<string[] | null> => {
-  try { const j = (await (await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(2000) })).json()) as { models?: { name: string }[] }; return (j.models ?? []).map((m) => m.name); } catch { return null; }
-};
-const has = (names: string[], want: string) => names.includes(want) || names.includes(`${want}:latest`);
-
-/**
- * Which router to run: the command-line argument, else CIE_ROUTER_MODEL, else the default. A model that is not installed is not used silently:
- * the default takes its place and the note says so. An explicitly asked-for hosted ("-cloud") model IS used — the daemon forwards it to
- * ollama.com, so the note says the question will leave this machine. Without Ollama at all the router is still created (it answers "no
- * answer", and the general map is used).
- */
-export async function chooseRouter(argv: string[] = process.argv.slice(2), env: Record<string, string | undefined> = process.env): Promise<{ router: RouterModel | null; note?: string }> {
-  const asked = routerArg(argv) ?? env.CIE_ROUTER_MODEL;
-  const scripted = scriptRouterFromEnv(env);
-  if (scripted) return { router: scripted, note: `router scripted from ${env.CIE_ROUTER_SCRIPT}: questions get exactly the labels in that file.` };
-  if (asked === "off" || env.CIE_ROUTER === "off") return { router: null, note: "router model off: questions get the general map" };
-  const baseUrl = env.CIE_OLLAMA_URL;
-  const base = baseUrl ?? "http://127.0.0.1:11434";
-  if (!asked) { const router = new OllamaRouter({ baseUrl }); return { router, ...(router.hosted ? { note: `router model "${router.name}" (the default) is hosted on Ollama Cloud; questions and the code the chat reads will leave this machine.` } : {}) }; }
-  const names = await installedModels(base);
-  if (names && !has(names, asked)) return { router: new OllamaRouter({ baseUrl }), note: `router model "${asked}" is not installed (ollama pull ${asked}); using ${DEFAULT_ROUTER_MODEL}` };
-  const router = new OllamaRouter({ model: asked, baseUrl });
-  return { router, ...(router.hosted ? { note: `router model "${asked}" is hosted on Ollama Cloud; questions sent to it will leave this machine.` } : {}) };
+  return model && env.CIE_ROUTER !== "off" ? new OllamaRouter({ model, baseUrl: env.CIE_OLLAMA_URL }) : null;
 }
 
 // ---- from an answer to something the service can act on

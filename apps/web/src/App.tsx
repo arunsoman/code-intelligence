@@ -459,7 +459,6 @@ export function App() {
   const levelsApply = !!view && semanticLevelsApply(view);
   const stepLevel = (d: number) => { setLevel((l) => Math.max(0, Math.min(MAX_LEVEL, l + d))); setFitTick((t) => t + 1); };
   const dm = (m: string) => (m === "FACT" ? "fact" : m === "INFERENCE" ? "inference" : m === "FOG" ? "fog" : "hyp");
-  const providerShort = info?.provider ?? "…";
   const pending = !!busy || jobActive;
   const phase = canvasPhase({ hasView: !!view, pending });
   const indexed = !!info?.revision;

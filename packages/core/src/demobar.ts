@@ -6,9 +6,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { createProvider, StubProvider } from "@cie/model";
+import { createProvider, resolveModel, StubProvider } from "@cie/model";
 import type { CallContext, Claim, ModelProvider, ViewSpec } from "@cie/schema";
-import { chooseRouter, type RouterModel } from "./llm-router.ts";
+import { routerFor, type RouterModel } from "./llm-router.ts";
 import { Service } from "./service.ts";
 import { Store } from "./store.ts";
 import { WorkerClient } from "./worker.ts";
@@ -241,10 +241,12 @@ export function formatReport(r: DemoBarReport): string {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const { provider, note } = await createProvider();
+  // A one-shot eval run, with no persisted choice of its own: whatever `ollama list` reports first, each time.
+  const resolved = await resolveModel(null);
+  if (resolved.note) console.warn(resolved.note);
+  const { provider, note } = await createProvider({ which: process.env.CIE_PROVIDER, model: resolved.model });
   if (note) console.warn(note);
-  const { router, note: routerNote } = await chooseRouter();
-  if (routerNote) console.warn(routerNote);
+  const router = routerFor(resolved.model);
   const report = await runDemoBar({ provider, router });
   console.log(formatReport(report));
   process.exit(report.passed ? 0 : 1);

@@ -4,7 +4,10 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { BudgetController, runModel, StubProvider, type GatewayFailure, type GatewayResult } from "@cie/model";
+import { BudgetController, OllamaProvider, hasModel, listInstalledModels, runModel, StubProvider, type GatewayFailure, type GatewayResult } from "@cie/model";
+import { routerFor } from "./llm-router.ts";
+import { fetchRepositoryBranches, repositoryGit, switchRepositoryBranch } from "./repository-git.ts";
+import { modelFailureNotice } from "./model-failure.ts";
 import { validateChatPlan } from "./chat-plan.ts";
 import { executeChatPlan } from "./chat-execution.ts";
 import { runChatAgent } from "./chat-agent.ts";
@@ -1304,6 +1307,25 @@ export class Service {
     return ok(ctx, r);
   }
 
+  repositoryGit(ctx: CallContext, req: { repoPath: string }) {
+    try { return ok(ctx, repositoryGit(req?.repoPath)); }
+    catch (e) { return fail(ctx, { code: "INVALID_SCHEMA", message: (e as Error).message, retryable: false }); }
+  }
+
+  async fetchBranches(ctx: CallContext, req: { repoPath: string }) {
+    try { return ok(ctx, await fetchRepositoryBranches(req?.repoPath)); }
+    catch (e) { return fail(ctx, { code: "PROVIDER_UNAVAILABLE", message: (e as Error).message, retryable: true }); }
+  }
+
+  switchBranch(ctx: CallContext, req: { repoPath: string; branch: string; expectedHead: string | null; expectedBranch: string | null; kind?: "local" | "remote" }) {
+    if (this.store.activeJobs().length) return fail(ctx, { code: "VERSION_CONFLICT", message: "Wait for running jobs to finish before switching branches.", retryable: true });
+    try {
+      const info = switchRepositoryBranch(req?.repoPath, req?.branch, req?.expectedHead, req?.expectedBranch, req?.kind);
+      this.store.audit(actor(ctx), "repository.switchBranch", info.repoRoot, { branch: info.branch, head: info.head });
+      return ok(ctx, info);
+    } catch (e) { return fail(ctx, { code: "INVALID_SCHEMA", message: (e as Error).message, retryable: false }); }
+  }
+
   /** Directory names only (never file contents) so the UI can offer a folder picker. Loopback-only gateway. */
   browseDirectory(ctx: CallContext, req: { path?: string }): ApiResult<DirListing> {
     const want = req.path?.trim() || homedir();
@@ -1381,10 +1403,10 @@ export class Service {
     return done ? ok(ctx, { dismissed: true }) : fail(ctx, { code: "NOT_FOUND", message: "no such exception", retryable: false });
   }
 
-  status(ctx: CallContext, req: { revision?: string }): ApiResult<{ revision: RevisionRow | null; provider: string; hosted: boolean; allowHosted: boolean; concepts: number; tests: TestSummary | null }> {
+  status(ctx: CallContext, req: { revision?: string }): ApiResult<{ revision: RevisionRow | null; provider: string; model: string | null; hosted: boolean; allowHosted: boolean; concepts: number; tests: TestSummary | null }> {
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     return ok(ctx, {
-      revision: rev, provider: `${this.model.name}/${this.model.model}`, hosted: this.model.hosted,
+      revision: rev, provider: `${this.model.name}/${this.model.model}`, model: this.model.name === "stub" ? null : this.model.model, hosted: this.model.hosted,
       allowHosted: rev ? this.store.allowHosted(rev.repoRoot) : false, concepts: rev ? this.store.concepts(rev.id).length : 0,
       tests: rev ? loadTestSummary(this.store, rev.repoRoot) : null,
     }, rev ? { revision: rev.id } : {});
@@ -1395,6 +1417,30 @@ export class Service {
     this.store.setAllowHosted(req.repoRoot, !!req.allow);
     this.store.audit(actor(ctx), req.allow ? "egress.policy.allow" : "egress.policy.deny", req.repoRoot, { destination: `${this.model.name}/${this.model.model}`, fields: EGRESS_FIELDS });
     return ok(ctx, { repoRoot: req.repoRoot, allowHosted: !!req.allow });
+  }
+
+  /** Every model `ollama list` reports, and which one (if any) is currently in use — the status chip's own menu. */
+  async listModels(ctx: CallContext): Promise<ApiResult<{ installed: string[]; current: string | null; hosted: boolean; reachable: boolean }>> {
+    const installed = await listInstalledModels(process.env.CIE_OLLAMA_URL);
+    return ok(ctx, { installed: installed ?? [], current: this.model.name === "stub" ? null : this.model.model, hosted: this.model.hosted, reachable: installed !== null });
+  }
+
+  /** Switch the one model this installation uses, for both the status chip's provider and the chat router, with
+   * no restart: it must already be installed (`ollama list`), and the choice is persisted so it survives one. */
+  async setModel(ctx: CallContext, req: { model: string }): Promise<ApiResult<{ model: string; hosted: boolean }>> {
+    if (!req || typeof req.model !== "string" || !req.model.trim() || req.model.length > 200) return fail(ctx, { code: "INVALID_SCHEMA", message: "model is required", retryable: false });
+    const model = req.model.trim();
+    const baseUrl = process.env.CIE_OLLAMA_URL;
+    const installed = await listInstalledModels(baseUrl);
+    if (installed === null) return fail(ctx, { code: "PROVIDER_UNAVAILABLE", message: "Ollama is not reachable; cannot confirm which models are installed", retryable: true });
+    if (!hasModel(installed, model)) return fail(ctx, { code: "NOT_FOUND", message: `"${model}" is not installed. Installed: ${installed.length ? installed.join(", ") : "none"}`, retryable: false });
+    const think = (["low", "medium", "high", "off"] as const).find((x) => x === process.env.CIE_OLLAMA_THINK);
+    const provider = new OllamaProvider({ model, baseUrl, think });
+    this.model = provider;
+    this.router = routerFor(model, process.env);
+    this.store.setSelectedModel(model);
+    this.store.audit(actor(ctx), "model.selected", "server", { model, hosted: provider.hosted });
+    return ok(ctx, { model, hosted: provider.hosted });
   }
 
   auditLog(ctx: CallContext, req: { limit?: number }): ApiResult<{ events: unknown[]; chain: { ok: boolean; brokenAt?: number } }> {
@@ -1600,10 +1646,10 @@ export class Service {
     let representation: RepresentationOutput | undefined, run;
     const warnings: string[] = [];
     if (bundle.entities.length > 0) {
-      const { result, note } = await this.callModel<RepresentationOutput>(ctx, rev, { purpose: "REPRESENT", schemaId: SCHEMA_REPRESENTATION, question, bundle: modelBundle });
+      const { result, note, provider } = await this.callModel<RepresentationOutput>(ctx, rev, { purpose: "REPRESENT", schemaId: SCHEMA_REPRESENTATION, question, bundle: modelBundle });
       if (note) warnings.push(note);
       if (result.ok) { representation = result.value; run = result.run; }
-      else { warnings.push(`model unavailable (${result.error.code}); showing deterministic facts only`); diagnostics.push(`model output unavailable: ${result.error.code}`); }
+      else { warnings.push(modelFailureNotice(result.error, provider)); diagnostics.push(`model output unavailable: ${result.error.code}`); }
     }
     const { view, claims } = compileView({ question, bundle, tiers, scored, representation, run, diagnostics, store: this.store, systemName: rev.repoRoot.split("/").filter(Boolean).pop() });
     // "The question is about how something works" is only true when the wording said so. A default or a guess is described

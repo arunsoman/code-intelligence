@@ -100,7 +100,7 @@ What it does **not** do: crossings are minimised, not eliminated. Dense graphs h
 
 ## Choosing the view: how a question is read
 A small local language model reads the question; there are no patterns (regular expressions) in the routing. `packages/core/src/llm-router.ts` shows the model a closed list of labels (the 16 kinds of view, plus only the conversational requests that make sense right now: zoom, pin, "why isn't X shown", ignore… need a map or a selection), the eight labelled example questions nearest to the one asked (character n-gram similarity, so a misspelt word still lands near its neighbours), and asks for one label plus the name the user mentioned. The daemon constrains the label to the list, temperature is 0, and the name is matched against the code afterwards, never trusted. The view says which model read it and offers the nearest other readings as buttons. A choice you make (the gallery, or a button) is never second-guessed. A pasted stack trace is recognised by the trace parser, not by the model.
-- **Model**: `qwen3:0.6b` through the local Ollama daemon by default. Name another with `--router-model <name>` (`./scripts_dev.sh --router-model llama3.2:1b`, or `node packages/core/src/server.ts --router-model llama3.2:1b`), or with `CIE_ROUTER_MODEL`; the argument wins. `--router-model off` (or `CIE_ROUTER=off`) disables it. A model that is not installed, or is hosted, is replaced by the default and the server log says so. A hosted (`:cloud`) model is refused, because the question would leave the machine. Install with `ollama pull qwen3:0.6b`.
+- **Model**: one model, through the local Ollama daemon, used both for this routing and for the status chip's own reasoning (concept cards, claims, maps) — there is no name baked into the source. Click the status chip to see every model `ollama list` reports and switch, live, with no restart. With nothing chosen yet, the first installed model is picked automatically and the server log says so; with nothing installed at all, answers fall back to the offline model and the chip says `no model`. A `:cloud` name is used as given, but since the daemon forwards it to ollama.com, the server log — and, for chat, the warnings on the reply — say that the question (and, for chat, the code it reads) will leave this machine. `CIE_ROUTER=off` turns the chat router off while leaving the status chip's own model alone; `CIE_ROUTER_SCRIPT` makes chat deterministic for tests and demos (see `packages/core/src/llm-router.ts`).
 - **No model, or no answer**: the general architecture map, marked *low* confidence, with the reason stated ("No router model is configured…") and the gallery to pick another view. Nothing is guessed in its place.
 
 Which model? Measured on the 164 distinct labelled questions in `packages/core/test/route-sets.ts`, each asked as written and with typing mistakes added by a seeded generator (swapped, dropped, doubled and neighbouring-key letters, lower case, filler), 95% intervals, CPU only (`docs/eval-tiny-models.json`, `scripts/eval-tiny-models.ts`):
@@ -190,16 +190,16 @@ npm start                             # http://127.0.0.1:4317 (loopback only)
 In the UI: **Browse…** to pick a repo → **Index** → ask. Try the demo repo with the three example prompts, then paste a stack trace (see `packages/core/test/helpers.ts` → `traceFor`). `./scripts_dev.sh [--fresh]` restarts the server.
 
 ### Models
-Default: the **local Ollama daemon** serving a **remote `:cloud` model** (`gpt-oss:120b-cloud`). Offline fallback: a deterministic stub that reasons only over the graph.
+The **local Ollama daemon**, one model, for everything (the status chip's own reasoning and the chat router): no model name is built into the source. Click the status chip to pick from whatever `ollama list` reports, live, no restart. With nothing picked yet, the first installed model is used and the choice is remembered (`selected_model` in the database); with nothing installed, or the daemon down, the offline stub answers instead and the chip says so.
 
 | Variable | Default | |
 |---|---|---|
-| `CIE_PROVIDER` | `ollama` | `ollama` or `stub` |
-| `CIE_OLLAMA_MODEL` | `gpt-oss:120b-cloud` | any installed model |
+| `CIE_PROVIDER` | `ollama` | `ollama` or `stub` (fully offline; the model menu has nothing to do) |
 | `CIE_OLLAMA_THINK` | `low` | reasoning effort (`low`/`medium`/`high`/`off`); `low` keeps answers at a few seconds |
 | `CIE_OLLAMA_URL` | `http://127.0.0.1:11434` | daemon address |
+| `CIE_ROUTER` | — | `off` disables chat's use of the model (the status chip's own reasoning is unaffected) |
 
-If Ollama is down or the model is missing, the server logs why and uses the stub (the header chip shows which is active).
+If Ollama is down or the selected model is no longer installed, the server logs why and uses the stub (the status chip shows which is active, and clicking it still lists whatever is installed).
 
 ### Nirdosha v2 source semantics
 `.nir` always receives ordinary Rust indexing. For Nirdosha-specific declarations, install the Nirdosha-owned `nirdosha-source-ir` binary on `PATH`, or set `CIE_NIRDOSHA_SOURCE_IR=/absolute/path/to/nirdosha-source-ir`. CIE invokes it once per repository and consumes only schema `nirdosha.source-ir/1`; procedural macros are never expanded or executed during indexing. The resulting guard, role, purpose, route, store, policy, workflow, approval and capability references retain exact source evidence.

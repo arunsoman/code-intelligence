@@ -4,9 +4,42 @@
 import { z } from "zod";
 import { OUTPUT_SCHEMAS, type ModelProvider, type ModelRequest } from "@cie/schema";
 
-export interface OllamaOptions { baseUrl?: string; model?: string; timeoutMs?: number; /** Reasoning effort for models that support it; "low" keeps interactive latency down. */ think?: "low" | "medium" | "high" | "off" }
+export interface OllamaOptions { baseUrl?: string; model: string; timeoutMs?: number; /** Reasoning effort for models that support it; "low" keeps interactive latency down. */ think?: "low" | "medium" | "high" | "off" }
 
-export const DEFAULT_OLLAMA_MODEL = "gpt-oss:120b-cloud";
+/** Every model the local daemon has pulled (`ollama list`), by name; null when the daemon could not be reached. */
+export async function listInstalledModels(baseUrl?: string): Promise<string[] | null> {
+  try {
+    const r = await fetch(`${(baseUrl ?? "http://127.0.0.1:11434").replace(/\/$/, "")}/api/tags`, { signal: AbortSignal.timeout(2000) });
+    if (!r.ok) return null;
+    const j = (await r.json()) as { models?: { name: string }[] };
+    return (j.models ?? []).map((m) => m.name);
+  } catch { return null; }
+}
+/** `names` from listInstalledModels may carry an implicit ":latest"; a bare name still matches it. */
+export const hasModel = (names: string[], want: string) => names.includes(want) || names.includes(`${want}:latest`);
+
+export interface ModelResolution {
+  model: string | null;
+  /** What `ollama list` reports; null when the daemon could not be reached (the persisted or asked-for name is then trusted as given). */
+  installed: string[] | null;
+  /** Set when the caller should persist `model` as the new choice (it was not already the stored one). */
+  picked: boolean;
+  note?: string;
+}
+/**
+ * The one Ollama model this installation uses, everywhere a model is needed: there is no built-in fallback name.
+ * `persisted` is the previously chosen model (from storage), or null when nothing has been chosen yet. If it is
+ * still installed (or the daemon cannot be reached to say otherwise, in which case it is trusted as given), it
+ * stands; otherwise the first model `ollama list` reports is picked, and the caller is told to remember that pick.
+ * With nothing installed at all, `model` is null and the caller falls back to running offline.
+ */
+export async function resolveModel(persisted: string | null, baseUrl?: string): Promise<ModelResolution> {
+  const installed = await listInstalledModels(baseUrl);
+  if (persisted && (!installed || hasModel(installed, persisted))) return { model: persisted, installed, picked: false };
+  const first = installed?.[0] ?? null;
+  if (first) return { model: first, installed, picked: true, note: `${persisted ? `the previously selected model "${persisted}" is no longer installed` : "no model has been selected yet"}; using ${first}, the first model \`ollama list\` reports. Pick another from the model menu.` };
+  return { model: null, installed, picked: false, note: persisted ? `"${persisted}" is not installed and Ollama reports no other model; pull one (ollama pull <name>) and pick it from the model menu` : "no Ollama model is installed; pull one (ollama pull <name>) and pick it from the model menu" };
+}
 
 const SYSTEM = `You are the reasoning step of a code-intelligence tool. You receive a JSON "bundle" extracted by static analysis of a repository.
 Rules:
@@ -79,9 +112,10 @@ export class OllamaProvider implements ModelProvider {
   private timeoutMs: number;
   private think: OllamaOptions["think"];
 
-  constructor(opts: OllamaOptions = {}) {
+  constructor(opts: OllamaOptions) {
+    if (!opts.model) throw new Error("OllamaProvider requires a model; there is no default one");
     this.baseUrl = (opts.baseUrl ?? "http://127.0.0.1:11434").replace(/\/$/, "");
-    this.model = opts.model ?? DEFAULT_OLLAMA_MODEL;
+    this.model = opts.model;
     this.timeoutMs = opts.timeoutMs ?? 120_000;
     this.think = opts.think ?? "low";
     this.hosted = /[:-]cloud$/.test(this.model);

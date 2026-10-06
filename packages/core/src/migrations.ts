@@ -892,6 +892,13 @@ export const MIGRATIONS: Migration[] = [
     `),
     down: (db) => db.exec("drop table feature_evaluations; drop table feature_relations; drop table feature_fence; drop table feature_leases;"),
   },
+  {
+    // The one Ollama model this installation uses (provider and chat router alike): a single persisted choice,
+    // set from the model menu, never a name baked into the source.
+    version: 35, name: "selected-model",
+    up: (db) => db.exec("create table if not exists selected_model(id integer primary key check (id = 1), model text not null, updated_at text not null);"),
+    down: (db) => db.exec("drop table selected_model;"),
+  },
 ];
 export function currentVersion(db: DatabaseSync): number {
   db.exec("create table if not exists schema_version(version integer not null, name text not null, applied_at text not null)");

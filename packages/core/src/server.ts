@@ -5,10 +5,10 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { createProvider } from "@cie/model";
+import { createProvider, resolveModel } from "@cie/model";
 import type { ApiResult, CallContext } from "@cie/schema";
 import { Interactions } from "./interactions.ts";
-import { chooseRouter } from "./llm-router.ts";
+import { routerFor } from "./llm-router.ts";
 import { featureHandlers } from "./feature/handlers.ts";
 import { featureOps } from "./feature/routes.ts";
 import { Service } from "./service.ts";
@@ -40,9 +40,14 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
   const ops: Record<string, { mutating: boolean; run: (ctx: CallContext, body: any) => Promise<ApiResult<unknown>> | ApiResult<unknown> }> = {
     "C01/status": { mutating: false, run: (c, b) => svc.status(c, b) },
     "C01/browseDirectory": { mutating: false, run: (c, b) => svc.browseDirectory(c, b) },
+    "C01/repositoryGit": { mutating: false, run: (c, b) => svc.repositoryGit(c, b) },
+    "C01/switchBranch": { mutating: true, run: (c, b) => svc.switchBranch(c, b) },
+    "C01/fetchBranches": { mutating: true, run: (c, b) => svc.fetchBranches(c, b) },
     "C01/captureEditorEvent": { mutating: false, run: (c, b) => svc.captureEditorEvent(c, b) },
     "C01/editorContext": { mutating: false, run: (c, b) => svc.editorContext(c, b) },
     "C03/setEgress": { mutating: true, run: (c, b) => svc.setEgress(c, b) },
+    "C01/listModels": { mutating: false, run: (c) => svc.listModels(c) },
+    "C01/setModel": { mutating: true, run: (c, b) => svc.setModel(c, b) },
     "C03/auditLog": { mutating: false, run: (c, b) => svc.auditLog(c, b) },
     "C04/ingestRepository": { mutating: true, run: (c, b) => svc.ingestRepository(c, b) },
     "C07/enqueue": { mutating: true, run: (c, b) => svc.enqueueJob(c, b) },
@@ -186,9 +191,10 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
       const ctx = mk(idem);
       // In a multi-tenant server a path is only usable if the tenant is allowed to read it: indexing, and even browsing for it.
       const opKey = `${m[1]}/${m[2]}`;
-      if (target instanceof TenantHost && (opKey === "C04/ingestRepository" || opKey === "C01/browseDirectory")) {
+      if (target instanceof TenantHost && ["C01/switchBranch", "C01/fetchBranches"].includes(opKey)) return send(res, 403, { ok: false, error: { code: "FORBIDDEN", message: "Branch switching and fetching are available only in the local app.", retryable: false } });
+      if (target instanceof TenantHost && ["C04/ingestRepository", "C01/browseDirectory", "C01/repositoryGit"].includes(opKey)) {
         const host: TenantHost = target;
-        const wanted = opKey === "C04/ingestRepository" ? body?.repoPath : body?.path;
+        const wanted = opKey === "C01/browseDirectory" ? body?.path : body?.repoPath;
         if (typeof wanted === "string") { const denied = host.authorizeSource(ctx, wanted); if (denied) return send(res, statusFor(denied), denied); }
         else if (opKey === "C01/browseDirectory") {
           const first = host.firstRoot(ctx);
@@ -228,13 +234,19 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const { provider, note } = await createProvider();
+  const store = new Store();
+  const env = process.env;
+  const baseUrl = env.CIE_OLLAMA_URL;
+  const think = (["low", "medium", "high", "off"] as const).find((x) => x === env.CIE_OLLAMA_THINK);
+  // CIE_PROVIDER=stub means fully offline: skip Ollama entirely (used by e2e tests for speed and determinism).
+  const resolved = env.CIE_PROVIDER === "stub" ? { model: null, note: undefined, picked: false } : await resolveModel(store.selectedModel(), baseUrl);
+  if (resolved.picked && resolved.model) store.setSelectedModel(resolved.model);
+  const { provider, note } = await createProvider({ which: env.CIE_PROVIDER, model: resolved.model, baseUrl, think });
+  if (resolved.note) console.warn(resolved.note);
   if (note) console.warn(note);
-  const svc = new Service(new Store(), new WorkerClient(), provider);
-  const { router, note: routerNote } = await chooseRouter();
-  if (routerNote) console.warn(routerNote);
-  svc.router = router;
+  const svc = new Service(store, new WorkerClient(), provider);
+  svc.router = routerFor(resolved.model, env);
   // Durable events become notifications, and due webhooks are sent. A crash between the two loses neither: both are stored first.
   setInterval(() => { try { svc.bus.dispatchPending(); void svc.notifications.dispatch().catch(() => {}); } catch { /* the next tick tries again */ } }, 2000).unref();
-  createServer(buildHandler(svc)).listen(PORT, HOST, () => console.log(`cie listening on http://${HOST}:${PORT} (model: ${provider.name}/${provider.model}; router: ${router?.name ?? "off"})`));
+  createServer(buildHandler(svc)).listen(PORT, HOST, () => console.log(`cie listening on http://${HOST}:${PORT} (model: ${provider.name}/${provider.model}; router: ${svc.router?.name ?? "off"})`));
 }

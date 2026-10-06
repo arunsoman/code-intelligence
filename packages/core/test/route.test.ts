@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { OllamaRouter, buildRequest, candidateLabels, nearest, readText, routerFromEnv, routerArg, chooseRouter, scriptRouterFromEnv } from "../src/llm-router.ts";
+import { OllamaRouter, buildRequest, candidateLabels, nearest, readText, routerFor, scriptRouterFromEnv } from "../src/llm-router.ts";
 import { EXEMPLARS, INTENT_EXEMPLARS } from "../src/route-exemplars.ts";
 import { ctx, setup } from "./helpers.ts";
 import { DEV, HELD_OUT, HELD_OUT_V2, HELD_OUT_V3 } from "./route-sets.ts";
@@ -118,12 +118,13 @@ test("through the service: the model's reading builds the view, an explicit choi
   worker.close();
 });
 
-test("CIE_ROUTER=off disables the router", () => {
-  assert.equal(routerFromEnv({ CIE_ROUTER: "off" }), null);
-  assert.equal(routerFromEnv({ CIE_ROUTER_MODEL: "smollm2:360m" })?.name, "smollm2:360m");
+test("routerFor: no model means no router; CIE_ROUTER=off disables it even with one resolved", () => {
+  assert.equal(routerFor(null, {}), null);
+  assert.equal(routerFor("glm-5.3:cloud", { CIE_ROUTER: "off" }), null);
+  assert.equal(routerFor("glm-5.3:cloud", {})?.name, "glm-5.3:cloud");
 });
 
-test("CIE_ROUTER_SCRIPT makes the router deterministic for tests and demos", async () => {
+test("CIE_ROUTER_SCRIPT makes the router deterministic for tests and demos, and always wins over a resolved model", async () => {
   assert.equal(scriptRouterFromEnv({}), null);
   const dir = mkdtempSync(join(tmpdir(), "cie-router-"));
   const file = join(dir, "script.json");
@@ -135,35 +136,5 @@ test("CIE_ROUTER_SCRIPT makes the router deterministic for tests and demos", asy
   assert.deepEqual(await r!.choose(buildRequest("pin charge", ["pin", "SemanticMap"])), { label: "pin", target: "charge" });
   assert.equal(await r!.choose(buildRequest("something else", ["connected", "SemanticMap"])), null, "an unlisted question gets no answer, so the caller falls back");
   assert.equal(await r!.choose(buildRequest("how are these connected?", ["SemanticMap"])), null, "a label that is not on offer is refused");
-  assert.equal(routerFromEnv(env)?.name, "scripted", "the script takes precedence over the model");
-  const chosen = await chooseRouter([], env);
-  assert.equal(chosen.router?.name, "scripted");
-  assert.match(chosen.note ?? "", /scripted from/);
-});
-
-test("the router model comes from the command line, else CIE_ROUTER_MODEL, else the default; a model that is missing or hosted falls back to the default and says so", async () => {
-  assert.equal(routerArg(["--fresh", "--router-model", "llama3.2:1b"]), "llama3.2:1b");
-  assert.equal(routerArg(["--router-model=smollm2:360m"]), "smollm2:360m");
-  assert.equal(routerArg(["--fresh"]), undefined);
-  const srv = createServer((req, res) => { res.end(JSON.stringify(req.url === "/api/tags" ? { models: [{ name: "qwen3:0.6b" }, { name: "llama3.2:1b" }, { name: "gemma3:latest" }, { name: "gpt-oss:120b-cloud" }] } : {})); });
-  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
-  const env = { CIE_OLLAMA_URL: `http://127.0.0.1:${(srv.address() as { port: number }).port}` };
-  try {
-    const byDefault = await chooseRouter([], env);
-    assert.equal(byDefault.router?.name, "glm-5.3:cloud", "nothing asked: the default");
-    assert.match(byDefault.note ?? "", /the default.*hosted on Ollama Cloud.*leave this machine/, "a hosted default says so");
-    assert.equal((await chooseRouter(["--router-model", "llama3.2:1b"], env)).router?.name, "llama3.2:1b", "the argument");
-    assert.equal((await chooseRouter(["--router-model", "gemma3"], env)).router?.name, "gemma3", "an installed model, named without its :latest tag");
-    assert.equal((await chooseRouter([], { ...env, CIE_ROUTER_MODEL: "llama3.2:1b" })).router?.name, "llama3.2:1b", "the environment");
-    assert.equal((await chooseRouter(["--router-model", "qwen3:0.6b"], { ...env, CIE_ROUTER_MODEL: "llama3.2:1b" })).router?.name, "qwen3:0.6b", "the argument beats the environment");
-    const missing = await chooseRouter(["--router-model", "nope:7b"], env);
-    assert.equal(missing.router?.name, "glm-5.3:cloud"); assert.match(missing.note ?? "", /"nope:7b" is not installed.*using glm-5.3:cloud/);
-    const hosted = await chooseRouter(["--router-model", "gpt-oss:120b-cloud"], env);
-    assert.equal(hosted.router?.name, "gpt-oss:120b-cloud"); assert.match(hosted.note ?? "", /hosted on Ollama Cloud/);
-    const notPulled = await chooseRouter(["--router-model", "kimi-k2:1t-cloud"], env);
-    assert.equal(notPulled.router?.name, "glm-5.3:cloud"); assert.match(notPulled.note ?? "", /"kimi-k2:1t-cloud" is not installed.*using glm-5.3:cloud/);
-    assert.equal((await chooseRouter(["--router-model", "off"], env)).router, null);
-  } finally { srv.close(); }
-  // No Ollama to ask: the named model is used as given, and a failing router just means the general map.
-  assert.equal((await chooseRouter(["--router-model", "llama3.2:1b"], { CIE_OLLAMA_URL: "http://127.0.0.1:9" })).router?.name, "llama3.2:1b");
+  assert.equal(routerFor("glm-5.3:cloud", env)?.name, "scripted", "the script takes precedence over the resolved model");
 });

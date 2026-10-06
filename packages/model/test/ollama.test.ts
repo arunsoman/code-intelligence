@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import type { EvidenceBundle, ModelRequest } from "@cie/schema";
-import { OllamaProvider, createProvider, runModel } from "../src/index.ts";
+import { OllamaProvider, createProvider, hasModel, listInstalledModels, resolveModel, runModel } from "../src/index.ts";
 
 const bundle: EvidenceBundle = {
   id: "b", revision: "r", evidence: [], entities: [{ entityId: "f:a", kind: "function", name: "a", file: "a.ts", spans: [] }],
@@ -55,13 +55,40 @@ test("persistently invalid output fails as PROVIDER_UNAVAILABLE, never passes th
 
 test("factory: uses ollama when the model is installed, otherwise falls back to the stub with a note", async () => {
   const f = await fake([], ["m:cloud"]);
-  const ok = await createProvider({ CIE_OLLAMA_URL: f.url, CIE_OLLAMA_MODEL: "m:cloud" });
+  const ok = await createProvider({ baseUrl: f.url, model: "m:cloud" });
   assert.equal(ok.provider.name, "ollama"); assert.equal(ok.note, undefined);
-  const missing = await createProvider({ CIE_OLLAMA_URL: f.url, CIE_OLLAMA_MODEL: "other:cloud" });
+  const missing = await createProvider({ baseUrl: f.url, model: "other:cloud" });
   assert.equal(missing.provider.name, "stub"); assert.match(missing.note ?? "", /not installed/);
-  const down = await createProvider({ CIE_OLLAMA_URL: "http://127.0.0.1:1", CIE_OLLAMA_MODEL: "m:cloud" });
+  const down = await createProvider({ baseUrl: "http://127.0.0.1:1", model: "m:cloud" });
   assert.equal(down.provider.name, "stub"); assert.match(down.note ?? "", /unreachable/);
-  assert.equal((await createProvider({ CIE_PROVIDER: "stub" })).provider.name, "stub");
-  await assert.rejects(createProvider({ CIE_PROVIDER: "bogus" }));
+  const none = await createProvider({ baseUrl: f.url });
+  assert.equal(none.provider.name, "stub"); assert.match(none.note ?? "", /no Ollama model selected/);
+  assert.equal((await createProvider({ which: "stub" })).provider.name, "stub");
+  await assert.rejects(createProvider({ which: "bogus" }));
   f.close();
+});
+
+test("listInstalledModels reports what ollama list has, or null when it cannot be reached", async () => {
+  const f = await fake([], ["a:cloud", "b"]);
+  assert.deepEqual(await listInstalledModels(f.url), ["a:cloud", "b"]);
+  assert.equal(await listInstalledModels("http://127.0.0.1:1"), null);
+  assert.ok(hasModel(["b"], "b") && hasModel(["b:latest"], "b") && !hasModel(["b"], "c"));
+  f.close();
+});
+
+test("resolveModel keeps the persisted model while it is installed, otherwise picks the first installed one and says so; nothing installed means no model at all", async () => {
+  const f = await fake([], ["a:cloud", "b"]);
+  assert.deepEqual(await resolveModel("b", f.url), { model: "b", installed: ["a:cloud", "b"], picked: false });
+  const gone = await resolveModel("c", f.url);
+  assert.deepEqual(gone, { model: "a:cloud", installed: ["a:cloud", "b"], picked: true, note: gone.note });
+  assert.match(gone.note!, /"c" is no longer installed.*using a:cloud/);
+  const fresh = await resolveModel(null, f.url);
+  assert.equal(fresh.model, "a:cloud"); assert.equal(fresh.picked, true); assert.match(fresh.note!, /no model has been selected yet/);
+  // The daemon cannot be asked, so a persisted choice is trusted rather than discarded.
+  const unreachable = await resolveModel("b", "http://127.0.0.1:1");
+  assert.deepEqual(unreachable, { model: "b", installed: null, picked: false });
+  const empty = await fake([], []);
+  const none = await resolveModel(null, empty.url);
+  assert.equal(none.model, null); assert.match(none.note!, /no Ollama model is installed/);
+  empty.close(); f.close();
 });

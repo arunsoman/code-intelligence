@@ -341,6 +341,14 @@ export class Store {
       .run(repoRoot, allow ? 1 : 0, new Date().toISOString());
   }
 
+  // ---- the one selected Ollama model (provider and chat router alike) ----
+  selectedModel(): string | null {
+    return ((this.db.prepare("select model from selected_model where id = 1").get() as { model: string } | undefined)?.model) ?? null;
+  }
+  setSelectedModel(model: string) {
+    this.db.prepare("insert into selected_model values (1,?,?) on conflict(id) do update set model=excluded.model, updated_at=excluded.updated_at").run(model, new Date().toISOString());
+  }
+
   // ---- editor context (privacy-minimized: paths, line numbers and resolved entity ids only; never file text) ----
   lastClientSeq(session: string): number {
     return Number((this.db.prepare("select max(client_seq) as m from context_events where session = ?").get(session) as any)?.m ?? -1);
