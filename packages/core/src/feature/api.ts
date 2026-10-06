@@ -92,7 +92,7 @@ export const OPS: OpSpec[] = [
   op("C28/planFeatureChange", true, "1.E"), op("C28/planReuseChange", true, "1.E"), op("C28/materializeCandidate", true, "1.E"), op("C28/readCandidateFile", false, "1.E"),
   op("C27/runValidation", true, "2.J"), op("C27/runSecurityValidation", true, "2.K"), op("C25/reviewDependencyDiff", false, "2.K"),
   op("C26/assessPerformanceRisk", false, "2.M"), op("C27/runPairedBenchmark", true, "2.M"), op("C26/evaluatePerformance", false, "2.M"),
-  op("C32/assessOperationalReadiness", false, "3.S"), op("C27/queryValidationResults", false, "2.J"), op("C23/queryRelatedTests", false, "3.P"),
+  op("C32/assessOperationalReadiness", false, "3.S"), op("C27/queryValidationResults", false, "2.J"), op("C23/queryRelatedTests", false, "3.P"), op("C23/observeCoverage", true, "3.P", "added by #94B: runs related tests in a copy of the candidate tree and records function-level observed coverage bound to run id and candidate hash"),
   op("C16/verifyFeature", true, "2.J"), op("C28/exportFeaturePatch", true, "3.Q", "renamed from the spec's exportPatch: C28/exportPatch already exists for change proposals"), op("C28/checkPatchDestination", false, "3.Q"), op("C28/applyPatchCandidate", true, "3.Q"),
   op("C30/publishFeaturePR", true, "3.R"), op("C29/ingestReviewFeedback", true, "3.R"), op("C23/scopeRevalidation", false, "3.R"),
   op("C30/previewIssueProjection", false, "2.O", "added by 2.O: the exact text that would leave this machine, so a person can review it before binding"), op("C30/bindRequestIssue", true, "2.O"), op("C30/syncRequestMilestones", true, "2.O"), op("C30/syncCapabilityRelations", true, "3.T"), op("C23/getMutationOrigins", false, "3.T"),

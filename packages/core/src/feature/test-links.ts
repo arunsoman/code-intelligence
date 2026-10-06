@@ -50,9 +50,25 @@ export function relatedTests(d: { fs: SqliteFeatureStore; store: Store }, reques
   }
   if (!changedCode.length) gaps.push("the candidate changes no non-test source file, so there is nothing for a test to depend on");
   gaps.push("dynamic imports, reflection and tests that exercise code through a running service are not detected");
+  // Observed coverage (#94B) upgrades a link only when it is bound to exactly this candidate: its binding hash AND content hash.
+  const obs = d.fs.latestObservedCoverage(c.bindingHash), bound = obs && obs.contentHash === c.binding.candidateContentHash && obs.requestId === c.requestId ? obs : null;
+  if (bound) {
+    const hit = new Set<string>();
+    for (const t of bound.tests) {
+      if (t.status !== "OBSERVED") { gaps.push(`${t.testId}: ${t.status === "TEST_FAILED" ? "the test failed under the coverage run" : "not observed"}${t.reason ? ` (${t.reason})` : ""}`); continue; }
+      const called = t.files.filter((f) => f.functionsCalled > 0 && changedCode.includes(f.file)).map((f) => f.file);
+      const loadedOnly = t.files.filter((f) => f.functionsCalled === 0 && changedCode.includes(f.file)).map((f) => f.file);
+      if (loadedOnly.length) gaps.push(`${t.testId} loaded ${loadedOnly.join(", ")} without calling anything in it`);
+      for (const f of called) hit.add(f);
+      const cur = byPath.get(t.testId);
+      if (called.length) byPath.set(t.testId, { ...(cur ?? { testId: t.testId, acceptanceIds: [], sourceStatus: "EXISTING" as const, evidenceIds: unitEvidence }), fileIds: [...new Set([...(cur?.fileIds ?? []), ...called])].sort(), basis: "OBSERVED_COVERAGE" });
+    }
+    for (const f of changedCode) if (!hit.has(f)) gaps.push(`${f}: no test was observed calling it`);
+    gaps.splice(gaps.indexOf("associations are static (explicit links and imports); runtime coverage was not observed"), 1, `observed coverage from run ${bound.runId} (function level, ${bound.tests.length} test file(s)); links not listed as observed are static or declared only`);
+  }
   const associations = [...byPath.values()].sort((a, b) => a.testId.localeCompare(b.testId));
   const coverage: CoverageRecord[] = [{ domain: "TESTS", state: "PARTIAL", searchedRoots: ["."], excluded: [{ root: "node_modules, build output and VCS metadata", reason: "not source" }, ...(truncated ? [{ root: "test files beyond the scan limit", reason: "bounded scan" }] : [])],
-    tools: ["static-import-scan"], found: associations.length ? "FOUND" : "NOT_FOUND_WITHIN_SEARCHED_SCOPE", artifacts: associations.map((a) => a.testId).slice(0, 20), unsupported: ["observed (runtime) coverage"], unresolved: [`${scanned} existing test files scanned`] }];
+    tools: bound ? ["static-import-scan", "v8-function-coverage"] : ["static-import-scan"], found: associations.length ? "FOUND" : "NOT_FOUND_WITHIN_SEARCHED_SCOPE", artifacts: associations.map((a) => a.testId).slice(0, 20), unsupported: bound ? ["line and branch coverage"] : ["observed (runtime) coverage"], unresolved: [`${scanned} existing test files scanned`] }];
   return { associations, coverage, gaps };
 }
 

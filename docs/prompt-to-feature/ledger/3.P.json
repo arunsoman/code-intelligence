@@ -49,16 +49,24 @@
         "state": "done"
       },
       {
-        "item": "observed test coverage links (PF-074)",
-        "tests": [],
-        "state": "blocked",
-        "needs": "a coverage-producing runner; links are explicit or static only"
+        "item": "observed test coverage links, function level, bound to run id + candidate binding + content hash; load-only and failing tests are not observed links (PF-074, #94B)",
+        "tests": [
+          "#94B observed coverage: a test that calls the changed file",
+          "#94B the local permission-model runner cannot observe coverage"
+        ],
+        "state": "done"
       },
       {
         "item": "browser end-to-end of the new stages (AT-14)",
         "tests": [],
         "state": "blocked",
         "needs": "a Chrome-driven e2e of Validate and Deliver against a live server; covered here by server-rendered markup only"
+      },
+      {
+        "item": "line/branch coverage and coverage under the local permission-model runner (Node disables the inspector there); observation needs the container runner",
+        "tests": [],
+        "state": "blocked",
+        "needs": "line/branch granularity and a certified container runner in the deployment"
       }
     ]
   }

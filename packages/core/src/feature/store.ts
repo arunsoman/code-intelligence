@@ -164,6 +164,18 @@ export class SqliteFeatureStore implements FeatureStore {
   listCandidates(requestId: Id): CandidateRecord[] { return (this.db.prepare("select json from feature_candidates where request_id = ? order by ordinal").all(requestId) as { json: string }[]).map((r) => JSON.parse(r.json) as CandidateRecord); }
   nextOrdinal(requestId: Id): number { return (this.db.prepare("select coalesce(max(ordinal),0)+1 n from feature_candidates where request_id = ?").get(requestId) as { n: number }).n; }
 
+  // ------------------------------------------------------------------ observed coverage (#94B)
+  // The table is created on first use so this record family needs no migration number of its own yet; fold it into the migration list when the numbering is settled.
+  private ensureCoverage(): void { this.db.exec("create table if not exists feature_coverage(id text primary key, request_id text not null, candidate_hash text not null, observed_at text not null, json text not null); create index if not exists feature_coverage_candidate on feature_coverage(candidate_hash, observed_at);"); }
+  putObservedCoverage(rec: import("./coverage.ts").ObservedCoverage): void {
+    this.ensureCoverage();
+    this.db.prepare("insert into feature_coverage(id,request_id,candidate_hash,observed_at,json) values (?,?,?,?,?) on conflict(id) do nothing").run(rec.id, rec.requestId, rec.candidateHash, rec.observedAt, JSON.stringify(rec));
+  }
+  latestObservedCoverage(candidateHash: string): import("./coverage.ts").ObservedCoverage | null {
+    this.ensureCoverage();
+    const r = this.db.prepare("select json from feature_coverage where candidate_hash = ? order by observed_at desc, id desc limit 1").get(candidateHash) as { json: string } | undefined; return r ? JSON.parse(r.json) : null;
+  }
+
   // ------------------------------------------------------------------ builder evaluations (3.U)
   putEvaluation(e: BuilderEvaluation): BuilderEvaluation {
     this.db.prepare("insert into feature_evaluations(identity_hash, suite_hash, passed, json, created_at) values (?,?,?,?,?) on conflict(identity_hash, suite_hash) do update set passed = excluded.passed, json = excluded.json, created_at = excluded.created_at")

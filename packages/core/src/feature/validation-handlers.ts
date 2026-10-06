@@ -4,6 +4,8 @@ import { Cancelled, PRIORITY } from "../jobs.ts";
 import { FeatureError, guarded, guardedAsync } from "./errors.ts";
 import { LocalRunner } from "./runner.ts";
 import { queryRelatedTests } from "./test-links.ts";
+import { observeCoverage } from "./coverage.ts";
+import { DockerRunner, dockerAvailable } from "./docker-runner.ts";
 import { unevaluatedModels } from "./builder-eval.ts";
 import type { SqliteFeatureStore } from "./store.ts";
 import type { CandidateRecord, FeatureRecord, Outcome, ValidationPage } from "./types.ts";
@@ -42,6 +44,9 @@ export function validationHandlers(svc: Service, fs: SqliteFeatureStore, owned: 
       if (parts && (parts[0] !== scope || !Number.isSafeInteger(offset) || offset < 0)) throw new FeatureError("STALE_REVISION", "result cursor is stale");
       return { status: decision.eligibility === "VERIFIED_WITHIN_SCOPE" ? "COMPLETE" : "PARTIAL", value: { results: results.slice(offset, offset + 100), ...(offset + 100 < results.length ? { nextCursor: `${scope}|${offset + 100}` } : {}), coverage: { state: decision.eligibility === "VERIFIED_WITHIN_SCOPE" ? "COMPLETE_WITHIN_SCOPE" : "PARTIAL", gaps: decision.reasons } }, evidenceIds: all.map((e) => e.id), diagnostics: decision.reasons };
     }),
+    // Observed coverage (#94B): runs the candidate's related tests in a copy of its tree. The container runner is used when Docker is available;
+    // otherwise the local runner reports every test as not observed, with the reason, and nothing is upgraded.
+    "C23/observeCoverage": (ctx, body) => guardedAsync(ctx, async () => observeCoverage({ fs, store: svc.store, runner: dockerAvailable() ? new DockerRunner() : new LocalRunner() }, ctx.actor.principalId, { candidateHash: body?.candidateHash, tests: body?.tests, wallMs: body?.wallMs })),
     "C23/queryRelatedTests": (ctx, body) => guarded(ctx, () => { const out = queryRelatedTests({ fs, store: svc.store }, ctx.actor.principalId, { candidateHash: body?.candidateHash, fileId: body?.fileId, acceptanceId: body?.acceptanceId, cursor: body?.cursor }); const next = out.diagnostics.find((x) => x.startsWith("next:")); return { ...out, diagnostics: out.diagnostics.filter((x) => !x.startsWith("next:")), ...(next ? { nextCursor: next.slice(5) } : {}) }; }),
     "C16/verifyFeature": (ctx, body) => guarded(ctx, () => {
       const { candidate, request } = bound(body.patchBindingHash, ctx.actor.principalId);
