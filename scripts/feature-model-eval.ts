@@ -23,13 +23,19 @@ const machine = { os: `${platform()} ${release()}`, arch: arch(), cpu: cpus()[0]
 const selected = async () => { const st = new Store(DB); try { const r = await resolveModel(st.selectedModel(), base); if (!r.model) throw new Error(r.note ?? "no model is selected or installed"); return r.model; } finally { st.db.close(); } };
 
 type Run = { run: number; model: string; digest: string; settings: object; startedAt: string; ms: number; cases: { id: string; state: string; detail: string }[] };
-const runs: Run[] = [];
+const runs: Run[] = [], infraRuns: { run: number; startedAt: string; detail: string }[] = [];
+// The runs finished so far are on disk after every run, so a crash loses at most the run in progress.
+const writeRunsSoFar = () => { mkdirSync("docs/prompt-to-feature/eval", { recursive: true }); writeFileSync("docs/prompt-to-feature/eval/_runs-in-progress.json", `${JSON.stringify({ runs, infraRuns }, null, 2)}\n`); };
 for (let n = 1; n <= RUNS; n++) {
   const model = await selected(); const have = (await installed()).find((m) => m.name === model || m.model === model);
   if (!have) { console.error(`${model} is not installed; this script never pulls.`); process.exit(3); }
   const router = new OllamaGenerationRouter({ model: have.name, baseUrl: base }), startedAt = new Date().toISOString(), t0 = Date.now();
-  const r = await runBuilderSuite({ route: router, egress: "LOCAL_ONLY", wallMs: WALL });
+  let r = await runBuilderSuite({ route: router, egress: "LOCAL_ONLY", wallMs: WALL });
+  // A run during which Ollama was unreachable says nothing about the model: it is kept in the file as an infrastructure failure, excluded from the counts, and run again.
+  const infra = (x: typeof r) => x.cases.some((c) => /PROVIDER_UNAVAILABLE|fetch failed|ECONNREFUSED/.test(c.detail));
+  if (infra(r)) { infraRuns.push({ run: n, startedAt, detail: r.cases.map((c) => `${c.id}: ${c.detail}`).join("; ").slice(0, 400) }); console.error(`run ${n}: Ollama was unreachable; excluded and retried`); n--; await new Promise((res) => setTimeout(res, 15_000)); if (infraRuns.length > 5) { console.error("too many infrastructure failures; stopping"); break; } continue; }
   runs.push({ run: n, model: have.name, digest: have.digest, settings: { provider: router.provider, endpoint: router.endpoint, temperature: 0, think: false, structuredOutput: "JSON schema via format", wallMs: WALL, egress: "LOCAL_ONLY" }, startedAt, ms: Date.now() - t0, cases: r.cases.map((c) => ({ id: c.id, state: c.state, detail: c.detail })) });
+  writeRunsSoFar();
   console.error(`run ${n}/${RUNS} [${have.name} ${have.digest.slice(0, 12)}]: ${r.cases.map((c) => `${c.id}=${c.state}`).join(" ")} (${Date.now() - t0} ms)`);
 }
 mkdirSync("docs/prompt-to-feature/eval", { recursive: true });
@@ -42,7 +48,7 @@ for (const key of [...new Set(runs.map((r) => `${r.model}|${r.digest}`))]) {
     schema: "pf-model-eval/1", suiteVersion: SUITE_VERSION, suiteHash: builderSuiteHash(), ranAt: new Date().toISOString(), ollamaVersion: version, machine, selectedBy: `system configuration (${DB} selected model, resolved like the server)`,
     identity: { name: model, digest, sizeBytes: have.size, family: show.details?.family, parameterSize: show.details?.parameter_size, quantization: show.details?.quantization_level, modifiedAt: have.modified_at },
     productIdentityNote: "the product's Ollama router does not record a resolved version or weight digest; the digest above comes from this script's own /api/tags call, so a product run on this model still shows an unknown generating identity",
-    perCase, verdict: { bar: "D002: >= 10 independent runs and >= 9/10 on each core case", coreCases: CORE, runs: mine.length, meetsBar: meets }, runs: mine,
+    perCase, infrastructureFailures: infraRuns, verdict: { bar: "D002: >= 10 independent runs and >= 9/10 on each core case", coreCases: CORE, runs: mine.length, meetsBar: meets }, runs: mine,
   };
   const file = `docs/prompt-to-feature/eval/${model.replace(/[^a-z0-9.]+/gi, "_")}.json`; writeFileSync(file, `${JSON.stringify(out, null, 2)}\n`);
   console.log(`${model}: ${perCase.map((c) => `${c.id} ${c.pass}/${c.of}`).join(", ")} -> ${meets ? "meets" : "does NOT meet"} the D002 bar; wrote ${file}`);

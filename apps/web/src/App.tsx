@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiResult, AuditEvent, JobView, ChangesSince, Claim, ConceptCard, ConverseResult, EditorContext, ExplainResult, MapOverlays, MatrixAxis, MatrixCell, ResolvedEvidence, RevisionInfo, SavedState, StatusInfo, VerdictKind, ViewNode, ViewSpec, WorkspaceOpen } from "@cie/schema";
 import { call } from "./api.ts";
+import { RepositoryGit } from "./RepositoryGit.tsx";
+import type { RepositoryGitInfo } from "@cie/schema";
 import { buttonFeedback } from "./button.ts";
 import { Canvas } from "./Canvas.tsx";
 import { ChatPanel, type Message } from "./ChatPanel.tsx";
+import { ModelMenu } from "./ModelMenu.tsx";
 import { CanvasSkeleton, Loading } from "./Skeleton.tsx";
 import { COMPOSING_CAPTION, EMPTY_NO_INDEX, canvasPhase, emptyStageCopy } from "./loading.ts";
 import { ClaimCard } from "./ClaimCard.tsx";
@@ -505,7 +508,7 @@ export function App() {
         {insightsOpen && revision && <InsightsPanel revision={revision} view={view} onClose={() => setInsightsOpen(false)} onAsk={askFromInsights} onReindexed={refresh} />}
         {investigationsOpen && revision && <InvestigationPanel key={`${revision}:${ws.id ?? "repo"}`} revision={revision} workspaceId={ws.id ?? `repo:${info?.revision?.repoRoot ?? repoPath}`} initialQuestion={view?.question ?? ""} entityRefs={[...new Set(selection.flatMap((id) => nodeById.get(id)?.entityRefs ?? []))]} onClose={() => setInvestigationsOpen(false)} />}
         <h1>Code Intelligence</h1>
-        <span className="chip" title="Model provider">{providerShort}{info?.hosted ? " · hosted" : ""}</span>
+        <ModelMenu current={info?.model ?? null} hosted={!!info?.hosted} call={call} onChanged={refresh} />
         {info?.revision && <span className="chip mono" title={info.revision.repoRoot}>rev {info.revision.id} · {info.revision.fileCount} files</span>}
         {info && info.concepts > 0 && <span className="chip">{info.concepts} concept cards</span>}
         {info?.tests && <span className="chip" title={`Loaded from ${info.tests.found.join(", ")}${info.tests.staleness.length ? `. ${info.tests.staleness.join("; ")}` : ""}`}>tests: {info.tests.tests.passed} pass · {info.tests.tests.failed} fail{info.tests.coverageLinePercent !== null ? ` · ${info.tests.coverageLinePercent}% covered` : ""}{info.tests.staleness.length ? " ⚠" : ""}</span>}
@@ -531,6 +534,19 @@ export function App() {
           <JobBar jobs={jobs} onCancel={(j) => void cancelJob(j)} />
           <label className="sr" htmlFor="repo">Absolute repository path</label>
           <input id="repo" value={repoPath} onChange={(e) => setRepoPath(e.target.value)} placeholder="/absolute/path/to/ts/repo" />
+          <RepositoryGit key={repoPath} repoPath={repoPath} revision={info?.revision ?? null} disabled={!!busy || jobActive} onSwitch={async (git, branch, kind) => {
+            await withBusy("Switching branch", async () => {
+              const r = await call<RepositoryGitInfo>("C01", "switchBranch", { repoPath: git.repoRoot, branch, kind, expectedHead: git.head, expectedBranch: git.branch });
+              if (!r.ok) throw new Error(r.error.message);
+              setView(null); setClaimMap({}); setSelection([]); setCellSel([]); setCards([]); setMessages([]); setDrawer(null); setCode(null); setStale(null); setChanges(null); setCardPins(null); setEditorFocus([]);
+              setWs({ version: 0 }); setWsName("");
+              setInfo((s) => s ? { ...s, revision: null, concepts: 0 } : s);
+              setNotice(`Switched to ${r.value.branch}. Indexing the checkout…`);
+              const indexed = await call<JobView>("C07", "enqueue", { kind: "index", repoPath: git.repoRoot });
+              if (!indexed.ok) throw new Error(`Switched to ${branch}, but indexing could not start: ${indexed.error.message}. Click Index to retry.`);
+              await syncJobs();
+            });
+          }} />
           <div className="row">
             <button className="secondary" onClick={() => setPicking(true)} disabled={!!busy || jobActive}>Browse…</button>
             <button onClick={index} disabled={!repoPath || !!busy || jobActive} className={indexFb.className} aria-busy={indexFb["aria-busy"]} title="Index the selected repository">{indexFb.spinner && <span className="spinner" aria-hidden="true" />}Index</button>

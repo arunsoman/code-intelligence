@@ -1,0 +1,61 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+import { Browser, CHROME } from "./cdp.ts";
+import { startServer } from "./harness.ts";
+
+test("repository controls switch local and fetched remote branches, then index their commits", { skip: !existsSync(CHROME), timeout: 120_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "cie-branch-ui-"));
+  const remote = mkdtempSync(join(tmpdir(), "cie-branch-remote-"));
+  const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: "pipe" }).trim();
+  git("init", "-b", "main");
+  writeFileSync(join(root, "app.ts"), "export function main() { return 1; }\n");
+  git("add", "."); git("-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "main");
+  git("switch", "-c", "feature/a");
+  writeFileSync(join(root, "app.ts"), "export function feature() { return 2; }\n");
+  git("add", "."); git("-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-m", "feature");
+  const targetHead = git("rev-parse", "HEAD");
+  git("switch", "main");
+  const server = await startServer();
+  let b: Browser | undefined;
+  try {
+    b = await Browser.launch();
+    await b.goto(server.url);
+    await b.tabTo(`el.id === 'repo'`); await b.type(root);
+    await b.waitFor(() => `document.querySelector('[aria-label="Repository Git details"]')?.innerText.includes('Current branch: main')`, 10_000);
+    const text = await b.eval<string>(`document.querySelector('[aria-label="Repository Git details"]').innerText`);
+    assert.match(text, /Local checkout/); assert.match(text, /No remote configured/);
+    await b.tabTo(`el.id === 'repository-branch'`);
+    await b.key("Home"); await b.key("Enter");
+    assert.equal(await b.eval<string>(`document.querySelector('#repository-branch').value`), "feature/a");
+    await b.tabTo(`el.tagName === 'BUTTON' && el.textContent.trim() === 'Switch branch and index'`); await b.key("Enter");
+    await b.waitFor(() => `document.querySelector('[aria-label="Repository Git details"]')?.innerText.includes('Current branch: feature/a')`, 10_000);
+    await b.waitFor(() => `document.querySelector('[aria-label="Repository Git details"]')?.innerText.includes('Displayed index: ${targetHead.slice(0, 10)}')`, 60_000);
+    assert.equal(git("branch", "--show-current"), "feature/a");
+    // Refresh discovers external edits and disables switching instead of discarding them.
+    writeFileSync(join(root, "uncommitted.ts"), "export const keep = true;");
+    await b.tabTo(`el.tagName === 'BUTTON' && el.textContent.trim() === 'Refresh Git details'`); await b.key("Enter");
+    await b.waitFor(() => `document.querySelector('[aria-label="Repository Git details"]')?.innerText.includes('Uncommitted local changes')`, 10_000);
+    assert.equal(await b.eval<boolean>(`[...document.querySelectorAll('button')].find(el => el.textContent === 'Switch branch and index').disabled`), true);
+    rmSync(join(root, "uncommitted.ts"));
+    git("init", "--bare", remote); git("remote", "add", "origin", remote);
+    git("push", "origin", "HEAD:refs/heads/remote-only");
+    await b.tabTo(`el.tagName === 'BUTTON' && el.textContent.trim() === 'Refresh Git details'`); await b.key("Enter");
+    await b.waitFor(() => `!![...document.querySelectorAll('button')].find(el => el.textContent === 'Fetch remote branches' && !el.disabled)`, 10_000);
+    await b.key("Tab", { shift: true });
+    await b.tabTo(`el.tagName === 'BUTTON' && el.textContent.trim() === 'Fetch remote branches'`); await b.key("Enter");
+    await b.waitFor(() => `document.querySelector('[aria-label="Repository Git details"]')?.innerText.includes('Remote branches updated')`, 10_000);
+    await b.key("Tab", { shift: true }); await b.key("Tab", { shift: true });
+    await b.tabTo(`el.id === 'repository-branch'`); await b.key("End"); await b.key("Enter");
+    assert.equal(await b.eval<string>(`document.querySelector('#repository-branch').value`), "remote:refs/remotes/origin/remote-only");
+    await b.tabTo(`el.tagName === 'BUTTON' && el.textContent.trim() === 'Switch branch and index'`); await b.key("Enter");
+    await b.waitFor(() => `document.querySelector('[aria-label="Repository Git details"]')?.innerText.includes('Current branch: remote-only')`, 10_000);
+    await b.waitFor(() => `document.querySelector('[aria-label="Repository Git details"]')?.innerText.includes('Displayed index: ${targetHead.slice(0, 10)}')`, 60_000);
+    assert.equal(git("config", "branch.remote-only.remote"), "origin");
+    assert.equal(git("config", "branch.remote-only.merge"), "refs/heads/remote-only");
+    assert.deepEqual(b.console.filter((s) => s.startsWith("exception:")), []);
+  } finally { b?.close(); server.proc.kill("SIGKILL"); rmSync(root, { recursive: true, force: true }); rmSync(remote, { recursive: true, force: true }); }
+});
