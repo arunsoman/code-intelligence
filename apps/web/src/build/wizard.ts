@@ -2,7 +2,7 @@ import type { WizardStage } from "./stages.ts";
 import type { FeatureReview } from "../../../../packages/core/src/feature/presentation.ts";
 
 // Wizard-shell logic for the Build feature panel (spec §43.1, §30.2; plan tasks 1.H).
-// Pure and fixture-driven: the shapes mirror the frozen contracts in packages/core/src/feature/types.ts
+// Pure: the shapes mirror the frozen contracts in packages/core/src/feature/types.ts
 // (FeatureWorkspace, advanceWizard in feature/api.ts) without the web app depending on packages/core.
 // When the backend lands (1.B store, C02/advanceWizard), this module is the seam to swap.
 
@@ -60,8 +60,6 @@ export type WizardWorkspace = {
   evidence: { id: string; kind: string; status: "CURRENT" | "STALE" }[];
   performance: "WITHIN_BUDGET" | "REGRESSION" | "INCONCLUSIVE" | "UNVALIDATED" | "NOT_APPLICABLE";
   blockers: WizardBlocker[];
-  /** Persistent mock labels (§30.2: mocks are always labelled). */
-  mocked: string[];
   updatedAt: string;
   review?: FeatureReview;
 };
@@ -191,8 +189,7 @@ export function statusBanners(ws: WizardWorkspace): string[] {
   if (ws.candidate?.status === "STALE") banners.push("STALE — the candidate was affected by a contract change; affected evidence is stale. Revalidate before anything is exported or published.");
   const staleEvidence = ws.evidence.filter((e) => e.status === "STALE").length;
   if (staleEvidence > 0) banners.push(`STALE — ${staleEvidence} evidence record(s) no longer match the current contract (v${ws.contractVersion}).`);
-  for (const m of ws.mocked) banners.push(`MOCKED — ${m}: results under this label are fixture-backed, not real integration evidence.`);
-  if (banners.length === 0) banners.push(ws.review ? "No blockers recorded. Validation evidence is shown within its recorded scope." : "No blockers recorded. Progress above is fixture data until the intake backend lands (task 1.C).");
+  if (banners.length === 0) banners.push(ws.review ? "No blockers recorded. Validation evidence is shown within its recorded scope." : "No blockers recorded. Nothing has been analysed or validated yet.");
   return banners;
 }
 

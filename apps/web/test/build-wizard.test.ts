@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { EFFECTFUL_ACTIONS, STAGES } from "../src/build/stages.ts";
-import { buildFixtureWorkspace, FIXTURE_REQUEST_ID, memoryStore } from "../src/build/fixture.ts";
+import { buildFixtureWorkspace, FIXTURE_REQUEST_ID } from "./build-fixture.ts";
+import { memoryStore } from "../src/build/store.ts";
 import { advanceWizard, groupTasks, recordDecision, stageGate, statusBanners, type WizardWorkspace } from "../src/build/wizard.ts";
 
 // AT-67 (submit/resume through the panel), AT-68 (Next with a material blocker), AT-69 (backward edit
@@ -115,7 +116,7 @@ test("§30.2 banners: implemented-but-unvalidated and unvalidated performance ar
   const banners = statusBanners(buildFixtureWorkspace());
   assert.ok(banners.some((b) => b.startsWith("IMPLEMENTED — VALIDATION INCOMPLETE")), "exact §30.2 wording");
   assert.ok(banners.some((b) => b === "PERFORMANCE UNVALIDATED"));
-  assert.ok(banners.some((b) => b.startsWith("MOCKED — provider integration")), "mocks carry a persistent label");
+  assert.ok(!banners.some((b) => /MOCKED/.test(b)), "no banner talks about mocks: the product has none");
   assert.ok(banners.some((b) => b.startsWith("BLOCKED — ") && b.includes("Q4")));
   for (const b of banners) {
     assert.ok(!/verified/i.test(b), `banner must not claim verified: ${b}`);

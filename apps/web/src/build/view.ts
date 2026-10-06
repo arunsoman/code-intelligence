@@ -26,26 +26,24 @@ export function openQuestions(ws: WizardWorkspace): OpenQuestion[] {
   return out;
 }
 
-export type Digest = { blocked: number; needsAnswer: number; running: number; ready: number; failed: number; criteria: { passed: number; total: number }; evidence: "mocked" | "real" | "none"; stale: boolean };
+export type Digest = { blocked: number; needsAnswer: number; running: number; ready: number; failed: number; criteria: { passed: number; total: number }; evidence: "real" | "none"; stale: boolean };
 export function digestOf(ws: WizardWorkspace): Digest {
   const g = groupTasks(ws.tasks);
   return {
     blocked: g.blocked.length, needsAnswer: openQuestions(ws).length, running: g.running.length, ready: g.ready.length, failed: g.failed.length,
     criteria: { passed: ws.criteria.filter((c) => c.validation === "PASS").length, total: ws.criteria.length },
-    evidence: ws.mocked.length ? "mocked" : ws.evidence.length ? "real" : "none", stale: ws.candidate?.status === "STALE" || ws.evidence.some((e) => e.status === "STALE"),
+    evidence: ws.evidence.length ? "real" : "none", stale: ws.candidate?.status === "STALE" || ws.evidence.some((e) => e.status === "STALE"),
   };
 }
 
 export type Note = { severity: Severity; text: string };
-/** The few status lines worth showing at once: blocked/stale first, then caution. Mocked labels are merged into one line. */
+/** The few status lines worth showing at once: blocked/stale first, then caution. */
 export function summaryNotes(ws: WizardWorkspace): { shown: Note[]; all: { severity: Severity; text: string }[] } {
-  const all = statusBanners(ws).map((text): Note => ({ severity: /^(BLOCKED|STALE)/.test(text) ? "blocked" : /^(MOCKED)/.test(text) ? "caution" : /^(IMPLEMENTED|PERFORMANCE)/.test(text) ? "caution" : "info", text }));
-  const mocked = all.filter((n) => n.text.startsWith("MOCKED"));
-  const rest = all.filter((n) => !n.text.startsWith("MOCKED") && !n.text.startsWith("BLOCKED"));
-  const merged: Note[] = mocked.length ? [{ severity: "caution", text: `MOCKED — ${ws.mocked.join("; ")}. Results under this label are sample data, not real integration evidence.` }] : [];
+  const all = statusBanners(ws).map((text): Note => ({ severity: /^(BLOCKED|STALE)/.test(text) ? "blocked" : /^(IMPLEMENTED|PERFORMANCE)/.test(text) ? "caution" : "info", text }));
+  const rest = all.filter((n) => !n.text.startsWith("BLOCKED"));
   const d = digestOf(ws);
   const blocked: Note[] = d.blocked || d.needsAnswer ? [{ severity: "blocked", text: `${d.needsAnswer ? `${d.needsAnswer} question(s) need your answer` : `${d.blocked} item(s) blocked`}; independent tasks keep running.` }] : [];
-  const shown = [...blocked, ...rest, ...merged].slice(0, 2);
+  const shown = [...blocked, ...rest].slice(0, 2);
   return { shown, all };
 }
 
@@ -154,12 +152,11 @@ export function sectionsOf(ws: WizardWorkspace): Section[] {
 export const GLOSSARY: { term: string; meaning: string }[] = [
   { term: "Candidate", meaning: "A complete set of proposed file changes, saved so it can be reviewed and checked. It is never applied to your working copy." },
   { term: "Drafted and saved", meaning: "The candidate exists and matches the current contract. It has not been validated." },
-  { term: "Mocked", meaning: "Produced from sample data or a stand-in service, so it is not evidence about the real system." },
   { term: "Contract", meaning: "The agreed requirements and acceptance criteria. Changing an answer creates a new version and marks earlier work stale." },
   { term: "Requirement (R…)", meaning: "One thing the feature must do, taken from your request." },
   { term: "Acceptance criterion (AC…)", meaning: "A check that shows a requirement is met. Passing counts describe progress, not proof." },
   { term: "Stale", meaning: "Built or checked against an older contract. It must be redone before export." },
-  { term: "Intake", meaning: "The backend step that reads your request and the repository. Until it is connected, some data here is sample data." },
+  { term: "Intake", meaning: "The backend step that reads your request and the repository." },
 ];
 
 /** "o/r#9" links to the tracker; a bare "#812" has no repository to link to, so it stays text. */

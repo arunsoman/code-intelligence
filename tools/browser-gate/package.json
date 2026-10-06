@@ -1,0 +1,5 @@
+{
+  "name": "cie-browser-gate", "version": "0.1.0", "private": true, "type": "module",
+  "description": "Live-browser gate for prompt-to-feature (#94C). Run it through scripts/browser-gate.ts: the browser is the pinned Playwright image, never the host's Chrome.",
+  "devDependencies": { "@playwright/test": "1.63.0", "@axe-core/playwright": "4.13.0" }
+}

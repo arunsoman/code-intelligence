@@ -1,7 +1,7 @@
 // Connects the wizard shell to the backend operations C01/openFeatureWorkspace and C02/advanceWizard (task 1.C/1.B handlers).
 // Only what the server owns is taken from it: the request id, stage, workspace version, contract version, outcome mode, issue
-// reference and candidate pointer. Tasks, criteria, decisions and evidence stay fixture data and are labelled as such, so
-// nothing synced here can make the shell look more complete than it is.
+// reference and candidate pointer. Everything else is shown only when the server has produced it (the review), so nothing here can
+// look more complete than it is.
 import type { WizardWorkspace } from "./wizard.ts";
 import type { WizardStage } from "./stages.ts";
 import type { FeatureReview } from "../../../../packages/core/src/feature/presentation.ts";
@@ -16,16 +16,15 @@ type ServerWorkspace = {
 type OpenOutcome = { status: string; value?: ServerWorkspace; diagnostics: string[] };
 
 export const MODE_LABEL: Record<string, string> = { PLAN: "PLAN_ONLY", BUILD_PREVIEW: "BUILD_AND_PREVIEW", CREATE_DRAFT_PR: "DRAFT_PR" };
-export const SYNC_LABEL = "Stage, version, contract version and candidate pointer come from the server; tasks, criteria, decisions and evidence below are still sample data.";
 
 export function mergeServer(ws: WizardWorkspace, s: ServerWorkspace): WizardWorkspace {
   return {
     ...ws, requestId: s.requestId, stage: s.stage, workspaceVersion: s.workspaceVersion, contractVersion: s.contractVersion ?? ws.contractVersion,
     outcomeMode: s.mode ? MODE_LABEL[s.mode] ?? s.mode : ws.outcomeMode, issueRef: s.issueRef,
     candidate: s.candidateHash ? { hash: s.candidateHash, status: s.candidateStatus ?? "MATERIALIZED" } : null,
-    mocked: ws.mocked.includes(SYNC_LABEL) ? ws.mocked : [...ws.mocked, SYNC_LABEL], updatedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
     ...(s.review ? {
-      review: s.review, prompt: s.review.prompt, mocked: [],
+      review: s.review, prompt: s.review.prompt,
       criteria: s.review.criteria.map((a) => ({ id: a.id, text: `${a.scenario} → ${a.expectedOutcome}`, mandatory: a.mandatory, implemented: !!s.candidateHash && s.review!.files.some((f) => f.requirementIds.some((id) => a.requirementIds.includes(id))), validation: s.review!.results.filter((r) => r.acceptanceId === a.id).at(-1)?.status ?? "NOT_RUN" })),
       decisions: s.review.decisions.map((d) => ({ id: d.id, questionId: d.questionId ?? d.id, question: d.questionId ?? d.id, answer: d.answer, actor: d.actorId, stage: "CLARIFY" as const, supersedesId: d.supersedesId })),
       tasks: s.review.tasks.map((t) => ({ id: t.id, label: `${t.componentId}: ${t.plannedEdits.join(", ")}`, state: t.state, requirementIds: t.requirementIds, blocker: s.review!.questions.find((q) => q.requirementIds.some((id) => t.requirementIds.includes(id)))?.text })),

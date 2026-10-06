@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useRef } from "react";
 import { STAGES, type WizardStage } from "./stages.ts";
-import { FIXTURE_REQUEST_ID, buildFixtureWorkspace, localStore, type WizardStore } from "./fixture.ts";
+import { blankWorkspace, localStore, type WizardStore } from "./store.ts";
 import { advanceRemote, openRemote, type RemoteCall } from "./remote.ts";
 import { advanceWizard, recordDecision, stageGate, type WizardWorkspace } from "./wizard.ts";
 import { GLOSSARY, MODES, STATUS_WORDS, actionReasons, ago, digestOf, issueLink, landingStage, openQuestions, primaryOf, refKind, retryTask, sectionsOf, stepsOf, summaryNotes, type TaskCard } from "./view.ts";
@@ -12,19 +12,19 @@ import { DeliverReview, ValidateReview } from "./DeliverStages.tsx";
 /**
  * "Build feature" (Prompt-to-feature §43, task 1.H). A modal wizard shell over a persistent per-request
  * workspace: six stages, a status banner that follows every stage, §30.2 progress groups, and separate
- * effectful actions. It is fixture-driven until the backend lands (1.C intake, 1.B store, 2.N/3.P stage
- * contents); navigation never runs anything, and no stage claims "verified" — that wording belongs to
- * the eligibility function (task 2.J), which does not exist yet.
+ * effectful actions. Everything it shows comes from the server; before the server has answered it is empty.
+ * Navigation never runs anything, and no stage claims "verified" — that wording belongs to the
+ * eligibility function (computeEligibility).
  */
 const KEY = (repo: string) => `cie.build.request.${repo}`;
 const MODE_OUT: Record<string, string> = { PLAN_ONLY: "PLAN", BUILD_AND_PREVIEW: "BUILD_PREVIEW", DRAFT_PR: "CREATE_DRAFT_PR" };
 const uid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
 
-export function BuildFeature({ onClose, store, api }: { onClose: () => void; store?: WizardStore; /** The server and repository to build against; without it the shell runs on sample data only. */ api?: { repositoryId: string; call: RemoteCall } }) {
+export function BuildFeature({ onClose, store, api }: { onClose: () => void; store?: WizardStore; /** The server and repository to build against; without it the shell stays empty. */ api?: { repositoryId: string; call: RemoteCall } }) {
   const [requestId, setRequestId] = useState<string | null>(() => { try { return api ? localStorage.getItem(KEY(api.repositoryId)) : null; } catch { return null; } });
   const remote = api && requestId ? { requestId, call: api.call } : undefined;
   const persistence = store ?? localStore();
-  const [ws, setWs] = useState<WizardWorkspace>(() => { const w = persistence.load(FIXTURE_REQUEST_ID) ?? buildFixtureWorkspace(); return { ...w, stage: landingStage(w) }; });
+  const [ws, setWs] = useState<WizardWorkspace>(() => { const w = blankWorkspace(); return { ...w, stage: landingStage(w) }; });
   const [note, setNote] = useState<string | null>(null);
   const [impact, setImpact] = useState<string | null>(null);
   const [draftAnswer, setDraftAnswer] = useState<Record<string, string>>({});
@@ -33,6 +33,9 @@ export function BuildFeature({ onClose, store, api }: { onClose: () => void; sto
   const [focusQ, setFocusQ] = useState<string | null>(null);
   const inputs = useRef(new Map<string, HTMLInputElement | null>());
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 15_000); return () => clearInterval(t); }, []);
+  // A modal takes focus when it opens (so Tab and Escape act on it, found by the live-browser gate) and gives it back to what opened it.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { const opener = document.activeElement as HTMLElement | null; dialogRef.current?.focus(); return () => { try { opener?.focus(); } catch { /* the opener is gone */ } }; }, []);
   useEffect(() => { if (focusQ && ws.stage === "CLARIFY") { inputs.current.get(focusQ)?.focus(); setFocusQ(null); } }, [focusQ, ws.stage]);
 
   const at = STAGES.findIndex((s) => s.id === ws.stage);
@@ -45,7 +48,7 @@ export function BuildFeature({ onClose, store, api }: { onClose: () => void; sto
   const primary = primaryOf(ws, draftAnswer);
   const issue = issueLink(ws.issueRef);
 
-  const commit = (next: WizardWorkspace) => { persistence.save(next); setWs(next); };
+  const commit = (next: WizardWorkspace) => { if (next.requestId) persistence.save(next); setWs(next); };
   const refresh = async () => { if (!remote) return; const r = await openRemote(remote.call, { ...ws, workspaceVersion: -1 }, remote.requestId); if (r.ok && !r.unchanged) commit(r.value); else if (!r.ok) setNote(r.message); };
   useEffect(() => {
     if (!remote) return;
@@ -127,7 +130,7 @@ export function BuildFeature({ onClose, store, api }: { onClose: () => void; sto
 
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Build feature">
-      <div className="bf-dialog" tabIndex={-1} onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}>
+      <div className="bf-dialog" ref={dialogRef} tabIndex={-1} onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}>
         <div className="bf-top">
           <div className="bf-title">
             <h2>Build feature<span className="bf-updated" aria-live="polite">updated {ago(ws.updatedAt, now)}</span></h2>
@@ -180,7 +183,6 @@ export function BuildFeature({ onClose, store, api }: { onClose: () => void; sto
             {digest.ready > 0 && <span className="bf-pill">⏳ {digest.ready} ready</span>}
             {digest.failed > 0 && <span className="bf-pill blocked">✗ {digest.failed} failed</span>}
             <span className="bf-pill" title="Acceptance criteria that passed. This is progress, not proof.">{digest.criteria.passed}/{digest.criteria.total} criteria passed</span>
-            {digest.evidence === "mocked" && <span className="bf-pill caution" title="Some evidence comes from sample data or a stand-in service">🔶 evidence mocked</span>}
             {digest.stale && <span className="bf-pill blocked">stale work</span>}
           </div>
           <div className="bf-notes">
@@ -227,7 +229,6 @@ export function BuildFeature({ onClose, store, api }: { onClose: () => void; sto
                   </select>
                   <p className="bf-help">{MODES.find((m) => m.value === ws.outcomeMode)?.explain}</p>
                 </label>
-                <p className="bf-help muted">Results are generated from sample data (<Term t="Mocked" />), so treat them as provisional. Real results arrive when <Term t="Intake" /> is connected; every result stays tagged 🔶 mocked until then.</p>
               </div>
             )}
 

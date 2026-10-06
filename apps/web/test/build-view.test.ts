@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildFixtureWorkspace } from "../src/build/fixture.ts";
+import { buildFixtureWorkspace } from "./build-fixture.ts";
 import { STAGES } from "../src/build/stages.ts";
 import { actionReasons, ago, cardOf, digestOf, issueLink, landingStage, openQuestions, primaryOf, retryTask, sectionsOf, splitQuestion, stepsOf, summaryNotes } from "../src/build/view.ts";
 import { recordDecision } from "../src/build/wizard.ts";
@@ -39,16 +39,16 @@ test("UX-72 a saved workspace resumes where it was; a fresh one that already has
   assert.equal(landingStage({ ...answered, stage: "DESCRIBE", candidate: null }), "DESCRIBE");
 });
 
-test("UX-73/84 one digest: counts agree with the progress groups, criteria are progress not proof, mocked is merged into a single line", () => {
+test("UX-73/84 one digest: counts agree with the progress groups, criteria are progress not proof, nothing is labelled mocked", () => {
   const w = ws(); const d = digestOf(w);
   assert.deepEqual([d.needsAnswer, d.blocked, d.running, d.ready, d.failed], [1, 2, 1, 1, 1]);
-  assert.deepEqual(d.criteria, { passed: 1, total: 6 }); assert.equal(d.evidence, "mocked");
+  assert.deepEqual(d.criteria, { passed: 1, total: 6 }); assert.equal(d.evidence, "real");
   const n = summaryNotes(w);
   assert.ok(n.shown.length <= 2, "at most two lines at once");
   assert.equal(n.shown[0]!.severity, "blocked"); assert.match(n.shown[0]!.text, /1 question\(s\) need your answer; independent tasks keep running/);
-  assert.equal(n.all.filter((x) => x.text.startsWith("MOCKED")).length, 2, "the full list keeps every original note");
+  assert.equal(n.all.filter((x) => /MOCKED/.test(x.text)).length, 0, "the product shows no mock labels");
   assert.ok(n.shown.concat(n.all).every((x) => !/verified|all green|complete\b/i.test(x.text.replace("VALIDATION INCOMPLETE", ""))), "no completion claim is made");
-  const clean = recordDecision({ ...w, mocked: [], blockers: [] }, { questionId: "none", question: "none", answer: "x", stage: "CLARIFY", actor: "u" }).workspace;
+  const clean = recordDecision({ ...w, blockers: [] }, { questionId: "none", question: "none", answer: "x", stage: "CLARIFY", actor: "u" }).workspace;
   assert.equal(digestOf(clean).evidence, "real");
 });
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildFixtureWorkspace } from "../src/build/fixture.ts";
-import { MODE_LABEL, SYNC_LABEL, advanceRemote, mergeServer, openRemote, type RemoteCall } from "../src/build/remote.ts";
+import { buildFixtureWorkspace } from "./build-fixture.ts";
+import { MODE_LABEL, advanceRemote, mergeServer, openRemote, type RemoteCall } from "../src/build/remote.ts";
 
 const server = { requestId: "req:abc", stage: "PLAN" as const, workspaceVersion: 4, contractVersion: 2, mode: "CREATE_DRAFT_PR", candidateHash: "pf-canon-v1/x:1", candidateStatus: "STALE" as const, issueRef: "o/r#9" };
 const fake = (handlers: Record<string, (body: any) => unknown>, log: string[] = []): RemoteCall => (async (component: string, op: string, body: unknown) => {
@@ -14,7 +14,7 @@ test("server-owned fields replace the sample ones, everything else stays and is 
   assert.deepEqual([m.requestId, m.stage, m.workspaceVersion, m.contractVersion, m.outcomeMode, m.issueRef], ["req:abc", "PLAN", 4, 2, "DRAFT_PR", "o/r#9"]);
   assert.deepEqual(m.candidate, { hash: "pf-canon-v1/x:1", status: "STALE" });
   assert.deepEqual(m.tasks, base.tasks, "tasks are not taken from the server yet");
-  assert.ok(m.mocked.includes(SYNC_LABEL)); assert.equal(mergeServer(m, server).mocked.filter((x) => x === SYNC_LABEL).length, 1, "the label is not duplicated");
+  assert.ok(!("mocked" in m), "no mock labels exist on a workspace");
   assert.equal(mergeServer(base, { ...server, candidateHash: undefined }).candidate, null, "no candidate on the server means no candidate shown");
   assert.deepEqual(Object.values(MODE_LABEL), ["PLAN_ONLY", "BUILD_AND_PREVIEW", "DRAFT_PR"]);
 });

@@ -67,6 +67,19 @@
         "tests": [],
         "state": "blocked",
         "needs": "line/branch granularity and a certified container runner in the deployment"
+      },
+      {
+        "item": "live-browser gate: pinned Playwright 1.63.0 image (digest in report), Chromium against the real server, 3 viewports, axe, role/denial and keyboard paths, traces hashed (#94C)",
+        "tests": [
+          "scripts/browser-gate.ts -> docs/prompt-to-feature/browser/report.json (9/9 passed)"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "browser gate coverage beyond the review-only seeded request: a UI-created request from a prompt, live validation evidence, mobile viewports, screen-reader checks",
+        "tests": [],
+        "state": "blocked",
+        "needs": "a model run through the UI (#94A) and a validated seeded request"
       }
     ]
   }

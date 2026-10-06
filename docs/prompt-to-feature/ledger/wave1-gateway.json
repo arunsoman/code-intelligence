@@ -46,7 +46,7 @@
         "state": "done"
       },
       {
-        "item": "Wiring: the Build feature wizard follows a real request (open, version-checked advance, conflict message) and labels what is still sample data",
+        "item": "Wiring: the Build feature wizard follows a real request (open, version-checked advance, conflict message) and shows only what the server produced (no sample data in the UI)",
         "tests": [
           "server-owned fields replace the sample ones",
           "openRemote asks only for what changed",
