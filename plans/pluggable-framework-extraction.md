@@ -6,7 +6,7 @@ Make framework-specific metadata extraction a first-class, pluggable extension i
 
 ## Status
 
-**Phase 0, Phase 1, Phase 2, Phase 3, and Phase 4 are implemented end-to-end.**
+**Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, and Phase 5 are implemented end-to-end.**
 
 - Framework plugin trait and registry: `crates/worker/src/frameworks/mod.rs`
 - Spring Boot plugin: `crates/worker/src/frameworks/spring.rs`
@@ -14,10 +14,11 @@ Make framework-specific metadata extraction a first-class, pluggable extension i
 - NestJS plugin: `crates/worker/src/frameworks/nestjs.rs`
 - Express plugin: `crates/worker/src/frameworks/express.rs`
 - Next.js plugin: `crates/worker/src/frameworks/nextjs.rs`
+- Config resolver plugin: `crates/worker/src/frameworks/config.rs`
 - Framework metadata → semantic model resolver: `crates/worker/src/index.rs` (`resolve_framework_metadata`)
 - TypeScript consumers: `packages/core/src/forms/journey.ts`, `packages/core/src/forms/analysis.ts`
 - Test fixtures: `fixtures/spring-repo/`, `fixtures/nestjs-repo/`, `fixtures/express-repo/`, `fixtures/nextjs-repo/`
-- Rust worker tests: `crates/worker/src/index.rs::spring_tests`, `crates/worker/src/index.rs::nestjs_tests`, `crates/worker/src/index.rs::express_tests`, `crates/worker/src/index.rs::nextjs_tests`, `crates/worker/src/frameworks/spring.rs::tests`, `crates/worker/src/frameworks/java_gateway.rs::tests`, `crates/worker/src/frameworks/nestjs.rs::tests`, `crates/worker/src/frameworks/express.rs::tests`, `crates/worker/src/frameworks/nextjs.rs::tests`
+- Rust worker tests: `crates/worker/src/index.rs::spring_tests`, `crates/worker/src/index.rs::nestjs_tests`, `crates/worker/src/index.rs::express_tests`, `crates/worker/src/index.rs::nextjs_tests`, `crates/worker/src/frameworks/spring.rs::tests`, `crates/worker/src/frameworks/java_gateway.rs::tests`, `crates/worker/src/frameworks/nestjs.rs::tests`, `crates/worker/src/frameworks/express.rs::tests`, `crates/worker/src/frameworks/nextjs.rs::tests`, `crates/worker/src/frameworks/config.rs::tests`
 - Node integration tests: `packages/core/test/spring-framework.test.ts`, `packages/core/test/nestjs-framework.test.ts`, `packages/core/test/express-framework.test.ts`, `packages/core/test/nextjs-framework.test.ts`
 
 ## Core principle
@@ -69,7 +70,7 @@ Source files (TS, Java, Go, Python, …)
 | `crates/worker/src/frameworks/nestjs.rs` | Extract NestJS metadata: controllers, providers, modules, routes, constructor injection, guards, interceptors |
 | `crates/worker/src/frameworks/express.rs` | Extract Express/Fastify/Koa-style metadata: static routes, middleware, router mounts |
 | `crates/worker/src/frameworks/nextjs.rs` | Extract Next.js metadata: App Router and Pages Router file-system routes, API handlers, server actions |
-| `crates/worker/src/frameworks/config.rs` | (future) Reads `package.json`, `tsconfig.json`, `nest-cli.json`, `.env`, `application*.yml/properties` |
+| `crates/worker/src/frameworks/config.rs` | Reads `package.json`, `tsconfig.json`, `nest-cli.json`, `.env`, `application*.yml/properties`, `pom.xml` and emits `config_value` / `active_profile` facts |
 
 ## Shared data shape
 
@@ -166,10 +167,11 @@ Because framework metadata is per-file and content-addressed, the existing incre
 | `crates/worker/src/frameworks/nextjs.rs::tests` | Plugin infers App Router and Pages Router file-system routes, API handlers, and server actions. |
 | `crates/worker/src/index.rs::express_tests` | Full indexing turns Express metadata into typed entities, facts, and relationships. |
 | `crates/worker/src/index.rs::nextjs_tests` | Full indexing turns Next.js metadata into typed entities and facts, including API handlers and server actions. |
-| `packages/core/test/spring-framework.test.ts` | Node service stores and exposes the framework facts; `guards()` recognises `@PreAuthorize`; journey marks transactional steps as "Spring transaction"; gateway routes/filters appear end-to-end. |
-| `packages/core/test/nestjs-framework.test.ts` | Node service stores NestJS framework facts; `guards()` recognises `@UseGuards` and `CanActivate` guard classes; routes, injection, and module graph are exposed. |
-| `packages/core/test/express-framework.test.ts` | Node service stores Express routes and middleware entities end-to-end. |
-| `packages/core/test/nextjs-framework.test.ts` | Node service stores Next.js routes and server actions end-to-end. |
+| `crates/worker/src/frameworks/config.rs::tests` | Plugin extracts package.json scripts/dependencies, tsconfig.json options, .env values, application.yml/properties, and pom.xml coordinates. |
+| `packages/core/test/spring-framework.test.ts` | Node service stores and exposes the framework facts; `guards()` recognises `@PreAuthorize`; journey marks transactional steps as "Spring transaction"; gateway routes/filters appear end-to-end; pom.xml and application properties are extracted. |
+| `packages/core/test/nestjs-framework.test.ts` | Node service stores NestJS framework facts; `guards()` recognises `@UseGuards` and `CanActivate` guard classes; routes, injection, module graph, package.json/tsconfig/.env are exposed. |
+| `packages/core/test/express-framework.test.ts` | Node service stores Express routes and middleware entities and package.json config values end-to-end. |
+| `packages/core/test/nextjs-framework.test.ts` | Node service stores Next.js routes and server actions and tsconfig.json/.env/package.json config values end-to-end. |
 
 ## Remaining phases
 
@@ -210,10 +212,18 @@ Next.js:
 - Extracts server actions from `actions.ts` / `actions/*.ts`.
 - Emits `nextjs_route` entities and `route` facts.
 
-### Phase 5 — Config resolver
-- Add `crates/worker/src/frameworks/config.rs`.
-- Read `package.json`, `tsconfig.json`, `.env`, `nest-cli.json`, `application*.yml/properties`.
-- Emit `config_value` and `active_profile` facts.
+### Phase 5 — Config resolver ✅
+
+Implemented in `crates/worker/src/frameworks/config.rs`.
+
+- Reads `package.json` (scripts, dependencies, name, version).
+- Reads `tsconfig.json` (compiler options, include/exclude).
+- Reads `.env` / `.env.*` files (key/value pairs, prefixed as `env:<filename>:<key>`).
+- Reads `nest-cli.json` (collection, sourceRoot, projects).
+- Reads `application*.yml` / `application*.properties` (flattened keys, `spring:` prefix for non-`spring.*` properties, `active_profile` fact for `spring.profiles.active`).
+- Reads `pom.xml` (groupId, artifactId, version, java.version, spring-boot.version).
+- The repository walk in `index.rs` now includes these config files and routes them through the framework plugin dispatch.
+- Emits `config_value` facts (with secret redaction) and `active_profile` facts.
 
 ### Phase 6 — Runtime sandbox
 - Add `packages/core/src/runtime-sandbox.ts`.
@@ -227,7 +237,7 @@ Next.js:
 ## How to run
 
 ```sh
-cargo build --release                 # build the worker with Spring + Gateway + NestJS + Express + Next.js plugins
+cargo build --release                 # build the worker with Spring + Gateway + NestJS + Express + Next.js + Config plugins
 node --test packages/core/test/spring-framework.test.ts
 node --test packages/core/test/nestjs-framework.test.ts
 node --test packages/core/test/express-framework.test.ts
@@ -236,7 +246,7 @@ node --test packages/core/test/nextjs-framework.test.ts
 
 All existing tests pass:
 ```sh
-cd crates/worker && cargo test        # 74 tests pass
+cd crates/worker && cargo test        # 81 tests pass
 npm run typecheck                      # TypeScript typechecks
 node --test packages/core/test/c05.test.ts packages/core/test/c07.test.ts
 node --test packages/core/test/forms.test.ts
