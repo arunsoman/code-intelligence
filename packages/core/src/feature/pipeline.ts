@@ -16,6 +16,7 @@ import { authorize, type AuthorityConfig } from "./authority.ts";
 import { rawHash } from "./canon.ts";
 import { materializeCandidate, type CandidateScope, type FeatureEdit } from "./candidate.ts";
 import { confirmAcceptance } from "./acceptance.ts";
+import { applyDeclarations, declarationGaps } from "./declarations.ts";
 import { assessFeatureImpact, planClarifications } from "./clarify.ts";
 import { checkRequirementConstraints, detectSemanticConflicts, type FindingProposer } from "./conflicts.ts";
 import { contractHashOf, recordDecision, reviseContract } from "./decisions.ts";
@@ -35,7 +36,7 @@ import type { Store } from "../store.ts";
 import type { CandidateRecord, DecisionRecord, FeatureRecord, Id, OutcomeMode, PublicationDecision, PublicationReceipt, QuestionBatch, Runner } from "./types.ts";
 import { computeEligibility, defaultValidationPlan, runFeatureValidation, type ValidationPlan } from "./validation.ts";
 
-export type StepName = "SUBMIT" | "DISCOVER" | "NORMALISE" | "CONSTRAINTS" | "CLARIFY" | "CONFIRM" | "OVERLAP" | "PLAN" | "GENERATE" | "CANDIDATE" | "VALIDATE" | "DECIDE" | "EXPORT" | "PUBLISH";
+export type StepName = "SUBMIT" | "DISCOVER" | "NORMALISE" | "CONSTRAINTS" | "CLARIFY" | "CONFIRM" | "OVERLAP" | "PLAN" | "GENERATE" | "CANDIDATE" | "DECLARE" | "VALIDATE" | "DECIDE" | "EXPORT" | "PUBLISH";
 export type StepStatus = "DONE" | "PARTIAL" | "SKIPPED" | "STOPPED";
 export type PipelineStep = { step: StepName; status: StepStatus; detail: string };
 export type PipelineStop = "COMPLETE" | "NEEDS_ANSWER" | "ALREADY_SUPPORTED" | "PLAN_ONLY" | "BLOCKED" | "FAILED";
@@ -55,7 +56,7 @@ export interface PipelineDeps {
   adapter?: (requestId: Id) => FeatureModelAdapter; proposer?: (requestId: Id, actor: Id) => FindingProposer | undefined;
   /** Gate drivers (security, dependency, operational, browser, performance) for the validation run; see gateDriverFor. */
   runCheck?: (candidate: CandidateRecord, request: FeatureRecord) => RunCheck | undefined;
-  publish?: Omit<PublishDeps, "fs" | "store">;
+  publish?: Omit<PublishDeps, "fs" | "store" | "authority">;
   /** Cancellation, a hook run just before the first external write (a job passes its commit point here), and a progress callback. */
   signal?: AbortSignal; beforePublish?: () => void; onStep?: (s: PipelineStep) => void;
 }
@@ -64,7 +65,7 @@ export interface PipelineInput {
   /** Answers by question id, applied in order. An answer for a question the contract does not have is ignored and reported. */
   answers?: Record<string, string>; scope?: CandidateScope; releasePlan?: FeatureRecord["contract"] extends infer C ? C extends { releasePlan?: infer R } ? R : never : never;
   /** A person confirms the generated expected outcomes (all, or the named criteria); without this the oracle stays unreviewed and nothing can be verified. */
-  confirm?: { criteria: "ALL" | string[]; rationale: string }; validation?: ValidationDeclaration; exportFormat?: (typeof EXPORT_FORMATS)[number] | null; publishTo?: string; budget?: { files?: number; tokens?: number };
+  confirm?: { criteria: "ALL" | string[]; rationale: string }; validation?: ValidationDeclaration; /** Why the declarations are right; stored with each one. */ validationRationale?: string; exportFormat?: (typeof EXPORT_FORMATS)[number] | null; publishTo?: string; budget?: { files?: number; tokens?: number };
 }
 export interface PipelineResult {
   requestId: Id; stop: PipelineStop; reason: string; steps: PipelineStep[]; questions?: QuestionBatch["questions"];
@@ -98,14 +99,14 @@ export function adapterEdits(d: Pick<PipelineDeps, "fs" | "adapter" | "auth">, a
 }
 
 /** The plan the driver validates with: the repository's own build/test scripts, the declared environment, honest defaults for the rest. */
-export function validationPlanFor(request: FeatureRecord, candidate: CandidateRecord, decl: ValidationDeclaration = {}): ValidationPlan {
+export function validationPlanFor(request: FeatureRecord, candidate: CandidateRecord, decl: ValidationDeclaration & { declaredBy?: { PERFORMANCE_NOT_APPLICABLE?: { actor: Id } } } = {}): ValidationPlan {
   const base = defaultValidationPlan(request, candidate);
   const env = { ...base.environment, hash: rawHash(JSON.stringify({ label: decl.environmentLabel ?? "unlabelled", fidelity: decl.fidelity ?? "PARTIAL" })), fidelity: decl.fidelity ?? "PARTIAL", dependencies: decl.dependencies ?? "UNKNOWN" };
   const testData = decl.testData ? { kind: decl.testData.kind, fixtureHash: rawHash(JSON.stringify(Object.keys(candidate.contents ?? {}).sort())), generatorHash: rawHash("inline-in-tests"), seed: "none", ...(decl.testData.authorizationRef ? { authorizationRef: decl.testData.authorizationRef } : {}) } : base.testData;
   const touchesUi = candidate.mutations.some((m) => /\.(tsx|jsx|html|css)$/.test(m.newPath ?? m.oldPath ?? ""));
   const perfApplicable = decl.performanceApplicable ?? base.performanceApplicable;
   const checks = base.checks.map((c) => c.kind === "BROWSER" && !touchesUi ? { ...c, applicability: "NOT_APPLICABLE" as const, rationale: "the change touches no UI file (tsx, jsx, html, css)" }
-    : c.kind === "PERFORMANCE" && !perfApplicable ? { ...c, applicability: "NOT_APPLICABLE" as const, rationale: `declared not performance-applicable by the caller (${decl.environmentLabel ?? "no label"}); the change was not measured` } : c);
+    : c.kind === "PERFORMANCE" && !perfApplicable ? { ...c, applicability: "NOT_APPLICABLE" as const, rationale: `Not measured — performance declared not applicable by ${decl.declaredBy?.PERFORMANCE_NOT_APPLICABLE?.actor ?? "an unrecorded principal"}` } : c);
   return { ...base, checks, environment: env, testData, performanceApplicable: perfApplicable, toolchainHash: rawHash(decl.environmentLabel ?? process.version) };
 }
 
@@ -191,7 +192,9 @@ export async function runFeaturePipeline(d: PipelineDeps, actor: Id, i: Pipeline
 
     // ---- release plan (a person's statement; the contract is re-hashed so every later step is bound to it)
     if (i.releasePlan) {
-      const rec = req(); const { hash: _h, ...body } = rec.contract!; const next = { ...body, releasePlan: i.releasePlan };
+      const rec = req(); const { hash: _h, ...body } = rec.contract!;
+      const bound = authorize(d.auth, actor, "release", rec.createdBy); // D001: the requester drafts; only a principal bound for release scope confirms
+      const next = { ...body, releasePlan: { ...i.releasePlan, draftedBy: actor, ...(bound.allowed ? { confirmedBy: actor } : {}) } };
       const contract = { ...next, hash: contractHashOf(next) };
       d.fs.updateRequest(requestId, rec.version, { ...rec, contract, workspace: { ...rec.workspace, contractHash: contract.hash, workspaceVersion: rec.workspace.workspaceVersion + 1 } });
     }
@@ -217,14 +220,16 @@ export async function runFeaturePipeline(d: PipelineDeps, actor: Id, i: Pipeline
     // ---- validate
     let cur = req(); if (cur.state === "CONTRACTING") cur = transition(d.fs, requestId, cur.version, "IMPLEMENTING", actor, "candidate built");
     if (cur.state === "IMPLEMENTING") cur = transition(d.fs, requestId, cur.version, "VALIDATING", actor, "validation started");
-    const vplan = validationPlanFor(req(), cand, i.validation);
+    const declared = applyDeclarations(d.fs, d.auth, actor, requestId, i.validation ?? {}, i.validationRationale);
+    add(t, "DECLARE", declared.refused.length ? "PARTIAL" : "DONE", `${declared.accepted.length} declaration(s) recorded${declared.refused.length ? `; refused: ${declared.refused.map((r) => `${r.kind} — ${r.reason}`).join("; ")}` : ""}`);
+    const vplan = validationPlanFor(req(), cand, declared.effective);
     const evidence = await runFeatureValidation({ store: d.fs, runner: d.runner, runCheck: d.runCheck?.(cand, req()) }, { candidateId: cand.id, plan: vplan, actor, wallMs: i.validation?.wallMs ?? 600_000, signal: d.signal });
     const counts = evidence.flatMap((e) => e.results).reduce<Record<string, number>>((m, r) => ({ ...m, [r.status]: (m[r.status] ?? 0) + 1 }), {});
     add(t, "VALIDATE", evidence.every((e) => e.results.every((r) => r.status === "PASS" || r.status === "NOT_APPLICABLE")) ? "DONE" : "PARTIAL", `${evidence.length} check(s): ${Object.entries(counts).sort().map(([k, v]) => `${k} ${v}`).join(", ")}`);
 
     // ---- decide, then deliver
     const fresh = d.fs.getCandidate(cand.id)!; const rec = req();
-    const decide = (purpose: string) => computeEligibility({ request: rec, candidate: fresh, plan: rec.validationPlan ?? vplan, evidence: d.fs.listEvidence(fresh.id).filter((e) => !e.verdict), decisions: d.fs.listDecisions(requestId), purpose });
+    const decide = (purpose: string) => computeEligibility({ request: rec, candidate: fresh, plan: rec.validationPlan ?? vplan, evidence: d.fs.listEvidence(fresh.id).filter((e) => !e.verdict), decisions: d.fs.listDecisions(requestId), purpose, externalGaps: declarationGaps(d.fs, rec, d.auth) });
     const decision = decide("EXPORT_PATCH");
     add(t, "DECIDE", decision.eligibility === "VERIFIED_WITHIN_SCOPE" ? "DONE" : "PARTIAL", `${decision.eligibility}${decision.reasons.length ? `: ${decision.reasons.slice(0, 3).join("; ")}${decision.reasons.length > 3 ? ` (+${decision.reasons.length - 3} more)` : ""}` : ""}`);
     const result: Partial<PipelineResult> = { candidate: d.fs.getCandidate(cand.id)!, decision, unusedAnswers: [...unused] };
@@ -238,7 +243,7 @@ export async function runFeaturePipeline(d: PipelineDeps, actor: Id, i: Pipeline
       else {
         d.beforePublish?.();
         try {
-          const pub = await publishFeaturePR({ fs: d.fs, store: d.store, ...d.publish }, actor, { proposalId: fresh.id, decisionId: decide("PUBLISH_DRAFT_PR").id, expectedHeadHash: fresh.binding.candidateContentHash, destination: i.publishTo, idempotencyKey: `pipeline:${requestId}:publish` });
+          const pub = await publishFeaturePR({ fs: d.fs, store: d.store, authority: () => d.auth, ...d.publish }, actor, { proposalId: fresh.id, decisionId: decide("PUBLISH_DRAFT_PR").id, expectedHeadHash: fresh.binding.candidateContentHash, destination: i.publishTo, idempotencyKey: `pipeline:${requestId}:publish` });
           result.publication = pub; add(t, "PUBLISH", "DONE", `draft PR #${pub.prNumber} (${pub.eligibility})`);
         } catch (e) { if (e instanceof FeatureError) { add(t, "PUBLISH", "STOPPED", e.message); return finish("BLOCKED", e.message, result); } throw e; }
       }

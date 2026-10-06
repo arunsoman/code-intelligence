@@ -52,16 +52,18 @@
         "state": "done"
       },
       {
-        "item": "PF-036 authority-scoped publication decisions",
-        "tests": [],
-        "state": "blocked",
-        "needs": "a recorded publish authority in .cie/authority.json; today the requester publishes their own request"
-      },
-      {
         "item": "real GitHub transport exercised end to end",
         "tests": [],
         "state": "blocked",
         "needs": "a live repository and credentials; tests use a scripted forge whose remote is a real local git repository"
+      },
+      {
+        "item": "publication is its own authority: a publish binding names principal, repositories, bases and draft_pr.create; ownership grants nothing; only a verified candidate; the receipt names the binding (PF-036, D005)",
+        "tests": [
+          "D005 publication needs a publish binding for this principal",
+          "D005 an authority file may not widen publication"
+        ],
+        "state": "done"
       }
     ]
   }

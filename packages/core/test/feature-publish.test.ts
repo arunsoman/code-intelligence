@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DraftForge } from "../src/defect-workflow.ts";
@@ -11,6 +11,8 @@ import { branchFor, parseDestination } from "../src/feature/publish.ts";
 import { defaultValidationPlan } from "../src/feature/validation.ts";
 import { boot, createEdit, none } from "./feature-boot.ts";
 
+/** Publication is its own authority (D005). The mechanics tests below bind arun for acme/payments:main and turn off only the verified-candidate rule, which has its own test. */
+const PUBLISH_AUTH = { bindings: [{ id: "pub", scope: "publish", principals: ["arun"], repositories: ["acme/payments"], bases: ["main"], permissions: ["draft_pr.create"] }] };
 const git = (repo: string, ...a: string[]) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 /** A scripted GitHub whose "remote" is the demo repository itself, so branches really exist and heads are real commits. */
@@ -29,12 +31,12 @@ class Forge implements DraftForge {
 async function world(o: { mode?: "CREATE_DRAFT_PR" | "BUILD_PREVIEW"; reviews?: ReviewSource } = {}) {
   const clones = mkdtempSync(join(tmpdir(), "pf-clones-"));
   let forge!: Forge; let events: ReviewEvent[] = [];
-  const b = await boot({ mode: o.mode ?? "CREATE_DRAFT_PR", prepare: (repo) => { git(repo, "remote", "add", "origin", "https://github.com/acme/payments.git"); }, text: "Add CSV export for transactions, my token is AKIAABCDEFGHIJKLMNOP" });
+  const b = await boot({ mode: o.mode ?? "CREATE_DRAFT_PR", prepare: (repo) => { git(repo, "remote", "add", "origin", "https://github.com/acme/payments.git"); mkdirSync(join(repo, ".cie"), { recursive: true }); writeFileSync(join(repo, ".cie/authority.json"), JSON.stringify(PUBLISH_AUTH)); }, text: "Add CSV export for transactions, my token is AKIAABCDEFGHIJKLMNOP" });
   forge = new Forge(b.repo);
   const setIssue = (syncState: "UNSYNCED" | "TRACKING_BLOCKED") => { const r = b.fs.getRequest(b.rid)!; b.fs.updateRequest(b.rid, r.version, { ...r, issue: { ...r.issue, syncState } }); };
   setIssue("UNSYNCED"); // mandatory tracking blocks building until an issue is bound; this suite is about publication, so it starts bound
   b.cand = materializeCandidate({ fs: b.fs, store: b.svc.store, auth: none }, "arun", { requestId: b.rid, snapshot: b.fs.getRequest(b.rid)!.source, edits: [createEdit("src/export/csv.ts", "export const toCsv = () => '';\n")], idempotencyKey: "m" }).candidate;
-  const h2 = (await import("../src/feature/handlers.ts")).featureHandlers(b.svc, { publish: { forge, cloneRoot: clones, reviews: o.reviews ?? { events: async () => events } } }) as Record<string, (c: any, x: any) => any>;
+  const h2 = (await import("../src/feature/handlers.ts")).featureHandlers(b.svc, { publish: { forge, cloneRoot: clones, requireVerified: false, reviews: o.reviews ?? { events: async () => events } } }) as Record<string, (c: any, x: any) => any>;
   const rec0 = b.fs.getRequest(b.rid)!;
   b.fs.updateRequest(b.rid, rec0.version, { ...rec0, validationPlan: { ...defaultValidationPlan(rec0, b.cand), testData: { kind: "SYNTHETIC", fixtureHash: "f", generatorHash: "g", seed: "1" } } });
   const track = () => setIssue("UNSYNCED"), untrack = () => setIssue("TRACKING_BLOCKED");
@@ -168,4 +170,35 @@ test("PF-051 after review, a revised candidate updates the SAME draft PR: the br
     assert.equal(git(w.repo, "show", `${branchFor(w.rid)}:src/export/csv.ts`), "export const toCsv = () => 'v2';");
     assert.ok(w.fs.listEvents(w.rid).some((e) => e.type === "PR_UPDATED")); assert.equal(w.fs.getRequest(w.rid)!.state, "PUBLISHED");
   } finally { w.close(); }
+});
+
+test("D005 publication needs a publish binding for this principal, repository and base, and a verified candidate: ownership grants nothing", async () => {
+  const w = await world(); w.track();
+  try {
+    const { authorizePublish } = await import("../src/feature/authority.ts");
+    const ok = authorizePublish(PUBLISH_AUTH as never, "arun", { repository: "acme/payments", base: "main" }); assert.equal(ok.allowed, true); assert.equal(ok.bindingId, "pub");
+    for (const [who, target, re] of [["bob", { repository: "acme/payments", base: "main" }, /not named for publication/], ["arun", { repository: "acme/other", base: "main" }, /may not publish to acme\/other/], ["arun", { repository: "acme/payments", base: "release" }, /not an allowed base branch/]] as const) {
+      const r = authorizePublish(PUBLISH_AUTH as never, who, target); assert.equal(r.allowed, false); assert.match(r.reason, re);
+    }
+    assert.match(authorizePublish({ bindings: [] }, "arun", { repository: "a/b", base: "main" }).reason, /no publication authority is configured/);
+    assert.match(authorizePublish({ bindings: [{ id: "p", scope: "publish", principals: ["arun"], repositories: ["acme/payments"], bases: ["main"], permissions: ["x.y"] }] } as never, "arun", { repository: "acme/payments", base: "main" }).reason, /lacks the draft_pr.create permission/);
+    // through the gateway: the owner is not bound for another repository or base, and nothing was pushed or created
+    for (const [dest, re] of [["acme/other:main", /may not publish to acme\/other/], ["acme/payments:release", /not an allowed base branch/]] as const) { const r = await w.publish({ destination: dest }, `k-${dest}`); assert.equal(r.error.code, "FORBIDDEN"); assert.match(r.error.message, re); }
+    assert.equal(w.forge.creates, 0); assert.equal(w.fs.listCandidates(w.rid)[0]!.publication, undefined);
+    // the default is verified-only: a review-only candidate is refused even with a binding
+    const strict = (await import("../src/feature/handlers.ts")).featureHandlers(w.svc, { publish: { forge: w.forge, cloneRoot: w.clones } }) as Record<string, (c: any, b: any) => any>;
+    const r = await strict["C30/publishFeaturePR"](w.as("arun", "strict"), { proposalId: w.cand.id, decisionId: w.decide().id, expectedHeadHash: w.cand.binding.candidateContentHash, destination: "acme/payments:main" });
+    assert.equal(r.ok, false); assert.match(r.error.message, /only a verified candidate is published/); assert.equal(w.forge.creates, 0);
+    // a published receipt names the binding that allowed it
+    const done = await w.publish({}, "k-ok"); assert.equal(done.ok, true); assert.equal(done.value.authorityBindingId, "pub");
+  } finally { w.close(); }
+});
+
+test("D005 an authority file may not widen publication: wildcards, unknown permissions and missing fields are refused", async () => {
+  const { loadAuthority } = await import("../src/feature/authority.ts"); const dir = mkdtempSync(join(tmpdir(), "pf-auth-")); mkdirSync(join(dir, ".cie"));
+  const load = (b: object) => { writeFileSync(join(dir, ".cie/authority.json"), JSON.stringify({ bindings: [b] })); return loadAuthority(dir); };
+  const base = { id: "p", scope: "publish", principals: ["arun"], repositories: ["acme/payments"], bases: ["main"], permissions: ["draft_pr.create"] };
+  assert.equal(load(base).bindings[0]!.permissions![0], "draft_pr.create");
+  assert.throws(() => load({ ...base, repositories: ["acme/*"] }), /no wildcards/); assert.throws(() => load({ ...base, permissions: ["pr.merge"] }), /merging and deploying are separate authorities/);
+  assert.throws(() => load({ id: "p", scope: "publish", principals: ["arun"] }), /names repositories, bases and permissions/); assert.throws(() => load({ id: "v", scope: "validation", principals: ["arun"], repositories: ["a/b"] }), /belong to publish bindings only/);
 });

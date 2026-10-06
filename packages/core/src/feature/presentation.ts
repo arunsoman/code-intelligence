@@ -1,5 +1,6 @@
 // 2.N: bounded read models derived from recorded contracts, plans and actual mutation inventory.
 import type { ViewSpec } from "@cie/schema";
+import { declarationGaps } from "./declarations.ts";
 import { policyFor } from "../access.ts";
 import type { Store } from "../store.ts";
 import { deliverView, validationDashboard } from "./dashboard.ts";
@@ -45,7 +46,7 @@ function featureReviewBase(fs: FeatureStore, request: FeatureRecord, candidate: 
     questions: request.blockers.map((b) => ({ id: b.id, text: b.text, requirementIds: b.requirementIds, scope: b.scope ?? "business", choices: [], whyNeeded: `Blocks ${b.requirementIds.join(", ") || "request progress"}; ${b.scope ?? "business"} authority is required.` })),
     tasks, overlap: request.contract?.overlap, files: allowed,
     fileCounts: Object.fromEntries(["ADDED", "MODIFIED", "DELETED", "RENAMED", "REUSED", "AFFECTED_UNCHANGED", "PLANNED"].map((k) => [k, allowed.filter((f) => f.kind === k).length])),
-    results: evidence.flatMap((e) => e.results), ...(candidate && plan ? { validationPlanHash: validationPlanHash(plan), decision: computeEligibility({ request, candidate, plan, evidence, decisions, unevaluatedModels: unevaluatedModels(fs as { getEvaluation?: never }, request, candidate) }) } : {}),
+    results: evidence.flatMap((e) => e.results), ...(candidate && plan ? { validationPlanHash: validationPlanHash(plan), decision: computeEligibility({ request, candidate, plan, evidence, decisions, unevaluatedModels: unevaluatedModels(fs as { getEvaluation?: never }, request, candidate), externalGaps: declarationGaps(fs, request) }) } : {}),
     gaps: [...(!request.contract ? ["No contract draft recorded."] : []), ...(!request.contract?.overlap ? ["Overlap assessment has not been recorded."] : []), ...(allowed.length !== files.length || hiddenEdits ? ["Some files are outside your source access scope; counts cover visible inventory only."] : [])] };
 }
 export function compileChangeGraph(request: FeatureRecord, files: ReviewFile[], input: { candidateHash?: string; filters?: Record<string, string>; cursor?: string; budget: { nodes: number } }): Outcome<ChangeGraphPage> {

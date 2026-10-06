@@ -14,12 +14,14 @@ test("PF-073/074 the Validate stage renders baseline beside candidate, origins, 
   assert.match(t, /backend: baseline preexisting failure · candidate fail/); assert.match(t, /Stale: the candidate is stale/); assert.match(t, /pass \(expectation not reviewed\)/);
   assert.match(t, /added by this change/); assert.match(t, /existing \(not in a changed file\)/); assert.match(t, /3 more not listed/);
   assert.match(t, /Do not edit, skip or loosen a test/); assert.match(t, /A test was weakened/); assert.match(t, /Run validation/);
+  assert.match(t, /What this result rests on/); assert.match(t, /declarer no longer authorised/); assert.match(t, /claimed but not declared|not confirmed/); assert.match(t, /declared by arun \(requester\)/);
   assert.deepEqual(run.findings!.validate, []);
 });
 
 test("PF-077/078/079 the Deliver stage gives each disabled action its reason, keeps effectful actions separate, and never says verified for a review-only candidate", () => {
   const blocked = text(run.html!.deliverBlocked!), ok = text(run.html!.deliverOk!);
   assert.match(blocked, /BLOCKED — a mandatory check failed/); assert.match(blocked, /a blocked candidate is not exported/); assert.match(blocked, /export a patch first/); assert.match(blocked, /BUILD_PREVIEW mode/);
+  assert.match(ok, /It is not a decision until a principal with release authority confirms it/); assert.match(ok, /You are not bound for publication\. Owning the request does not grant it/);
   assert.match(ok, /REVIEW ONLY — VALIDATION INCOMPLETE/); assert.doesNotMatch(ok, /verified within/i); assert.match(ok, /Export patch/); assert.match(ok, /Create draft PR/); assert.match(ok, /never merges or approves/);
   assert.match(run.html!.deliverBlocked!, /disabled=""[^>]*aria-describedby="why-export"|aria-describedby="why-export"[^>]*disabled=""/);
   assert.deepEqual(run.findings!.deliverBlocked, []); assert.deepEqual(run.findings!.deliverOk, []);

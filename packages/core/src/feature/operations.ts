@@ -57,13 +57,15 @@ export const tierOfCandidate = (c: CandidateRecord): Tier => classifyTier(c.muta
 export function releasePlanProblems(plan: ReleasePlan | undefined, tier: Tier): string[] {
   if (tier === "T0") return [];
   if (!plan) return [tier === "T2" ? "no release plan (flag or kill switch, revert runbook, stop criteria, observation window, operator)" : "no operational note (how this is rolled back)"];
-  if (plan.applicability === "NOT_APPLICABLE") return plan.rationale?.trim() && tier === "T1" ? [] : [tier === "T2" ? "a T2 change cannot declare its release plan not applicable" : "release plan marked not applicable without a rationale"];
+  // D001: the requester drafts; until a principal bound for release scope confirms it, it is a draft and not a decision.
+  const draft = plan.confirmedBy ? [] : [`the ${tier === "T2" ? "release plan" : "operational note"} is a draft: no principal with release authority has confirmed it`];
+  if (plan.applicability === "NOT_APPLICABLE") return [...(plan.rationale?.trim() && tier === "T1" ? [] : [tier === "T2" ? "a T2 change cannot declare its release plan not applicable" : "release plan marked not applicable without a rationale"]), ...draft];
   const need: [keyof ReleasePlan, string][] = tier === "T2"
     ? [["revertRunbook", "revert runbook"], ["stopCriteria", "stop criteria"], ["observationWindow", "observation window"], ["operator", "operator"]]
     : [["revertRunbook", "revert runbook"]];
   const out = need.filter(([k]) => { const v = plan[k]; return Array.isArray(v) ? !v.length : !String(v ?? "").trim(); }).map(([, l]) => `release plan lacks a ${l}`);
   if (tier === "T2" && !plan.flagStrategy?.trim() && !plan.killSwitch?.trim()) out.push("release plan lacks a flag strategy or kill switch");
-  return out;
+  return [...draft, ...out];
 }
 
 /** Facts only: the revert note and the data-recovery limit can be derived from the change; thresholds, windows and owners cannot. */

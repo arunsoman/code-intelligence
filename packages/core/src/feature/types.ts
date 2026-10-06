@@ -233,6 +233,8 @@ export type PublicationDecision = {
 export type ReleasePlan = {
   applicability: "APPLICABLE" | "NOT_APPLICABLE"; rationale?: string; flagStrategy?: string; deploymentOrder?: string[]; observationWindow?: string;
   stopCriteria?: string[]; operator?: string; killSwitch?: string; revertRunbook?: string; dataRecoveryLimits?: string;
+  /** D001: the requester drafts; a plan is not a confirmed decision until a principal bound for release scope confirms it. */
+  draftedBy?: Id; confirmedBy?: Id;
 };
 
 // ------------------------------------------------------------------------------------------------ overlap and concurrency (§37, §40)
@@ -265,7 +267,7 @@ export type PatchExport = {
 export type PublicationReceipt = {
   id: Id; kind: "DRAFT_PR" | "ISSUE_SYNC" | "PATCH_APPLY"; remoteRef?: string; headHash?: Hash; decisionId: Id; at: Timestamp;
   /** 3.R: where the draft PR is, the exact commit that was pushed, and what it was bound to. */
-  repository?: string; branch?: string; prNumber?: number; commit?: Hash; eligibility?: PublicationEligibility; idempotencyKey?: string; updated?: boolean; notes?: string[];
+  repository?: string; branch?: string; prNumber?: number; commit?: Hash; eligibility?: PublicationEligibility; idempotencyKey?: string; updated?: boolean; notes?: string[]; /** D005: the publish binding that allowed this write. */ authorityBindingId?: Id;
 };
 
 // ------------------------------------------------------------------------------------------------ placeholders (fields added by the owning task)

@@ -330,3 +330,14 @@ The five policy decisions are recorded in [`decisions/README.md`](decisions/READ
 7. #90: align documentation with #89 and publish measured accessibility and low-resource results.
 
 #93 and #91 can be developed independently, but both must be complete before the full #88 candidate is certified. #88 depends on #94, #92 and #93, with #91 included for the complete file-mutation scope. #89 depends on the end-to-end and validation evidence; #90 reports only measured/certified results.
+
+### 13.1 Decisions D001 and D005 enforced (2026-10-06)
+
+Authority-scoped declarations and publication, per `docs/prompt-to-feature/decisions/`:
+
+- `feature/declarations.ts`: each strong claim a run makes about itself is a recorded decision (who, which binding, why). Refused claims are named, audited as BLOCKED events, and the run continues with the weaker claim. `declarationGaps` is passed into `computeEligibility` wherever it is computed, so revoking a binding, or a plan claiming more than anyone recorded, makes the result review-only again.
+- Authority scopes `validation` and `publish` added. A publish binding names principals, repositories, bases and permissions (`draft_pr.create` only; wildcards and merge permissions are refused when the file loads).
+- `publishFeaturePR` requires that binding for the exact repository and base, and a `VERIFIED_WITHIN_SCOPE` candidate; the receipt names the binding. Ownership of the request grants nothing.
+- Release plan or T1 operational note: the requester drafts (`C15/draftReleasePlan`), a principal bound for release confirms (`C15/confirmReleasePlan`); an unconfirmed plan is a named gap.
+- The verified demo now needs `validation`, `performance` and `release` bindings (and `publish` for the PR). Without them the same run is REVIEW ONLY, with each refusal listed. The earlier statement that the demo reaches VERIFIED holds only with those bindings.
+- Still open here: a read-only reviewer role (today only the requester can open a request), and UI controls that write declarations (the stages show who declared what).

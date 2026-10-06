@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Dashboard, DeliverView } from "../../../packages/core/src/feature/dashboard.ts";
-import { actionState, bannerTone, countByStatus, exportFileName, filterTests, reasonList, statusText, statusTone, targetLine, validDestination, type TestRow } from "../src/build/deliver-view.ts";
+import { declarationText, declarationTone, publishAuthorityText, actionState, bannerTone, countByStatus, exportFileName, filterTests, reasonList, statusText, statusTone, targetLine, validDestination, type TestRow } from "../src/build/deliver-view.ts";
 
 const rows: TestRow[] = [
   { name: "accepts current tenant", target: "backend", checkId: "tests:.", status: "PASS", origin: "ADDED" }, { name: "rejects other tenant", target: "backend", checkId: "tests:.", status: "FAIL", origin: "ADDED" },
@@ -32,4 +32,10 @@ test("PF-077/078 export names, destination syntax and the reason a disabled acti
   const v = { actions: [{ action: "Export patch", enabled: false, reason: "a blocked candidate is not exported" }] } as unknown as DeliverView;
   assert.equal(actionState(v, "Export patch").reason, "a blocked candidate is not exported"); assert.equal(actionState(v, "Export patch").enabled, false); assert.equal(actionState(v, "Create draft PR").enabled, false); assert.ok(actionState(v, "Create draft PR").reason);
   assert.deepEqual(reasonList(Array.from({ length: 11 }, (_, i) => `r${i}`)), { shown: ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7"], more: 3 }); assert.deepEqual(reasonList(["a"]), { shown: ["a"], more: 0 });
+});
+
+test("D001/D005 a declaration nobody recorded, or whose declarer lost authority, is never shown green; publication text says whether you are bound", () => {
+  assert.deepEqual(["DECLARED", "CONFIRMED", "NOT_CLAIMED", "NOT_DECLARED", "UNCONFIRMED", "NO_LONGER_AUTHORISED", "x"].map(declarationTone), ["ok", "ok", "ok", "warn", "warn", "bad", "warn"]);
+  assert.equal(declarationText("NO_LONGER_AUTHORISED"), "declarer no longer authorised"); assert.equal(declarationText("UNCONFIRMED"), "not confirmed");
+  assert.match(publishAuthorityText({ bound: true, repositories: ["a/b"], bases: ["main"] }), /a\/b against main/); assert.match(publishAuthorityText({ bound: false, repositories: [], bases: [] }), /not bound for publication/);
 });

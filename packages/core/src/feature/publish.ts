@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import type { DraftForge } from "../defect-workflow.ts";
 import { copyTree, makeScratch, removeScratch, safeJoin, sha256 } from "../isolated-exec.ts";
 import type { Store } from "../store.ts";
+import { authorizePublish, type AuthorityConfig } from "./authority.ts";
 import { contentRoot, entriesFromDirectory } from "./canon.ts";
 import { FeatureError } from "./errors.ts";
 import { snapshotOf } from "./intake.ts";
@@ -24,7 +25,13 @@ import type { SqliteFeatureStore } from "./store.ts";
 import type { CandidateRecord, FeatureRecord, Id, PublicationDecision, PublicationReceipt } from "./types.ts";
 
 export const PUBLISH_PURPOSES = ["PUBLISH_DRAFT_PR"] as const;
-export interface PublishDeps { fs: SqliteFeatureStore; store: Store; forge: DraftForge; cloneRoot: string; now?: () => string }
+export interface PublishDeps {
+  fs: SqliteFeatureStore; store: Store; forge: DraftForge; cloneRoot: string; now?: () => string;
+  /** The authority file for a repository (D005). Publication needs a "publish" binding; ownership of the request grants nothing. */
+  authority: (repositoryId: string) => AuthorityConfig;
+  /** Default true (D005: the candidate must be verified). Only mechanics tests turn it off. */
+  requireVerified?: boolean;
+}
 export interface PublishInput { proposalId: Id; decisionId: Id; expectedHeadHash: string; destination: string; idempotencyKey: string }
 
 const DEST = /^([A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}):([A-Za-z0-9][A-Za-z0-9_./-]{0,100})$/;
@@ -83,6 +90,8 @@ export async function publishFeaturePR(d: PublishDeps, actor: Id, i: PublishInpu
   // A retry with the same key returns what was recorded; it never creates a second PR.
   if (candidate.publication?.idempotencyKey === i.idempotencyKey) return candidate.publication;
   assertStillAccessible(d.store, request, candidate);
+  const authority = authorizePublish(d.authority(request.repositoryId), actor, { repository, base });
+  if (!authority.allowed) throw new FeatureError("FORBIDDEN", `publication is not permitted: ${authority.reason}`);
   if (request.mode !== "CREATE_DRAFT_PR") throw new FeatureError("FORBIDDEN", `this request was made in ${request.mode} mode; only CREATE_DRAFT_PR requests publish`);
   if (["CANCELLED", "FAILED"].includes(request.state)) throw new FeatureError("FORBIDDEN", `the request is ${request.state}`);
   if (request.issue.syncState === "TRACKING_BLOCKED") throw new FeatureError("BLOCKED", "issue tracking is mandatory for this request and no issue is bound yet");
@@ -91,6 +100,7 @@ export async function publishFeaturePR(d: PublishDeps, actor: Id, i: PublishInpu
   const decision = currentDecision(d, request, candidate, i.decisionId, PUBLISH_PURPOSES);
   if (decision.status === "STALE") throw new FeatureError("STALE_REVISION", "the decision is stale");
   if (decision.eligibility === "BLOCKED") throw new FeatureError("BLOCKED", `a blocked candidate is not published: ${decision.reasons.slice(0, 3).join("; ")}`);
+  if (d.requireVerified !== false && decision.eligibility !== "VERIFIED_WITHIN_SCOPE") throw new FeatureError("BLOCKED", `only a verified candidate is published as a draft pull request (${decision.eligibility}): ${decision.reasons.slice(0, 3).join("; ")}`);
   const blocks = exportBlocks(candidate);
   if (blocks.length) throw new FeatureError("FORBIDDEN", `the candidate cannot be written to a branch: ${blocks.join("; ")}`);
   const live = snapshotOf(d.store, request.repositoryId);
@@ -146,7 +156,7 @@ export async function publishFeaturePR(d: PublishDeps, actor: Id, i: PublishInpu
 
   const pub: PublicationReceipt = {
     id: `pub:${sha256(`${candidate.bindingHash}|${receipt.number}|${commit}`).slice(0, 24)}`, kind: "DRAFT_PR", remoteRef: receipt.url, headHash: candidate.binding.candidateContentHash, decisionId: decision.id,
-    at: (d.now ?? (() => new Date().toISOString()))(), repository, branch, prNumber: receipt.number, commit, eligibility: decision.eligibility, idempotencyKey: i.idempotencyKey, updated,
+    at: (d.now ?? (() => new Date().toISOString()))(), repository, branch, prNumber: receipt.number, commit, eligibility: decision.eligibility, idempotencyKey: i.idempotencyKey, updated, authorityBindingId: authority.bindingId,
     notes: [...(baseNote ? [baseNote] : []), ...(decision.eligibility === "VERIFIED_WITHIN_SCOPE" ? [] : ["review only: validation incomplete"])],
   };
   const fresh = d.fs.getCandidate(candidate.id)!;

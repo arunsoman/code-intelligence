@@ -1,6 +1,6 @@
 // Shared by the pipeline tests: the transactions demo repository, a scripted model, the edits it proposes and a fake container runner.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GenerationRequest, GenerationResponse, GenerationRouter } from "../src/llm-router.ts";
@@ -9,10 +9,16 @@ import type { FeatureEdit } from "../src/feature/candidate.ts";
 import type { RunRequest, RunResult, Runner } from "../src/feature/types.ts";
 
 const ROOT = join(import.meta.dirname, "../../..");
-export function demo(): string {
+/** The bindings a fully authorised demo needs (D001, D005): validation, performance, release and publish. */
+export const AUTH = { bindings: [
+  { id: "val", scope: "validation", principals: ["arun"] }, { id: "perf", scope: "performance", principals: ["arun"] }, { id: "rel", scope: "release", principals: ["arun"] },
+  { id: "pub", scope: "publish", principals: ["arun"], repositories: ["acme/transactions"], bases: ["main"], permissions: ["draft_pr.create"] },
+] } as const;
+export function demo(authority?: object): string {
   const dir = join(mkdtempSync(join(tmpdir(), "cie-tx-")), "transactions-app");
   execFileSync("bash", [join(ROOT, "scripts_make_demo_repo.sh"), dir, "transactions-app"], { stdio: "pipe" });
   execFileSync("git", ["-C", dir, "remote", "add", "origin", "https://github.com/acme/transactions.git"]);
+  if (authority) { mkdirSync(join(dir, ".cie"), { recursive: true }); writeFileSync(join(dir, ".cie/authority.json"), JSON.stringify(authority)); }
   return dir;
 }
 

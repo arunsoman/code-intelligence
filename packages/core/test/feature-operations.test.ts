@@ -32,7 +32,7 @@ test("PF-048 a new endpoint without a signal, a limit or a release note is a gap
   } finally { w.close(); }
   const ok = await world({ "src/api/export.ts": `import { app } from "./app.ts";\napp.get("/export", (req, res) => { const limit = 1000; logger.info("export"); res.send("csv"); });\n` });
   try {
-    const rec = ok.rec; const withPlan = { ...rec, contract: { ...rec.contract!, releasePlan: { applicability: "APPLICABLE" as const, revertRunbook: "revert PR" } } };
+    const rec = ok.rec; const withPlan = { ...rec, contract: { ...rec.contract!, releasePlan: { applicability: "APPLICABLE" as const, revertRunbook: "revert PR", confirmedBy: "ops" } } };
     const r = ok.report(withPlan); assert.equal(r.status, "PASS", JSON.stringify(r.gaps));
   } finally { ok.close(); }
 });
@@ -56,10 +56,11 @@ test("PF-048 job and external-call code needs retry/timeout handling", async () 
 test("PF-049 release plan fields are required by tier and never defaulted; the suggestion carries only facts", async () => {
   assert.deepEqual(releasePlanProblems(undefined, "T0"), []);
   assert.match(releasePlanProblems(undefined, "T1")[0]!, /operational note/);
-  assert.deepEqual(releasePlanProblems({ applicability: "NOT_APPLICABLE", rationale: "internal" }, "T1"), []);
-  assert.match(releasePlanProblems({ applicability: "NOT_APPLICABLE", rationale: "internal" }, "T2")[0]!, /cannot declare/);
-  const t2 = releasePlanProblems({ applicability: "APPLICABLE", revertRunbook: "r" }, "T2"); assert.equal(t2.length, 4); assert.ok(t2.some((x) => /stop criteria/.test(x)) && t2.some((x) => /flag strategy or kill switch/.test(x)));
-  assert.deepEqual(releasePlanProblems({ applicability: "APPLICABLE", revertRunbook: "r", stopCriteria: ["5xx>1%"], observationWindow: "1h", operator: "ops", killSwitch: "flag" }, "T2"), []);
+  assert.deepEqual(releasePlanProblems({ applicability: "NOT_APPLICABLE", rationale: "internal", confirmedBy: "ops" }, "T1"), []);
+  assert.match(releasePlanProblems({ applicability: "NOT_APPLICABLE", rationale: "internal" }, "T1")[0]!, /is a draft/);
+  assert.ok(releasePlanProblems({ applicability: "NOT_APPLICABLE", rationale: "internal" }, "T2").some((x) => /cannot declare/.test(x)));
+  const t2 = releasePlanProblems({ applicability: "APPLICABLE", revertRunbook: "r", confirmedBy: "ops" }, "T2"); assert.equal(t2.length, 4); assert.ok(t2.some((x) => /stop criteria/.test(x)) && t2.some((x) => /flag strategy or kill switch/.test(x)));
+  assert.deepEqual(releasePlanProblems({ applicability: "APPLICABLE", revertRunbook: "r", stopCriteria: ["5xx>1%"], observationWindow: "1h", operator: "ops", killSwitch: "flag", confirmedBy: "ops" }, "T2"), []);
   const w = await world({ "src/api/export.ts": ROUTE });
   try { const s = suggestReleasePlan(w.fs.getCandidate(w.cand.id)!); assert.equal(s.stopCriteria, undefined); assert.equal(s.operator, undefined); assert.match(s.dataRecoveryLimits!, /no schema/); assert.ok(releasePlanProblems(s, "T2").length >= 3); } finally { w.close(); }
 });

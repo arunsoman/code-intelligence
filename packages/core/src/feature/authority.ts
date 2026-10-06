@@ -8,9 +8,11 @@ import { asSet, canonHash, defineSchema, type Canon } from "./canon.ts";
 import { ConfigError, DEFAULT_CONFIG } from "./config.ts";
 import type { Id } from "./types.ts";
 
-export const SCOPES = ["business", "policy", "access", "security", "performance", "release", "data"] as const;
+export const SCOPES = ["business", "policy", "access", "security", "performance", "release", "data", "validation", "publish"] as const;
 export type AuthorityScope = (typeof SCOPES)[number];
-export interface AuthorityBinding { id: Id; scope: AuthorityScope; principals: Id[] }
+/** `repositories`, `bases` and `permissions` apply to the "publish" scope only (decision D005): publication is a separate authority with a named repository, base branch and permission set. */
+export interface AuthorityBinding { id: Id; scope: AuthorityScope; principals: Id[]; repositories?: string[]; bases?: string[]; permissions?: string[] }
+export const PUBLISH_PERMISSIONS = ["draft_pr.create"] as const;
 export interface AuthorityConfig { bindings: AuthorityBinding[] }
 
 export const NO_AUTHORITY: AuthorityConfig = { bindings: [] };
@@ -29,18 +31,30 @@ export function loadAuthority(repoRoot: string, rel: string = DEFAULT_CONFIG.aut
   const bindings = o.bindings.map((b, i): AuthorityBinding => {
     const x = b as Record<string, unknown>;
     if (!x || typeof x !== "object") throw new ConfigError(`binding ${i} must be an object`);
-    for (const k of Object.keys(x)) if (!["id", "scope", "principals"].includes(k)) throw new ConfigError(`binding ${i}: unknown key ${k}`);
+    for (const k of Object.keys(x)) if (!["id", "scope", "principals", "repositories", "bases", "permissions"].includes(k)) throw new ConfigError(`binding ${i}: unknown key ${k}`);
     if (typeof x.id !== "string" || !/^[A-Za-z0-9._:-]{1,64}$/.test(x.id)) throw new ConfigError(`binding ${i}: bad id`);
     if (seen.has(x.id)) throw new ConfigError(`duplicate binding id ${x.id}`);
     seen.add(x.id);
     if (!SCOPES.includes(x.scope as AuthorityScope)) throw new ConfigError(`binding ${x.id}: unknown scope ${String(x.scope)}`);
     if (!Array.isArray(x.principals) || !x.principals.length || !x.principals.every((p) => typeof p === "string" && /^[^\s]{1,128}$/.test(p))) throw new ConfigError(`binding ${x.id}: principals must be a non-empty list of ids`);
-    return { id: x.id, scope: x.scope as AuthorityScope, principals: [...new Set(x.principals as string[])] };
+    const out: AuthorityBinding = { id: x.id, scope: x.scope as AuthorityScope, principals: [...new Set(x.principals as string[])] };
+    const list = (k: "repositories" | "bases" | "permissions", re: RegExp, what: string): string[] | undefined => {
+      if (x[k] === undefined) return undefined;
+      if (!Array.isArray(x[k]) || !x[k].length || !x[k].every((v: unknown) => typeof v === "string" && re.test(v))) throw new ConfigError(`binding ${x.id}: ${k} must be a non-empty list of ${what}`);
+      return [...new Set(x[k] as string[])];
+    };
+    const repos = list("repositories", /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/, "owner/name repositories (no wildcards)"), bases = list("bases", /^[A-Za-z0-9][A-Za-z0-9_./-]{0,100}$/, "branch names"), perms = list("permissions", /^[a-z_]+\.[a-z_]+$/, "permissions");
+    if (x.scope === "publish") {
+      if (!repos || !bases || !perms) throw new ConfigError(`binding ${x.id}: a publish binding names repositories, bases and permissions`);
+      const bad = perms.filter((q) => !(PUBLISH_PERMISSIONS as readonly string[]).includes(q)); if (bad.length) throw new ConfigError(`binding ${x.id}: unknown permission ${bad[0]} (only ${PUBLISH_PERMISSIONS.join(", ")} exists; merging and deploying are separate authorities)`);
+      out.repositories = repos; out.bases = bases; out.permissions = perms;
+    } else if (repos || bases || perms) throw new ConfigError(`binding ${x.id}: repositories, bases and permissions belong to publish bindings only`);
+    return out;
   });
   return { bindings };
 }
 
-const PolicyIdentity = defineSchema<AuthorityConfig>("pf.AuthorityPolicy", "1", (c) => asSet(c.bindings.map((b): Canon => ({ id: b.id, scope: b.scope, principals: asSet(b.principals) }))) as Canon);
+const PolicyIdentity = defineSchema<AuthorityConfig>("pf.AuthorityPolicy", "1", (c) => asSet(c.bindings.map((b): Canon => ({ id: b.id, scope: b.scope, principals: asSet(b.principals), repositories: asSet(b.repositories ?? []), bases: asSet(b.bases ?? []), permissions: asSet(b.permissions ?? []) }))) as Canon);
 export const authorityPolicyHash = (c: AuthorityConfig): string => canonHash(PolicyIdentity, c);
 
 export interface AuthorityDecision { allowed: boolean; bindingId?: Id; reason: string }
@@ -53,6 +67,17 @@ export function authorize(cfg: AuthorityConfig, principal: Id, scope: string, re
   if (s === "business" && principal === requester) return { allowed: true, reason: "the requester decides business scope by default" };
   const named = cfg.bindings.some((b) => b.scope === s);
   return { allowed: false, reason: named ? `${principal} is not named for ${s} decisions` : `no authority binding names anyone for ${s} decisions; add one to the authority file` };
+}
+
+/** Publication (D005): ownership of the request grants nothing. A binding must name this principal, this repository, this base branch and the draft_pr.create permission. */
+export function authorizePublish(cfg: AuthorityConfig, principal: Id, target: { repository: string; base: string }): AuthorityDecision {
+  const mine = cfg.bindings.filter((b) => b.scope === "publish" && b.principals.includes(principal));
+  if (!cfg.bindings.some((b) => b.scope === "publish")) return { allowed: false, reason: "no publication authority is configured: add a publish binding (principal, repositories, bases, permissions) to the authority file" };
+  if (!mine.length) return { allowed: false, reason: `${principal} is not named for publication` };
+  const hit = mine.find((b) => b.repositories!.includes(target.repository) && b.bases!.includes(target.base) && b.permissions!.includes("draft_pr.create"));
+  if (hit) return { allowed: true, bindingId: hit.id, reason: `binding ${hit.id} lets ${principal} create draft pull requests in ${target.repository} against ${target.base}` };
+  const repoOk = mine.some((b) => b.repositories!.includes(target.repository));
+  return { allowed: false, reason: !repoOk ? `${principal} may not publish to ${target.repository}` : mine.some((b) => b.repositories!.includes(target.repository) && b.bases!.includes(target.base)) ? `${principal} lacks the draft_pr.create permission` : `${target.base} is not an allowed base branch for ${principal} in ${target.repository}` };
 }
 
 /** The scope a question or finding needs, from what it is about. */

@@ -164,7 +164,7 @@ export async function runFeatureValidation(d: ValidationDependencies, i: { candi
 }
 
 /** Pure single eligibility authority. The full plan is evaluated even for a subset/rerun of evidence. */
-export function computeEligibility(i: { request: FeatureRecord; candidate: CandidateRecord; plan: ValidationPlan; evidence: EvidenceRecord[]; decisions?: DecisionRecord[]; now?: string; purpose?: string; unresolvedFindingIds?: string[]; /** 3.U: model identities behind the generation that have no passing builder evaluation (see builder-eval.ts). */ unevaluatedModels?: string[] }): PublicationDecision {
+export function computeEligibility(i: { request: FeatureRecord; candidate: CandidateRecord; plan: ValidationPlan; evidence: EvidenceRecord[]; decisions?: DecisionRecord[]; now?: string; purpose?: string; unresolvedFindingIds?: string[]; /** 3.U: model identities behind the generation that have no passing builder evaluation (see builder-eval.ts). */ unevaluatedModels?: string[]; /** Gaps another module computed (declarations whose authority is gone or missing, D001); reported verbatim and never a pass. */ externalGaps?: string[] }): PublicationDecision {
   const { request, candidate: c, plan } = i; const contract = request.contract; const reasons: string[] = []; let blocked = false; let stale = false;
   const block = (s: string) => { reasons.push(s); blocked = true; }; const gap = (s: string) => reasons.push(s);
   try { assertPlan(plan); } catch { block("validation plan is invalid"); }
@@ -175,6 +175,7 @@ export function computeEligibility(i: { request: FeatureRecord; candidate: Candi
   if (c.oracleState === "PROPERTY_CHANGE_PENDING_REVIEW" || (c.binding.originalOracleHash !== c.binding.candidateOracleHash && !c.binding.propertyChangeReviewId)) block("original oracle changed without property-change review");
   if (c.mutations.some((m) => m.attribution !== "COMPLETE")) gap("mutation attribution is incomplete");
   for (const m of i.unevaluatedModels ?? []) gap(`builder not evaluated: ${m}`);
+  for (const g of i.externalGaps ?? []) gap(g);
   if (plan.environment.fidelity !== "REPRESENTATIVE" || plan.environment.dependencies !== "AVAILABLE") gap("environment fidelity or dependencies are incomplete");
   const tier = classifyTier(c.mutations.flatMap((m) => [m.oldPath, m.newPath].filter((p): p is string => !!p).map((path) => ({ path, kind: m.kind })))).tier;
   const mandatoryKinds: ValidationKind[] = tier === "T0" ? ["SECURITY"] : ["BUILD", "UNIT", "SECURITY", "DEPENDENCY", "OPERATIONAL"];
@@ -187,6 +188,7 @@ export function computeEligibility(i: { request: FeatureRecord; candidate: Candi
     if (!plan.checks.some((ch) => ch.phase === "REGRESSION" && ch.mandatory && ch.applicability === "APPLICABLE")) gap("affected regression suite missing");
   }
   if (tier === "T2" && (!contract?.releasePlan?.revertRunbook || !contract.releasePlan.stopCriteria)) gap("release/revert plan is incomplete");
+  if (tier === "T2" && contract?.releasePlan && !contract.releasePlan.confirmedBy) gap("the release plan is a draft: no principal with release authority has confirmed it");
   const planHash = validationPlanHash(plan);
   for (const criterion of contract?.acceptance.filter((a) => a.mandatory) ?? []) {
     if (!criterion.validationKinds.length) gap(`${criterion.id}: no validation kinds declared`);

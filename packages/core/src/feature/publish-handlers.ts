@@ -3,13 +3,14 @@ import { dirname, join, resolve } from "node:path";
 import { GhDraftForge } from "../gh-forge.ts";
 import type { DraftForge } from "../defect-workflow.ts";
 import type { Service } from "../service.ts";
+import { authorityFor } from "./declarations.ts";
 import { FeatureError, guarded, guardedAsync } from "./errors.ts";
 import { publishFeaturePR } from "./publish.ts";
 import { GhReviewSource, ingestReviewFeedback, scopeRevalidation, type ReviewSource } from "./review-feedback.ts";
 import type { Handlers } from "./routes.ts";
 import type { SqliteFeatureStore } from "./store.ts";
 
-export interface PublishHooks { forge?: DraftForge; reviews?: ReviewSource; cloneRoot?: string; now?: () => string }
+export interface PublishHooks { forge?: DraftForge; reviews?: ReviewSource; cloneRoot?: string; now?: () => string; /** Test seam only: the default is true (D005). */ requireVerified?: boolean }
 const obj = (b: unknown): Record<string, any> => { if (!b || typeof b !== "object" || Array.isArray(b)) throw new FeatureError("INVALID_SCHEMA", "the request body must be an object"); return b as Record<string, any>; };
 
 export function publishHandlers(svc: Service, fs: SqliteFeatureStore, hooks: PublishHooks = {}): Handlers {
@@ -19,7 +20,7 @@ export function publishHandlers(svc: Service, fs: SqliteFeatureStore, hooks: Pub
   return {
     "C30/publishFeaturePR": (c, b) => guardedAsync(c, async () => {
       const x = obj(b);
-      return publishFeaturePR({ fs, store: svc.store, forge: (forge ??= new GhDraftForge()), cloneRoot, now: hooks.now }, who(c), { proposalId: x.proposalId, decisionId: x.decisionId, expectedHeadHash: x.expectedHeadHash, destination: x.destination, idempotencyKey: c.idempotencyKey });
+      return publishFeaturePR({ fs, store: svc.store, forge: (forge ??= new GhDraftForge()), cloneRoot, now: hooks.now, authority: (repo) => authorityFor(repo).auth, requireVerified: hooks.requireVerified }, who(c), { proposalId: x.proposalId, decisionId: x.decisionId, expectedHeadHash: x.expectedHeadHash, destination: x.destination, idempotencyKey: c.idempotencyKey });
     }),
     "C29/ingestReviewFeedback": (c, b) => guardedAsync(c, async () => { const x = obj(b); return ingestReviewFeedback({ fs, source: (reviews ??= new GhReviewSource()), now: hooks.now }, who(c), { requestId: x.requestId, pullRequestId: x.pullRequestId, externalEventId: x.externalEventId, headHash: x.headHash }); }),
     "C23/scopeRevalidation": (c, b) => guarded(c, () => { const x = obj(b); return scopeRevalidation({ fs }, who(c), { oldBinding: x.oldBinding, newBinding: x.newBinding, feedbackIds: x.feedbackIds ?? [], coverage: x.coverage ?? [] }); }),

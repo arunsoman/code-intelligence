@@ -3,7 +3,7 @@ import type { FeatureReview } from "../../../../packages/core/src/feature/presen
 import type { TestAssociation } from "../../../../packages/core/src/feature/types.ts";
 import type { RemoteCall } from "./remote.ts";
 import { pageOf } from "./review-view.ts";
-import { BASIS_TEXT, ORIGIN_TEXT, actionState, bannerTone, countByStatus, exportFileName, filterTests, reasonList, statusText, statusTone, targetLine, validDestination } from "./deliver-view.ts";
+import { BASIS_TEXT, RELEASE_TEXT, declarationText, declarationTone, publishAuthorityText, ORIGIN_TEXT, actionState, bannerTone, countByStatus, exportFileName, filterTests, reasonList, statusText, statusTone, targetLine, validDestination } from "./deliver-view.ts";
 
 type Result<T> = { status: string; value?: T; diagnostics: string[] };
 const uid = () => crypto.randomUUID();
@@ -29,6 +29,8 @@ export function ValidateReview({ review, candidateHash, call, refresh, notify }:
     <p className={`bf-banner ${bannerTone(d.banner.eligibility) === "ok" ? "" : bannerTone(d.banner.eligibility) === "bad" ? "error" : "warn"}`} role="status">{d.banner.text}</p>
     {d.stale.stale && <p className="bf-banner warn" role="alert">Stale: {d.stale.reasons.slice(0, 3).join("; ")}. Results below are not current; run validation again before exporting.</p>}
     <div className="row"><button onClick={() => void run()} disabled={busy || !candidateHash || !review.validationPlanHash}>Run validation</button><span className="muted">Starts the required checks for this candidate. Reading results never runs anything.</span></div>
+    <section aria-label="Declarations"><h4>What this result rests on</h4><p className="muted">Each claim shows who made it. A claim nobody recorded, or whose declarer lost the authority, keeps the result from being verified.</p>
+      <ul className="bf-list">{d.declarations.map((x) => <li key={x.id} className="bf-item"><span>{x.claim} <span className={`chip ${declarationTone(x.state) === "ok" ? "" : "warn"}`}>{declarationText(x.state)}</span></span><span className="muted">{x.detail}</span></li>)}</ul></section>
     <h4>Builds: baseline beside candidate</h4>
     <ul aria-label="Build targets" className="bf-list">{d.targets.map((t) => <li key={t.target} className="bf-item"><span>{targetLine(t)}</span><Chip status={t.candidate} /></li>)}{!d.targets.length && <li className="muted">No build target is declared in the plan.</li>}</ul>
     <h4>Checks</h4><ul aria-label="Checks by kind" className="bf-list">{d.gates.map((g) => <li key={g.kind} className="bf-item"><span>{g.kind.toLowerCase()}{g.gaps.length ? ` — ${g.gaps[0]}` : ""}</span><Chip status={g.status} /></li>)}</ul>
@@ -76,6 +78,7 @@ export function DeliverReview({ review, call, refresh, notify }: { review: Featu
   return <div className="bf-stack">
     <p className={`bf-banner ${bannerTone(v.eligibility) === "ok" ? "" : bannerTone(v.eligibility) === "bad" ? "error" : "warn"}`} role="status">{v.label}</p>
     {reasons.shown.length > 0 && <ul aria-label="Why not verified">{reasons.shown.map((r) => <li key={r}>{r}</li>)}{reasons.more > 0 && <li>…and {reasons.more} more</li>}</ul>}
+    <section aria-label="Operational note and publication"><h4>Operational note and publication</h4><p>{RELEASE_TEXT[v.release.state]}{v.release.draftedBy ? ` Drafted by ${v.release.draftedBy}.` : ""}{v.release.confirmedBy ? ` Confirmed by ${v.release.confirmedBy}.` : ""}</p><p>{publishAuthorityText(v.publishAuthority)}</p></section>
     <section aria-label="Export patch"><h4>Export patch</h4><p className="muted">Writes the candidate out as text someone else applies. It does not change your files.</p>
       <div className="row"><label>Format<select className="input" value={format} onChange={(e) => setFormat(e.target.value)}>{v.formats.map((f) => <option key={f}>{f}</option>)}</select></label>
         <button disabled={!ex.enabled || !!busy} aria-describedby="why-export" onClick={() => void doExport()}>Export patch</button></div><p id="why-export" className="muted">{ex.reason}</p>

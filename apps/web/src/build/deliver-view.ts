@@ -27,3 +27,9 @@ export const exportFileName = (e: { id: string; format: string }): string => `fe
 export const validDestination = (s: string): boolean => /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}:[A-Za-z0-9][A-Za-z0-9_./-]{0,100}$/.test(s) && !s.includes("..");
 /** The action a button stands for, with the exact reason it is unavailable; a disabled button never has a blank explanation. */
 export const actionState = (v: DeliverView, name: DeliverView["actions"][number]["action"]): { enabled: boolean; reason: string } => v.actions.find((a) => a.action === name) ?? { enabled: false, reason: "not available" };
+
+/** Declaration rows (D001): a claim nobody recorded, or whose declarer lost the authority, is a warning, never a pass. */
+export const declarationTone = (state: string): "ok" | "warn" | "bad" => (state === "DECLARED" || state === "CONFIRMED" || state === "NOT_CLAIMED" ? "ok" : state === "NO_LONGER_AUTHORISED" ? "bad" : "warn");
+export const declarationText = (state: string): string => ({ DECLARED: "declared", CONFIRMED: "confirmed", UNCONFIRMED: "not confirmed", NOT_DECLARED: "claimed but not declared", NO_LONGER_AUTHORISED: "declarer no longer authorised", NOT_CLAIMED: "not claimed" } as Record<string, string>)[state] ?? state.replaceAll("_", " ").toLowerCase();
+export const RELEASE_TEXT: Record<string, string> = { NONE: "No operational note or release plan has been drafted.", DRAFT: "A draft exists. It is not a decision until a principal with release authority confirms it.", CONFIRMED: "Confirmed by a principal with release authority." };
+export const publishAuthorityText = (a: { bound: boolean; repositories: string[]; bases: string[] }): string => a.bound ? `You are bound to create draft pull requests in ${a.repositories.join(", ")} against ${a.bases.join(", ")}.` : "You are not bound for publication. Owning the request does not grant it; a publish binding names the principal, repository and base branch.";

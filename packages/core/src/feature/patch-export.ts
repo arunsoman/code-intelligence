@@ -6,6 +6,7 @@
 //   * Unsafe paths, VCS metadata, submodule (gitlink) files and non-text bytes are refused before a patch is produced.
 //   * checkPatchDestination is a dry run on hashes (no write); applyPatchCandidate writes only into a new scratch directory
 //     on an exact base, and the result is compared with the candidate's own content hash.
+import { declarationGaps } from "./declarations.ts";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { copyTree, makeScratch, removeScratch, safeJoin, sha256 } from "../isolated-exec.ts";
@@ -119,7 +120,7 @@ export type PatchManifest = {
 export function currentDecision(d: ExportDeps, request: FeatureRecord, candidate: CandidateRecord, decisionId: string, purposes: readonly string[] = EXPORT_PURPOSES): PublicationDecision {
   const evidence = d.fs.listEvidence(candidate.id).filter((e) => !e.verdict);
   const plan = request.validationPlan ?? defaultValidationPlan(request, candidate); const decisions = d.fs.listDecisions(request.requestId);
-  const tried = purposes.map((purpose) => computeEligibility({ request, candidate, plan, evidence, decisions, purpose, unevaluatedModels: unevaluatedModels(d.fs, request, candidate) }));
+  const tried = purposes.map((purpose) => computeEligibility({ request, candidate, plan, evidence, decisions, purpose, unevaluatedModels: unevaluatedModels(d.fs, request, candidate), externalGaps: declarationGaps(d.fs, request) }));
   const hit = tried.find((x) => x.id === decisionId);
   if (!hit) throw new FeatureError("STALE_REVISION", "that decision does not match the current candidate, contract and evidence; verify again before exporting");
   return hit;

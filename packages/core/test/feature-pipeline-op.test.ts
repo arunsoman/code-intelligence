@@ -8,14 +8,14 @@ import { parseDeclaration, parsePipelineBody } from "../src/feature/pipeline-han
 import { setupCheck } from "../src/feature/setup-check.ts";
 import { SqliteFeatureStore } from "../src/feature/store.ts";
 import { Forge } from "./feature-pipeline-forge.ts";
-import { demo, exportEdits, FakeRunner, PROMPT, Script } from "./feature-pipeline-fixtures.ts";
+import { AUTH, demo, exportEdits, FakeRunner, PROMPT, Script } from "./feature-pipeline-fixtures.ts";
 import { ctx, setup } from "./helpers.ts";
 
 const FULL = { confirm: { criteria: "ALL", rationale: "these are the outcomes I want" }, releasePlan: { applicability: "APPLICABLE", revertRunbook: "revert the draft PR" },
   validation: { fidelity: "REPRESENTATIVE", dependencies: "AVAILABLE", environmentLabel: "test-double", testData: { kind: "SYNTHETIC" }, performanceApplicable: false } };
 
 async function world(over: Record<string, unknown> = {}) {
-  const repo = demo(); const { svc, worker } = await setup(undefined, repo); const fs = new SqliteFeatureStore(svc.store); const router = new Script(); const runner = new FakeRunner();
+  const repo = demo(AUTH); const { svc, worker } = await setup(undefined, repo); const fs = new SqliteFeatureStore(svc.store); const router = new Script(); const runner = new FakeRunner();
   const { featureHandlers } = await import("../src/feature/handlers.ts");
   const h = featureHandlers(svc, { pipeline: { runner: () => runner, adapter: (rid: string) => new FeatureModelAdapter(fs, rid, { routes: [router], egress: "LOCAL_ONLY" }), generateEdits: async () => ({ edits: exportEdits(repo), invocationIds: [] }), probes: { docker: () => ({ daemon: true, image: true }), gh: () => ({ ok: true, detail: "x" }), ollama: async () => ({ reachable: true, models: ["m"] }) }, ...over } }) as Record<string, (c: any, b: any) => any>;
   const as = (p: string, idem?: string) => { const c = ctx(idem); return { ...c, actor: { ...c.actor, principalId: p } }; };
@@ -96,7 +96,7 @@ test("4.1 C02/featureSetupCheck says what is ready and what is missing, with the
   const w = await world();
   try {
     const ok = await w.h["C02/featureSetupCheck"](w.as("arun"), { repositoryId: w.repo }); assert.equal(ok.ok, true);
-    const by = Object.fromEntries(ok.value.items.map((i: any) => [i.id, i])); assert.equal(by.INDEX.state, "READY"); assert.equal(by.CONTAINER.state, "READY"); assert.equal(by.STACK.state, "READY"); assert.equal(by.SECURITY_POLICY.state, "READY"); assert.equal(by.AUTHORITY.state, "WARN"); assert.match(by.AUTHORITY.fix, /authority/);
+    const by = Object.fromEntries(ok.value.items.map((i: any) => [i.id, i])); assert.equal(by.INDEX.state, "READY"); assert.equal(by.CONTAINER.state, "READY"); assert.equal(by.STACK.state, "READY"); assert.equal(by.SECURITY_POLICY.state, "READY"); assert.equal(by.AUTHORITY.state, "READY"); assert.match(by.AUTHORITY.detail, /4 authority binding/);
     assert.equal(ok.value.ready, true);
     const probes = { docker: () => ({ daemon: true, image: false }), gh: () => ({ ok: false, detail: "not logged in" }), ollama: async () => ({ reachable: true, models: ["qwen3:0.6b"] }) };
     const bad = await setupCheck(w.svc.store, w.repo, probes); const b = Object.fromEntries(bad.items.map((i) => [i.id, i]));

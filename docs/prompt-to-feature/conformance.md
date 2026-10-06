@@ -6,7 +6,7 @@ PASS means a test written for the scenario passed in the recorded run. It is an 
 
 | AT | Status | Scenario | Tests | Note |
 | --- | --- | --- | --- | --- |
-| AT-01 | PASS | Short CSV-export prompt | ✔ AT-01/PF-004 discovery produces a coverage record for every domain and moves the request o |  |
+| AT-01 | PASS | Short CSV-export prompt | ✔ 4.2 scenario references in titles: single, range and list forms, limited to AT-01–84<br>✔ 4.2 the spec has exactly AT-01–84, the committed map and deferrals name real scenarios and<br>✔ AT-01/PF-004 discovery produces a coverage record for every domain and moves the request o |  |
 | AT-02 | PASS | Detailed internally inconsistent PRD | ✔ AT-02/PF-010/013 a direct contradiction with a related source is CONFIRMED with both quote |  |
 | AT-03 | PASS | Similar statements for different tenants | ✔ AT-03 statements about different tenants, roles or periods may both be true and are not re |  |
 | AT-04 | PASS | “All records” unspecified scope | ✔ AT-04 vague terms are findings, not silent choices: "all" needs a scope, "fast" and "secur |  |

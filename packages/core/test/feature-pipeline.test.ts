@@ -14,11 +14,11 @@ import { SqliteFeatureStore } from "../src/feature/store.ts";
 import type { FeatureEdit } from "../src/feature/candidate.ts";
 import type { RunRequest, RunResult, Runner } from "../src/feature/types.ts";
 import { setup } from "./helpers.ts";
-import { demo, exportEdits, FakeRunner, PROMPT, Script } from "./feature-pipeline-fixtures.ts";
+import { AUTH, demo, exportEdits, FakeRunner, PROMPT, Script } from "./feature-pipeline-fixtures.ts";
 
 async function world(runner: Runner = new FakeRunner(), over: Partial<PipelineDeps> = {}) {
-  const repo = demo(); const { svc, worker } = await setup(undefined, repo); const fs = new SqliteFeatureStore(svc.store); const router = new Script();
-  const deps: PipelineDeps = { fs, store: svc.store, auth: { bindings: [] }, runner, adapter: (rid) => new FeatureModelAdapter(fs, rid, { routes: [router], egress: "LOCAL_ONLY" }),
+  const repo = demo(AUTH); const { svc, worker } = await setup(undefined, repo); const fs = new SqliteFeatureStore(svc.store); const router = new Script();
+  const deps: PipelineDeps = { fs, store: svc.store, auth: AUTH as never, runner, adapter: (rid) => new FeatureModelAdapter(fs, rid, { routes: [router], egress: "LOCAL_ONLY" }),
     generateEdits: async () => ({ edits: exportEdits(repo), invocationIds: [] }), runCheck: gateDriverFor({}, fs), ...over };
   return { repo, svc, fs, router, deps, close: () => worker.close() };
 }
@@ -28,7 +28,7 @@ test("4.1 the driver runs the whole slice on the transactions demo and reports r
   const w = await world();
   try {
     const r = await runFeaturePipeline(w.deps, "arun", input(w.repo, { confirm: { criteria: "ALL", rationale: "these are the outcomes I want" }, releasePlan: { applicability: "APPLICABLE", revertRunbook: "revert the draft PR" }, validation: { fidelity: "REPRESENTATIVE", dependencies: "AVAILABLE", environmentLabel: "test-double", testData: { kind: "SYNTHETIC" } } }));
-    assert.deepEqual(r.steps.map((s) => s.step), ["SUBMIT", "DISCOVER", "NORMALISE", "CONSTRAINTS", "CLARIFY", "CONFIRM", "OVERLAP", "PLAN", "GENERATE", "CANDIDATE", "VALIDATE", "DECIDE", "EXPORT", "PUBLISH"], JSON.stringify(r.steps));
+    assert.deepEqual(r.steps.map((s) => s.step), ["SUBMIT", "DISCOVER", "NORMALISE", "CONSTRAINTS", "CLARIFY", "CONFIRM", "OVERLAP", "PLAN", "GENERATE", "CANDIDATE", "DECLARE", "VALIDATE", "DECIDE", "EXPORT", "PUBLISH"], JSON.stringify(r.steps));
     assert.equal(r.stop, "COMPLETE", JSON.stringify(r)); assert.equal(r.decision!.eligibility, "REVIEW_ONLY_INCOMPLETE"); assert.match(r.reason, /^review only/);
     assert.ok(r.decision!.reasons.every((x) => /^performance:/.test(x)), r.decision!.reasons.join("; "));
     assert.ok(r.exportId); assert.equal(r.candidate!.mutations.length, 3);
@@ -45,7 +45,7 @@ test("4.1 when every declared gate is satisfied the same driver reports VERIFIED
     const r = await runFeaturePipeline(w.deps, "arun", input(w.repo, FULL));
     assert.equal(r.stop, "COMPLETE", JSON.stringify(r.steps)); assert.equal(r.decision!.eligibility, "VERIFIED_WITHIN_SCOPE", r.decision!.reasons.join("; ")); assert.match(r.reason, /^verified within the scope/);
     const exp = w.fs.getCandidate(r.candidate!.id)!.exports![0]!; assert.match(exp.label!, /VERIFIED WITHIN THE SCOPE/); assert.doesNotMatch(exp.label!, /bug-free/i);
-    const perf = w.fs.listEvidence(r.candidate!.id).flatMap((e) => e.results).find((x) => x.kind === "PERFORMANCE")!; assert.equal(perf.status, "NOT_APPLICABLE"); assert.match(perf.notApplicableRationale ?? "", /not measured/);
+    const perf = w.fs.listEvidence(r.candidate!.id).flatMap((e) => e.results).find((x) => x.kind === "PERFORMANCE")!; assert.equal(perf.status, "NOT_APPLICABLE"); assert.match(perf.notApplicableRationale ?? "", /^Not measured — performance declared not applicable by arun/);
   } finally { w.close(); }
 });
 

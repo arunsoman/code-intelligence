@@ -43,15 +43,16 @@ export function parseDeclaration(v: unknown): ValidationDeclaration | undefined 
 }
 
 export function parsePipelineBody(b: unknown): PipelineInput {
-  const x = obj(b); only(x, ["repositoryId", "text", "mode", "answers", "confirm", "releasePlan", "validation", "exportFormat", "publishTo", "budget"], "the request");
+  const x = obj(b); only(x, ["repositoryId", "text", "mode", "answers", "confirm", "releasePlan", "validation", "validationRationale", "exportFormat", "publishTo", "budget"], "the request");
   if (typeof x.repositoryId !== "string" || !x.repositoryId) throw new FeatureError("INVALID_SCHEMA", "repositoryId is required");
   if (typeof x.text !== "string" || !x.text.trim()) throw new FeatureError("INVALID_SCHEMA", "describe the feature you want");
   if (!MODES.includes(x.mode)) throw new FeatureError("INVALID_SCHEMA", `mode must be one of ${MODES.join(", ")}`);
   const input: PipelineInput = { repositoryId: x.repositoryId, text: x.text, mode: x.mode, idempotencyKey: "" };
   if (x.answers !== undefined) { const a = obj(x.answers, "answers"); for (const [k, v] of Object.entries(a)) if (typeof v !== "string" || !v.trim() || v.length > 20_000) throw new FeatureError("INVALID_SCHEMA", `the answer for ${k} must be 1-20000 characters`); input.answers = a as Record<string, string>; }
   if (x.confirm !== undefined) { const c = obj(x.confirm, "confirm"); only(c, ["criteria", "rationale"], "confirm"); if (c.criteria !== "ALL" && !(Array.isArray(c.criteria) && c.criteria.length && c.criteria.every((i: unknown) => typeof i === "string"))) throw new FeatureError("INVALID_SCHEMA", 'confirm.criteria is "ALL" or a list of criterion ids'); if (typeof c.rationale !== "string" || !c.rationale.trim()) throw new FeatureError("INVALID_SCHEMA", "confirm.rationale is required"); input.confirm = { criteria: c.criteria, rationale: c.rationale }; }
-  if (x.releasePlan !== undefined) { const r = obj(x.releasePlan, "releasePlan"); only(r, ["applicability", "rationale", "flagStrategy", "deploymentOrder", "observationWindow", "stopCriteria", "operator", "killSwitch", "revertRunbook", "dataRecoveryLimits"], "releasePlan"); if (!["APPLICABLE", "NOT_APPLICABLE"].includes(r.applicability)) throw new FeatureError("INVALID_SCHEMA", "releasePlan.applicability is APPLICABLE or NOT_APPLICABLE"); input.releasePlan = r as never; }
+  if (x.releasePlan !== undefined) { const r = obj(x.releasePlan, "releasePlan"); if ("confirmedBy" in r || "draftedBy" in r) throw new FeatureError("INVALID_SCHEMA", "a release plan cannot name its own confirmer; confirmation is recorded by a principal with release authority"); only(r, ["applicability", "rationale", "flagStrategy", "deploymentOrder", "observationWindow", "stopCriteria", "operator", "killSwitch", "revertRunbook", "dataRecoveryLimits"], "releasePlan"); if (!["APPLICABLE", "NOT_APPLICABLE"].includes(r.applicability)) throw new FeatureError("INVALID_SCHEMA", "releasePlan.applicability is APPLICABLE or NOT_APPLICABLE"); input.releasePlan = r as never; }
   const v = parseDeclaration(x.validation); if (v) input.validation = v;
+  if (x.validationRationale !== undefined) { if (typeof x.validationRationale !== "string" || x.validationRationale.length > 2000) throw new FeatureError("INVALID_SCHEMA", "validationRationale is at most 2000 characters"); input.validationRationale = x.validationRationale; }
   if (x.exportFormat !== undefined && x.exportFormat !== null && !["UNIFIED_DIFF", "GIT_PATCH", "BUNDLE"].includes(x.exportFormat)) throw new FeatureError("INVALID_SCHEMA", "exportFormat is UNIFIED_DIFF, GIT_PATCH, BUNDLE or null");
   if (x.exportFormat !== undefined) input.exportFormat = x.exportFormat;
   if (x.publishTo !== undefined) { if (typeof x.publishTo !== "string") throw new FeatureError("INVALID_SCHEMA", 'publishTo is "owner/name:branch"'); input.publishTo = x.publishTo; }
@@ -84,7 +85,7 @@ export function pipelineHandlers(svc: Service, fs: SqliteFeatureStore, hooks: Pi
             const runner = hooks.runner?.() ?? (dockerAvailable() ? new DockerRunner({ fence: () => control.holdsFence?.() ?? true }) : new LocalRunner({ fence: () => control.holdsFence?.() ?? true }));
             const deps: PipelineDeps = { fs, store: svc.store, auth, runner, adapter: hooks.adapter, proposer: hooks.proposer, runCheck: gateDriverFor(hooks.gates ?? {}, fs), signal: abort.signal,
               generateEdits: hooks.generateEdits ?? adapterEdits({ fs, adapter: hooks.adapter, auth }, who(c), authorityPolicyHash(auth)),
-              publish: hooks.publish?.forge || hooks.publish?.cloneRoot ? { forge: hooks.publish.forge ?? new GhDraftForge(), cloneRoot: hooks.publish.cloneRoot ?? "" } : undefined,
+              publish: hooks.publish?.forge || hooks.publish?.cloneRoot ? { forge: hooks.publish.forge ?? new GhDraftForge(), cloneRoot: hooks.publish.cloneRoot ?? "", requireVerified: hooks.publish.requireVerified } : undefined,
               onStep: (s) => { control.checkpoint(); control.progress({ phase: s.step.toLowerCase(), message: `${s.step}: ${s.detail}` }); }, beforePublish: () => { control.checkpoint(); control.commit(); } };
             const result = await runFeaturePipeline(deps, who(c), input);
             control.checkpoint(); control.commit();

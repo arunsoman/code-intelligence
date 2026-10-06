@@ -6,6 +6,7 @@ import type { Service } from "../service.ts";
 import { PRIORITY } from "../jobs.ts";
 import { loadAuthority, type AuthorityConfig } from "./authority.ts";
 import { confirmAcceptance } from "./acceptance.ts";
+import { confirmReleasePlan, draftReleasePlan } from "./declarations.ts";
 import { cancelFeature } from "./cancel.ts";
 import { materializeCandidate, readCandidateFile, refreshStaleness, type CandidateDeps, type FeatureEdit } from "./candidate.ts";
 import { loadFeatureConfig, type FeatureConfig } from "./config.ts";
@@ -79,6 +80,8 @@ export function featureHandlers(svc: Service, opts: { gates?: GateHooks; perf?: 
       if (!Array.isArray(x.decisionIds)) throw new FeatureError("INVALID_SCHEMA", "decisionIds must be a list");
       return reviseContract(fs, authOf(rec.repositoryId), who(c), { requestId, expectedVersion: x.expectedVersion, decisionIds: x.decisionIds });
     }),
+    "C15/draftReleasePlan": (c, b) => guarded(c, () => { const x = obj(b); const requestId = requestIdOf(str(x.contractId, "contractId")); owned(requestId, who(c)); return draftReleasePlan(fs, who(c), { requestId, plan: x.plan }); }),
+    "C15/confirmReleasePlan": (c, b) => guarded(c, () => { const x = obj(b); const requestId = requestIdOf(str(x.contractId, "contractId")); const rec = owned(requestId, who(c)); return confirmReleasePlan(fs, authOf(rec.repositoryId), who(c), { requestId }); }),
     "C15/confirmAcceptance": (c, b) => guarded(c, () => {
       const x = obj(b); const requestId = requestIdOf(str(x.contractId, "contractId")); const rec = owned(requestId, who(c));
       return confirmAcceptance(fs, authOf(rec.repositoryId), who(c), { requestId, expectedVersion: x.expectedVersion, criteria: x.criteria, rationale: x.rationale, idempotencyKey: c.idempotencyKey });
