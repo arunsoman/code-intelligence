@@ -147,13 +147,20 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
   }
   const picked: string[] = [];
   let inaccessible = 0;
-  for (const c of candidates) {
+  // A pin ("it will always be shown") or an explicit seed (the subject of this view, or what a chat answer
+  // relied on) must survive being outranked by an unrelated flood of ordinary keyword matches — the cap and the
+  // weak-match floor below are both for THOSE, never for a caller-named entity. Access and "ignore" still apply:
+  // being named does not override either. Guaranteed entities go first, in their own score order, so when there
+  // are more of them than maxNodes the strongest still wins; everything else fills whatever capacity is left.
+  const guaranteed = (id: string) => overrides.get(id) === "pin" || (opts.extraSeeds ?? []).includes(id);
+  const [first, rest] = [candidates.filter((c) => guaranteed(c.id)), candidates.filter((c) => !guaranteed(c.id))];
+  for (const c of [...first, ...rest]) {
     const label = byId.get(c.id)!.name;
     // A denied match is counted and dropped before anything else can mention it: not in the picks, not in "why hidden".
     if (isDenied(c.id)) { inaccessible++; continue; }
     if (opts.ignored?.has(c.id)) { hidden.push({ entityId: c.id, label, reason: "you asked to ignore it" }); continue; }
-    if (picked.length >= maxNodes) { hidden.push({ entityId: c.id, label, reason: `matched, but ranked below the top ${maxNodes}` }); continue; }
-    if (c.tier === "HIDDEN" && !(opts.extraSeeds ?? []).includes(c.id)) { hidden.push({ entityId: c.id, label, reason: "matched weakly; relevance below the display threshold" }); continue; }
+    if (!guaranteed(c.id) && picked.length >= maxNodes) { hidden.push({ entityId: c.id, label, reason: `matched, but ranked below the top ${maxNodes}` }); continue; }
+    if (c.tier === "HIDDEN" && !guaranteed(c.id)) { hidden.push({ entityId: c.id, label, reason: "matched weakly; relevance below the display threshold" }); continue; }
     picked.push(c.id);
     const e = byId.get(c.id)!, nm = e.name.toLowerCase(), pth = e.file.toLowerCase();
     if (terms.some((t) => nm.includes(t) || pth.includes(t))) note(c.id, "lexical");
@@ -180,7 +187,10 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
   let truncation: Retrieval["truncation"];
   if (opts.tokenBudget && bundle.tokenEstimate > opts.tokenBudget) {
     const before = bundle.tokenEstimate;
-    const rank = (id: string) => (overrides.get(id) === "pin" ? 3 : scored.get(id)!.tier === "CRITICAL" ? 2 : scored.get(id)!.tier === "RELEVANT" ? 1 : 0);
+    // A pin or an explicit seed is exempt from the maxNodes cutoff above for the same reason it must not be the
+    // first thing a token squeeze throws away: it is not a weak match to be weighed against stronger ones, it is
+    // the thing the caller named.
+    const rank = (id: string) => (guaranteed(id) ? 3 : scored.get(id)!.tier === "CRITICAL" ? 2 : scored.get(id)!.tier === "RELEVANT" ? 1 : 0);
     const order = [...picked].sort((a, b) => rank(a) - rank(b) || scored.get(a)!.score - scored.get(b)!.score || a.localeCompare(b));
     const dropped: { entityId: string; label: string }[] = [];
     let keep = new Set(picked);

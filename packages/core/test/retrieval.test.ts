@@ -223,3 +223,25 @@ test("C10: the embedder is replaceable: vectors are stored beside the data and r
   } finally { globalThis.fetch = real; }
   worker.close();
 });
+
+test("an explicit seed (a pin, or a caller-named entity) survives being outranked by a flood of ordinary matches — both the node cap and the token-budget trim", async () => {
+  const { svc, worker, revision } = await setup();
+  try {
+    // "getUser" shares no word with "token"; without being named, it is not even a candidate for this question.
+    const seed = svc.store.entities(revision).find((e) => e.name === "getUser")!.entityId;
+    const plain = retrieveForQuestion(svc.store, revision, "token", { maxNodes: 1 });
+    assert.ok(!plain.bundle.entities.some((e) => e.entityId === seed), "not named: excluded like anything else ranked below the cap");
+    const seeded = retrieveForQuestion(svc.store, revision, "token", { maxNodes: 1, extraSeeds: [seed] });
+    assert.ok(seeded.bundle.entities.some((e) => e.entityId === seed), "named: present despite a cap of 1 and scoring below every token match");
+    assert.ok(!seeded.hidden.some((h) => h.entityId === seed), "and not reported as hidden either");
+    // The same guarantee under a token squeeze: with many higher-tier matches competing for a tiny budget,
+    // the named entity must not be among the first (or any) dropped.
+    const squeezed = retrieveForQuestion(svc.store, revision, "token", { maxNodes: 40, extraSeeds: [seed], tokenBudget: 1 });
+    assert.ok(squeezed.bundle.entities.some((e) => e.entityId === seed), "survives a token-budget trim that drops everything else first");
+    assert.ok(!squeezed.truncation?.dropped.some((d) => d.entityId === seed));
+    // A pinned entity (the product's own "it will always be shown" promise) gets the identical guarantee, with no extraSeeds needed.
+    svc.store.setOverride(svc.store.revision(revision)!.repoRoot, seed, "pin");
+    const pinned = retrieveForQuestion(svc.store, revision, "token", { maxNodes: 1 });
+    assert.ok(pinned.bundle.entities.some((e) => e.entityId === seed), "a pin alone is enough, the same way extraSeeds is");
+  } finally { worker.close(); }
+});
