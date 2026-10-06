@@ -18,6 +18,8 @@ test("gateway: allowlist, idempotency header, content-type, host guard", async (
   await withServer(async (base) => {
     assert.equal((await post(base, "/api/v1/components/C99/nope", {})).status, 404);
     assert.equal((await post(base, "/api/v1/components/C04/ingestRepository", { repoPath: FIXTURE })).status, 400, "mutating op needs Idempotency-Key");
+    assert.equal((await post(base, "/api/v1/components/C01/switchBranch", { repoPath: FIXTURE, branch: "main" })).status, 400, "switching a checkout also requires an action key");
+    assert.equal((await post(base, "/api/v1/components/C01/fetchBranches", { repoPath: FIXTURE })).status, 400, "fetching also requires an action key");
     const ct = await fetch(base + "/api/v1/components/C01/status", { method: "POST", headers: { "content-type": "text/plain" }, body: "{}" });
     assert.equal(ct.status, 415);
     // fetch() ignores a custom Host header, so use a raw request for the rebinding check.

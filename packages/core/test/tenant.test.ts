@@ -148,6 +148,9 @@ test("C03: the gateway takes the caller from the trusted transport, serves each 
     assert.equal(browse.status, 200);
     assert.ok(browse.body.value.path.startsWith(shared.replace(/\/[^/]*$/, "")) || browse.body.value.path === shared, "browsing starts inside the tenant's own folders");
     assert.equal((await call("beta", "C01/browseDirectory", { path: "/" })).status, 403, "and cannot go above them");
+    assert.equal((await call("alpha", "C01/repositoryGit", { repoPath: shared })).status, 403, "Git details cannot expose another tenant's checkout");
+    assert.equal((await call("alpha", "C01/switchBranch", { repoPath: repo, branch: "main" })).status, 403, "read access does not grant permission to switch a shared checkout");
+    assert.equal((await call("alpha", "C01/fetchBranches", { repoPath: repo })).status, 403, "read access does not grant permission to fetch into a shared checkout");
   } finally { srv.close(); host.close(); }
 });
 
