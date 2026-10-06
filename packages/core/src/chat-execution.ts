@@ -14,7 +14,7 @@ export async function executeChatPlan(svc: Service, ctx: CallContext, rev: Revis
   const results: ChatAnalysisResult[] = [], warnings: string[] = [];
   const access = policyFor(svc.store, rev.repoRoot);
   for (const step of plan.steps) {
-    const title = step.tool === "overview" ? "Project overview" : step.tool === "risk" ? "Change risk" : step.tool === "tests" ? "Tests" : step.form!;
+    const title = step.tool === "overview" ? "Project overview" : step.tool === "risk" ? "Change risk" : step.tool === "tests" ? "Tests" : step.tool === "ask" ? "Answer" : step.form!;
     const record: ChatAnalysisResult = { tool: step.tool, title, status: "complete", message: "", claims: [] };
     if (Date.now() >= ctx.deadlineMs) { results.push({ ...record, status: "skipped", message: "The request deadline was reached before this analysis could start." }); continue; }
     // Sequential context: a test lookup with no explicit scope consumes the
@@ -36,10 +36,11 @@ export async function executeChatPlan(svc: Service, ctx: CallContext, rev: Revis
         record.message = [built.view.answer ?? built.view.caption, ...trail].join("\n");
         if (built.view.answer) record.thinking = [built.view.caption, ...trail].join("\n");
       } else {
-        const r = await svc.ask(ctx, { question: step.question, revision: rev.id, form: step.tool === "overview" ? "SemanticMap" : step.tool === "risk" ? "ChangeRisk" : step.tool === "tests" ? "TestConfidence" : step.form, kind: step.kind, subject, pins, ...(step.tool === "overview" ? { level: 1, overview: true } : {}) });
+        const r = await svc.ask(ctx, { question: step.question, revision: rev.id, form: step.tool === "overview" ? "SemanticMap" : step.tool === "risk" ? "ChangeRisk" : step.tool === "tests" ? "TestConfidence" : step.form, kind: step.kind, subject, pins, seeds: step.seeds, ...(step.tool === "overview" ? { level: 1, overview: true } : {}) });
         if (!r.ok) throw new Error(r.error.message);
         warnings.push(...r.metadata.warnings);
         record.view = r.value.view; record.claims = r.value.claims;
+        if (step.tool === "ask" && r.value.view.route?.name) record.title = r.value.view.route.name;
         const hasAnswer = !!r.value.view.answer;
         record.message = r.value.view.answer ?? r.value.view.caption;
         if (hasAnswer) record.thinking = [r.value.view.formReason, r.value.view.caption].filter(Boolean).join(" ");
@@ -47,8 +48,10 @@ export async function executeChatPlan(svc: Service, ctx: CallContext, rev: Revis
           // Profile prose includes folder names, so run it through the same access
           // redaction as the visual before adding it to the conversation.
           const profile = redactBuilt(svc.store, rev, { view: { ...r.value.view, caption: [projectDescription(svc.store, rev.repoRoot), projectProfile(svc.store, rev.id).text].filter(Boolean).join("\n") }, claims: [...r.value.claims] });
-          if (hasAnswer) record.thinking = `${profile.view.caption}\n${r.value.view.caption}\n${r.value.view.gaps.join("\n")}`;
-          record.message = `${profile.view.caption}\n${record.message}\n${r.value.view.gaps.join("\n")}`;
+          record.thinking = `${profile.view.caption}\n${r.value.view.caption}\n${r.value.view.gaps.join("\n")}`;
+          // A composed answer already speaks to this step's own question; the project-wide profile and raw
+          // gaps it would otherwise repeat stay in the trace instead of burying that answer in boilerplate.
+          if (!hasAnswer) record.message = `${profile.view.caption}\n${record.message}\n${r.value.view.gaps.join("\n")}`;
         }
         if (step.tool === "risk") {
           const terrain = r.value.view.terrain;

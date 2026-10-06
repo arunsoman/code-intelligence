@@ -7,6 +7,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { BudgetController, runModel, StubProvider, type GatewayFailure, type GatewayResult } from "@cie/model";
 import { validateChatPlan } from "./chat-plan.ts";
 import { executeChatPlan } from "./chat-execution.ts";
+import { runChatAgent } from "./chat-agent.ts";
 import type {
   AnalysisBatch, ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptStore, ConceptsOutput, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceRef, ExplainResult, ExplanationOutput,
   HypothesesOutput, ModelProvider, ModelRequest, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec, SourceSpan,
@@ -1986,17 +1987,23 @@ export class Service {
     // The same chat entry point can now compose several analyses. Legacy map
     // controls and stack traces retain their existing handlers.
     let plannerWarning: string | undefined;
-    if (this.router?.plan && !looksLikeTrace(text)) {
+    if ((this.router?.converse || this.router?.plan) && !looksLikeTrace(text)) {
       const revision = view?.revision ?? req.revision;
       const rev = revision ? this.store.revision(revision) : this.store.latestRevision();
       if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index a repository first", retryable: false });
       const history = Array.isArray(req.history) ? req.history.slice(-6).filter((m) => m && ["user", "assistant"].includes(m.role) && typeof m.text === "string").map((m) => ({ role: m.role, text: m.text.slice(0, 1500) })) : [];
       const files = [...new Set(selected.map((n) => n.file).filter(Boolean))];
       const subject = files.length === 1 ? files[0] : typeof view?.params?.chatSubject === "string" ? view.params.chatSubject : view?.formId === "TestConfidence" && typeof view.params?.subject === "string" ? view.params.subject : undefined;
-      let plan = null;
-      try { plan = validateChatPlan(await this.router.plan({ text: text.slice(0, 6000), history, subject })); } catch { /* legacy route remains available */ }
-      if (plan?.steps.length) return executeChatPlan(this, ctx, rev, plan, subject, req.pins);
-      if (!plan) plannerWarning = "The multi-step planner did not return a valid plan; only the single-question route was attempted.";
+      // A model that can call tools works the question out itself; one that cannot gets a fixed plan (the scripted router, tests).
+      if (this.router.converse) {
+        const answered = await runChatAgent(this, ctx, rev, this.router, { text: text.slice(0, 6000), history, subject, pins: req.pins });
+        if (answered) return answered;
+      } else if (this.router.plan) {
+        let plan = null;
+        try { plan = validateChatPlan(await this.router.plan({ text: text.slice(0, 6000), history, subject })); } catch { /* legacy route remains available */ }
+        if (plan?.steps.length) return executeChatPlan(this, ctx, rev, plan, subject, req.pins);
+        if (!plan) plannerWarning = "The multi-step planner did not return a valid plan; only the single-question route was attempted.";
+      }
     }
     const reading = await readText(this.router, text, { hasView: !!view || referentCount >= 1, viewForm: view?.formId, selectionCount: referentCount, looksLikeTrace: looksLikeTrace(text) });
     const intent = reading.intent;

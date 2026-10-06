@@ -71,9 +71,10 @@ test("a label the model was not offered, no answer, or no model at all gives the
   assert.equal(trace.seen.length, 0, "parsing a stack trace is not a language-model job");
 });
 
-test("a hosted router model is refused: the question would leave the machine", () => {
-  assert.throws(() => new OllamaRouter({ model: "gpt-oss:120b-cloud" }), /hosted/);
-  assert.throws(() => new OllamaRouter({ model: "x:cloud" }), /hosted/);
+test("a hosted router model is allowed when explicitly named, and marks itself as hosted", () => {
+  assert.equal(new OllamaRouter({ model: "gpt-oss:120b-cloud" }).hosted, true);
+  assert.equal(new OllamaRouter({ model: "x:cloud" }).hosted, true);
+  assert.equal(new OllamaRouter({ model: "qwen3:0.6b" }).hosted, false);
 });
 
 test("the Ollama router asks for one constrained label at temperature 0, parses the answer, and treats every failure as 'no answer'", async () => {
@@ -144,19 +145,23 @@ test("the router model comes from the command line, else CIE_ROUTER_MODEL, else 
   assert.equal(routerArg(["--fresh", "--router-model", "llama3.2:1b"]), "llama3.2:1b");
   assert.equal(routerArg(["--router-model=smollm2:360m"]), "smollm2:360m");
   assert.equal(routerArg(["--fresh"]), undefined);
-  const srv = createServer((req, res) => { res.end(JSON.stringify(req.url === "/api/tags" ? { models: [{ name: "qwen3:0.6b" }, { name: "llama3.2:1b" }, { name: "gemma3:latest" }] } : {})); });
+  const srv = createServer((req, res) => { res.end(JSON.stringify(req.url === "/api/tags" ? { models: [{ name: "qwen3:0.6b" }, { name: "llama3.2:1b" }, { name: "gemma3:latest" }, { name: "gpt-oss:120b-cloud" }] } : {})); });
   await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
   const env = { CIE_OLLAMA_URL: `http://127.0.0.1:${(srv.address() as { port: number }).port}` };
   try {
-    assert.equal((await chooseRouter([], env)).router?.name, "qwen3:0.6b", "nothing asked: the default");
+    const byDefault = await chooseRouter([], env);
+    assert.equal(byDefault.router?.name, "glm-5.3:cloud", "nothing asked: the default");
+    assert.match(byDefault.note ?? "", /the default.*hosted on Ollama Cloud.*leave this machine/, "a hosted default says so");
     assert.equal((await chooseRouter(["--router-model", "llama3.2:1b"], env)).router?.name, "llama3.2:1b", "the argument");
     assert.equal((await chooseRouter(["--router-model", "gemma3"], env)).router?.name, "gemma3", "an installed model, named without its :latest tag");
     assert.equal((await chooseRouter([], { ...env, CIE_ROUTER_MODEL: "llama3.2:1b" })).router?.name, "llama3.2:1b", "the environment");
     assert.equal((await chooseRouter(["--router-model", "qwen3:0.6b"], { ...env, CIE_ROUTER_MODEL: "llama3.2:1b" })).router?.name, "qwen3:0.6b", "the argument beats the environment");
     const missing = await chooseRouter(["--router-model", "nope:7b"], env);
-    assert.equal(missing.router?.name, "qwen3:0.6b"); assert.match(missing.note ?? "", /"nope:7b" is not installed.*using qwen3:0.6b/);
+    assert.equal(missing.router?.name, "glm-5.3:cloud"); assert.match(missing.note ?? "", /"nope:7b" is not installed.*using glm-5.3:cloud/);
     const hosted = await chooseRouter(["--router-model", "gpt-oss:120b-cloud"], env);
-    assert.equal(hosted.router?.name, "qwen3:0.6b"); assert.match(hosted.note ?? "", /hosted/);
+    assert.equal(hosted.router?.name, "gpt-oss:120b-cloud"); assert.match(hosted.note ?? "", /hosted on Ollama Cloud/);
+    const notPulled = await chooseRouter(["--router-model", "kimi-k2:1t-cloud"], env);
+    assert.equal(notPulled.router?.name, "glm-5.3:cloud"); assert.match(notPulled.note ?? "", /"kimi-k2:1t-cloud" is not installed.*using glm-5.3:cloud/);
     assert.equal((await chooseRouter(["--router-model", "off"], env)).router, null);
   } finally { srv.close(); }
   // No Ollama to ask: the named model is used as given, and a failing router just means the general map.

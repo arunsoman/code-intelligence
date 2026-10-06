@@ -27,12 +27,19 @@ export type Intent =
 export interface IntentContext { hasView: boolean; viewForm?: string; selectionCount: number; looksLikeTrace: boolean }
 
 export interface RouterRequest { system: string; user: string; labels: string[] }
+/** One turn of a tool-calling conversation (see chat-agent.ts). */
+export interface AgentToolCall { name: string; arguments: Record<string, unknown> }
+export interface AgentMessage { role: "system" | "user" | "assistant" | "tool"; content: string; toolCalls?: AgentToolCall[]; toolName?: string }
+export interface AgentToolSpec { name: string; description: string; parameters: Record<string, unknown> }
+export interface AgentReply { content: string; toolCalls: AgentToolCall[] }
 export interface RouterAnswer { label: string; target: string }
 /** Anything that can pick one label from a closed list: a local Ollama model in production, a scripted one in tests. */
 export interface RouterModel {
   readonly name: string;
   choose(req: RouterRequest): Promise<RouterAnswer | null>;
   plan?(req: ChatPlanRequest): Promise<ChatPlan | null>;
+  /** The next turn of a conversation in which the model may call `tools`; null when it did not answer. */
+  converse?(messages: AgentMessage[], tools: AgentToolSpec[], signal: AbortSignal): Promise<AgentReply | null>;
 }
 
 export const FORM_LABELS: Record<string, string> = {
@@ -98,14 +105,16 @@ export function buildRequest(question: string, labels: string[]): RouterRequest 
   };
 }
 
-/** A small model running in the local Ollama daemon. A hosted (":cloud") model is refused: the question would leave the machine. */
+/** A model running in the local Ollama daemon. A hosted (":cloud" / "-cloud") model is allowed when
+ * explicitly named: the daemon forwards the request to ollama.com, so the question leaves the machine. */
 export class OllamaRouter implements RouterModel {
   readonly name: string;
+  readonly hosted: boolean;
   private opts: { model?: string; baseUrl?: string; timeoutMs?: number };
   constructor(opts: { model?: string; baseUrl?: string; timeoutMs?: number } = {}) {
     this.opts = opts;
     this.name = opts.model ?? DEFAULT_ROUTER_MODEL;
-    if (/(:|-)cloud$/.test(this.name)) throw new Error(`router model "${this.name}" is hosted; the router only runs models on this machine`);
+    this.hosted = /(:|-)cloud$/.test(this.name);
   }
   async plan(req: ChatPlanRequest): Promise<ChatPlan | null> {
     const base = this.opts.baseUrl ?? process.env.CIE_OLLAMA_URL ?? "http://127.0.0.1:11434";
@@ -120,22 +129,48 @@ export class OllamaRouter implements RouterModel {
       return validateChatPlan(JSON.parse(body.message?.content ?? "null"));
     } catch { return null; }
   }
+  async converse(messages: AgentMessage[], tools: AgentToolSpec[], signal: AbortSignal): Promise<AgentReply | null> {
+    const base = this.opts.baseUrl ?? process.env.CIE_OLLAMA_URL ?? "http://127.0.0.1:11434";
+    const wire = messages.map((m) => m.role === "assistant" ? { role: "assistant", content: m.content, ...(m.toolCalls?.length ? { tool_calls: m.toolCalls.map((c) => ({ function: { name: c.name, arguments: c.arguments } })) } : {}) }
+      : m.role === "tool" ? { role: "tool", content: m.content, tool_name: m.toolName } : { role: m.role, content: m.content });
+    try {
+      const r = await fetch(`${base}/api/chat`, {
+        method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.any([signal, AbortSignal.timeout(this.opts.timeoutMs ?? 60_000)]),
+        body: JSON.stringify({ model: this.name, stream: false, think: false, keep_alive: "30m", options: { temperature: 0, num_ctx: 32_768 }, tools: tools.map((t) => ({ type: "function", function: t })), messages: wire }),
+      });
+      if (!r.ok) return null;
+      const body = await r.json() as { message?: { content?: string; tool_calls?: { function?: { name?: string; arguments?: unknown } }[] } };
+      const toolCalls = (body.message?.tool_calls ?? []).flatMap((c) => {
+        const name = c.function?.name, raw = c.function?.arguments;
+        let args: unknown = raw;
+        if (typeof raw === "string") { try { args = JSON.parse(raw); } catch { args = null; } }
+        return typeof name === "string" ? [{ name, arguments: (args && typeof args === "object" ? args : {}) as Record<string, unknown> }] : [];
+      });
+      return { content: typeof body.message?.content === "string" ? body.message.content : "", toolCalls };
+    } catch { return null; }
+  }
   async choose(req: RouterRequest): Promise<RouterAnswer | null> {
     const base = this.opts.baseUrl ?? process.env.CIE_OLLAMA_URL ?? "http://127.0.0.1:11434";
-    const body = {
-      model: this.name, stream: false, think: false, keep_alive: "30m", options: { temperature: 0, num_predict: 40, num_ctx: 4096 },
-      format: { type: "object", properties: { label: { type: "string", enum: req.labels }, target: { type: "string" } }, required: ["label", "target"] },
-      messages: [{ role: "system", content: req.system }, { role: "user", content: req.user }],
-    };
+    const schema = { type: "object", properties: { label: { type: "string", enum: req.labels }, target: { type: "string" } }, required: ["label", "target"] };
+    // A small local model is held to the schema by constrained decoding (what scripts/eval-tiny-models.ts measured). Hosted models
+    // ignore `format` and `think: false` and reason in prose, so they answer through a tool call instead, which they do respect.
+    const body = this.hosted
+      ? { model: this.name, stream: false, think: false, options: { temperature: 0 }, tools: [{ type: "function", function: { name: "choose", description: "Record which label the message is and the name it mentions", parameters: schema } }], messages: [{ role: "system", content: `${req.system}\nAnswer by calling the choose tool.` }, { role: "user", content: req.user }] }
+      : { model: this.name, stream: false, think: false, keep_alive: "30m", options: { temperature: 0, num_predict: 40, num_ctx: 4096 }, format: schema, messages: [{ role: "system", content: req.system }, { role: "user", content: req.user }] };
     try {
       const r = await fetch(`${base}/api/chat`, { method: "POST", body: JSON.stringify(body), signal: AbortSignal.timeout(this.opts.timeoutMs ?? 30_000) });
       if (!r.ok) return null;
-      const a = JSON.parse(((await r.json()) as { message?: { content?: string } }).message?.content ?? "{}") as Partial<RouterAnswer>;
+      const msg = ((await r.json()) as { message?: { content?: string; tool_calls?: { function?: { arguments?: unknown } }[] } }).message;
+      const args = msg?.tool_calls?.[0]?.function?.arguments;
+      const a = (this.hosted ? (typeof args === "string" ? JSON.parse(args) : args ?? {}) : JSON.parse(msg?.content ?? "{}")) as Partial<RouterAnswer>;
       return typeof a.label === "string" && req.labels.includes(a.label) ? { label: a.label, target: typeof a.target === "string" ? a.target.slice(0, 120) : "" } : null;
     } catch { return null; }
   }
 }
-export const DEFAULT_ROUTER_MODEL = "qwen3:0.6b";
+/** Hosted: questions, and the code excerpts the chat tools read, are sent through the local daemon to ollama.com. */
+export const DEFAULT_ROUTER_MODEL = "glm-5.3:cloud";
+/** Feature generation keeps its own local default; moving it off the machine is a separate decision. */
+export const DEFAULT_GENERATION_MODEL = "qwen3:0.6b";
 
 /**
  * A router that is not a model: an exact question → label map read from the JSON file named by `CIE_ROUTER_SCRIPT`.
@@ -192,8 +227,10 @@ const installedModels = async (base: string): Promise<string[] | null> => {
 const has = (names: string[], want: string) => names.includes(want) || names.includes(`${want}:latest`);
 
 /**
- * Which router to run: the command-line argument, else CIE_ROUTER_MODEL, else the default. A model that is hosted or not installed is not used silently:
- * the default takes its place and the note says so. Without Ollama at all the router is still created (it answers "no answer", and the general map is used).
+ * Which router to run: the command-line argument, else CIE_ROUTER_MODEL, else the default. A model that is not installed is not used silently:
+ * the default takes its place and the note says so. An explicitly asked-for hosted ("-cloud") model IS used — the daemon forwards it to
+ * ollama.com, so the note says the question will leave this machine. Without Ollama at all the router is still created (it answers "no
+ * answer", and the general map is used).
  */
 export async function chooseRouter(argv: string[] = process.argv.slice(2), env: Record<string, string | undefined> = process.env): Promise<{ router: RouterModel | null; note?: string }> {
   const asked = routerArg(argv) ?? env.CIE_ROUTER_MODEL;
@@ -202,11 +239,11 @@ export async function chooseRouter(argv: string[] = process.argv.slice(2), env: 
   if (asked === "off" || env.CIE_ROUTER === "off") return { router: null, note: "router model off: questions get the general map" };
   const baseUrl = env.CIE_OLLAMA_URL;
   const base = baseUrl ?? "http://127.0.0.1:11434";
-  if (!asked) return { router: new OllamaRouter({ baseUrl }) };
-  if (/(:|-)cloud$/.test(asked)) return { router: new OllamaRouter({ baseUrl }), note: `router model "${asked}" is hosted and the router only runs models on this machine; using ${DEFAULT_ROUTER_MODEL}` };
+  if (!asked) { const router = new OllamaRouter({ baseUrl }); return { router, ...(router.hosted ? { note: `router model "${router.name}" (the default) is hosted on Ollama Cloud; questions and the code the chat reads will leave this machine.` } : {}) }; }
   const names = await installedModels(base);
   if (names && !has(names, asked)) return { router: new OllamaRouter({ baseUrl }), note: `router model "${asked}" is not installed (ollama pull ${asked}); using ${DEFAULT_ROUTER_MODEL}` };
-  return { router: new OllamaRouter({ model: asked, baseUrl }) };
+  const router = new OllamaRouter({ model: asked, baseUrl });
+  return { router, ...(router.hosted ? { note: `router model "${asked}" is hosted on Ollama Cloud; questions sent to it will leave this machine.` } : {}) };
 }
 
 // ---- from an answer to something the service can act on
@@ -274,7 +311,7 @@ export class OllamaGenerationRouter implements GenerationRouter {
   readonly endpoint: string;
   readonly hosted: boolean;
   constructor(opts: { model?: string; baseUrl?: string } = {}) {
-    this.model = opts.model ?? DEFAULT_ROUTER_MODEL;
+    this.model = opts.model ?? DEFAULT_GENERATION_MODEL;
     this.endpoint = (opts.baseUrl ?? "http://127.0.0.1:11434").replace(/\/$/, "");
     this.hosted = /[:-]cloud$/i.test(this.model);
   }

@@ -371,7 +371,7 @@ export interface ChangesSince {
   summary: string;
 }
 export interface ChatAnalysisResult {
-  tool: "overview" | "view" | "risk" | "tests";
+  tool: "overview" | "view" | "risk" | "tests" | "ask";
   title: string;
   status: "complete" | "failed" | "skipped";
   message: string;
@@ -482,6 +482,9 @@ export interface SearchResponse {
   notIndexed: { repositoryId: string; repositoryName: string; reason: string }[];
   totals: { shown: number; matched: number | null; matchedAtLeast: number | null };
   queryDiagnostics: Diagnostic[];
+  /** AUTO only: code names the query was read as — named inside a sentence ("exact") or spelt close to one ("fuzzy").
+   * Listed only when the name produced a hit the caller may see, so a reading never reveals a hidden symbol. */
+  readAs?: { text: string; name: string; how: "exact" | "fuzzy" }[];
 }
 export type SearchModes = "LITERAL" | "REGEX" | "SYMBOL";
 export interface DefinitionLocation {

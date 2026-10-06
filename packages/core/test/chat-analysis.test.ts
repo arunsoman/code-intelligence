@@ -17,7 +17,23 @@ const PLAN: ChatPlan = { steps: [
 
 test("chat plans reject unknown tools, future dependencies and excessive work before execution", () => {
   assert.ok(validateChatPlan(PLAN));
-  for (const value of [null, { steps: [{ tool: "deleteRepository", question: "delete" }] }, { steps: [{ tool: "tests", question: "tests", fromStep: 0 }] }, { steps: [{ tool: "view", question: "show", form: "Shell" }] }, { steps: Array(7).fill(PLAN.steps[0]) }, { steps: [PLAN.steps[0], { tool: "tests", question: "tests", fromStep: 0, subject: "invented" }] }]) assert.equal(validateChatPlan(value), null);
+  assert.ok(validateChatPlan({ steps: [{ tool: "ask", question: "what is mifilter" }] }), "a bare named-lookup question is a valid plan");
+  for (const value of [null, { steps: [{ tool: "deleteRepository", question: "delete" }] }, { steps: [{ tool: "tests", question: "tests", fromStep: 0 }] }, { steps: [{ tool: "view", question: "show", form: "Shell" }] }, { steps: [{ tool: "ask", question: "x", form: "SemanticMap" }] }, { steps: Array(7).fill(PLAN.steps[0]) }, { steps: [PLAN.steps[0], { tool: "tests", question: "tests", fromStep: 0, subject: "invented" }] }]) assert.equal(validateChatPlan(value), null);
+});
+
+test("a question naming something specific gets the 'ask' tool, not forced into overview/risk/tests", async () => {
+  const { svc, worker, revision } = await setup();
+  try {
+    svc.router = new ScriptRouter({ "what is mifilter": { steps: [{ tool: "ask", question: "what is mifilter" }] } });
+    const r = await svc.converse(ctx(), { text: "what is mifilter", revision });
+    assert.ok(r.ok && r.value.kind === "analysis");
+    assert.equal(r.value.results.length, 1);
+    const [result] = r.value.results;
+    assert.equal(result.status, "complete");
+    assert.equal(result.tool, "ask");
+    assert.ok(result.view, "the ask tool still produces a view, routed like a normal question");
+    assert.equal(result.title, "Intent-relative architecture map", "the title reflects the actual routed form, not a generic placeholder");
+  } finally { worker.close(); }
 });
 
 test("compound chat retains three views and resolves the test subject from the actual risk result", async () => {
