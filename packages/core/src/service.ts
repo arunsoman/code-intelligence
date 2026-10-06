@@ -25,6 +25,7 @@ import { Collab } from "./collab.ts";
 import { Evaluator, PLANTED_SECURITY, SEEDED_CONCEPTS } from "./evaluation.ts";
 import { Indexer } from "./indexer.ts";
 import { History } from "./history.ts";
+import { runRuntimeSandbox } from "./runtime-sandbox.ts";
 import { Runtime } from "./runtime.ts";
 import { mapOverlays } from "./overlays.ts";
 import { Security } from "./security.ts";
@@ -678,6 +679,7 @@ export class Service {
         if (ghConn) this.store.audit(actor(ctx), "source.gh.auto", row.repoRoot, { sourceId: ghConn.health().sourceId });
       } catch (e) { this.store.audit(actor(ctx), "source.gh.auto_failed", row.repoRoot, { error: String((e as Error).message).slice(0, 200) }); }
       this.scheduleSearchIndex(row.repoRoot, row.id, ctx);
+      this.scheduleRuntimeIntrospection(row.repoRoot, row.id, ctx);
       return ok(ctx, { ...row, reuse, delta: { ...delta, phasesMs: phases } }, { revision: row.id, warnings, completeness: batch.diagnostics.some((d) => d.code !== "REUSED_CACHED_PARSES") ? "PARTIAL" : "COMPLETE" });
     } catch (e) {
       if (e instanceof Cancelled || (control && e instanceof WorkerError && e.api.code === "CANCELLED")) throw new Cancelled();
@@ -868,6 +870,30 @@ export class Service {
       },
     });
   }
+  /** Idempotent per revision: schedule runtime introspection for frameworks we can safely bootstrap (NestJS for now). */
+  private scheduleRuntimeIntrospection(repoRoot: string, revision: string, caller?: CallContext) {
+    // Only run when framework metadata suggests a supported runtime framework.
+    const hasNest = this.store.factsByPredicate(revision, "framework_role").some((f) => (f.object as { value?: { framework?: string } }).value?.framework === "nestjs");
+    if (!hasNest) return null;
+    const jctx: CallContext = {
+      requestId: `req-runtime:${randomUUID()}`,
+      idempotencyKey: `runtime-introspect:${repoRoot}:${revision}`,
+      actor: caller?.actor ?? { principalId: "system", tenantId: "local", sessionId: "system" },
+      deadlineMs: Date.now() + 600_000, traceId: `trace-runtime:${randomUUID()}`,
+    };
+    return this.jobs.enqueue(jctx, {
+      kind: "runtime-introspect", priority: 5, lane: "runner", params: { repoPath: repoRoot, revision },
+      run: async (jctx2, control) => {
+        const rev = this.store.revision(revision);
+        if (!rev) return fail(jctx2, { code: "NOT_FOUND", message: "revision not found", retryable: false });
+        control?.progress({ phase: "runtime", message: "Running framework runtime introspection…" });
+        const r = await runRuntimeSandbox({ store: this.store, registry: this.registry, revision: rev, wallMs: 120_000 });
+        if (!r.ok) return fail(jctx2, r.error);
+        return ok(jctx2, { facts: r.value.facts.length, evidence: r.value.evidence.length, diagnostics: r.value.diagnostics }, { warnings: r.value.diagnostics });
+      },
+    });
+  }
+
   private async searchCall<T>(ctx: CallContext, fn: () => Promise<T | ApiFail> | T | ApiFail): Promise<ApiResult<T>> {
     try {
       const v = await fn();

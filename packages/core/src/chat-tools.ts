@@ -87,8 +87,9 @@ function truncateSource(text: string): string {
   return out.length < text.length ? `${out}\n… (${lines.length} lines in all; the rest is not shown)` : out;
 }
 
-/** Run one existing analysis step (the same code the scripted planner runs) and report it to the model. */
-async function analysis(env: ToolEnv, step: ChatStep): Promise<string> {
+/** Run one existing analysis step (the same code the scripted planner runs) and report it to the model. Exported so
+ * the agent loop can also call it directly, outside any tool call, to guarantee a view (see chat-agent.ts). */
+export async function analysis(env: ToolEnv, step: ChatStep): Promise<string> {
   if (step.subject && env.access.denied(step.subject)) return "That subject is not accessible to this user.";
   const r = await executeChatPlan(env.svc, env.ctx, env.rev, { steps: [step] }, env.currentSubject, env.pins);
   if (!r.ok) return `Failed: ${r.error.message}`;
@@ -177,6 +178,131 @@ export const CHAT_TOOLS: ChatTool[] = [
     description: "Find tests linked to a source file, separating static call paths from measured coverage. Without a subject, uses the current subject or reports general test confidence.",
     parameters: obj({ question: str("What the user asked about tests"), subject: str("A source file path (as find_code or read_code reported it)", { maxLength: 300 }) }, ["question"]),
     run: (env, a) => analysis(env, { tool: "tests", question: a.question as string, ...(a.subject ? { subject: fileFor(env, a.subject as string) } : {}) }),
+  },
+  {
+    name: "get_routes",
+    description: "List framework HTTP routes (method + path) extracted from Spring, NestJS, Express, Next.js, or Spring Cloud Gateway. Optionally filter by method, path fragment, or framework.",
+    parameters: obj({ method: str("HTTP method to filter by, e.g. GET or POST", { maxLength: 12 }), path: str("Path fragment to filter by, e.g. /users", { maxLength: 200 }), framework: str("Framework name to filter by, e.g. spring or nestjs", { maxLength: 30 }) }, []),
+    async run(env, { method, path, framework }) {
+      const routes = env.svc.store.factsByPredicate(env.rev.id, "route").map((f) => {
+        const v = (f.object as { value?: { method?: string; path?: string; handler?: string; framework?: string; kind?: string } }).value ?? {};
+        return { id: f.subject, method: String(v.method ?? "").toUpperCase(), path: String(v.path ?? ""), handler: String(v.handler ?? ""), framework: v.framework, kind: v.kind };
+      }).filter((r) => r.path || r.method);
+      const filtered = routes.filter((r) =>
+        (!method || r.method === String(method).toUpperCase()) &&
+        (!path || r.path.toLowerCase().includes(String(path).toLowerCase())) &&
+        (!framework || String(r.framework ?? "").toLowerCase() === String(framework).toLowerCase()));
+      if (!filtered.length) return `No framework routes matched${method ? ` method ${method}` : ""}${path ? ` path ${path}` : ""}${framework ? ` framework ${framework}` : ""}.`;
+      const entities = new Map(env.svc.store.entitiesById(env.rev.id, filtered.map((r) => r.id)).map((e) => [e.entityId, e]));
+      for (const r of filtered) env.seen.set(r.id, { name: `${r.method} ${r.path}`, file: entities.get(r.id)?.file ?? "" });
+      return [`${filtered.length} route(s):`, ...filtered.map((r) => `- [${r.id}] ${r.method} ${r.path} — ${r.framework ? `${r.framework} ` : ""}${r.handler || r.kind || "handler"}`)].join("\n");
+    },
+  },
+  {
+    name: "get_guards",
+    description: "List framework guards and which routes they protect. Optionally filter by route id/name or guard name.",
+    parameters: obj({ route: str("Route id or name to focus on", { maxLength: 300 }), guard: str("Guard name fragment to filter by", { maxLength: 100 }) }, []),
+    async run(env, { route, guard }) {
+      const store = env.svc.store;
+      const rev = env.rev.id;
+      const entities = new Map(store.entities(rev).map((e) => [e.entityId, e]));
+      const routes = store.factsByPredicate(rev, "route").map((f) => {
+        const v = (f.object as { value?: { method?: string; path?: string; handler?: string; framework?: string; kind?: string } }).value ?? {};
+        return { id: f.subject, method: String(v.method ?? "").toUpperCase(), path: String(v.path ?? ""), handler: String(v.handler ?? ""), framework: v.framework };
+      }).filter((r) => r.path || r.method);
+      const guards = store.factsByPredicate(rev, "framework_role").filter((f) => (f.object as { value?: { role?: string } }).value?.role === "guard").map((f) => {
+        const v = (f.object as { value?: { role?: string; framework?: string; name?: string } }).value ?? {};
+        const e = entities.get(f.subject);
+        return { id: f.subject, name: v.name || (e?.name ?? f.subject), framework: v.framework, evidenceIds: f.evidence.map((e) => e.id) };
+      });
+      let targetRouteId: string | null = null;
+      if (route) {
+        const re = entityFor(env, route as string);
+        targetRouteId = re?.entityId ?? routes.find((r) => `${r.method} ${r.path}`.toLowerCase() === String(route).toLowerCase() || r.path.toLowerCase().includes(String(route).toLowerCase()))?.id ?? null;
+      }
+      const filtered = guards.filter((g) => (!guard || g.name.toLowerCase().includes(String(guard).toLowerCase())));
+      const rels = store.allRelationships(rev);
+      const applies = (g: typeof guards[number], r: typeof routes[number]) => {
+        if (g.id === r.id) return true;
+        const exposes = rels.find((rel) => rel.kind === "exposes_route" && rel.to === r.id);
+        if (g.id === exposes?.from) return true;
+        return rels.some((rel) => rel.kind === "contains" && rel.to === r.id && rel.from === g.id);
+      };
+      const out: string[] = [];
+      for (const g of filtered) {
+        env.seen.set(g.id, { name: g.name, file: entities.get(g.id)?.file ?? "" });
+        const covered = routes.filter((r) => applies(g, r) && (!targetRouteId || r.id === targetRouteId));
+        out.push(`- [${g.id}] ${g.name}${g.framework ? ` (${g.framework} guard)` : ""}`);
+        if (covered.length) out.push(...covered.slice(0, 12).map((r) => `  • ${r.method} ${r.path}`));
+        else if (targetRouteId) out.push(`  • does not protect the requested route`);
+        else out.push(`  • no matching routes found`);
+      }
+      if (!filtered.length) return targetRouteId ? "No framework guards protect that route." : "No framework guards found.";
+      return out.join("\n");
+    },
+  },
+  {
+    name: "get_module_graph",
+    description: "Show the framework module / dependency-injection graph: modules, controllers, providers, and what they import or inject. Optionally focus on one module id or name.",
+    parameters: obj({ module: str("Module id or name to focus on", { maxLength: 300 }) }, []),
+    async run(env, { module }) {
+      const store = env.svc.store;
+      const rev = env.rev.id;
+      const entities = new Map(store.entities(rev).map((e) => [e.entityId, e]));
+      const modules = store.factsByPredicate(rev, "framework_role").filter((f) => (f.object as { value?: { role?: string } }).value?.role === "module").map((f) => {
+        const e = entities.get(f.subject);
+        return { id: f.subject, name: e?.name ?? f.subject, file: e?.file ?? "" };
+      });
+      const root = module ? (entityFor(env, module as string)?.entityId ?? modules.find((m) => m.name.toLowerCase() === String(module).toLowerCase())?.id) : undefined;
+      const relevant = root ? [root] : modules.map((m) => m.id);
+      const rels = store.allRelationships(rev).filter((r) => ["contains", "injects", "imports"].includes(r.kind));
+      const lines: string[] = [];
+      for (const id of relevant) {
+        const e = entities.get(id);
+        env.seen.set(id, { name: e?.name ?? id, file: e?.file ?? "" });
+        lines.push(`- [${id}] ${e?.name ?? id}${e?.file ? ` — ${e.file}` : ""}`);
+        const children = rels.filter((r) => r.from === id && r.kind === "contains").slice(0, 20);
+        for (const c of children) {
+          const ce = entities.get(c.to);
+          env.seen.set(c.to, { name: ce?.name ?? c.to, file: ce?.file ?? "" });
+          lines.push(`  • contains [${c.to}] ${ce?.name ?? c.to} (${c.label ?? "member"})`);
+        }
+        const injects = rels.filter((r) => r.from === id && r.kind === "injects").slice(0, 20);
+        for (const i of injects) {
+          const ie = entities.get(i.to);
+          env.seen.set(i.to, { name: ie?.name ?? i.to, file: ie?.file ?? "" });
+          lines.push(`  • injects [${i.to}] ${ie?.name ?? i.to}${i.label ? ` (${i.label})` : ""}`);
+        }
+        const imports = rels.filter((r) => r.from === id && r.kind === "imports").slice(0, 20);
+        for (const i of imports) {
+          const ie = entities.get(i.to);
+          env.seen.set(i.to, { name: ie?.name ?? i.to, file: ie?.file ?? "" });
+          lines.push(`  • imports [${i.to}] ${ie?.name ?? i.to}`);
+        }
+      }
+      if (!lines.length) return "No framework module graph found.";
+      return lines.join("\n");
+    },
+  },
+  {
+    name: "get_config",
+    description: "Read configuration values extracted by the framework config resolver (package.json, .env, application.yml/properties, tsconfig.json, pom.xml). Secrets are redacted.",
+    parameters: obj({ key: str("Key fragment to filter by, e.g. DATABASE_URL or spring.datasource", { maxLength: 200 }), source: str("Source file fragment, e.g. .env or application.yml", { maxLength: 100 }) }, []),
+    async run(env, { key, source }) {
+      const store = env.svc.store;
+      const rev = env.rev.id;
+      const facts = store.factsByPredicate(rev, "config_value");
+      const filtered = facts.filter((f) => {
+        const v = (f.object as { value?: { key?: string; source?: string } }).value ?? {};
+        return (!key || String(v.key ?? "").toLowerCase().includes(String(key).toLowerCase())) && (!source || String(v.source ?? "").toLowerCase().includes(String(source).toLowerCase()));
+      });
+      if (!filtered.length) return "No matching config values found.";
+      return [`${filtered.length} config value(s):`, ...filtered.map((f) => {
+        const v = (f.object as { value?: { key: string; source: string; value?: unknown; redacted?: unknown; framework?: string } }).value ?? { key: "?", source: "?" };
+        const shown = v.redacted !== undefined ? String(v.redacted) : v.value !== undefined ? String(v.value) : "(redacted)";
+        return `- ${v.key} = ${shown} (${v.source}${v.framework ? `, ${v.framework}` : ""})`;
+      })].join("\n");
+    },
   },
   {
     name: "answer",

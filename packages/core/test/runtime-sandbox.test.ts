@@ -23,3 +23,22 @@ test("NestJS runtime sandbox emits runtime facts", async () => {
     worker.close();
   }
 });
+
+test("NestJS runtime introspection is scheduled as a job after indexing", async () => {
+  const { svc, worker, revision } = await setup(undefined, NESTJS_REPO);
+  try {
+    // The job is enqueued asynchronously after ingestRepository returns.
+    let job = svc.jobs.list(20).find((j) => j.kind === "runtime-introspect" && j.params.revision === revision);
+    for (let i = 0; i < 50 && !job; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      job = svc.jobs.list(20).find((j) => j.kind === "runtime-introspect" && j.params.revision === revision);
+    }
+    assert.ok(job, "runtime-introspect job should be scheduled");
+    const done = await svc.jobs.settled(job.id);
+    assert.equal(done.state, "SUCCEEDED", `runtime job failed: ${done.error?.message ?? done.message}`);
+    const facts = svc.store.allFacts(revision);
+    assert.ok(facts.some((f) => f.resolution === "RUNTIME" && f.predicate === "framework_role"), "expected runtime framework_role facts from scheduled job");
+  } finally {
+    worker.close();
+  }
+});

@@ -6,7 +6,7 @@ Make framework-specific metadata extraction a first-class, pluggable extension i
 
 ## Status
 
-**Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, Phase 5, and Phase 6 are implemented end-to-end.**
+**Phase 0, Phase 1, Phase 2, Phase 3, Phase 4, Phase 5, Phase 6, and Phase 7 are implemented end-to-end.**
 
 - Framework plugin trait and registry: `crates/worker/src/frameworks/mod.rs`
 - Spring Boot plugin: `crates/worker/src/frameworks/spring.rs`
@@ -16,8 +16,10 @@ Make framework-specific metadata extraction a first-class, pluggable extension i
 - Next.js plugin: `crates/worker/src/frameworks/nextjs.rs`
 - Config resolver plugin: `crates/worker/src/frameworks/config.rs`
 - Runtime sandbox: `packages/core/src/runtime-sandbox.ts`
+- Framework-aware chat tools: `packages/core/src/chat-tools.ts`
+- RouteMap visual form: `packages/core/src/forms/routemap.ts`
 - Framework metadata → semantic model resolver: `crates/worker/src/index.rs` (`resolve_framework_metadata`)
-- TypeScript consumers: `packages/core/src/forms/journey.ts`, `packages/core/src/forms/analysis.ts`
+- TypeScript consumers: `packages/core/src/forms/journey.ts`, `packages/core/src/forms/analysis.ts`, `packages/core/src/forms/routemap.ts`
 - Test fixtures: `fixtures/spring-repo/`, `fixtures/nestjs-repo/`, `fixtures/express-repo/`, `fixtures/nextjs-repo/`
 - Rust worker tests: `crates/worker/src/index.rs::spring_tests`, `crates/worker/src/index.rs::nestjs_tests`, `crates/worker/src/index.rs::express_tests`, `crates/worker/src/index.rs::nextjs_tests`, `crates/worker/src/frameworks/spring.rs::tests`, `crates/worker/src/frameworks/java_gateway.rs::tests`, `crates/worker/src/frameworks/nestjs.rs::tests`, `crates/worker/src/frameworks/express.rs::tests`, `crates/worker/src/frameworks/nextjs.rs::tests`, `crates/worker/src/frameworks/config.rs::tests`
 - Node integration tests: `packages/core/test/spring-framework.test.ts`, `packages/core/test/nestjs-framework.test.ts`, `packages/core/test/express-framework.test.ts`, `packages/core/test/nextjs-framework.test.ts`, `packages/core/test/runtime-sandbox.test.ts`
@@ -236,9 +238,17 @@ Implemented in `packages/core/src/runtime-sandbox.ts`.
 - Emits facts with `resolution: "RUNTIME"` and `evidence.class: "RUNTIME_*"` so downstream forms can weight runtime evidence.
 - Runtime-only dependency tokens (e.g. `CONFIG`) are overridden with safe defaults so static fixtures can boot without real secrets.
 
-### Phase 7 — LLM tools + new forms
-- Add framework-aware tools (`getModuleGraph`, `getRoutes`, `getProviders`, `getGuards`, `getConfigValue`, `getGatewayRoutes`).
-- Add gateway/module route visual forms if needed.
+### Phase 7 — LLM tools + new forms ✅
+
+Implemented in `packages/core/src/chat-tools.ts` and `packages/core/src/forms/routemap.ts`.
+
+- Added framework-aware chat tools:
+  - `get_routes`: list HTTP routes extracted by the framework plugins, with optional filters for method, path fragment, and framework.
+  - `get_guards`: list framework guards (security annotations, `CanActivate` classes, gateway filters) and the routes they protect.
+  - `get_module_graph`: show the DI/module graph — modules, controllers, providers, and `contains`/`injects`/`imports` relationships.
+  - `get_config`: read `config_value` facts from `package.json`, `.env`, `application.yml/properties`, `tsconfig.json`, `pom.xml`, etc., with secrets redacted.
+- Added new visual form `RouteMap` (`V18`): a routes × guards matrix plus a graph of route and guard nodes.
+- Wired the runtime sandbox into the service as a `runtime-introspect` job that is auto-scheduled after indexing when framework metadata indicates NestJS.
 
 ## How to run
 

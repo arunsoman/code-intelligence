@@ -141,7 +141,7 @@ export type FormId =
   | "SemanticMap" | "CausalGraph" | "HypothesisGraph"
   | "TransactionJourney" | "DataLineage" | "SemanticDiff" | "Archaeology" | "TrustBoundary" | "RuntimeOverlay"
   | "RaceWindow" | "Counterfactual" | "TestConfidence" | "Ownership" | "ConceptAtlas" | "PolicyMap" | "ChangeRisk"
-  | "TraceLinkedProfile";
+  | "TraceLinkedProfile" | "RouteMap";
 export interface TerrainCell {
   id: Id; label: string; file: string; factors: Record<string, number>; raw: Record<string, string>; evidenceIds: Id[]; area: number; entityIds: Id[]; note?: string;
 }
@@ -173,7 +173,7 @@ export interface ViewMatrix {
 
 // ---- Jobs (C07): long work that runs in the background and can be cancelled ----
 // "pr-analysis": F02 — a pull request's base and head are indexed, compared, analysed and gated in one background job.
-export type JobKind = "index" | "concepts" | "investigate" | "defect-detect" | "defect-experiment" | "pr-analysis" | "search-index" | "dependency-scan" | "history-analysis" | "campaign-advance" | "campaign-joint-check" | "feature-build" | "feature-validate" | "feature-apply";
+export type JobKind = "index" | "concepts" | "investigate" | "defect-detect" | "defect-experiment" | "pr-analysis" | "search-index" | "dependency-scan" | "history-analysis" | "campaign-advance" | "campaign-joint-check" | "feature-build" | "feature-validate" | "feature-apply" | "runtime-introspect";
 export type JobState = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 export interface JobView {
   id: Id; kind: JobKind; state: JobState;
