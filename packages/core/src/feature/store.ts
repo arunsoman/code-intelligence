@@ -124,6 +124,9 @@ export class SqliteFeatureStore implements FeatureStore {
     const row = (surface: string) => q.get(rec.repositoryId, surface) as { surface: string; lease_id: string; request_id: string; fencing_token: number; expires_at: number } | undefined;
     const taken = paths.filter((p) => { const r = row(p); return r && r.request_id !== requestId && r.expires_at > now; });
     if (taken.length) throw new FeatureError("STALE_REVISION", `${taken[0]} is leased by another request; this write is refused${taken.length > 1 ? ` (and ${taken.length - 1} more path(s))` : ""}`);
+    // Monotonic fence: a presented token below the repository's current token was issued before a newer lease and is stale, whichever paths it names.
+    const current = (this.db.prepare("select token from feature_fence where repository_id = ?").get(rec.repositoryId) as { token: number } | undefined)?.token ?? 0;
+    if (fence && fence.token < current && !paths.every((p) => { const r = row(p); return r && r.request_id === requestId && r.fencing_token === fence.token && r.lease_id === fence.leaseId && r.expires_at > now; })) throw new FeatureError("STALE_REVISION", `fencing token ${fence.token} is older than the repository's current token ${current}; the write is refused`);
     if (opts.takeoverOnly) return;
     const mine = (this.db.prepare("select count(*) n from feature_leases where request_id = ?").get(requestId) as { n: number }).n > 0;
     if (!mine && !opts.requireFence) return;

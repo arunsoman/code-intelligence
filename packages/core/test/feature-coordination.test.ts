@@ -167,6 +167,8 @@ test("#93 a candidate write needs the current lease id and fencing token; a repl
     assert.throws(() => build(other.rid, "src/held/a.ts", { leaseId: mine.id, token: mine.fencingToken }, late, "-resumed"), /leased by another request/);
     assert.equal(w.fs.listCandidates(other.rid).length, count, "a refused writer leaves nothing behind");
     assert.deepEqual(liveIds(), liveBefore, "and supersedes nothing");
+    // a resumed worker presenting its old token is refused even on a path nobody holds: the token is older than the repository's current one
+    assert.throws(() => build(other.rid, "src/held/c.ts", { leaseId: mine.id, token: mine.fencingToken }, late, "-c"), /older than the repository/);
     // the check is about paths: a path nobody holds is writable by anyone unless requireFence is on (below)
     assert.ok(build(other.rid, "src/held/b.ts", undefined, late, "-b").candidate);
     assert.ok(takeover.fencingToken > mine.fencingToken);
