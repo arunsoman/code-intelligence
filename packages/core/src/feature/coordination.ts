@@ -22,6 +22,7 @@ import { snapshotOf } from "./intake.ts";
 import type { SqliteFeatureStore } from "./store.ts";
 import type { CandidateRecord, Id, ImpactAssessment, IntegrationAssessment, MutationLease, MutationLineage, Outcome, RequestRelation, SourceRef, Snapshot } from "./types.ts";
 import { validationHash } from "./validation.ts";
+import { materializeCandidate } from "./candidate.ts";
 
 export interface CoordDeps { fs: SqliteFeatureStore; store: Store; now?: () => number }
 const clock = (d: CoordDeps) => (d.now ?? Date.now)();
@@ -180,4 +181,22 @@ export function assessRetirement(d: CoordDeps, actor: Id, i: { requestId: Id; ca
   const gaps = ["consumers outside this repository (other services, scripts, deployed configuration, dynamic imports and reflection) cannot be enumerated from here: the unknown-consumer gap stays open until an owner confirms none exist"];
   const checklist = ["Name an owner for each static consumer below and migrate or confirm it", "Deprecate before removal: keep a compatibility path for an agreed window, or record why not", "Confirm no external consumer exists, or notify them", "Remove behind a flag or release step that can be reverted (a revert is a new candidate)"];
   return { status: "PARTIAL", value: { schemaVersion: 1, id: validationHash("pf.Retirement", { c: c.bindingHash, k: [...consumers].sort() }), affectedIds: removed, staleIds: [], consumers: [...consumers].sort(), gaps, reasons: checklist, regressionObligations: [...consumers].sort().map((x) => `re-run the tests that cover ${x.split(" → ")[0]}`) }, evidenceIds: [c.id], diagnostics: gaps };
+}
+
+// ------------------------------------------------------------------------------------------------ the integrated candidate (#93)
+
+/**
+ * Build the combined tree of several individually verified candidates as ONE immutable candidate of `targetRequestId`, so the tree that is
+ * built, tested, validated and published is the tree that was assessed. Conflicts, a stale base or a hash that differs from the assessed
+ * combined tree refuse the build. Validation of the result is the ordinary validation of that candidate: nothing is inherited from the parts.
+ */
+export function integrateCandidates(d: CoordDeps & { auth: import("./authority.ts").AuthorityConfig; requireFence?: boolean }, actor: Id, i: { requestIds: Id[]; candidateBindings: string[]; snapshot: Snapshot; targetRequestId: Id; idempotencyKey: string; fence?: { leaseId: Id; token: number } }): Outcome<{ binding: string; candidateId: Id; integratedContentHash: string; sources: string[] }> {
+  if (!i.requestIds?.includes(i.targetRequestId)) throw new FeatureError("INVALID_SCHEMA", "the target request must be one of the requests being integrated");
+  const a = assessConcurrentChanges(d, actor, i);
+  if (a.status !== "COMPLETE" || !a.value) return { status: a.status === "STALE" ? "STALE" : "PARTIAL", evidenceIds: a.evidenceIds, diagnostics: a.diagnostics };
+  if (!a.value.integratedContentHash) throw new FeatureError("BLOCKED", "no combined tree could be computed");
+  const ordered = (a.value.order ?? i.requestIds).map((rid) => d.fs.getCandidateByBinding(i.candidateBindings[i.requestIds.indexOf(rid)]!)!);
+  const built = materializeCandidate({ fs: d.fs, store: d.store, auth: d.auth, now: d.now, requireFence: d.requireFence }, actor, { requestId: i.targetRequestId, snapshot: i.snapshot, edits: [], integrate: ordered, idempotencyKey: i.idempotencyKey, fence: i.fence });
+  if (built.candidate.binding.candidateContentHash !== a.value.integratedContentHash) throw new FeatureError("BLOCKED", "the integrated candidate does not match the assessed combined tree; nothing was recorded as verified");
+  return { status: "COMPLETE", value: { binding: built.candidate.bindingHash, candidateId: built.candidate.id, integratedContentHash: a.value.integratedContentHash, sources: ordered.map((c) => c.bindingHash) }, evidenceIds: [built.candidate.id, ...ordered.map((c) => c.id)], diagnostics: ["the combined tree is a new candidate: validate it; the parts' verification does not carry over"] };
 }

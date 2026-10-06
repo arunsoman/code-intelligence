@@ -13,7 +13,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { EditOperationSchema, type EditOperation } from "@cie/schema";
 import { admissionProblems, detectOracleWeakening, exactnessProblems, isProtectedPath, isTestPath, normalizeRel } from "../execution.ts";
 import { applyTextEdits, makeScratch, removeScratch, safeJoin, sha256, walkFiles } from "../isolated-exec.ts";
-import { MAX_BINARY_BYTES, copyTreeKeepLinks, diffTrees, passesThroughLink, readEntry, symlinkHash, symlinkProblem, FILE_MODES, type TreeDelta } from "./tree.ts";
+import { MAX_BINARY_BYTES, applyCandidateToDir, copyTreeKeepLinks, diffTrees, passesThroughLink, readEntry, symlinkHash, symlinkProblem, FILE_MODES, type TreeDelta } from "./tree.ts";
 import { policyFor } from "../access.ts";
 import { unifiedDiff } from "../changes.ts";
 import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -49,8 +49,12 @@ export interface CandidateScope {
   /** Security grant: exact protected paths (CI config, lockfiles) that may change. Secrets can never be listed. */
   allowProtected?: string[];
 }
-export interface CandidateDeps { fs: SqliteFeatureStore; store: Store; auth: AuthorityConfig }
-export interface MaterializeInput { requestId: Id; snapshot: Snapshot; edits: FeatureEdit[]; scope?: CandidateScope; invocationIds?: Id[]; idempotencyKey: string }
+export interface CandidateDeps { fs: SqliteFeatureStore; store: Store; auth: AuthorityConfig; now?: () => number; requireFence?: boolean }
+/** The lease and fencing token a writer presents (#93). The store checks them at commit, so a worker that was replaced cannot land a stale write. */
+export interface FenceInput { leaseId: Id; token: number }
+export interface MaterializeInput { requestId: Id; snapshot: Snapshot; edits: FeatureEdit[]; scope?: CandidateScope; invocationIds?: Id[]; idempotencyKey: string; fence?: FenceInput;
+  /** #93: build ONE candidate from several verified candidates applied in order (the integrated tree). `edits` is ignored. */
+  integrate?: CandidateRecord[] }
 
 const NEVER = [/(^|\/)\.git(\/|$)/, /(^|\/)\.env(\.|$)/, /(^|\/)secrets?\//, /(^|\/)secrets?\.(json|ya?ml|toml)$/, /(^|\/)id_(rsa|ed25519|ecdsa)/, /\.(pem|key|p12)$/];
 const MAX_TOTAL_BYTES = 4 * 1024 * 1024, DEFAULT_MAX_FILES = 50, DEFAULT_MAX_DIFF = 5000;
@@ -237,12 +241,14 @@ export function materializeCandidate(d: CandidateDeps, actor: Id, i: Materialize
   const baseDir = makeScratch("pf-base-"), candDir = makeScratch("pf-cand-");
   try {
     try { copyTreeKeepLinks(rec.repositoryId, baseDir); copyTreeKeepLinks(rec.repositoryId, candDir); } catch (e) { throw new FeatureError("FORBIDDEN", `the repository cannot be copied safely: ${(e as Error).message}`); }
-    if (!Array.isArray(i.edits) || !i.edits.length) throw new FeatureError("INVALID_SCHEMA", "a candidate needs at least one edit");
-    const expanded = parseEdits(i.edits, baseDir), extra = parseNonText(i.edits);
-    const problems = [...featureAdmission(expanded, scope, baseDir).filter((p) => !(extra.length && /returned no operations/.test(p))), ...nonTextAdmission(extra, expanded, scope, baseDir)];
+    const integrate = i.integrate;
+    if (!integrate && (!Array.isArray(i.edits) || !i.edits.length)) throw new FeatureError("INVALID_SCHEMA", "a candidate needs at least one edit");
+    const expanded = integrate ? [] : parseEdits(i.edits, baseDir), extra = integrate ? [] : parseNonText(i.edits);
+    const problems = integrate ? [] : [...featureAdmission(expanded, scope, baseDir).filter((p) => !(extra.length && /returned no operations/.test(p))), ...nonTextAdmission(extra, expanded, scope, baseDir)];
     if (problems.length) throw new FeatureError("FORBIDDEN", `the candidate was rejected: ${problems.join("; ")}`);
 
     // ---- apply
+    if (integrate) { try { for (const c of integrate) applyCandidateToDir(candDir, c); } catch (e) { throw new FeatureError("FORBIDDEN", `the integrated tree could not be built: ${(e as Error).message}`); } }
     const spans = expanded.filter((e) => e.op.op === "REPLACE_SPAN").map((e) => e.op as Extract<EditOperation, { op: "REPLACE_SPAN" }>);
     try {
       applyTextEdits(candDir, spans.map((o) => ({ file: normalizeRel(o.file), start: o.start, end: o.end, expected: o.expected, newText: o.newText })));
@@ -285,7 +291,8 @@ export function materializeCandidate(d: CandidateDeps, actor: Id, i: Materialize
     const depProblems = deltas.filter((c) => /(^|\/)package\.json$/.test(c.file)).flatMap((c) => dependencyChanges(baseContents[c.file] ?? null, contents[c.file] ?? null));
     if (depProblems.length && !scope.allowNewDependencies) throw new FeatureError("FORBIDDEN", `the candidate was rejected: ${depProblems.join("; ")} (needs a security grant: allowNewDependencies)`);
 
-    const attrib: Attrib[] = [...expanded.map((e) => ({ paths: e.rename ? [e.rename.from, e.rename.to] : [normalizeRel(e.op.file)], meta: e.meta })), ...extra.map((x) => ({ paths: [x.op.file], meta: x.meta }))];
+    const fromSources: Attrib[] = (integrate ?? []).flatMap((c) => c.mutations.map((m) => ({ paths: [m.oldPath, m.newPath].filter((p): p is string => !!p), meta: { requirementIds: m.requirementIds, taskIds: m.taskIds, actionIds: m.actionIds } })));
+    const attrib: Attrib[] = [...fromSources, ...expanded.map((e) => ({ paths: e.rename ? [e.rename.from, e.rename.to] : [normalizeRel(e.op.file)], meta: e.meta })), ...extra.map((x) => ({ paths: [x.op.file], meta: x.meta }))];
     const mutations = inventory(deltas, attrib, entries, baseEntries);
     const notes: string[] = [];
     const touched = new Set(attrib.flatMap((a) => a.paths));
@@ -307,7 +314,7 @@ export function materializeCandidate(d: CandidateDeps, actor: Id, i: Materialize
 
     // ---- binding
     const rootOf = (dir: string) => contentRoot(entriesFromDirectory(dir, { exclude: [] }));
-    const editsHash = sha256(JSON.stringify(i.edits));
+    const editsHash = sha256(JSON.stringify(integrate ? { integrate: integrate.map((c) => c.bindingHash) } : i.edits));
     const binding: PatchBinding = {
       repositoryId: rec.repositoryId, baseCommitHash: live.commitHash, baseContentHash: rootOf(baseDir), candidateContentHash: rootOf(candDir), diffHash: canonHash(DiffSchema, deltas),
       contractHash: rec.contract.hash, originalOracleHash, candidateOracleHash, runManifestIds: [], mutationInventoryHash: canonHash(MutationSchema, mutations),
@@ -324,10 +331,13 @@ export function materializeCandidate(d: CandidateDeps, actor: Id, i: Materialize
       mutations, invocationIds: [...new Set(i.invocationIds ?? [])], status: "MATERIALIZED", createdAt: new Date().toISOString(),
       contents, baseContents, entries, baseEntries, baseSnapshotRoot: live.contentRootHash, oracleState, oracleChanges, notes: [...notes, ...depProblems],
     };
+    // The fence is checked before anything is superseded (and again at commit, inside the write) so a refused writer changes nothing.
+    const fence = i.fence ? { ...i.fence, nowMs: (d.now ?? Date.now)(), requireFence: d.requireFence } : d.requireFence ? { leaseId: "", token: -1, nowMs: (d.now ?? Date.now)(), requireFence: true } : undefined;
+    d.fs.assertFence(rec.requestId, Object.keys({ ...contents, ...entries }), i.fence, { nowMs: fence?.nowMs, requireFence: d.requireFence });
     // Earlier candidates of this request are superseded, then the new one is saved with its event.
     for (const c of d.fs.listCandidates(rec.requestId)) if (c.id !== `cand:${bindingHash.split(":").pop()!.slice(0, 24)}` && (c.status === "MATERIALIZED" || c.status === "PLANNED")) d.fs.putCandidate({ ...c, status: "SUPERSEDED" });
     d.fs.putCandidate(candidate, eventFor(rec, "CandidateCreated", actor, { after: bindingHash, requirementIds: [...new Set(mutations.flatMap((m) => m.requirementIds))],
-      rationale: `${mutations.length} file(s): ${count(mutations, "ADDED")} added, ${count(mutations, "MODIFIED")} modified, ${count(mutations, "DELETED")} deleted, ${count(mutations, "RENAMED")} renamed; oracle ${oracleState}` }));
+      rationale: `${mutations.length} file(s): ${count(mutations, "ADDED")} added, ${count(mutations, "MODIFIED")} modified, ${count(mutations, "DELETED")} deleted, ${count(mutations, "RENAMED")} renamed; oracle ${oracleState}` }), fence);
     let cur = d.fs.getRequest(rec.requestId)!;
     if (cur.state === "CONTRACTING") cur = transition(d.fs, cur.requestId, cur.version, "IMPLEMENTING", actor, "candidate built");
     d.fs.updateRequest(cur.requestId, cur.version, { ...cur, workspace: { ...cur.workspace, candidateHash: bindingHash, workspaceVersion: cur.workspace.workspaceVersion + 1 } });

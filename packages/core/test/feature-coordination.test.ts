@@ -134,3 +134,68 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { rawHash } from "../src/feature/canon.ts";
 function require_hash(repo: string, rel: string) { return rawHash(readFileSync(join(repo, rel))); }
+
+test("#93 a candidate write needs the current lease id and fencing token; a replaced or resumed worker is refused at commit and nothing changes", async () => {
+  const w = await world();
+  try {
+    const rev = snapshotOf(w.svc.store, w.repo).contentRootHash, snap = snapshotOf(w.svc.store, w.repo);
+    const other = second(w, "k2", {});
+    const reserve = (requestId: string, surfaceIds: string[]) => w.h["C07/reserveMutationSurfaces"](w.as("arun"), { requestId, surfaceIds, expectedRevision: rev, ttlMs: 60_000 }).value.value;
+    const build = (requestId: string, file: string, fence?: { leaseId: string; token: number }, now?: () => number, tag = "") =>
+      materializeCandidate({ fs: w.fs, store: w.svc.store, auth: none, now }, "arun", { requestId, snapshot: snap, edits: [createEdit(file, `export const v = '${file}${tag}';\n`)], idempotencyKey: `m-${requestId}-${file}${tag}`, fence });
+    // 1. nothing leased: the write proceeds exactly as before
+    assert.ok(build(other.rid, "src/free/free.ts").candidate);
+    // 2. the holder must present its lease: no fence, a wrong token and a wrong lease id are all refused
+    const mine = reserve(other.rid, ["src/held/a.ts"]);
+    assert.throws(() => build(other.rid, "src/held/a.ts"), /lease id and fencing token are required/);
+    assert.throws(() => build(other.rid, "src/held/a.ts", { leaseId: mine.id, token: mine.fencingToken + 1 }), /not current/);
+    assert.throws(() => build(other.rid, "src/held/a.ts", { leaseId: "lease:other", token: mine.fencingToken }), /not current/);
+    // a path outside the leased surfaces is refused even with a valid fence
+    assert.throws(() => build(other.rid, "src/held/other.ts", { leaseId: mine.id, token: mine.fencingToken }), /not covered by a lease/);
+    const before = w.fs.listCandidates(other.rid).length;
+    const ok = build(other.rid, "src/held/a.ts", { leaseId: mine.id, token: mine.fencingToken }); assert.equal(ok.candidate.status, "MATERIALIZED");
+    assert.equal(w.fs.listCandidates(other.rid).length, before + 1);
+    // 3. another request cannot write onto a path a live lease holds, token or not
+    const clash = reserve(w.rid, ["src/shared/x.ts"]);
+    assert.throws(() => build(other.rid, "src/shared/x.ts", { leaseId: mine.id, token: mine.fencingToken }), /leased by another request/);
+    assert.ok(clash.fencingToken > mine.fencingToken);
+    // 4. a resumed worker: its lease expired and another request took it over; the old token is refused, the new holder may write
+    const late = () => Date.now() + 120_000, { reserveMutationSurfaces } = await import("../src/feature/coordination.ts");
+    const takeover = reserveMutationSurfaces({ ...w.deps, now: late }, "arun", { requestId: w.rid, surfaceIds: ["src/held/a.ts"], expectedRevision: rev, ttlMs: 60_000 }).value!;
+    const count = w.fs.listCandidates(other.rid).length, liveIds = () => w.fs.listCandidates(other.rid).filter((c) => c.status === "MATERIALIZED").map((c) => c.id);
+    const liveBefore = liveIds();
+    assert.throws(() => build(other.rid, "src/held/a.ts", { leaseId: mine.id, token: mine.fencingToken }, late, "-resumed"), /leased by another request/);
+    assert.equal(w.fs.listCandidates(other.rid).length, count, "a refused writer leaves nothing behind");
+    assert.deepEqual(liveIds(), liveBefore, "and supersedes nothing");
+    // the check is about paths: a path nobody holds is writable by anyone unless requireFence is on (below)
+    assert.ok(build(other.rid, "src/held/b.ts", undefined, late, "-b").candidate);
+    assert.ok(takeover.fencingToken > mine.fencingToken);
+    // 5. the store enforces it at commit: a direct write with a stale token is refused too, and a record update only checks takeover
+    const cand = w.fs.listCandidates(other.rid).at(-1)!;
+    assert.throws(() => w.fs.putCandidate({ ...cand, id: "cand:forged", bindingHash: "pf-canon-v1/forged", contents: { "src/held/a.ts": "x" }, entries: {} }, undefined, { leaseId: mine.id, token: mine.fencingToken, nowMs: Date.now() + 120_000 }), /leased by another request/);
+    assert.doesNotThrow(() => w.fs.putCandidate({ ...w.fs.getCandidate(clash.id) ?? cand, status: cand.status }));
+    // 6. requireFence makes the fence mandatory even before any lease exists
+    assert.throws(() => materializeCandidate({ fs: w.fs, store: w.svc.store, auth: none, requireFence: true }, "arun", { requestId: other.rid, snapshot: snap, edits: [createEdit("src/new/n.ts", "export const n = 1;\n")], idempotencyKey: "m-req" }), /required/);
+  } finally { w.close(); }
+});
+
+test("#93 the integrated candidate is built and hashed as one tree that equals the assessed combined tree (publication already refuses any other head)", async () => {
+  const w = await world();
+  try {
+    const b2 = second(w, "k2", { "src/b/two.ts": "export const two = 2;\n" }); const snap = snapshotOf(w.svc.store, w.repo);
+    const ids = { requestIds: [w.rid, b2.rid], candidateBindings: [w.cand.bindingHash, b2.cand.bindingHash], snapshot: snap, targetRequestId: w.rid };
+    const assessed = w.h["C23/assessConcurrentChanges"](w.as("arun"), ids).value.value.integratedContentHash;
+    const r = w.h["C23/integrateCandidates"](w.as("arun", "int-1"), ids); assert.equal(r.ok, true, JSON.stringify(r.error)); assert.equal(r.value.status, "COMPLETE");
+    const integrated = w.fs.getCandidateByBinding(r.value.value.binding)!;
+    assert.equal(integrated.binding.candidateContentHash, assessed, "the built tree is the assessed tree");
+    assert.deepEqual(Object.keys(integrated.contents ?? {}).sort(), ["src/a/one.ts", "src/b/two.ts"]);
+    assert.equal(integrated.requestId, w.rid); assert.equal(integrated.status, "MATERIALIZED");
+    assert.match(r.value.diagnostics.join(), /validate it/);
+    // conflicting candidates are never integrated
+    const clash = second(w, "k3", { "src/a/one.ts": "export const one = 'other';\n" });
+    const bad = w.h["C23/integrateCandidates"](w.as("arun", "int-2"), { ...ids, requestIds: [w.rid, clash.rid], candidateBindings: [w.cand.bindingHash, clash.cand.bindingHash] }); assert.equal(bad.value.status, "PARTIAL");
+    // the target must be part of the set; a stranger sees nothing
+    assert.equal(w.h["C23/integrateCandidates"](w.as("arun", "int-3"), { ...ids, targetRequestId: clash.rid }).error.code, "INVALID_SCHEMA");
+    assert.equal(w.h["C23/integrateCandidates"](w.as("mallory", "int-4"), ids).error.code, "NOT_FOUND");
+  } finally { w.close(); }
+});

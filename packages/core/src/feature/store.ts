@@ -109,9 +109,41 @@ export class SqliteFeatureStore implements FeatureStore {
   }
 
   // ------------------------------------------------------------------ candidates
-  putCandidate(rec: CandidateRecord, event?: NewEvent): CandidateRecord {
+  /**
+   * The commit-time lease check (#93), run inside the same transaction as the write. Rules, for the paths the write changes:
+   *   * another request holds a live lease on any of them: refused, with or without a token (a replaced worker lands here);
+   *   * this request has lease rows (live or expired): a fence is required, must name that lease and the CURRENT token for every path,
+   *     and the lease must not have expired; a path outside the leased surfaces is refused;
+   *   * no lease rows at all: coordination is not in use for this request and the write proceeds.
+   * `requireFence` makes a fence mandatory even without lease rows.
+   */
+  assertFence(requestId: Id, paths: string[], fence: { leaseId: Id; token: number } | undefined, opts: { nowMs?: number; requireFence?: boolean; takeoverOnly?: boolean } = {}): void {
+    const rec = this.getRequest(requestId); if (!rec) throw new FeatureError("NOT_FOUND", `no such request ${requestId}`);
+    const now = opts.nowMs ?? Date.now();
+    const q = this.db.prepare("select surface, lease_id, request_id, fencing_token, expires_at from feature_leases where repository_id = ? and surface = ?");
+    const row = (surface: string) => q.get(rec.repositoryId, surface) as { surface: string; lease_id: string; request_id: string; fencing_token: number; expires_at: number } | undefined;
+    const taken = paths.filter((p) => { const r = row(p); return r && r.request_id !== requestId && r.expires_at > now; });
+    if (taken.length) throw new FeatureError("STALE_REVISION", `${taken[0]} is leased by another request; this write is refused${taken.length > 1 ? ` (and ${taken.length - 1} more path(s))` : ""}`);
+    if (opts.takeoverOnly) return;
+    const mine = (this.db.prepare("select count(*) n from feature_leases where request_id = ?").get(requestId) as { n: number }).n > 0;
+    if (!mine && !opts.requireFence) return;
+    if (!fence) throw new FeatureError("STALE_REVISION", "a lease id and fencing token are required to write a candidate for this request");
+    for (const p of paths) {
+      const r = row(p);
+      if (!r || r.request_id !== requestId) throw new FeatureError("STALE_REVISION", `${p} is not covered by a lease held by this request; reserve it before building`);
+      if (r.lease_id !== fence.leaseId || r.fencing_token !== fence.token) throw new FeatureError("STALE_REVISION", `the fencing token for ${p} is not current (expected ${r.fencing_token}, got ${fence.token}); the write is refused`);
+      if (r.expires_at <= now) throw new FeatureError("STALE_REVISION", `the lease on ${p} expired; reserve it again`);
+    }
+  }
+  putCandidate(rec: CandidateRecord, event?: NewEvent, fence?: { leaseId: Id; token: number; nowMs?: number; requireFence?: boolean }): CandidateRecord {
     return this.s.tx(() => {
       if (!this.getRequest(rec.requestId)) throw new FeatureError("NOT_FOUND", `no such request ${rec.requestId}`);
+      // A candidate's tree never changes after it is created (its binding is immutable), so the check names the paths of a NEW record;
+      // later writes on the same record (status, exports, publication) are refused only when another request now holds a live lease.
+      const paths = [...new Set([...Object.keys(rec.contents ?? {}), ...Object.keys(rec.entries ?? {})])];
+      const isNew = !this.db.prepare("select 1 from feature_candidates where id = ?").get(rec.id);
+      // Invalidating a record (STALE, SUPERSEDED) only lowers trust, so another holder's lease never blocks it.
+      if (isNew || !(rec.status === "STALE" || rec.status === "SUPERSEDED")) this.assertFence(rec.requestId, paths, fence ? { leaseId: fence.leaseId, token: fence.token } : undefined, { nowMs: fence?.nowMs, requireFence: fence?.requireFence, takeoverOnly: !isNew });
       const prior = this.db.prepare("select binding_hash, request_id from feature_candidates where id = ?").get(rec.id) as { binding_hash: string; request_id: string } | undefined;
       if (prior) {
         if (prior.binding_hash !== rec.bindingHash || prior.request_id !== rec.requestId) throw new FeatureError("IDEMPOTENCY_CONFLICT", "a candidate's binding never changes; create a new candidate");

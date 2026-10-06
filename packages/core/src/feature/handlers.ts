@@ -34,7 +34,7 @@ import type { FeatureRecord, FeatureWorkspace, Id, Outcome } from "./types.ts";
 const str = (v: unknown, what: string): string => { if (typeof v !== "string" || !v) throw new FeatureError("INVALID_SCHEMA", `${what} is required`); return v; };
 const obj = (b: unknown): Record<string, any> => { if (!b || typeof b !== "object" || Array.isArray(b)) throw new FeatureError("INVALID_SCHEMA", "the request body must be an object"); return b as Record<string, any>; };
 
-export function featureHandlers(svc: Service, opts: { gates?: GateHooks; perf?: PerfHooks; issues?: IssueHooks; requirements?: RequirementHooks; publish?: PublishHooks; builder?: { routes?: readonly import("../llm-router.ts").GenerationRouter[] }; pipeline?: PipelineHooks } = {}): Handlers {
+export function featureHandlers(svc: Service, opts: { gates?: GateHooks; perf?: PerfHooks; issues?: IssueHooks; requirements?: RequirementHooks; publish?: PublishHooks; builder?: { routes?: readonly import("../llm-router.ts").GenerationRouter[] }; pipeline?: PipelineHooks; requireFence?: boolean } = {}): Handlers {
   const fs = new SqliteFeatureStore(svc.store);
   const isActive = (id: string) => { const j = svc.store.job(id); return !!j && (j.state === "QUEUED" || j.state === "RUNNING"); };
   try { reconcileAll(fs, "system", isActive); } catch { /* a closed or older database: nothing to reconcile */ }
@@ -60,7 +60,7 @@ export function featureHandlers(svc: Service, opts: { gates?: GateHooks; perf?: 
     ...opsHandlers(svc, fs, owned),
     ...pipelineHandlers(svc, fs, { gates: opts.gates, publish: opts.publish, adapter: opts.requirements?.adapter, ...opts.pipeline }),
     ...builderHandlers(svc, fs, opts.builder),
-    ...coordinationHandlers(svc, fs, { forge: opts.issues?.forge }),
+    ...coordinationHandlers(svc, fs, { forge: opts.issues?.forge, authOf, requireFence: opts.requireFence }),
     ...publishHandlers(svc, fs, opts.publish ?? {}),
     "C19/compileChangeGraph": (c, b) => guarded(c, () => {
       const x = obj(b); const rec = owned(x.requestId, who(c));
@@ -90,13 +90,13 @@ export function featureHandlers(svc: Service, opts: { gates?: GateHooks; perf?: 
     "C28/materializeCandidate": (c, b) => guarded(c, () => {
       const x = obj(b); const rec = owned(x.requestId, who(c));
       if (!Array.isArray(x.edits)) throw new FeatureError("INVALID_SCHEMA", "edits must be a list");
-      const d: CandidateDeps = { fs, store: svc.store, auth: authOf(rec.repositoryId) };
+      const d: CandidateDeps = { fs, store: svc.store, auth: authOf(rec.repositoryId), requireFence: opts.requireFence };
       const work = createHash("sha256").update(JSON.stringify([x.edits, x.scope ?? null, c.idempotencyKey])).digest("hex");
       const job = svc.jobs.enqueue(c, {
         kind: "feature-build", lane: "runner", priority: PRIORITY.VALIDATION, fenceKey: `surface:${rec.requestId}`, params: { repositoryId: rec.repositoryId, analysisId: rec.requestId, headHash: work },
         run: async (ctx, control) => {
           control.checkpoint(); control.commit(); // building writes the candidate in one step; a replaced holder is refused here
-          return guarded(ctx, () => materializeCandidate(d, who(c), { requestId: rec.requestId, snapshot: x.snapshot, edits: x.edits as FeatureEdit[], scope: x.scope, invocationIds: x.invocationIds, idempotencyKey: c.idempotencyKey }).candidate.binding);
+          return guarded(ctx, () => materializeCandidate(d, who(c), { requestId: rec.requestId, snapshot: x.snapshot, edits: x.edits as FeatureEdit[], scope: x.scope, invocationIds: x.invocationIds, idempotencyKey: c.idempotencyKey, fence: x.fence }).candidate.binding);
         },
       });
       return { jobId: job.id, result: undefined };

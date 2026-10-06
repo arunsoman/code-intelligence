@@ -45,16 +45,25 @@
         "state": "done"
       },
       {
-        "item": "lease enforcement at candidate commit",
-        "tests": [],
-        "state": "blocked",
-        "needs": "a surface list known before the build: assertFence exists but materializeCandidate does not require a token yet"
+        "item": "lease id + fencing token required at the candidate commit; another holder's live lease refuses the write, a replaced or resumed worker leaves nothing behind (#93)",
+        "tests": [
+          "#93 a candidate write needs the current lease id and fencing token"
+        ],
+        "state": "done"
       },
       {
-        "item": "integrated candidate validated as one",
-        "tests": [],
-        "state": "blocked",
-        "needs": "running validation on the combined tree: the assessment names its hash; no operation builds and validates it"
+        "item": "integrated candidate: the combined tree of verified candidates is built as one immutable candidate whose hash equals the assessed tree, then validated as a candidate of its own (#93)",
+        "tests": [
+          "#93 the integrated candidate is built and hashed as one tree"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "strict mode: every candidate writer must present a fence even before any lease exists (requireFence); pipeline and other writers pass fences only when the caller supplies one",
+        "tests": [
+          "#93 a candidate write needs the current lease id and fencing token"
+        ],
+        "state": "done"
       }
     ]
   }

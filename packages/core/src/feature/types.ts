@@ -352,7 +352,7 @@ export interface FeatureStore {
   updateRequest(requestId: Id, expectedVersion: number, next: FeatureRecord, event?: Omit<EventRecord, "sequence" | "sync">): FeatureRecord;
   putDecision(rec: DecisionRecord, event?: Omit<EventRecord, "sequence" | "sync">): DecisionRecord;
   listDecisions(requestId: Id): DecisionRecord[];
-  putCandidate(rec: CandidateRecord, event?: Omit<EventRecord, "sequence" | "sync">): CandidateRecord;
+  putCandidate(rec: CandidateRecord, event?: Omit<EventRecord, "sequence" | "sync">, fence?: { leaseId: Id; token: number; nowMs?: number; requireFence?: boolean }): CandidateRecord;
   getCandidate(id: Id): CandidateRecord | null;
   listCandidates(requestId: Id): CandidateRecord[];
   putEvidence(rec: EvidenceRecord, event?: Omit<EventRecord, "sequence" | "sync">): EvidenceRecord;
