@@ -174,7 +174,7 @@ fn fn_name<'a>(node: Node<'a>, src: &'a [u8], lang: Lang) -> String {
         match parent.kind() {
             // `const f = () => …`, `f = function(){…}`, `x: function(){…}`
             "variable_declarator" | "assignment_expression" | "pair" | "property" | "assignment" => {
-                let Some(sibling) = named_sibling_of(parent, cur) else { break };
+                let Some(sibling) = named_sibling_of(parent, cur, src) else { break };
                 return sibling;
             }
             "call_expression" | "call" if lang == Lang::Python => { cur = parent; }
@@ -192,11 +192,11 @@ fn fn_name<'a>(node: Node<'a>, src: &'a [u8], lang: Lang) -> String {
     }
 }
 
-fn named_sibling_of(parent: Node, child: Node) -> Option<String> {
+fn named_sibling_of(parent: Node, child: Node, src: &[u8]) -> Option<String> {
     let mut w = parent.walk();
     for c in parent.children(&mut w) {
         if c.id() == child.id() { break; }
-        if matches!(c.kind(), "identifier" | "property_identifier") { return Some(c.utf8_text(&[]).unwrap_or("").to_string()); }
+        if matches!(c.kind(), "identifier" | "property_identifier") { return Some(c.utf8_text(src).unwrap_or("").to_string()); }
     }
     None
 }
@@ -456,5 +456,22 @@ mod tests {
         let many = (0..MAX_FILES + 1).map(|i| format!("f{i}.ts")).collect::<Vec<_>>();
         let err2 = metrics_verify(&dir, &json!({ "files": many })).unwrap_err();
         assert_eq!(err2.0, "RESOURCE_LIMIT");
+    }
+
+    /// Regression: `named_sibling_of` (named functions assigned via `const f = () => …` or an
+    /// object property like `onClick: () => …`) used to read the sibling's text against an empty
+    /// byte slice instead of the file's source, panicking the whole worker process on any such
+    /// file instead of just failing to resolve a name.
+    #[test]
+    fn names_an_arrow_function_assigned_to_a_variable_or_property() {
+        let dir = std::env::temp_dir().join(format!("cie-metrics3-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let src = "const onUserActionSelect = (a, b) => {\n  if (a && b) { return 1; }\n  return 0;\n};\nconst obj = {\n  onClick: (x) => { return x; },\n};\n";
+        std::fs::write(dir.join("src/a.ts"), src).unwrap();
+        let v = metrics_verify(&dir, &json!({ "files": ["src/a.ts"] })).unwrap();
+        let functions = v["files"][0]["functions"].as_array().unwrap();
+        let names: Vec<&str> = functions.iter().map(|f| f["name"].as_str().unwrap()).collect();
+        assert_eq!(names, vec!["onUserActionSelect", "onClick"], "{functions:?}");
+        std::fs::remove_dir_all(dir).ok();
     }
 }
