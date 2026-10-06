@@ -4,7 +4,12 @@
     "target": "es2021",
     "strict": true,
     "esModuleInterop": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "types": ["node"]
   },
   "include": ["src"]
 }

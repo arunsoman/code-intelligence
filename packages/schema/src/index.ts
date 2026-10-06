@@ -11,7 +11,7 @@ export type EvidenceClass =
   | "STATIC_PARSED" | "STATIC_RESOLVED" | "RUNTIME" | "TEST" | "HISTORY"
   | "DOCUMENT" | "HUMAN_JUDGMENT" | "INFERRED" | "SPECULATIVE";
 export type EvidenceState = "CURRENT" | "STALE" | "UNAVAILABLE" | "ACCESS_REVOKED";
-export type ResolutionKind = "PARSED" | "RESOLVED" | "OBSERVED" | "UNRESOLVED";
+export type ResolutionKind = "PARSED" | "RESOLVED" | "OBSERVED" | "UNRESOLVED" | "STATIC_RESOLVED" | "RUNTIME";
 export type DisplayMode = "FACT" | "INFERENCE" | "HYPOTHESIS" | "FOG" | "HIDDEN";
 
 export interface MapOverlayEntity {
@@ -64,7 +64,8 @@ export interface EvidenceBundle {
 export type ErrorCode =
   | "UNAUTHORIZED" | "FORBIDDEN" | "STALE_REVISION" | "VERSION_CONFLICT" | "EVIDENCE_MISSING"
   | "EVIDENCE_STALE" | "INVALID_SCHEMA" | "BUDGET_EXCEEDED" | "PROVIDER_UNAVAILABLE" | "CANCELLED"
-  | "DEADLINE_EXCEEDED" | "RESOURCE_LIMIT" | "STORAGE_FAILURE" | "INSUFFICIENT_EVIDENCE" | "NOT_FOUND";
+  | "DEADLINE_EXCEEDED" | "RESOURCE_LIMIT" | "STORAGE_FAILURE" | "INSUFFICIENT_EVIDENCE" | "NOT_FOUND"
+  | "NOT_IMPLEMENTED" | "RUNTIME_PROBE_FAILED" | "RUNTIME_PROBE_OUTPUT_INVALID";
 
 export interface ApiError { code: ErrorCode; message: string; retryable: boolean; currentVersion?: number }
 export interface ResponseMetadata {
@@ -355,6 +356,13 @@ export interface SavedState {
   messages?: { role: "user" | "assistant"; text: string; at: string }[];
 }
 export interface RevisionInfo { id: Id; repoRoot: string; gitHead: string | null; createdAt: string; analyzerVersion: string; fileCount: number; diagnostics: Diagnostic[] }
+export interface RepositoryGitInfo {
+  remotes: string[];
+  remoteBranches: { ref: string; remote: string; branch: string; localBranch: string | null }[];
+  repoRoot: string; isGitRepo: boolean; branch: string | null; head: string | null;
+  dirty: boolean; branches: string[]; origin: string | null;
+  github: { repository: string; credentialsAvailable: boolean } | null;
+}
 export interface WorkspaceOpen {
   id: Id; name: string; version: number; revision: Id | null; state: SavedState;
   staleEvidence: Id[]; staleFiles: string[]; revisionIndexed: boolean; claimStates?: Claim[];
@@ -395,7 +403,7 @@ export interface TestSummaryInfo {
   found: string[]; coverageFiles: number; coverageLinePercent: number | null;
   tests: { passed: number; failed: number; skipped: number }; failing: { name: string; file?: string; message?: string }[]; generatedAt: string; staleness: string[];
 }
-export interface StatusInfo { revision: RevisionInfo | null; provider: string; hosted: boolean; allowHosted: boolean; concepts: number; tests: TestSummaryInfo | null }
+export interface StatusInfo { revision: RevisionInfo | null; provider: string; /** Bare model name, or null when running the offline stub; what the model menu shows and switches. */ model: string | null; hosted: boolean; allowHosted: boolean; concepts: number; tests: TestSummaryInfo | null }
 export interface WorkspaceOpen2 extends WorkspaceOpen { claimStates: Claim[] }
 export interface AuditEvent { seq: number; actor: string; action: string; resource: string; ts: string; meta: string }
 
