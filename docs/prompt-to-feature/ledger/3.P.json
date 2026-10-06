@@ -71,7 +71,7 @@
       {
         "item": "live-browser gate: pinned Playwright 1.63.0 image (digest in report), Chromium against the real server, 3 viewports, axe, role/denial and keyboard paths, traces hashed (#94C)",
         "tests": [
-          "scripts/browser-gate.ts -> docs/prompt-to-feature/browser/report.json (9/9 passed)"
+          "#94C the committed browser gate report names a pinned image"
         ],
         "state": "done"
       },
