@@ -201,14 +201,16 @@ Merge order: 1.B, 1.D, 1.F, then 1.C, 1.E, 1.G, 1.H (1.E uses 1.F's runner inter
 
 PF-016/017 (access enforcement) are properties of the *generated* feature; they have no owning task of their own and are proven by the 4.1 scenarios plus 2.I's access-matrix checks. Do not mark them done from unit tests of the builder.
 
-## 8. Decisions I assumed (change before starting W1 if wrong)
+## 8. Existing implementation assumptions
+
+The original Wave 0 assumptions remain implementation constraints where not superseded by the product decisions recorded in [`decisions/`](decisions/README.md):
 
 1. Slice 1 targets TypeScript/Node apps only (S17).
 2. Default tracking mode is `MANDATORY` for CREATE_DRAFT_PR and `OPTIONAL` for PLAN/BUILD_PREVIEW.
-3. Model egress defaults to local-only unless the project config opts in to a cloud provider.
-4. Single-user authority default (S7): policy-changing decisions stay blocked until `.cie/authority.json` names a principal.
-5. Performance statistics follow S11 (≥10 runs, bootstrap CI).
-6. T2 features cannot be marked verified without a representative environment; otherwise `PERFORMANCE UNVALIDATED`.
+3. Local Ollama is mandatory for baseline certification; cloud providers are optional and explicit, and local-only never falls back to cloud ([D002](decisions/D002-local-model-policy.md)).
+4. Authority is scope-bound; missing bindings keep the affected declaration/gate in REVIEW ONLY or BLOCKED ([D001](decisions/D001-declaration-authority.md)).
+5. Performance uses at least 10 repetitions and bootstrap confidence intervals; limits require an authority-bound source and are never invented by implementers ([D003](decisions/D003-performance-policy.md)).
+6. T2 features cannot be marked verified without a representative environment; missing representative evidence leaves performance UNVALIDATED ([D001](decisions/D001-declaration-authority.md), [D003](decisions/D003-performance-policy.md)).
 
 ## 9. Audit of this plan (reviewer pass) and status
 
@@ -227,11 +229,9 @@ Checks run, and what they found. Fixes are already applied above.
 
 ### Status
 
-**The plan is ready to start implementation at Wave 0.** It is not ready to hand to eight parallel agents until T0.1–T0.3 are done, because Wave 1 depends on the frozen contracts and the baseline.
+The initial Wave 0 readiness statement above is historical. Wave 0 through Wave 3 have since been implemented; Wave 4 is in progress as recorded in §13. Product-policy questions in #98 are resolved by the linked decision records. Hardware measurements, authority principal bindings, the audited browser image, performance budgets and real fixture-repository credentials remain execution prerequisites tracked by #94 and #92; they are not silently assumed by this plan.
 
-- Ready now: T0.1 (audit + baseline), then T0.2, then T0.3, by one agent.
-- Needs your confirmation before Wave 1: the six assumptions in §8, especially #3 (local-only model egress) and S6 (a prompt-only feature cannot be VERIFIED without user-confirmed examples).
-- Known risk: the largest unknown is 1.E/1.G, the first code generation in this product. If T0.1 shows `ChangeEngine` cannot take new-file edits cleanly, 1.E becomes a new module rather than an extension, which is a larger task than the table suggests.
+Known risk: the largest implementation risk remains whether the candidate engine supports the full mutation set. Issue #91 tracks binary, symlink and mode changes; complete #91 before claiming the full #88 golden path.
 
 ## 10. Review of external comments on the spec
 
@@ -316,3 +316,17 @@ Blockers found before starting 4.1, and what changed:
 Result: with `DockerRunner` the demo reaches `VERIFIED_WITHIN_SCOPE` (build and tests run in `node:24-alpine` on the candidate's exact bytes, baseline HEALTHY, user's tree untouched). That run **declares performance not applicable and the report says the change was not measured**. Without that declaration the only open gap is performance. `.cie/security.json` in the fixture sets `requireExternalSast: false` (a repository decision; the pattern rules still run).
 
 Still open for Wave 4: performance measurement on the demo, browser gate on a UI feature, an operation exposing the driver (4.1); the AT-01–84 traceability map and run (4.2); README, spec fixes and measured numbers (4.3). See `ledger/4.1.json` and issues #88–#90.
+
+## 14. Issue #98 decisions and remaining execution order
+
+The five policy decisions are recorded in [`decisions/README.md`](decisions/README.md). #98 is a decision-unblocker, not a coding task. Execute the remaining work in this order:
+
+1. #94: establish local-model evaluation, observed coverage, live Chromium E2E and runtime telemetry.
+2. #92: enforce publication authority and complete one real draft-PR run in a harmless fixture repository.
+3. #93: require fencing tokens for candidate writers and validate the exact integrated candidate.
+4. #91: add binary/symlink/mode candidate support and patch-event assertions.
+5. #88: run the CSV export golden path, including normal, denied-role, reuse/no-change and small-data variants, with all applicable gates.
+6. #89: execute AT-01–84, preserve PASS/FAIL/DEFERRED/BLOCKED distinctions, and update readiness only from evidence.
+7. #90: align documentation with #89 and publish measured accessibility and low-resource results.
+
+#93 and #91 can be developed independently, but both must be complete before the full #88 candidate is certified. #88 depends on #94, #92 and #93, with #91 included for the complete file-mutation scope. #89 depends on the end-to-end and validation evidence; #90 reports only measured/certified results.
