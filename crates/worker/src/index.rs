@@ -33,6 +33,14 @@ struct FileRec {
     ids: Vec<String>,
 }
 
+fn is_config_file(rel: &str) -> bool {
+    let n = std::path::Path::new(rel).file_name().and_then(|s| s.to_str()).unwrap_or("");
+    matches!(n,
+        "package.json" | "tsconfig.json" | "nest-cli.json" | "pom.xml" | ".env" | ".env.local"
+    ) || n.starts_with("application") && (n.ends_with(".yml") || n.ends_with(".yaml") || n.ends_with(".properties"))
+      || n.starts_with(".env.")
+}
+
 // ---- parse cache (incremental re-index; CE-3 region-level reuse) ----
 // Key: (relative path, content hash); value: the parsed file. Only valid within one
 // analyzer version and one worker process (spawn-local). Bounded by estimated parser bytes, not by an
@@ -211,8 +219,11 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>, base: Option<&BaseRe
         .map(|e| e.into_path())
         .filter(|p| {
             let n = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            let ext = p.extension().and_then(|s| s.to_str());
+            let rel = p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
             !n.ends_with(".d.ts")
-                && matches!(p.extension().and_then(|s| s.to_str()), Some("ts" | "tsx" | "mts" | "cts" | "rs" | "nir" | "java" | "go" | "py" | "yml" | "yaml" | "properties"))
+                && (is_config_file(&rel)
+                    || matches!(ext, Some("ts" | "tsx" | "mts" | "cts" | "rs" | "nir" | "java" | "go" | "py" | "yml" | "yaml" | "properties")))
         })
         .collect();
     paths.sort();
@@ -310,6 +321,11 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>, base: Option<&BaseRe
             Some("go") => parse_go(&src, &rel),
             Some("py") => parse_python(&src, &rel),
             Some("yml" | "yaml" | "properties") => {
+                let mut raw = crate::language::RawFile::default();
+                crate::frameworks::apply(&mut raw, FrameworkContext { rel: &rel, src: &src, project_root: &root });
+                raw
+            }
+            _ if is_config_file(&rel) => {
                 let mut raw = crate::language::RawFile::default();
                 crate::frameworks::apply(&mut raw, FrameworkContext { rel: &rel, src: &src, project_root: &root });
                 raw
@@ -1247,7 +1263,7 @@ where
                     let is_secret = key.to_ascii_uppercase().contains("TOKEN") || key.to_ascii_uppercase().contains("PASSWORD") || key.to_ascii_uppercase().contains("SECRET") || key.to_ascii_uppercase().contains("KEY");
                     let redacted = if is_secret { serde_json::Value::String("***".to_string()) } else { value.clone() };
                     batch.facts.push(Fact {
-                        id: format!("fact:config_value:{}:{}", rec.rel, m.start),
+                        id: format!("fact:config_value:{}:{}:{}", rec.rel, m.name, m.start),
                         subject: fid.clone(),
                         predicate: "config_value".into(),
                         object: json!({"kind":"ScalarValue","value":{"key":key,"source":source,"redacted":redacted,"has_secret":is_secret}}),

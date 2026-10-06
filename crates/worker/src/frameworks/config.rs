@@ -130,7 +130,8 @@ fn parse_dotenv(rel: &str, src: &str, raw: &mut RawFile, span: (usize, usize)) {
         let v = v.trim().trim_matches('"').trim_matches('\'').to_string();
         let start = src.find(&k).unwrap_or(span.0);
         let end = start + k.len() + 1 + v.len();
-        push(raw, format!("env:{}:{}", file, k), k.clone(), json!(v), &file, start, end.min(span.1));
+        let key = format!("env:{}:{}", file, k);
+        push(raw, format!("env:{}:{}", file, k), key, json!(v), &file, start, end.min(span.1));
     }
 }
 
@@ -171,7 +172,8 @@ fn parse_spring_properties(rel: &str, src: &str, raw: &mut RawFile, span: (usize
         let v = v.trim().to_string();
         let start = src.find(&k).unwrap_or(span.0);
         let end = start + k.len() + 1 + v.len();
-        push(raw, format!("spring:{}", k), k.clone(), json!(v), "application.properties", start, end.min(span.1));
+        let key = if k.starts_with("spring.") { k.clone() } else { format!("spring:{}", k) };
+        push(raw, key.clone(), key.clone(), json!(v), "application.properties", start, end.min(span.1));
     }
 }
 
@@ -231,8 +233,8 @@ mod tests {
     fn extracts_dotenv() {
         let src = "DATABASE_URL=postgres://localhost\n# comment\nAUTH_TOKEN=secret\n";
         let m = extract(".env", src);
-        assert!(m.iter().any(|x| x.properties["key"] == "DATABASE_URL" && x.properties["value"] == "postgres://localhost"));
-        assert!(m.iter().any(|x| x.properties["key"] == "AUTH_TOKEN"));
+        assert!(m.iter().any(|x| x.properties["key"] == "env:.env:DATABASE_URL" && x.properties["value"] == "postgres://localhost"));
+        assert!(m.iter().any(|x| x.properties["key"] == "env:.env:AUTH_TOKEN"));
     }
 
     #[test]
@@ -248,7 +250,7 @@ mod tests {
         let src = "spring.profiles.active=prod\nserver.port=8080\n";
         let m = extract("application.properties", src);
         assert!(m.iter().any(|x| x.properties["key"] == "spring.profiles.active" && x.properties["value"] == "prod"));
-        assert!(m.iter().any(|x| x.properties["key"] == "server.port"));
+        assert!(m.iter().any(|x| x.properties["key"] == "spring:server.port"));
     }
 
     #[test]
@@ -257,5 +259,15 @@ mod tests {
         let m = extract("pom.xml", src);
         assert!(m.iter().any(|x| x.name == "maven:artifactId" && x.properties["value"] == "demo"));
         assert!(m.iter().any(|x| x.name == "maven:java.version" && x.properties["value"] == "17"));
+    }
+
+    #[test]
+    fn extracts_fixture_pom() {
+        let src = std::fs::read_to_string("../../fixtures/spring-repo/pom.xml").unwrap();
+        let m = extract("pom.xml", &src);
+        let names: Vec<_> = m.iter().map(|m| (m.name.clone(), m.properties["key"].as_str().unwrap_or("").to_string(), m.properties["value"].clone())).collect();
+        assert!(names.iter().any(|(n, k, _)| n == "maven:artifactId" && k == "pom.xml:artifactId"));
+        assert!(names.iter().any(|(n, k, v)| n == "maven:groupId" && k == "pom.xml:groupId" && v == "com.example"));
+        assert!(names.iter().any(|(n, k, v)| n == "maven:java.version" && k == "pom.xml:java.version" && v == "17"));
     }
 }

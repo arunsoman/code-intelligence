@@ -28,7 +28,7 @@ test("Next.js fixture: tsconfig.json and env config values are extracted", async
   const { svc, worker, revision } = await setup(undefined, NEXTJS_REPO);
   try {
     const facts = svc.store.allFacts(revision);
-    assert.ok(facts.some((f) => f.predicate === "config_value" && (f.object as any).value.key === "tsconfig.json:compilerOptions:strict" && (f.object as any).value.value === true));
+    assert.ok(facts.some((f) => f.predicate === "config_value" && (f.object as any).value.key === "tsconfig.json:compilerOptions:strict" && (f.object as any).value.redacted === true));
     assert.ok(facts.some((f) => f.predicate === "config_value" && (f.object as any).value.key === "env:.env.local:DATABASE_URL"));
     assert.ok(facts.some((f) => f.predicate === "config_value" && (f.object as any).value.key === "package.json:dependencies:next"));
   } finally {

@@ -29,7 +29,7 @@ test("Express fixture: package.json config values are extracted", async () => {
     const facts = svc.store.allFacts(revision);
     assert.ok(facts.some((f) => f.predicate === "config_value" && (f.object as any).value.key === "package.json:scripts:start"));
     assert.ok(facts.some((f) => f.predicate === "config_value" && (f.object as any).value.key === "package.json:dependencies:express"));
-    assert.ok(facts.some((f) => f.predicate === "config_value" && (f.object as any).value.key === "package.json:name" && (f.object as any).value.value === "express-repo"));
+    assert.ok(facts.some((f) => f.predicate === "config_value" && (f.object as any).value.key === "package.json:name" && (f.object as any).value.redacted === "express-repo"));
   } finally {
     worker.close();
   }

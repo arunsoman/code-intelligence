@@ -101,8 +101,8 @@ test("Spring fixture: pom.xml and application properties are extracted", async (
   try {
     const facts = svc.store.allFacts(revision);
 
-    assert.ok(facts.some((f) => f.predicate === "config_value" && (f.object as any).value.key === "pom.xml:artifactId" && (f.object as any).value.value === "payments"));
-    assert.ok(facts.some((f) => f.predicate === "config_value" && (f.object as any).value.key === "pom.xml:java.version" && (f.object as any).value.value === "17"));
+    assert.ok(facts.some((f) => f.predicate === "config_value" && (f.object as any).value.key === "pom.xml:artifactId" && (f.object as any).value.redacted === "payments"));
+    assert.ok(facts.some((f) => f.predicate === "config_value" && (f.object as any).value.key === "pom.xml:java.version" && (f.object as any).value.redacted === "17"));
     assert.ok(facts.some((f) => f.predicate === "active_profile" && (f.object as any).value.profile === "dev"));
     assert.ok(facts.some((f) => f.predicate === "config_value" && (f.object as any).value.key === "spring:payments.api.key"));
   } finally {

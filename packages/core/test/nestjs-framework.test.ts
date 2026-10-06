@@ -63,7 +63,7 @@ test("NestJS fixture: config values and env are extracted", async () => {
 
     assert.ok(facts.some((f) => f.predicate === "config_value" && (f.object as any).value.key === "package.json:scripts:start"));
     assert.ok(facts.some((f) => f.predicate === "config_value" && (f.object as any).value.key === "package.json:dependencies:@nestjs/common"));
-    assert.ok(facts.some((f) => f.predicate === "config_value" && (f.object as any).value.key === "tsconfig.json:compilerOptions:strict" && (f.object as any).value.value === true));
+    assert.ok(facts.some((f) => f.predicate === "config_value" && (f.object as any).value.key === "tsconfig.json:compilerOptions:strict" && (f.object as any).value.redacted === true));
     assert.ok(facts.some((f) => f.predicate === "config_value" && (f.object as any).value.key === "env:.env:DATABASE_URL"));
   } finally {
     worker.close();
