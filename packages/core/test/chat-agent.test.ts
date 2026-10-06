@@ -79,6 +79,22 @@ test("the agent starts from resolved mentions, reads the code, and cites only wh
     assert.ok(r.metadata.warnings.some((w) => /cited 1 element\(s\) no tool had shown/.test(w)));
     assert.match(r.value.thinking!, /read_code\(id="class:src\/auth\/service\.ts#AuthService"\)/);
     assert.equal(request(model.calls[0].messages).mentions[0].name, "AuthService");
+    // Every chat reply draws a picture alongside the words — a model that only ever called text tools must still
+    // leave the user with a view, built automatically and grounded in what the answer actually cited.
+    assert.equal(r.value.results.length, 1);
+    assert.equal(r.value.results[0].view?.formId, "SemanticMap");
+    assert.ok(r.value.results[0].view!.nodes.some((n) => n.entityRefs.includes(request(model.calls[0].messages).mentions[0].candidates[0].id)), "the guaranteed view is seeded from the cited element, not the general map");
+  } finally { worker.close(); }
+});
+
+test("a model that answers with no tool call at all (not_analysis, or an answer with nothing cited) still gets a default view, never a blank canvas", async () => {
+  const { svc, worker, revision } = await setup();
+  try {
+    svc.router = scripted([() => call("answer", { text: "I could not find anything relevant.", cites: [] })]);
+    const r = await svc.converse(ctx(), { text: "what is the weather like", revision });
+    assert.ok(r.ok && r.value.kind === "analysis");
+    assert.equal(r.value.results.length, 1);
+    assert.equal(r.value.results[0].view?.formId, "SemanticMap", "falls back to the general map when nothing was cited or mentioned");
   } finally { worker.close(); }
 });
 

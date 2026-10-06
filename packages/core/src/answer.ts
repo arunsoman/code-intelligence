@@ -143,7 +143,10 @@ export function analysisMessage(results: { title: string; status: "complete" | "
   if (done.length > 1) {
     const subjects = [...new Set(done.map((r) => r.subject).filter((s): s is string => !!s))];
     const summary = done.map((r) => firstSentence(r.message)).filter(Boolean);
-    out.push(`In short: ${summary.join(" ")}${subjects.length === 1 && done.filter((r) => r.subject === subjects[0]).length > 1 ? ` These findings all concern ${subjects[0]}.` : ""}`);
+    // Only claim every finding concerns one subject when every step actually has that subject
+    // (a step with no subject, such as a project overview, is never truthfully "about" one file).
+    const allShareSubject = subjects.length === 1 && done.every((r) => r.subject === subjects[0]);
+    out.push(`In short: ${summary.join(" ")}${allShareSubject ? ` These findings all concern ${subjects[0]}.` : ""}`);
   }
   results.forEach((r, i) => {
     if (r.status !== "complete") return;

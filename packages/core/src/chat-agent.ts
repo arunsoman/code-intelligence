@@ -7,7 +7,7 @@
 // dropped and the reply says so.
 import type { ApiResult, CallContext, ConverseResult } from "@cie/schema";
 import { policyFor } from "./access.ts";
-import { CHAT_TOOLS, checkArgs, toolByName, type ToolEnv } from "./chat-tools.ts";
+import { analysis, CHAT_TOOLS, checkArgs, toolByName, type ToolEnv } from "./chat-tools.ts";
 import type { AgentMessage, AgentReply, AgentToolCall, RouterModel } from "./llm-router.ts";
 import { resolveMentions } from "./mentions.ts";
 import type { Service } from "./service.ts";
@@ -100,9 +100,9 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
   }
 
   const warnings = [...env.warnings];
-  let message: string;
+  let message: string, cited: string[] = [];
   if (final) {
-    const cited = [...new Set(final.cites)].filter((id) => env.seen.has(id));
+    cited = [...new Set(final.cites)].filter((id) => env.seen.has(id));
     const invented = final.cites.filter((id) => !env.seen.has(id));
     if (invented.length) warnings.push(`The answer cited ${invented.length} element(s) no tool had shown; they were left out.`);
     if (!cited.length) warnings.push("The answer cites no code element.");
@@ -112,6 +112,30 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
     // No answer: say what was looked at rather than inventing a conclusion from it.
     message = [`I could not finish an answer (${stopped || "the turn budget ran out"}).`, ...(trace.length ? ["What I looked at:", ...trace.map((t) => `• ${t}`)] : [])].join("\n");
     warnings.push(`The chat model did not complete an answer: ${stopped || "turn budget exhausted"}.`);
+  }
+  // Every chat reply draws a picture alongside the words (answer.ts's whole premise); a model that only ever called
+  // text tools (read_code, find_code) must not quietly leave the canvas blank. With nothing already shown, build the
+  // default map now. Its relevance rests on two separate guarantees, not on trusting the model's judgment:
+  //  1. Every seed is a real entity id, never invented: `mentions` came from matching actual words of the question
+  //     against the index (mentions.ts), before any model ran; `cited` passed the same no-invented-ids check the
+  //     answer itself did. A seed can be the WRONG real thing (the model cites something it only glanced at), but
+  //     it cannot be a fabricated one — the question's own named subject is weighted first for exactly this reason.
+  //  2. A seed only guarantees that element is not hidden; it does not inject fake content around it. The view is
+  //     still built from the real graph (retrieveForQuestion/salience.ts), still scored against the question's own
+  //     text, and every node and edge still passes the same evidence/claim gates as any other view in the product.
+  // No extra time-budget gate here: executeChatPlan already skips a step once the deadline is reached, and the
+  // model call inside it is floored to a 1s minimum regardless (service.ts), so this never meaningfully overruns —
+  // which matters because the case most likely to reach here (the model stalled or timed out) is also the case
+  // with the least time left, and that is exactly when a visual must not silently go missing.
+  if (!env.results.some((r) => r.view)) {
+    const seeds = [...new Set([...mentions.resolved.flatMap((m) => m.matches.map((x) => x.entityId)), ...cited])].slice(0, 5);
+    // A seed guarantees it is not hidden or trimmed away (retrieval.ts), but the REST of the map still fills in by
+    // matching words in whatever "question" is passed — and the user's own phrasing ("show me the contents of X
+    // file") carries generic words ("file", "contents") that can out-match the seed everywhere else in a large
+    // repository. With a seed in hand, its own name(s) are a sharper, already-verified question than the sentence
+    // that produced it; the raw text is only the fallback when nothing resolved at all (a general, best-effort map).
+    const seedNames = [...new Set(seeds.map((id) => env.seen.get(id)?.name).filter((n): n is string => !!n))];
+    await analysis(env, { tool: "view", form: "SemanticMap", question: seedNames.length ? seedNames.join(", ") : req.text, ...(seeds.length ? { seeds } : {}) });
   }
   return {
     ok: true,
