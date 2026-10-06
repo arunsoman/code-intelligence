@@ -122,6 +122,8 @@ pub struct RawFile {
     pub txs: Vec<RawTx>,
     pub locks: Vec<RawLock>,
     pub declarations: Vec<RawDeclaration>,
+    /// Framework-specific metadata emitted by plugins; the AST stays framework-agnostic.
+    pub framework_metadata: Vec<crate::frameworks::RawFrameworkMetadata>,
     pub had_errors: bool,
 }
 

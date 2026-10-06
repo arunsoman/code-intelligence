@@ -57,6 +57,18 @@ export function buildJourney(store: Store, rev: RevisionRow, question: string, s
   const throwsAt = new Map<string, { cls: string; ev: string[] }[]>();
   for (const f of store.factsByPredicate(rev.id, "throws")) if (seen.has(f.subject)) throwsAt.set(f.subject, [...(throwsAt.get(f.subject) ?? []), { cls: String((f.object as { value?: unknown }).value), ev: f.evidence.map((x) => x.id) }]);
 
+  // Transaction boundaries: any step that runs inside a transaction. Framework facts (Spring) are preferred
+  // over name-based heuristics; the fact carries the framework name and whether it came from a method or class annotation.
+  const txAt = new Set<string>();
+  const txFramework = new Map<string, string>();
+  for (const f of store.factsByPredicate(rev.id, "uses_transaction")) {
+    if (seen.has(f.subject)) {
+      txAt.add(f.subject);
+      const framework = String((f.object as { framework?: unknown }).framework ?? "");
+      if (framework) txFramework.set(f.subject, framework);
+    }
+  }
+
   // Control-flow context of each step, from where its call sits in the caller's source.
   const fns = loadFunctions(store, rev, new Set(order));
   const contextOfStep = new Map<string, Context[]>();
@@ -81,6 +93,12 @@ export function buildJourney(store: Store, rev: RevisionRow, question: string, s
     const ctxs = contextOfStep.get(id) ?? [];
     for (const c of ctxs) node.notes!.push({ if: `Runs only if ${c.text}.`, else: `Runs only in the other branch: ${c.text}.`, loop: `Runs once per element: ${c.text}, so it can run many times.`, retry: `Inside a retry or error-handling loop (${c.text}): it may run several times, or again after a failure.` }[c.kind]);
     if (ctxs.length) node.badge = ctxs.some((c) => c.kind === "retry") ? "retry" : ctxs.some((c) => c.kind === "loop") ? "loop" : "conditional";
+    if (txAt.has(id)) {
+      const fw = txFramework.get(id);
+      const fwLabel = fw ? fw.charAt(0).toUpperCase() + fw.slice(1) : "";
+      node.notes!.push(fw ? `Runs inside a ${fwLabel} transaction.` : "Runs inside a transaction boundary.");
+      node.badge = node.badge ? `${node.badge}, transactional` : "transactional";
+    }
     if (afterAsync.has(id)) {
       const c = claimOf(store, rev.id, {
         assertion: `${e.name} runs after an asynchronous hand-off, so the caller does not observe its outcome.`, claimClass: "journey-async", evidenceIds: [...(r?.evidence.map((x) => x.id) ?? [])],

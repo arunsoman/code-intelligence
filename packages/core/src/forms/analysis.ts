@@ -23,22 +23,33 @@ export function entryPoints(flow: Flow): Entry[] {
 export const GUARD_NAME = /auth|permit|permission|allow|guard|acl|csrf|valid|sanit|idempot|rate.?limit|throttle|fraud|verify|check|claim.?key|limit/i;
 export const GUARD_ERROR = /Forbidden|Unauthori[sz]ed|Denied|Reject|Fraud|Limit|Duplicate|Invalid|Insufficient|Expired|Declined/i;
 
-export interface Guard { id: string; reason: string; errors: string[]; evidenceIds: string[]; nameMatch: boolean }
+export interface Guard { id: string; reason: string; errors: string[]; evidenceIds: string[]; nameMatch: boolean; frameworkGuard?: boolean }
 export function guards(store: Store, rev: string, flow: Flow): Map<string, Guard> {
   const throwsBy = new Map<string, Fact[]>();
   for (const f of store.factsByPredicate(rev, "throws")) throwsBy.set(f.subject, [...(throwsBy.get(f.subject) ?? []), f]);
+  const frameworkGuards = new Map<string, Fact>();
+  for (const f of store.factsByPredicate(rev, "framework_role")) {
+    if ((f.object as { value?: { role?: string } }).value?.role === "guard") {
+      frameworkGuards.set(f.subject, f);
+    }
+  }
   const out = new Map<string, Guard>();
   for (const e of flow.entities.values()) {
-    if (!isCode(e)) continue;
+    const isGuardClass = e.kind === "class" && frameworkGuards.has(e.entityId);
+    if (!isCode(e) && !isGuardClass) continue;
     const thr = (throwsBy.get(e.entityId) ?? []).filter((f) => GUARD_ERROR.test(String((f.object as { value?: unknown }).value)));
     const nameMatch = GUARD_NAME.test(e.name.split(".").pop()!);
-    // Enforcement means refusing something: a name alone is not enough, there must be a throw site.
-    if (!thr.length) continue;
+    const fw = frameworkGuards.get(e.entityId);
+    // Enforcement means refusing something: a name alone is not enough, there must be a throw site
+    // or a framework security annotation (Spring @PreAuthorize, NestJS guard, etc.).
+    if (!thr.length && !fw) continue;
     const errors = [...new Set(thr.map((f) => String((f.object as { value?: unknown }).value)))];
+    const fwFramework = fw ? String((fw.object as { value?: { framework?: string } }).value?.framework ?? "framework") : "";
+    const fwNote = fw ? `Annotated as a guard by ${fwFramework}.` : "";
     out.set(e.entityId, {
-      id: e.entityId, errors, nameMatch,
-      reason: `${short(e.entityId)} can refuse the operation by throwing ${errors.join(", ")}${nameMatch ? " and is named like a check" : ""}`,
-      evidenceIds: thr.flatMap((f) => f.evidence.map((x) => x.id)),
+      id: e.entityId, errors, nameMatch, frameworkGuard: !!fw,
+      reason: `${short(e.entityId)} can refuse the operation${errors.length ? ` by throwing ${errors.join(", ")}` : ""}${nameMatch ? " and is named like a check" : ""}${fwNote ? "; " + fwNote : ""}.`,
+      evidenceIds: thr.flatMap((f) => f.evidence.map((x) => x.id)).concat(fw?.evidence.map((x) => x.id) ?? []),
     });
   }
   return out;
