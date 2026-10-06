@@ -346,6 +346,8 @@ export interface Runner { readonly isolation: IsolationClass; readonly omissions
 
 /** OWNED BY 1.B. All writes are atomic with their outbox event; pointers move by compare-and-swap on `version`. */
 export interface FeatureStore {
+  /** The one Ollama model the installation has selected; generation uses it. Absent or null means none. */
+  selectedModel?(): string | null;
   createRequest(rec: FeatureRecord, firstEvent: Omit<EventRecord, "sequence" | "sync">, idempotencyKey: string): { record: FeatureRecord; replayed: boolean };
   getRequest(requestId: Id): FeatureRecord | null;
   /** Throws VERSION_CONFLICT when `expectedVersion` is not current. */

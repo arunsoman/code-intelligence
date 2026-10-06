@@ -2,7 +2,7 @@
 // Every question in the labelled routing sets is asked twice: as written, and with realistic typing mistakes added by a seeded generator
 // (swapped, dropped, doubled and neighbouring-key letters, lower case, no punctuation, filler). Models run through Ollama with a
 // constrained JSON answer (one label from the closed list), temperature 0. This runs the same code the product runs (llm-router.ts).
-//   node scripts/eval-tiny-models.ts qwen3:0.6b [more models]      writes docs/eval-tiny-models.json
+//   node scripts/eval-tiny-models.ts <installed model> [more models]      writes docs/eval-tiny-models.json
 import { writeFileSync } from "node:fs";
 import { OllamaRouter, candidateLabels, readText } from "../packages/core/src/llm-router.ts";
 import { DEV, HELD_OUT, HELD_OUT_V2, HELD_OUT_V3 } from "../packages/core/test/route-sets.ts";

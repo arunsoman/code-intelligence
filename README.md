@@ -111,8 +111,8 @@ Which model? Measured on the 164 distinct labelled questions in `packages/core/t
 | gemma3 270M | 8% | 7% | 4 s |
 | qwen2.5 0.5B | 46% | 39% | 1 s |
 | llama3.2 1B | 51% | 47% | 1.5 s |
-| qwen3 0.6B, one fixed example per label | 71% | 64% | 1.1 s |
-| **qwen3 0.6B, nearest examples (shipped)** | **81%** [74–86] | **71%** [64–78] | 4 s |
+| a 0.6B model, one fixed example per label | 71% | 64% | 1.1 s |
+| **the same 0.6B model, nearest examples (shipped)** | **81%** [74–86] | **71%** [64–78] | 4 s |
 | *the old regex + similarity router, for comparison* | *89%* | *63%* | *instant* |
 
 So the SmolLM2 and Gemma 270M sizes cannot do this task at all (near chance for 16 labels). The shipped model is **worse than the old rules on clean wording (81% vs 89%, though that 89% includes questions the rules were tuned on) and better when the typing is bad (71% vs 63%)**, at a cost of about four seconds per question on CPU instead of microseconds. About one question in five is still read as the wrong view, which is why the reading is always shown with the other readings one click away. The retrieved examples are kept apart from the evaluation questions (a test fails if one leaks). `route-live.test.ts` runs the real model on a sample when it is installed (14/18 on its last run); everything else is tested with a scripted router, so the suite does not need Ollama.

@@ -2,7 +2,7 @@
 // edits belong to 2.I/1.D/1.E. No generated field can change provider policy or execute a tool.
 import { randomUUID } from "node:crypto";
 import { isIP } from "node:net";
-import { OllamaGenerationRouter, type GenerationRouter, type GenerationResponse } from "../llm-router.ts";
+import { generationRoutesFor, type GenerationRouter, type GenerationResponse } from "../llm-router.ts";
 import { guardRetrievedText } from "./authority.ts";
 import { canonHash, defineSchema, parseStrictJson, rawHash, type Canon } from "./canon.ts";
 import type { FeatureApi } from "./api.ts";
@@ -95,7 +95,7 @@ export class FeatureModelAdapter {
   private readonly policy: EgressPolicy;
   private readonly budgets: Record<GenerationStage, StageBudget>;
   constructor(store: FeatureStore, requestId: string, options: { routes?: readonly GenerationRouter[]; egress?: EgressPolicy; budgets?: Partial<Record<GenerationStage, Partial<StageBudget>>> } = {}) {
-    this.store = store; this.requestId = requestId; this.routes = [...(options.routes ?? [new OllamaGenerationRouter()])];
+    this.store = store; this.requestId = requestId; this.routes = [...(options.routes ?? generationRoutesFor(store.selectedModel?.(), process.env.CIE_OLLAMA_URL))];
     this.policy = options.egress ?? "LOCAL_ONLY";
     this.budgets = Object.fromEntries(Object.entries(DEFAULT_MODEL_BUDGETS).map(([stage, defaults]) => [stage, { ...defaults, ...options.budgets?.[stage as GenerationStage] }])) as Record<GenerationStage, StageBudget>;
     for (const b of Object.values(this.budgets)) for (const [k, v] of Object.entries(b)) if (!Number.isSafeInteger(v) || v < 1 || v > (k === "attempts" ? 4 : k === "timeoutMs" ? 300000 : 262144)) fail("INVALID_BUDGET");

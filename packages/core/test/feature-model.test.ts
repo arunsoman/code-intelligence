@@ -226,3 +226,17 @@ test("Ollama generation transport sends schema/token limits and refuses redirect
     await assert.rejects(router.generate(request)); assert.equal(seen.length, 2);
   } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((e) => e ? reject(e) : resolve())); }
 });
+
+test("generation uses the model the installation has selected, and has no route when none is", async () => {
+  const { generationRoutesFor } = await import("../src/llm-router.ts");
+  assert.deepEqual(generationRoutesFor(null), []); assert.deepEqual(generationRoutesFor(undefined), []);
+  const [r] = generationRoutesFor("local-model:1b", "http://127.0.0.1:9"); assert.equal(r!.model, "local-model:1b"); assert.equal(r!.hosted, false);
+  assert.equal(generationRoutesFor("example:cloud")[0]!.hosted, true);
+  assert.throws(() => new OllamaGenerationRouter({ model: "" }), /requires a model/);
+  // the adapter's default routes follow the stored selection; with nothing selected a generate call fails with a typed refusal, never a built-in model
+  const { store, fs, record, input } = setup();
+  const none = await new FeatureModelAdapter(fs, record.requestId, {}).generate(input);
+  assert.equal(none.status, "FAILED"); assert.match(none.diagnostics.join(), /NO_ALLOWED_PROVIDER/);
+  store.setSelectedModel("local-model:1b");
+  assert.equal(fs.selectedModel(), "local-model:1b");
+});

@@ -98,7 +98,7 @@ test("4.1 C02/featureSetupCheck says what is ready and what is missing, with the
     const ok = await w.h["C02/featureSetupCheck"](w.as("arun"), { repositoryId: w.repo }); assert.equal(ok.ok, true);
     const by = Object.fromEntries(ok.value.items.map((i: any) => [i.id, i])); assert.equal(by.INDEX.state, "READY"); assert.equal(by.CONTAINER.state, "READY"); assert.equal(by.STACK.state, "READY"); assert.equal(by.SECURITY_POLICY.state, "READY"); assert.equal(by.AUTHORITY.state, "READY"); assert.match(by.AUTHORITY.detail, /4 authority binding/);
     assert.equal(ok.value.ready, true);
-    const probes = { docker: () => ({ daemon: true, image: false }), gh: () => ({ ok: false, detail: "not logged in" }), ollama: async () => ({ reachable: true, models: ["qwen3:0.6b"] }) };
+    const probes = { docker: () => ({ daemon: true, image: false }), gh: () => ({ ok: false, detail: "not logged in" }), ollama: async () => ({ reachable: true, models: ["local-model:1b"] }) };
     const bad = await setupCheck(w.svc.store, w.repo, probes); const b = Object.fromEntries(bad.items.map((i) => [i.id, i]));
     assert.equal(b.CONTAINER.state, "MISSING"); assert.match(b.CONTAINER.fix!, /docker pull node:24-alpine/); assert.equal(b.GITHUB.state, "WARN"); assert.match(b.GITHUB.fix!, /gh auth login/); assert.equal(b.MODEL_SIZE.state, "WARN"); assert.equal(bad.ready, false);
     const down = await setupCheck(w.svc.store, w.repo, { ...probes, docker: () => ({ daemon: false, image: false }), ollama: async () => ({ reachable: false, models: [] }) });

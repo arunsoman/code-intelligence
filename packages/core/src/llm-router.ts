@@ -168,10 +168,6 @@ export class OllamaRouter implements RouterModel {
     } catch { return null; }
   }
 }
-/** Prompt-to-feature's own code-generation pipeline (OllamaGenerationRouter below), not the chat router or the status
- * chip's provider: a separate subsystem with its own budgets and fallback routes, out of the one-model selection
- * this file otherwise defers to the caller for. Moving it onto the same selection is a separate decision. */
-export const DEFAULT_GENERATION_MODEL = "qwen3:0.6b";
 
 /**
  * A router that is not a model: an exact question → label map read from the JSON file named by `CIE_ROUTER_SCRIPT`.
@@ -276,13 +272,22 @@ export interface GenerationRouter {
   generate(req: GenerationRequest): Promise<GenerationResponse>;
 }
 
+/**
+ * The generation routes for the model this installation has selected (the same one the status chip and the chat router use):
+ * one route for it, or none when nothing is selected, in which case generation fails with a typed "no allowed provider".
+ */
+export function generationRoutesFor(model: string | null | undefined, baseUrl?: string): GenerationRouter[] {
+  return model ? [new OllamaGenerationRouter({ model, baseUrl })] : [];
+}
+
 export class OllamaGenerationRouter implements GenerationRouter {
   readonly provider = "ollama";
   readonly model: string;
   readonly endpoint: string;
   readonly hosted: boolean;
-  constructor(opts: { model?: string; baseUrl?: string } = {}) {
-    this.model = opts.model ?? DEFAULT_GENERATION_MODEL;
+  constructor(opts: { model: string; baseUrl?: string }) {
+    if (!opts.model) throw new Error("OllamaGenerationRouter requires a model; there is no default one");
+    this.model = opts.model;
     this.endpoint = (opts.baseUrl ?? "http://127.0.0.1:11434").replace(/\/$/, "");
     this.hosted = /[:-]cloud$/i.test(this.model);
   }

@@ -74,7 +74,7 @@ test("a label the model was not offered, no answer, or no model at all gives the
 test("a hosted router model is allowed when explicitly named, and marks itself as hosted", () => {
   assert.equal(new OllamaRouter({ model: "gpt-oss:120b-cloud" }).hosted, true);
   assert.equal(new OllamaRouter({ model: "x:cloud" }).hosted, true);
-  assert.equal(new OllamaRouter({ model: "qwen3:0.6b" }).hosted, false);
+  assert.equal(new OllamaRouter({ model: "local-model:1b" }).hosted, false);
 });
 
 test("the Ollama router asks for one constrained label at temperature 0, parses the answer, and treats every failure as 'no answer'", async () => {
@@ -90,15 +90,15 @@ test("the Ollama router asks for one constrained label at temperature 0, parses 
   await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(srv.address() as { port: number }).port}`;
   try {
-    const router = new OllamaRouter({ model: "qwen3:0.6b", baseUrl: base });
+    const router = new OllamaRouter({ model: "local-model:1b", baseUrl: base });
     const req = buildRequest("where can balance race", candidateLabels(none));
     assert.deepEqual(await router.choose(req), { label: "RaceWindow", target: "balance" });
     const sent = seen[0];
-    assert.equal(sent.model, "qwen3:0.6b"); assert.equal(sent.options.temperature, 0); assert.equal(sent.think, false); assert.equal(sent.stream, false);
+    assert.equal(sent.model, "local-model:1b"); assert.equal(sent.options.temperature, 0); assert.equal(sent.think, false); assert.equal(sent.stream, false);
     assert.deepEqual(sent.format.properties.label.enum, candidateLabels(none), "the daemon is told the closed list");
     for (const m of ["bad", "off-list", "http500"] as const) { mode = m; assert.equal(await router.choose(req), null, m); }
   } finally { srv.close(); }
-  assert.equal(await new OllamaRouter({ model: "qwen3:0.6b", baseUrl: "http://127.0.0.1:9", timeoutMs: 500 }).choose(buildRequest("x", candidateLabels(none))), null, "unreachable daemon");
+  assert.equal(await new OllamaRouter({ model: "local-model:1b", baseUrl: "http://127.0.0.1:9", timeoutMs: 500 }).choose(buildRequest("x", candidateLabels(none))), null, "unreachable daemon");
 });
 
 test("through the service: the model's reading builds the view, an explicit choice is never second-guessed, and no router means the plain map", async () => {

@@ -9,7 +9,7 @@ import { loadAuthority } from "./authority.ts";
 import { loadFeatureConfig } from "./config.ts";
 import { dockerAvailable } from "./docker-runner.ts";
 import { generationRouteAllowed } from "./model.ts";
-import { OllamaGenerationRouter } from "../llm-router.ts";
+import { generationRoutesFor } from "../llm-router.ts";
 import { loadSecurityPolicy } from "./security.ts";
 
 export type SetupState = "READY" | "WARN" | "MISSING";
@@ -52,8 +52,10 @@ export async function setupCheck(store: Store, repoRoot: string, probes: SetupPr
   const g = (probes.gh ?? (() => { const r = ghAuthStatus(); return { ok: r.ok, detail: r.ok ? `signed in as ${r.user}` : r.reason }; }))();
   add("GITHUB", g.ok ? "READY" : "WARN", g.ok ? `gh ${g.detail}` : `gh is not usable (${g.detail}): issue tracking and draft PRs are unavailable`, g.ok ? undefined : "Run: gh auth login");
   const url = probes.ollamaUrl ?? process.env.CIE_OLLAMA_URL ?? "http://127.0.0.1:11434"; const o = await (probes.ollama ?? defaultOllama(url))();
-  const route = new OllamaGenerationRouter({ baseUrl: url }); const allowed = generationRouteAllowed(route, cfg?.egress ?? "LOCAL_ONLY");
-  add("MODEL", o.reachable && o.models.length && allowed ? "READY" : "MISSING", !o.reachable ? "the model daemon is not reachable: requirements cannot be generated" : !o.models.length ? "the daemon has no model installed" : !allowed ? "the configured model route is not allowed by the egress policy" : `${o.models.length} model(s) installed: ${o.models.slice(0, 4).join(", ")}${o.models.length > 4 ? ", …" : ""}`,
+  // The model generation will use is the one the installation has selected; with none stored, the first installed one is what the server would pick.
+  const selected = store.selectedModel() ?? o.models[0] ?? null, route = generationRoutesFor(selected, url)[0];
+  const allowed = !!route && generationRouteAllowed(route, cfg?.egress ?? "LOCAL_ONLY");
+  add("MODEL", o.reachable && o.models.length && allowed ? "READY" : "MISSING", !o.reachable ? "the model daemon is not reachable: requirements cannot be generated" : !o.models.length ? "the daemon has no model installed" : !allowed ? "the configured model route is not allowed by the egress policy" : `generation will use ${selected} (the selected model); ${o.models.length} model(s) installed: ${o.models.slice(0, 4).join(", ")}${o.models.length > 4 ? ", …" : ""}`,
     !o.reachable ? "Start the model daemon (ollama serve)" : !o.models.length ? "ollama pull <model>" : !allowed ? "Use a local model, or opt in to a cloud provider in .cie/feature.json" : undefined);
   if (o.reachable && o.models.length && o.models.every((m) => /(^|[:\-])(0\.\d+b|1b|270m|[1-3]\d\dm)\b/i.test(m))) add("MODEL_SIZE", "WARN", "only very small models are installed (about 1B parameters or less): the builder conformance suite has not been run on them and generated requirements and edits may not be usable", "Evaluate a model with C17/evaluateBuilderVersion before relying on it");
   return { ready: items.every((i) => i.state !== "MISSING"), items };

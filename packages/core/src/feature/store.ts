@@ -27,6 +27,7 @@ export const decisionIdentity = (d: DecisionRecord): string => canonHash(Decisio
 export class SqliteFeatureStore implements FeatureStore {
   private readonly s: Store;
   constructor(store: Store) { this.s = store; }
+  selectedModel(): string | null { return this.s.selectedModel(); }
   private get db() { return this.s.db; }
 
   // ------------------------------------------------------------------ events (always called inside a transaction)
