@@ -29,6 +29,12 @@ export const EXPORT_PURPOSES = ["EXPORT_PATCH", "REVIEW"] as const;
 export const EXPORT_POLICY = { formats: [...EXPORT_FORMATS], maxPatchBytes: 4 * 1024 * 1024, textOnly: true, incompleteLabel: "REVIEW ONLY — VALIDATION INCOMPLETE" } as const;
 export const exportPolicyHash = (): string => validationHash("pf.ExportPolicy", EXPORT_POLICY);
 
+/** Permission can be withdrawn after a candidate was approved (AT-11): every path that leaves the system is re-checked at the moment it leaves, and the refusal does not name the path. */
+export function assertStillAccessible(store: Store, request: FeatureRecord, c: CandidateRecord): void {
+  const policy = policyFor(store, request.repositoryId);
+  if (c.mutations.some((m) => [m.oldPath, m.newPath].some((p) => !!p && policy.denied(p)))) throw new FeatureError("FORBIDDEN", "access to part of this candidate was withdrawn, so it can no longer be exported, published or applied");
+}
+
 export interface ExportDeps { fs: SqliteFeatureStore; store: Store; now?: () => string }
 
 // ------------------------------------------------------------------------------------------------ the patch text
@@ -124,6 +130,7 @@ export function exportFeaturePatch(d: ExportDeps, actor: Id, i: { candidateHash:
   if (!candidate) throw new FeatureError("NOT_FOUND", "no such candidate");
   const request = d.fs.getRequest(candidate.requestId);
   if (!request || request.createdBy !== actor) throw new FeatureError("NOT_FOUND", "no such candidate");
+  assertStillAccessible(d.store, request, candidate);
   if (!(EXPORT_FORMATS as readonly string[]).includes(i.format)) throw new FeatureError("INVALID_SCHEMA", `format must be one of ${EXPORT_FORMATS.join(", ")}`);
   if (i.exportPolicyHash !== exportPolicyHash()) throw new FeatureError("STALE_REVISION", "the export policy changed; reload it before exporting");
   if (candidate.status !== "MATERIALIZED" || request.workspace.candidateHash !== candidate.bindingHash) throw new FeatureError("STALE_REVISION", "this candidate is stale or superseded and cannot be exported");
@@ -177,7 +184,8 @@ function findExport(d: ExportDeps, actor: Id, exportId: Id): { request: FeatureR
 
 /** A dry run on hashes. Nothing is written; every reason an application would fail is listed. */
 export function checkPatchDestination(d: ExportDeps, actor: Id, i: { exportId: Id; destinationSnapshot: Snapshot; dirtyState: string[] }): Outcome<ApplicationAssessment> {
-  const { candidate, exp } = findExport(d, actor, i.exportId);
+  const { request, candidate, exp } = findExport(d, actor, i.exportId);
+  assertStillAccessible(d.store, request, candidate);
   if (!Array.isArray(i.dirtyState) || i.dirtyState.some((p) => typeof p !== "string")) throw new FeatureError("INVALID_SCHEMA", "dirtyState is a list of paths");
   const dest = i.destinationSnapshot?.repositoryId;
   if (typeof dest !== "string" || !dest) throw new FeatureError("INVALID_SCHEMA", "a destination snapshot is required");

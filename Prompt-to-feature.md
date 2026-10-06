@@ -901,7 +901,7 @@ C18/C31 own durable lineage; C02 owns request action history; C28 produces actua
 | AT-47 | PR published but not merged/deployed | Issue/report never labels deployed or verified-operational |
 | AT-48 | Crash between file change and issue sync | Durable event recovered; accurate mutation milestones synced |
 
-Revision 1.1 definition of done extends section 27 with applicable PF-041–056 and AT-31–48. Requirements remain proposed until audited and validated. Mandatory issue tracking governs prompt-caused mutations in the configured workflow; it does not authorize arbitrary public disclosure or imply that this document revision created a GitHub issue.
+The definition of done extends section 27 with the applicable PF-041–080 and AT-31–84. Requirements remain proposed until audited and validated. Mandatory issue tracking governs prompt-caused mutations in the configured workflow; it does not authorize arbitrary public disclosure or imply that this document revision created a GitHub issue.
 
 ## 37. Existing-capability overlap and reuse
 
@@ -1118,7 +1118,7 @@ Exit: one real feature—or justified configuration/no-change result—with curr
 | Review/publication | Current head/evidence/authority and caveated presentation bound |
 | Release lifecycle | Deployment separately authorized; observation/recovery plan applicable |
 
-Policy may authorize a caveated draft for review with incomplete validation; the system must never label it verified complete. No-change and configuration-only outcomes retain evidence and issue lineage without fabricating code mutations. All PF-001–PF-068 are capability requirements with applicability as specified; none is asserted implemented by this document. AT-01–AT-66 are proposed conformance scenarios, not executed test results.
+Policy may authorize a caveated draft for review with incomplete validation; the system must never label it verified complete. No-change and configuration-only outcomes retain evidence and issue lineage without fabricating code mutations. All PF-001–080 are capability requirements with applicability as specified; none is asserted implemented by this document. AT-01–84 are proposed conformance scenarios, not executed test results; the executed results live in `docs/prompt-to-feature/conformance.md`.
 
 ## 43. Dedicated Build feature workspace and wizard
 

@@ -24,6 +24,7 @@ import { issueHandlers, type IssueHooks } from "./issue-handlers.ts";
 import { patchHandlers } from "./delivery-handlers.ts";
 import { builderHandlers } from "./builder-handlers.ts";
 import { coordinationHandlers } from "./coordination-handlers.ts";
+import { pipelineHandlers, type PipelineHooks } from "./pipeline-handlers.ts";
 import { opsHandlers } from "./ops-handlers.ts";
 import { publishHandlers, type PublishHooks } from "./publish-handlers.ts";
 import { requirementHandlers, type RequirementHooks } from "./requirement-handlers.ts";
@@ -32,7 +33,7 @@ import type { FeatureRecord, FeatureWorkspace, Id, Outcome } from "./types.ts";
 const str = (v: unknown, what: string): string => { if (typeof v !== "string" || !v) throw new FeatureError("INVALID_SCHEMA", `${what} is required`); return v; };
 const obj = (b: unknown): Record<string, any> => { if (!b || typeof b !== "object" || Array.isArray(b)) throw new FeatureError("INVALID_SCHEMA", "the request body must be an object"); return b as Record<string, any>; };
 
-export function featureHandlers(svc: Service, opts: { gates?: GateHooks; perf?: PerfHooks; issues?: IssueHooks; requirements?: RequirementHooks; publish?: PublishHooks; builder?: { routes?: readonly import("../llm-router.ts").GenerationRouter[] } } = {}): Handlers {
+export function featureHandlers(svc: Service, opts: { gates?: GateHooks; perf?: PerfHooks; issues?: IssueHooks; requirements?: RequirementHooks; publish?: PublishHooks; builder?: { routes?: readonly import("../llm-router.ts").GenerationRouter[] }; pipeline?: PipelineHooks } = {}): Handlers {
   const fs = new SqliteFeatureStore(svc.store);
   const isActive = (id: string) => { const j = svc.store.job(id); return !!j && (j.state === "QUEUED" || j.state === "RUNNING"); };
   try { reconcileAll(fs, "system", isActive); } catch { /* a closed or older database: nothing to reconcile */ }
@@ -56,6 +57,7 @@ export function featureHandlers(svc: Service, opts: { gates?: GateHooks; perf?: 
     ...securityHandlers(svc, fs, owned, opts.gates ?? {}),
     ...patchHandlers(svc, fs, owned),
     ...opsHandlers(svc, fs, owned),
+    ...pipelineHandlers(svc, fs, { gates: opts.gates, publish: opts.publish, adapter: opts.requirements?.adapter, ...opts.pipeline }),
     ...builderHandlers(svc, fs, opts.builder),
     ...coordinationHandlers(svc, fs, { forge: opts.issues?.forge }),
     ...publishHandlers(svc, fs, opts.publish ?? {}),

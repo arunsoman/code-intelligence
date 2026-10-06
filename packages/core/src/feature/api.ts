@@ -85,7 +85,7 @@ export const OPS: OpSpec[] = [
   op("C02/submitFeature", true, "1.C"), op("C10/discoverFeatureContext", false, "1.C"), op("C02/resumeRequest", false, "1.B"),
   op("C15/normalizeRequirements", true, "2.I"), op("C15/detectSemanticConflicts", false, "2.I"), op("C25/checkRequirementConstraints", false, "2.I"),
   op("C23/assessFeatureImpact", false, "2.I"), op("C22/planClarifications", false, "2.I"),
-  op("C02/recordDecision", true, "1.D"), op("C15/reviseContract", true, "1.D"), op("C15/confirmAcceptance", true, "4.1", "added by 4.1: a person confirms generated expected outcomes, making them a reviewed oracle (plan S6)"),
+  op("C02/recordDecision", true, "1.D"), op("C15/reviseContract", true, "1.D"), op("C02/runFeaturePipeline", true, "4.1", "added by 4.1: runs every step as one cancellable job and returns a summary (ids, file kinds, decision), never file contents"), op("C02/featureSetupCheck", false, "4.1", "added by 4.1: what is ready and what is missing, with the fix for each"), op("C15/confirmAcceptance", true, "4.1", "added by 4.1: a person confirms generated expected outcomes, making them a reviewed oracle (plan S6)"),
   op("C10/findRelatedCapabilities", false, "2.I"), op("C15/compareRequestedBehaviour", false, "2.I"), op("C22/investigateOverlap", true, "2.I"),
   op("C23/assessReuseImpact", false, "2.I"), op("C16/verifyOverlap", false, "2.I"),
   op("C28/planFeatureChange", true, "1.E"), op("C28/planReuseChange", true, "1.E"), op("C28/materializeCandidate", true, "1.E"), op("C28/readCandidateFile", false, "1.E"),

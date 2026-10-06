@@ -56,6 +56,8 @@ export interface PipelineDeps {
   /** Gate drivers (security, dependency, operational, browser, performance) for the validation run; see gateDriverFor. */
   runCheck?: (candidate: CandidateRecord, request: FeatureRecord) => RunCheck | undefined;
   publish?: Omit<PublishDeps, "fs" | "store">;
+  /** Cancellation, a hook run just before the first external write (a job passes its commit point here), and a progress callback. */
+  signal?: AbortSignal; beforePublish?: () => void; onStep?: (s: PipelineStep) => void;
 }
 export interface PipelineInput {
   repositoryId: Id; text: string; mode: OutcomeMode; idempotencyKey: string;
@@ -107,11 +109,11 @@ export function validationPlanFor(request: FeatureRecord, candidate: CandidateRe
   return { ...base, checks, environment: env, testData, performanceApplicable: perfApplicable, toolchainHash: rawHash(decl.environmentLabel ?? process.version) };
 }
 
-type Draft = { steps: PipelineStep[] };
-const add = (d: Draft, step: StepName, status: StepStatus, detail: string) => { d.steps.push({ step, status, detail }); };
+type Draft = { steps: PipelineStep[]; onStep?: (s: PipelineStep) => void };
+const add = (d: Draft, step: StepName, status: StepStatus, detail: string) => { const s = { step, status, detail }; d.steps.push(s); d.onStep?.(s); };
 
 export async function runFeaturePipeline(d: PipelineDeps, actor: Id, i: PipelineInput): Promise<PipelineResult> {
-  const t: Draft = { steps: [] }; let requestId: Id = "";
+  const t: Draft = { steps: [], onStep: d.onStep }; let requestId: Id = "";
   const finish = (stop: PipelineStop, reason: string, extra: Partial<PipelineResult> = {}): PipelineResult => ({ requestId, stop, reason, steps: t.steps, ...extra });
   const intake = { fs: d.fs, store: d.store, config: loadFeatureConfig };
   const od = { fs: d.fs, store: d.store };
@@ -131,7 +133,7 @@ export async function runFeaturePipeline(d: PipelineDeps, actor: Id, i: Pipeline
 
     // ---- normalise requirements (needs the model); a repeated run reuses the contract it already has
     if (!req().contract) {
-      const norm = await normalizeRequirements({ fs: d.fs, store: d.store, adapter: d.adapter }, actor, { requestId, sourceRefs: [], assessmentId: req().assessment!.id });
+      const norm = await normalizeRequirements({ fs: d.fs, store: d.store, adapter: d.adapter }, actor, { requestId, sourceRefs: [], assessmentId: req().assessment!.id, signal: d.signal });
       add(t, "NORMALISE", norm.status === "COMPLETE" ? "DONE" : "STOPPED", norm.status === "COMPLETE" ? `${norm.value!.contract.requirements.length} requirement(s), ${norm.value!.contract.acceptance.length} criteria` : norm.diagnostics.slice(0, 2).join("; "));
       if (norm.status !== "COMPLETE") return finish("FAILED", `requirements were not produced: ${norm.diagnostics[0] ?? norm.status}`);
     } else add(t, "NORMALISE", "SKIPPED", "a contract already exists");
@@ -216,7 +218,7 @@ export async function runFeaturePipeline(d: PipelineDeps, actor: Id, i: Pipeline
     let cur = req(); if (cur.state === "CONTRACTING") cur = transition(d.fs, requestId, cur.version, "IMPLEMENTING", actor, "candidate built");
     if (cur.state === "IMPLEMENTING") cur = transition(d.fs, requestId, cur.version, "VALIDATING", actor, "validation started");
     const vplan = validationPlanFor(req(), cand, i.validation);
-    const evidence = await runFeatureValidation({ store: d.fs, runner: d.runner, runCheck: d.runCheck?.(cand, req()) }, { candidateId: cand.id, plan: vplan, actor, wallMs: i.validation?.wallMs ?? 600_000 });
+    const evidence = await runFeatureValidation({ store: d.fs, runner: d.runner, runCheck: d.runCheck?.(cand, req()) }, { candidateId: cand.id, plan: vplan, actor, wallMs: i.validation?.wallMs ?? 600_000, signal: d.signal });
     const counts = evidence.flatMap((e) => e.results).reduce<Record<string, number>>((m, r) => ({ ...m, [r.status]: (m[r.status] ?? 0) + 1 }), {});
     add(t, "VALIDATE", evidence.every((e) => e.results.every((r) => r.status === "PASS" || r.status === "NOT_APPLICABLE")) ? "DONE" : "PARTIAL", `${evidence.length} check(s): ${Object.entries(counts).sort().map(([k, v]) => `${k} ${v}`).join(", ")}`);
 
@@ -234,6 +236,7 @@ export async function runFeaturePipeline(d: PipelineDeps, actor: Id, i: Pipeline
     if (i.publishTo) {
       if (!d.publish) { add(t, "PUBLISH", "SKIPPED", "no forge is configured"); }
       else {
+        d.beforePublish?.();
         try {
           const pub = await publishFeaturePR({ fs: d.fs, store: d.store, ...d.publish }, actor, { proposalId: fresh.id, decisionId: decide("PUBLISH_DRAFT_PR").id, expectedHeadHash: fresh.binding.candidateContentHash, destination: i.publishTo, idempotencyKey: `pipeline:${requestId}:publish` });
           result.publication = pub; add(t, "PUBLISH", "DONE", `draft PR #${pub.prNumber} (${pub.eligibility})`);

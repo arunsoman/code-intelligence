@@ -1,0 +1,22 @@
+{
+ "AT-09": [
+  "AT-07 revising the contract makes the next version",
+  "PF-019 impact: open findings"
+ ],
+ "AT-32": [
+  "rust:shared_vectors_match_the_typescript_implementation",
+  "stored identity names its protocol and schema; the digest matches an independent computation",
+  "pf-canon-v1 relations: the same/different claims hold"
+ ],
+ "AT-34": [
+  "AT-18/P5/budget: infrastructure failures, undeclared cases and an exhausted budget"
+ ],
+ "AT-37": [
+  "PF-048 a new endpoint without a signal"
+ ],
+ "AT-83": [
+  "PF-072 reading a candidate: every representation",
+  "PF-072 paging: 40 per page",
+  "PF-071 file filters"
+ ]
+}

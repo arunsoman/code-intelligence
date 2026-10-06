@@ -19,7 +19,7 @@ import { FeatureError } from "./errors.ts";
 import { snapshotOf } from "./intake.ts";
 import { guardOutgoing } from "./issue-trail.ts";
 import { eventFor, transition } from "./lifecycle.ts";
-import { currentDecision, exportBlocks } from "./patch-export.ts";
+import { assertStillAccessible, currentDecision, exportBlocks } from "./patch-export.ts";
 import type { SqliteFeatureStore } from "./store.ts";
 import type { CandidateRecord, FeatureRecord, Id, PublicationDecision, PublicationReceipt } from "./types.ts";
 
@@ -82,6 +82,7 @@ export async function publishFeaturePR(d: PublishDeps, actor: Id, i: PublishInpu
   if (!candidate || !request || request.createdBy !== actor) throw new FeatureError("NOT_FOUND", "no such candidate");
   // A retry with the same key returns what was recorded; it never creates a second PR.
   if (candidate.publication?.idempotencyKey === i.idempotencyKey) return candidate.publication;
+  assertStillAccessible(d.store, request, candidate);
   if (request.mode !== "CREATE_DRAFT_PR") throw new FeatureError("FORBIDDEN", `this request was made in ${request.mode} mode; only CREATE_DRAFT_PR requests publish`);
   if (["CANCELLED", "FAILED"].includes(request.state)) throw new FeatureError("FORBIDDEN", `the request is ${request.state}`);
   if (request.issue.syncState === "TRACKING_BLOCKED") throw new FeatureError("BLOCKED", "issue tracking is mandatory for this request and no issue is bound yet");
