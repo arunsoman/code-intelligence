@@ -18,7 +18,7 @@ const MAX_WALL_MS = 30 * 60_000, MAX_OUTPUT = 16 * 1024 * 1024, MAX_SCAN = 100_0
 const FORBIDDEN_ENV = /^(NODE_OPTIONS|NODE_PATH|NODE_EXTRA_CA_CERTS|LD_.*|DYLD_.*|BASH_ENV|ENV|PYTHON.*|RUBY.*|PERL.*|GIT_.*|SSH_.*|HOME|PATH|SHELL|IFS)$/;
 const SECRETISH = /(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE|API[_-]?KEY|AUTH)/i;
 /** Node flags a caller may put before the script. Anything that widens a permission or loads code is refused. */
-export const NODE_FLAG_OK = [/^--test$/, /^--test-isolation=(none|process)$/, /^--test-name-pattern=.{1,200}$/, /^--no-warnings$/, /^--enable-source-map$/, /^--experimental-strip-types$/, /^--experimental-transform-types$/, /^--stack-trace-limit=\d{1,3}$/];
+export const NODE_FLAG_OK = [/^--test$/, /^--test-isolation=(none|process)$/, /^--test-name-pattern=.{1,200}$/, /^--no-warnings$/, /^--enable-source-map$/, /^--experimental-strip-types$/, /^--experimental-transform-types$/, /^--stack-trace-limit=\d{1,3}$/, /^--preserve-symlinks$/, /^--preserve-symlinks-main$/];
 
 export interface RunnerOptions {
   /** Called with a request's fencing token before the run and again after it; false means the lease was lost (AT-24, AT-57). */

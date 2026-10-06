@@ -47,4 +47,11 @@ export function criterionEvidence(review: FeatureReview, file: ReviewFile): Crit
   }));
 }
 
-export const filePosition = (f: ReviewFile): string => `${f.kind}: ${f.oldPath && f.oldPath !== f.path ? `${f.oldPath} → ` : ""}${f.path}`;
+/** What kind of thing a file is, beyond its text: a binary, a link (and where it points) and a changed executable bit. Text files at the default mode say nothing extra. */
+export function fileBadges(f: ReviewFile): string[] {
+  const out: string[] = [];
+  if (f.entryKind === "BINARY") out.push("binary"); if (f.entryKind === "SYMLINK") out.push(`symlink${f.target ? ` → ${f.target}` : ""}`);
+  if (f.beforeMode !== f.afterMode && (f.beforeMode === "100755" || f.afterMode === "100755")) out.push(f.afterMode === "100755" ? (f.beforeMode ? "now executable" : "executable") : "no longer executable");
+  return out;
+}
+export const filePosition = (f: ReviewFile): string => { const badges = fileBadges(f); return `${f.kind}: ${f.oldPath && f.oldPath !== f.path ? `${f.oldPath} → ` : ""}${f.path}${badges.length ? ` (${badges.join(", ")})` : ""}`; };

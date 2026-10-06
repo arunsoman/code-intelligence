@@ -127,6 +127,8 @@ export function operationalRunCheck(candidate: CandidateRecord, request: Feature
 export function planRevert(c: CandidateRecord, liveRoot: string): { edits: FeatureEdit[]; conflicts: string[] } {
   const contents = c.contents ?? {}, base = c.baseContents ?? {}; const edits: FeatureEdit[] = [], conflicts: string[] = [];
   const live = (p: string): string | null => { try { return existsSync(safeJoin(liveRoot, p)) ? readFileSync(safeJoin(liveRoot, p), "utf8") : null; } catch { return null; } };
+  const nonText = c.mutations.filter((m) => m.entryKind || m.beforeKind || m.beforeMode || m.afterMode).map((m) => (m.newPath ?? m.oldPath)!);
+  if (nonText.length) return { edits: [], conflicts: [`a revert of binary, executable-bit or symlink changes is not planned here (${nonText.slice(0, 3).join(", ")}); revert them with git`] };
   const why = "revert of a feature candidate";
   for (const m of c.mutations) {
     if (m.kind === "RENAMED") {

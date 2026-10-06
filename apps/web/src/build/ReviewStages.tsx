@@ -93,7 +93,7 @@ export function FileViewer({ file, candidateHash, call }: { file: ReviewFile; ca
   }, [candidateHash, path, representation, start, call]);
   const download = async () => {
     try { const r = await call<Result<FilePage>>("C28", "readCandidateFile", { candidateHash, path, representation, download: true }); if (!r.ok) { setError(r.error.message); return; } if (!r.value.value?.complete) { setError("Full download unavailable; no partial file was downloaded."); return; }
-      const url = URL.createObjectURL(new Blob([r.value.value.content], { type: "text/plain" })); const a = document.createElement("a"); a.href = url; a.download = downloadName(path, representation); a.click(); URL.revokeObjectURL(url);
+      const v = r.value.value as FilePage & { encoding?: string }; const bytes = v.encoding === "base64" ? Uint8Array.from(atob(v.content), (c) => c.charCodeAt(0)) : v.content; const url = URL.createObjectURL(new Blob([bytes], { type: v.encoding === "base64" ? "application/octet-stream" : "text/plain" })); const a = document.createElement("a"); a.href = url; a.download = downloadName(path, representation); a.click(); URL.revokeObjectURL(url);
     } catch { setError("Download failed; retry when the file is available."); }
   };
   let rows: { left: string | null; right: string | null }[] | undefined;

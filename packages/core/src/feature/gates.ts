@@ -5,7 +5,7 @@
 //   PASS → PASSED / exit 0     BLOCKED → FAILED / exit 1     INCOMPLETE → INFRA_ERROR (a gap, never a pass)
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { AuthorityConfig } from "./authority.ts";
+import { authorize, type AuthorityConfig } from "./authority.ts";
 import { asSet, canonHash, defineSchema, type Canon } from "./canon.ts";
 import { reviewDependencies, type AdvisoryAdapter, type DependencyReport } from "./dependencies.ts";
 import { buildProvenance, type ProvenanceRecord } from "./provenance.ts";
@@ -55,11 +55,20 @@ export async function securityGate(ctx: GateContext, signal?: AbortSignal): Prom
     similarityConfigured: false,
   });
   const gaps = [...scan.gaps];
+  // #91: bytes and links cannot be pattern-scanned. Unscanned binary content is a gap unless a security-authorised, unexpired suppression names it;
+  // an executable bit that appears is a visible finding (it is not blocking by itself: the file is still scanned as text when it is text).
+  const now = ctx.now ?? new Date().toISOString(); const nonText: Finding[] = [];
+  const binary = Object.entries(ctx.candidate.entries ?? {}).filter(([, e]) => e?.kind === "BINARY").map(([p]) => p).sort();
+  const suppressed = (path: string) => ctx.policy.suppressions.some((x) => x.rule === "BINARY-UNSCANNED" && x.expires > now && (x.path === path || (x.path.endsWith("/") && path.startsWith(x.path))) && authorize(ctx.auth, x.owner, "security", ctx.request.createdBy).allowed);
+  const unscanned = binary.filter((p) => !suppressed(p));
+  if (unscanned.length) gaps.push(`${unscanned.length} binary file(s) were not analysed (${unscanned.slice(0, 3).join(", ")}${unscanned.length > 3 ? ", …" : ""}); a security-authorised suppression for rule BINARY-UNSCANNED can record that a person looked at them`);
+  for (const m of ctx.candidate.mutations) if (m.afterMode === "100755" && m.beforeMode !== "100755" && m.kind !== "DELETED") { const path = (m.newPath ?? m.oldPath)!; nonText.push({ id: `exec-bit:${path}`, rule: "EXEC-BIT", cls: "SAST", severity: "MEDIUM", path, message: "the file became executable", origin: "BUILTIN", introduced: true }); }
+  for (const m of ctx.candidate.mutations) if (m.entryKind === "SYMLINK" && m.kind !== "DELETED") { const path = (m.newPath ?? m.oldPath)!; nonText.push({ id: `symlink:${path}`, rule: "SYMLINK-ADDED", cls: "SAST", severity: "MEDIUM", path, message: `a symlink to ${ctx.candidate.entries?.[path]?.target ?? "?"} was added or retargeted (checked to stay inside the repository)`, origin: "BUILTIN", introduced: true }); }
   if (ctx.policy.requireSimilarityCheck) gaps.push("no code-similarity source is configured, so copied code without a licence marker is not detected");
   const provBlocking = provenance.findings.filter((f) => f.severity === "CRITICAL" || f.severity === "HIGH");
   const blocking = [...scan.blocking, ...provBlocking];
   const status: SecurityReport["status"] = blocking.length ? "BLOCKED" : gaps.length ? "INCOMPLETE" : "PASS";
-  return { ...scan, findings: [...scan.findings, ...provenance.findings], gaps, blocking, status, provenance };
+  return { ...scan, findings: [...scan.findings, ...provenance.findings, ...nonText], gaps, blocking, status, provenance };
 }
 
 const findingLine = (f: Finding): string => `${f.rule} ${f.severity} ${f.path}${f.line ? `:${f.line}` : ""} — ${f.message}${f.cls === "SECRET" && f.excerpt ? ` [${f.excerpt}]` : ""}`;

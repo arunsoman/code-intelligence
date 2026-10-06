@@ -12,10 +12,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { EditOperationSchema, type EditOperation } from "@cie/schema";
 import { admissionProblems, detectOracleWeakening, exactnessProblems, isProtectedPath, isTestPath, normalizeRel } from "../execution.ts";
-import { applyTextEdits, copyTree, makeScratch, removeScratch, safeJoin, sha256, treeDiff, walkFiles, type TreeChange } from "../isolated-exec.ts";
+import { applyTextEdits, makeScratch, removeScratch, safeJoin, sha256, walkFiles } from "../isolated-exec.ts";
+import { MAX_BINARY_BYTES, copyTreeKeepLinks, diffTrees, passesThroughLink, readEntry, symlinkHash, symlinkProblem, FILE_MODES, type TreeDelta } from "./tree.ts";
 import { policyFor } from "../access.ts";
 import { unifiedDiff } from "../changes.ts";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Store } from "../store.ts";
 import { authorize, type AuthorityConfig } from "./authority.ts";
@@ -25,10 +26,20 @@ import { eventFor, transition } from "./lifecycle.ts";
 import { snapshotOf } from "./intake.ts";
 import { alreadySupported } from "./overlap.ts";
 import type { SqliteFeatureStore } from "./store.ts";
-import type { CandidateRecord, FileMutation, Hash, Id, Outcome, PatchBinding, Snapshot } from "./types.ts";
+import type { CandidateEntry, CandidateRecord, FileMutation, Hash, Id, Outcome, PatchBinding, Snapshot } from "./types.ts";
 
 export type RenameEdit = { op: "RENAME_FILE"; from: string; to: string; baseHash: string; why: string };
-export type FeatureEdit = (EditOperation | RenameEdit) & { requirementIds?: Id[]; taskIds?: Id[]; actionIds?: Id[] };
+/** Binary files, executable bits and symlinks (issue #91). Text edits keep their own operations; a binary file is deleted with DELETE_FILE. */
+export type NonTextEdit =
+  | { op: "CREATE_BINARY"; file: string; base64: string; mode?: "100644" | "100755"; why: string }
+  | { op: "REPLACE_BINARY"; file: string; baseHash: string; base64: string; why: string }
+  | { op: "SET_MODE"; file: string; baseHash?: string; mode: "100644" | "100755"; why: string }
+  | { op: "CREATE_SYMLINK"; file: string; target: string; why: string }
+  | { op: "RETARGET_SYMLINK"; file: string; baseTarget: string; target: string; why: string }
+  | { op: "REMOVE_SYMLINK"; file: string; baseTarget: string; why: string };
+export type FeatureEdit = (EditOperation | RenameEdit | NonTextEdit) & { requirementIds?: Id[]; taskIds?: Id[]; actionIds?: Id[] };
+const NON_TEXT_OPS = ["CREATE_BINARY", "REPLACE_BINARY", "SET_MODE", "CREATE_SYMLINK", "RETARGET_SYMLINK", "REMOVE_SYMLINK"] as const;
+const isNonText = (e: FeatureEdit): e is NonTextEdit & { requirementIds?: Id[]; taskIds?: Id[]; actionIds?: Id[] } => (NON_TEXT_OPS as readonly string[]).includes((e as { op: string }).op);
 export interface CandidateScope {
   allowedPaths?: string[]; forbiddenPaths?: string[]; maxFilesChanged?: number; maxDiffLines?: number;
   /** Policy grant: edit or delete EXISTING tests (adding tests never needs it). */
@@ -52,19 +63,20 @@ const PatchBindingSchema = defineSchema<PatchBinding>("pf.PatchBinding", "1", (b
   runManifestIds: asSet(b.runManifestIds) as Canon, mutationInventoryHash: b.mutationInventoryHash, generationProvenanceHash: b.generationProvenanceHash,
 }));
 const MutationSchema = defineSchema<FileMutation[]>("pf.MutationInventory", "1", (ms) => asSet(ms.map((m): Canon => ({
-  oldPath: m.oldPath ?? "", newPath: m.newPath ?? "", kind: m.kind, before: m.beforeHash ?? "", after: m.afterHash ?? "", attribution: m.attribution, supporting: !!m.supporting,
+  oldPath: m.oldPath ?? "", newPath: m.newPath ?? "", kind: m.kind, before: m.beforeHash ?? "", after: m.afterHash ?? "", attribution: m.attribution, supporting: !!m.supporting, entry: m.entryKind ?? "TEXT", beforeMode: m.beforeMode ?? "", afterMode: m.afterMode ?? "",
   requirementIds: asSet(m.requirementIds), taskIds: asSet(m.taskIds), actionIds: asSet(m.actionIds),
 }))) as Canon);
-const DiffSchema = defineSchema<TreeChange[]>("pf.Diff", "1", (cs) => asSet(cs.map((c): Canon => ({ file: c.file, kind: c.kind, old: c.oldHash ?? "", new: c.newHash ?? "" }))) as Canon);
+const DiffSchema = defineSchema<TreeDelta[]>("pf.Diff", "1", (cs) => asSet(cs.map((c): Canon => ({ file: c.file, kind: c.kind, old: c.before?.hash ?? "", new: c.after?.hash ?? "", oldMode: c.before?.mode ?? "", newMode: c.after?.mode ?? "", oldKind: c.before?.kind ?? "", newKind: c.after?.kind ?? "" }))) as Canon);
 const ProvenanceSchema = defineSchema<{ invocationIds: Id[]; editsHash: string }>("pf.GenerationProvenance", "1", (p) => ({ invocationIds: asSet(p.invocationIds), editsHash: p.editsHash }));
 
 type Expanded = { op: EditOperation; meta: { requirementIds: Id[]; taskIds: Id[]; actionIds: Id[] }; rename?: { from: string; to: string } };
 
 function parseEdits(raw: FeatureEdit[], baseRoot: string): Expanded[] {
-  if (!Array.isArray(raw) || !raw.length) throw new FeatureError("INVALID_SCHEMA", "a candidate needs at least one edit");
+  if (!Array.isArray(raw)) throw new FeatureError("INVALID_SCHEMA", "edits must be a list");
   if (raw.length > 500) throw new FeatureError("RESOURCE_LIMIT", "more than 500 edits in one candidate");
   const out: Expanded[] = [];
   raw.forEach((e, idx) => {
+    if (isNonText(e)) return; // binary, mode and symlink edits are parsed by parseNonText
     const { requirementIds = [], taskIds = [], actionIds = [], ...op } = e as FeatureEdit & Record<string, unknown>;
     const meta = { requirementIds: [...requirementIds], taskIds: [...taskIds], actionIds: actionIds.length ? [...actionIds] : [`edit:${idx + 1}`] };
     if ((op as RenameEdit).op === "RENAME_FILE") {
@@ -113,6 +125,70 @@ export function featureAdmission(expanded: Expanded[], scope: CandidateScope, ba
   problems.push(...exactnessProblems(baseRoot, ops.filter((o) => !(o.op === "CREATE_FILE" && expanded.some((e) => e.rename?.to === o.file)))));
   return [...new Set(problems)];
 }
+
+// ------------------------------------------------------------------------------------------------ binary, mode and symlink edits (#91)
+
+type Meta3 = { requirementIds: Id[]; taskIds: Id[]; actionIds: Id[] };
+export type NonTextExpanded = { op: NonTextEdit; meta: Meta3 };
+function parseNonText(raw: FeatureEdit[]): NonTextExpanded[] {
+  const out: NonTextExpanded[] = [];
+  raw.forEach((e, idx) => {
+    if (!isNonText(e)) return;
+    const { requirementIds = [], taskIds = [], actionIds = [], ...op } = e as FeatureEdit & Record<string, unknown>;
+    const o = op as unknown as NonTextEdit;
+    if (typeof o.file !== "string" || !o.file || typeof o.why !== "string" || !o.why.trim()) throw new FeatureError("INVALID_SCHEMA", `edit ${idx + 1} (${o.op}) needs a file and a reason`);
+    const allowed: Record<string, string[]> = { CREATE_BINARY: ["op", "file", "base64", "mode", "why"], REPLACE_BINARY: ["op", "file", "baseHash", "base64", "why"], SET_MODE: ["op", "file", "baseHash", "mode", "why"], CREATE_SYMLINK: ["op", "file", "target", "why"], RETARGET_SYMLINK: ["op", "file", "baseTarget", "target", "why"], REMOVE_SYMLINK: ["op", "file", "baseTarget", "why"] };
+    for (const k of Object.keys(op)) if (!allowed[o.op]!.includes(k)) throw new FeatureError("INVALID_SCHEMA", `edit ${idx + 1} (${o.op}): unknown field ${k}`);
+    out.push({ op: { ...o, file: normalizeRel(o.file) } as NonTextEdit, meta: { requirementIds: [...requirementIds], taskIds: [...taskIds], actionIds: actionIds.length ? [...actionIds] : [`edit:${idx + 1}`] } });
+  });
+  return out;
+}
+const b64 = (s: unknown): Buffer | null => (typeof s === "string" && s.length <= Math.ceil(MAX_BINARY_BYTES * 4 / 3) + 8 && /^[A-Za-z0-9+/]*={0,2}$/.test(s) && s.length % 4 === 0 ? Buffer.from(s, "base64") : null);
+
+/** Everything admission rejects for binary, mode and symlink edits. Pure given the base tree. */
+export function nonTextAdmission(extra: NonTextExpanded[], expanded: Expanded[], scope: CandidateScope, baseRoot: string): string[] {
+  const problems: string[] = []; const allowProtected = new Set((scope.allowProtected ?? []).map(normalizeRel));
+  const seen = new Map<string, string[]>();
+  for (const e of expanded) seen.set(normalizeRel(e.op.file), [...(seen.get(normalizeRel(e.op.file)) ?? []), e.op.op]);
+  for (const x of extra) seen.set(x.op.file, [...(seen.get(x.op.file) ?? []), x.op.op]);
+  const extraPaths = new Set(extra.map((x) => x.op.file));
+  for (const [f, kinds] of seen) { if (!extraPaths.has(f)) continue; const rest = kinds.filter((k) => k !== "SET_MODE"); if (kinds.filter((k) => k === "SET_MODE").length > 1 || !(rest.length <= 1 || rest.every((k) => k === "REPLACE_SPAN"))) problems.push(`conflicting operations on ${f}: ${kinds.join(", ")}`); }
+  for (const { op } of extra) {
+    const rel = op.file;
+    if (NEVER.some((re) => re.test(rel))) { problems.push(`secrets and VCS paths are never edited: ${rel}`); continue; }
+    let base: CandidateEntry | null = null; try { base = readEntry(baseRoot, rel); } catch { problems.push(`${rel} cannot be read in the base tree`); continue; }
+    const creates = expanded.some((e) => normalizeRel(e.op.file) === rel && e.op.op === "CREATE_FILE") || extra.some((y) => y.op.file === rel && (y.op.op === "CREATE_BINARY" || y.op.op === "CREATE_SYMLINK"));
+    if (isTestPath(rel)) { if (!(op.op === "CREATE_BINARY" || op.op === "CREATE_SYMLINK") && base && !scope.allowTestEdits) problems.push(`editing the existing test file ${rel} is a property change and needs a policy grant (allowTestEdits)`); }
+    else if (isProtectedPath(rel) && !allowProtected.has(rel)) problems.push(`protected path (CI config, lockfile or tool config) needs an exact security grant: ${rel}`);
+    if (passesThroughLink(baseRoot, rel)) problems.push(`${rel} is below a symlink`);
+    switch (op.op) {
+      case "CREATE_BINARY": { const bytes = b64(op.base64); if (!bytes) problems.push(`${rel}: base64 is invalid or larger than ${MAX_BINARY_BYTES} bytes`); else if (bytes.length > MAX_BINARY_BYTES) problems.push(`${rel}: ${bytes.length} bytes is more than the ${MAX_BINARY_BYTES}-byte binary limit`); if (base) problems.push(`${rel} already exists; use REPLACE_BINARY`); if (op.mode !== undefined && !(FILE_MODES as readonly string[]).includes(op.mode) ) problems.push(`${rel}: mode must be 100644 or 100755`); break; }
+      case "REPLACE_BINARY": { const bytes = b64(op.base64); if (!bytes) problems.push(`${rel}: base64 is invalid or too large`); if (!base || base.kind === "SYMLINK") problems.push(`${rel} is not an existing file`); else if (base.hash !== op.baseHash) problems.push(`${rel} has changed since the proposer read it (base hash mismatch)`); break; }
+      case "SET_MODE": { if (!(FILE_MODES as readonly string[]).includes(op.mode)) problems.push(`${rel}: mode must be 100644 or 100755 (a gitlink or link mode is never set this way)`); if (!base && !creates) problems.push(`${rel} does not exist`); else if (base && base.kind === "SYMLINK") problems.push(`${rel} is a symlink; it has no executable bit`); else if (base && op.baseHash !== undefined && base.hash !== op.baseHash) problems.push(`${rel} has changed since the proposer read it (base hash mismatch)`); else if (base && op.baseHash === undefined && !creates) problems.push(`${rel}: SET_MODE on an existing file needs its baseHash`); break; }
+      case "CREATE_SYMLINK": { const why = symlinkProblem(rel, op.target); if (why) problems.push(`${rel}: ${why}`); if (base) problems.push(`${rel} already exists`); break; }
+      case "RETARGET_SYMLINK": { const why = symlinkProblem(rel, op.target); if (why) problems.push(`${rel}: ${why}`); if (base?.kind !== "SYMLINK") problems.push(`${rel} is not an existing symlink`); else if (base.target !== op.baseTarget) problems.push(`${rel} points somewhere else than the proposer read (base target mismatch)`); break; }
+      case "REMOVE_SYMLINK": { if (base?.kind !== "SYMLINK") problems.push(`${rel} is not an existing symlink`); else if (base.target !== op.baseTarget) problems.push(`${rel} points somewhere else than the proposer read (base target mismatch)`); break; }
+    }
+  }
+  // the file cap counts every path, text or not
+  const total = new Set([...expanded.map((e) => normalizeRel(e.op.file)), ...extra.map((x) => x.op.file)]).size; const cap = scope.maxFilesChanged ?? DEFAULT_MAX_FILES;
+  if (extra.length && total > cap) problems.push(`the candidate changes ${total} files; the limit is ${cap}`);
+  return [...new Set(problems)];
+}
+
+function applyNonText(dir: string, extra: NonTextExpanded[]): void {
+  for (const { op } of extra) {
+    const abs = safeJoin(dir, op.file); mkdirSync(dirname(abs), { recursive: true });
+    switch (op.op) {
+      case "CREATE_BINARY": writeFileSync(abs, Buffer.from(op.base64, "base64")); chmodSync(abs, op.mode === "100755" ? 0o755 : 0o644); break;
+      case "REPLACE_BINARY": { const mode = readEntry(dir, op.file)?.mode; rmSync(abs, { force: true }); writeFileSync(abs, Buffer.from(op.base64, "base64")); chmodSync(abs, mode === "100755" ? 0o755 : 0o644); break; }
+      case "SET_MODE": chmodSync(abs, op.mode === "100755" ? 0o755 : 0o644); break;
+      case "CREATE_SYMLINK": symlinkSync(op.target, abs); break;
+      case "RETARGET_SYMLINK": rmSync(abs, { force: true }); symlinkSync(op.target, abs); break;
+      case "REMOVE_SYMLINK": rmSync(abs, { force: true }); break;
+    }
+  }
+}
 const safeJoinSafe = (root: string, rel: string): string => { try { return safeJoin(root, rel); } catch { return root + "/\0invalid"; } };
 
 /** Dependency-section and install-script changes between two package.json texts. */
@@ -160,9 +236,10 @@ export function materializeCandidate(d: CandidateDeps, actor: Id, i: Materialize
 
   const baseDir = makeScratch("pf-base-"), candDir = makeScratch("pf-cand-");
   try {
-    try { copyTree(rec.repositoryId, baseDir); copyTree(rec.repositoryId, candDir); } catch (e) { throw new FeatureError("FORBIDDEN", `the repository cannot be copied safely: ${(e as Error).message}`); }
-    const expanded = parseEdits(i.edits, baseDir);
-    const problems = featureAdmission(expanded, scope, baseDir);
+    try { copyTreeKeepLinks(rec.repositoryId, baseDir); copyTreeKeepLinks(rec.repositoryId, candDir); } catch (e) { throw new FeatureError("FORBIDDEN", `the repository cannot be copied safely: ${(e as Error).message}`); }
+    if (!Array.isArray(i.edits) || !i.edits.length) throw new FeatureError("INVALID_SCHEMA", "a candidate needs at least one edit");
+    const expanded = parseEdits(i.edits, baseDir), extra = parseNonText(i.edits);
+    const problems = [...featureAdmission(expanded, scope, baseDir).filter((p) => !(extra.length && /returned no operations/.test(p))), ...nonTextAdmission(extra, expanded, scope, baseDir)];
     if (problems.length) throw new FeatureError("FORBIDDEN", `the candidate was rejected: ${problems.join("; ")}`);
 
     // ---- apply
@@ -177,34 +254,42 @@ export function materializeCandidate(d: CandidateDeps, actor: Id, i: Materialize
         const rel = normalizeRel(e.op.file);
         if (e.op.op === "CREATE_FILE") { const p = safeJoin(candDir, rel); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, e.op.content); }
       }
+      applyNonText(candDir, extra);
     } catch (e) {
       if (e instanceof FeatureError) throw e;
       const code = (e as { code?: string }).code;
       throw new FeatureError(code === "STALE_REVISION" ? "STALE_REVISION" : "FORBIDDEN", `the edits could not be applied: ${(e as Error).message}`);
     }
 
-    // ---- what changed, from the trees themselves
-    const changes = treeDiff(baseDir, candDir);
-    if (!changes.length) throw new FeatureError("INVALID_SCHEMA", "the candidate changes no file: there is nothing to validate or publish");
+    // ---- what changed, from the trees themselves (content, mode and kind all count)
+    const deltas = diffTrees(baseDir, candDir);
+    if (!deltas.length) throw new FeatureError("INVALID_SCHEMA", "the candidate changes no file: there is nothing to validate or publish");
     const ctxPolicy = policyFor(d.store, rec.repositoryId);
-    const denied = changes.find((c) => ctxPolicy.denied(c.file));
-    if (denied) throw new FeatureError("FORBIDDEN", "the candidate touches a path you do not have access to");
-    const depProblems = changes.filter((c) => /(^|\/)package\.json$/.test(c.file)).flatMap((c) => dependencyChanges(
-      c.kind === "ADDED" ? null : readFileSync(safeJoin(baseDir, c.file), "utf8"), c.kind === "DELETED" ? null : readFileSync(safeJoin(candDir, c.file), "utf8")));
-    if (depProblems.length && !scope.allowNewDependencies) throw new FeatureError("FORBIDDEN", `the candidate was rejected: ${depProblems.join("; ")} (needs a security grant: allowNewDependencies)`);
+    if (deltas.some((c) => ctxPolicy.denied(c.file))) throw new FeatureError("FORBIDDEN", "the candidate touches a path you do not have access to");
 
-    const contents: Record<string, string | null> = {}, baseContents: Record<string, string | null> = {};
+    const contents: Record<string, string | null> = {}, baseContents: Record<string, string | null> = {}, entries: Record<string, CandidateEntry | null> = {}, baseEntries: Record<string, CandidateEntry | null> = {};
     let bytes = 0;
-    for (const c of changes) {
-      const read = (root: string, gone: boolean) => { if (gone) return null; const b = readFileSync(safeJoin(root, c.file)); bytes += b.length; const t = b.toString("utf8"); if (Buffer.from(t, "utf8").compare(b) !== 0) throw new FeatureError("INVALID_SCHEMA", `${c.file} is not valid UTF-8 text; binary changes are not supported in candidates`); return t; };
-      baseContents[c.file] = read(baseDir, c.kind === "ADDED"); contents[c.file] = read(candDir, c.kind === "DELETED");
+    const side = (e: CandidateEntry | null, root: string, file: string, text: Record<string, string | null>, ents: Record<string, CandidateEntry | null>) => {
+      ents[file] = e ? (e.kind === "TEXT" ? { kind: e.kind, mode: e.mode, hash: e.hash, size: e.size } : e) : null;
+      if (e) bytes += e.size;
+      if (e?.kind === "TEXT") text[file] = readFileSync(safeJoin(root, file), "utf8");
+      if (e?.kind === "BINARY" && e.size > MAX_BINARY_BYTES) throw new FeatureError("RESOURCE_LIMIT", `${file} is ${e.size} bytes; the binary limit is ${MAX_BINARY_BYTES}`);
+    };
+    for (const c of deltas) {
+      const before = c.kind === "ADDED" ? null : readEntry(baseDir, c.file), after = c.kind === "DELETED" ? null : readEntry(candDir, c.file);
+      side(before, baseDir, c.file, baseContents, baseEntries); side(after, candDir, c.file, contents, entries);
+      if (before === null) baseContents[c.file] = null; // added: nothing in the base
+      if (after === null && before?.kind === "TEXT") contents[c.file] = null; // a deleted text file keeps its null marker
     }
     if (bytes > MAX_TOTAL_BYTES) throw new FeatureError("RESOURCE_LIMIT", `the candidate changes ${bytes} bytes; the limit is ${MAX_TOTAL_BYTES}`);
+    const depProblems = deltas.filter((c) => /(^|\/)package\.json$/.test(c.file)).flatMap((c) => dependencyChanges(baseContents[c.file] ?? null, contents[c.file] ?? null));
+    if (depProblems.length && !scope.allowNewDependencies) throw new FeatureError("FORBIDDEN", `the candidate was rejected: ${depProblems.join("; ")} (needs a security grant: allowNewDependencies)`);
 
-    const mutations = inventory(changes, expanded);
+    const attrib: Attrib[] = [...expanded.map((e) => ({ paths: e.rename ? [e.rename.from, e.rename.to] : [normalizeRel(e.op.file)], meta: e.meta })), ...extra.map((x) => ({ paths: [x.op.file], meta: x.meta }))];
+    const mutations = inventory(deltas, attrib, entries, baseEntries);
     const notes: string[] = [];
-    const touched = new Set(expanded.flatMap((e) => e.rename ? [e.rename.from, e.rename.to] : [normalizeRel(e.op.file)]));
-    for (const f of touched) if (!changes.some((c) => c.file === f)) notes.push(`${f} was named by an edit but ended up unchanged`);
+    const touched = new Set(attrib.flatMap((a) => a.paths));
+    for (const f of touched) if (!deltas.some((c) => c.file === f)) notes.push(`${f} was named by an edit but ended up unchanged`);
 
     // ---- oracle: the tests that exist in the base, and what the candidate did to them
     const baseTests = textFiles(baseDir, (rel) => isTestPath(rel) && isCode(rel)), candTests = textFiles(candDir, (rel) => isTestPath(rel) && isCode(rel));
@@ -224,7 +309,7 @@ export function materializeCandidate(d: CandidateDeps, actor: Id, i: Materialize
     const rootOf = (dir: string) => contentRoot(entriesFromDirectory(dir, { exclude: [] }));
     const editsHash = sha256(JSON.stringify(i.edits));
     const binding: PatchBinding = {
-      repositoryId: rec.repositoryId, baseCommitHash: live.commitHash, baseContentHash: rootOf(baseDir), candidateContentHash: rootOf(candDir), diffHash: canonHash(DiffSchema, changes),
+      repositoryId: rec.repositoryId, baseCommitHash: live.commitHash, baseContentHash: rootOf(baseDir), candidateContentHash: rootOf(candDir), diffHash: canonHash(DiffSchema, deltas),
       contractHash: rec.contract.hash, originalOracleHash, candidateOracleHash, runManifestIds: [], mutationInventoryHash: canonHash(MutationSchema, mutations),
       generationProvenanceHash: canonHash(ProvenanceSchema, { invocationIds: [...new Set(i.invocationIds ?? [])], editsHash }),
     };
@@ -237,7 +322,7 @@ export function materializeCandidate(d: CandidateDeps, actor: Id, i: Materialize
     const candidate: CandidateRecord = {
       schemaVersion: 1, id: `cand:${bindingHash.split(":").pop()!.slice(0, 24)}`, requestId: rec.requestId, ordinal: existing?.ordinal ?? d.fs.nextOrdinal(rec.requestId), binding, bindingHash,
       mutations, invocationIds: [...new Set(i.invocationIds ?? [])], status: "MATERIALIZED", createdAt: new Date().toISOString(),
-      contents, baseContents, baseSnapshotRoot: live.contentRootHash, oracleState, oracleChanges, notes: [...notes, ...depProblems],
+      contents, baseContents, entries, baseEntries, baseSnapshotRoot: live.contentRootHash, oracleState, oracleChanges, notes: [...notes, ...depProblems],
     };
     // Earlier candidates of this request are superseded, then the new one is saved with its event.
     for (const c of d.fs.listCandidates(rec.requestId)) if (c.id !== `cand:${bindingHash.split(":").pop()!.slice(0, 24)}` && (c.status === "MATERIALIZED" || c.status === "PLANNED")) d.fs.putCandidate({ ...c, status: "SUPERSEDED" });
@@ -251,22 +336,29 @@ export function materializeCandidate(d: CandidateDeps, actor: Id, i: Materialize
 }
 const count = (ms: FileMutation[], k: FileMutation["kind"]) => ms.filter((m) => m.kind === k).length;
 
-/** One FileMutation per changed path, from the tree diff. Delete+add of identical bytes is a rename; attribution comes from the edits that touched it. */
-export function inventory(changes: TreeChange[], expanded: Expanded[]): FileMutation[] {
-  const deleted = changes.filter((c) => c.kind === "DELETED"), added = changes.filter((c) => c.kind === "ADDED");
+export type Attrib = { paths: string[]; meta: Meta3 };
+/** One FileMutation per changed path, from the tree diff. Delete+add of an identical blob (same bytes, mode and kind) is a rename; attribution comes from the edits that touched it. */
+export function inventory(deltas: TreeDelta[], attrib: Attrib[], entries: Record<string, CandidateEntry | null> = {}, baseEntries: Record<string, CandidateEntry | null> = {}): FileMutation[] {
+  const deleted = deltas.filter((c) => c.kind === "DELETED"), added = deltas.filter((c) => c.kind === "ADDED");
+  const same = (x?: { hash: string; mode: string; kind: string }, y?: { hash: string; mode: string; kind: string }) => !!x && !!y && x.hash === y.hash && x.mode === y.mode && x.kind === y.kind;
   const pairs = new Map<string, string>(); const used = new Set<string>();
-  for (const del of deleted) { const to = added.find((a) => !used.has(a.file) && a.newHash === del.oldHash); if (to) { used.add(to.file); pairs.set(del.file, to.file); } }
-  const editsFor = (paths: string[]) => expanded.filter((e) => paths.includes(normalizeRel(e.op.file)));
-  const attribution = (es: Expanded[]): FileMutation["attribution"] => !es.length || es.every((e) => !e.meta.requirementIds.length) ? "UNATTRIBUTED" : es.every((e) => e.meta.requirementIds.length) ? "COMPLETE" : "PARTIAL";
+  for (const del of deleted) { const to = added.find((a) => !used.has(a.file) && same(a.after, del.before)); if (to) { used.add(to.file); pairs.set(del.file, to.file); } }
+  const editsFor = (paths: string[]) => attrib.filter((e) => e.paths.some((p) => paths.includes(p)));
+  const attribution = (es: Attrib[]): FileMutation["attribution"] => !es.length || es.every((e) => !e.meta.requirementIds.length) ? "UNATTRIBUTED" : es.every((e) => e.meta.requirementIds.length) ? "COMPLETE" : "PARTIAL";
   const supporting = (p: string) => isTestPath(p) || /\.(md|mdx|txt)$|(^|\/)docs?\//i.test(p);
   const out: FileMutation[] = [];
-  for (const c of changes) {
+  for (const c of deltas) {
     if (c.kind === "ADDED" && [...pairs.values()].includes(c.file)) continue;
     const to = c.kind === "DELETED" ? pairs.get(c.file) : undefined;
     const paths = to ? [c.file, to] : [c.file], es = editsFor(paths);
+    const after = c.kind === "DELETED" ? undefined : entries[c.file] ?? undefined, before = c.kind === "ADDED" ? undefined : baseEntries[c.file] ?? undefined;
+    const kind = (to ? entries[to] : after)?.kind ?? before?.kind ?? "TEXT";
+    const modes = (before && before.mode !== "100644") || (after && after.mode !== "100644") || (before && after && before.mode !== after.mode);
     out.push({
       oldPath: c.kind === "ADDED" ? undefined : c.file, newPath: to ?? (c.kind === "DELETED" ? undefined : c.file), kind: to ? "RENAMED" : c.kind,
-      beforeHash: c.oldHash ?? undefined, afterHash: to ? c.oldHash ?? undefined : c.newHash ?? undefined,
+      beforeHash: c.before?.hash, afterHash: to ? c.before?.hash : c.after?.hash,
+      ...(kind !== "TEXT" ? { entryKind: kind } : {}), ...(before && before.kind !== kind ? { beforeKind: before.kind } : {}),
+      ...(modes ? { beforeMode: before?.mode, afterMode: (to ? entries[to] : after)?.mode } : {}),
       requirementIds: [...new Set(es.flatMap((e) => e.meta.requirementIds))].sort(), taskIds: [...new Set(es.flatMap((e) => e.meta.taskIds))].sort(), actionIds: [...new Set(es.flatMap((e) => e.meta.actionIds))].sort(),
       attribution: attribution(es), supporting: supporting(to ?? c.file) || undefined,
     });
@@ -309,6 +401,17 @@ function splitDiff(a: string | null, b: string | null): string {
   return JSON.stringify(rows);
 }
 
+/** A binary file or a link is never shown as text: the reader gets its kind, mode, size and hash, and the bytes only through an explicit download. */
+function describeNonText(cand: CandidateRecord, rel: string, i: { representation: string; download?: boolean }, entry: CandidateEntry | null, base: CandidateEntry | null): Outcome<{ sourceArtifactRef: Id; content: string; complete: boolean; startLine?: number; totalLines?: number; binary?: boolean; encoding?: string }> {
+  const e = i.representation === "BASELINE" ? base : entry;
+  if (!e) throw new FeatureError("NOT_FOUND", i.representation === "BASELINE" ? `${rel} does not exist in the base` : `${rel} is deleted in this candidate`);
+  const ref = `${cand.bindingHash}:${rel}:${i.representation}`;
+  if (e.kind === "SYMLINK") return { status: "COMPLETE", value: { sourceArtifactRef: ref, content: `symlink ${rel} -> ${e.target}\nmode ${e.mode}`, complete: true, startLine: 1, totalLines: 2, binary: false }, evidenceIds: [cand.id], diagnostics: [] };
+  const summary = `binary file ${rel}\n${e.size} bytes · mode ${e.mode} · sha-256 ${e.hash}${base && entry ? `\nbefore: ${base.kind === "SYMLINK" ? "symlink" : `${base.size} bytes · mode ${base.mode} · ${base.hash}`}` : ""}`;
+  if (i.download && (i.representation === "CANDIDATE" || i.representation === "BASELINE")) return { status: "COMPLETE", value: { sourceArtifactRef: ref, content: e.base64 ?? "", complete: true, binary: true, encoding: "base64" }, evidenceIds: [cand.id], diagnostics: [] };
+  return { status: "PARTIAL", value: { sourceArtifactRef: ref, content: summary, complete: false, startLine: 1, totalLines: summary.split("\n").length, binary: true }, evidenceIds: [cand.id], diagnostics: ["a binary file is not shown as text; download it to see its bytes"] };
+}
+
 export function readCandidateFile(d: CandidateDeps, i: { candidateHash: Hash; path: string; range?: [number, number]; representation: Representation; download?: boolean }): Outcome<{ sourceArtifactRef: Id; content: string; complete: boolean; startLine?: number; nextLine?: number; totalLines?: number }> {
   const cand = d.fs.getCandidateByBinding(i.candidateHash);
   if (!cand) throw new FeatureError("NOT_FOUND", "no such candidate");
@@ -320,7 +423,10 @@ export function readCandidateFile(d: CandidateDeps, i: { candidateHash: Hash; pa
   if (i.path.startsWith("/") || i.path.split(/[\\/]/).includes("..")) throw new FeatureError("INVALID_SCHEMA", "the path must be inside the repository");
   if (policyFor(d.store, rec.repositoryId).denied(rel)) throw new FeatureError("NOT_FOUND", "no such file in this candidate");
   const contents = cand.contents ?? {}, baseContents = cand.baseContents ?? {};
-  const changed = rel in contents;
+  const entry = (cand.entries ?? {})[rel], baseEntry = (cand.baseEntries ?? {})[rel];
+  const nonText = (entry && entry.kind !== "TEXT") || (baseEntry && baseEntry.kind !== "TEXT");
+  const changed = rel in contents || rel in (cand.entries ?? {});
+  if (nonText) return describeNonText(cand, rel, i, entry ?? null, baseEntry ?? null);
   let candidateText: string | null, baseText: string | null;
   if (changed) { candidateText = contents[rel] ?? null; baseText = baseContents[rel] ?? null; }
   else {

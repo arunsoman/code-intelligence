@@ -7,9 +7,11 @@
 //   * checkPatchDestination is a dry run on hashes (no write); applyPatchCandidate writes only into a new scratch directory
 //     on an exact base, and the result is compared with the candidate's own content hash.
 import { declarationGaps } from "./declarations.ts";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { copyTree, makeScratch, removeScratch, safeJoin, sha256 } from "../isolated-exec.ts";
+import { makeScratch, removeScratch, safeJoin, sha256 } from "../isolated-exec.ts";
+import { MAX_BINARY_BYTES, applyCandidateToDir, changedPaths, copyTreeKeepLinks, passesThroughLink, readEntry, symlinkProblem } from "./tree.ts";
 import { policyFor } from "../access.ts";
 import type { Store } from "../store.ts";
 import { canonHash, contentRoot, defineSchema, entriesFromDirectory } from "./canon.ts";
@@ -88,25 +90,68 @@ export function exportBlocks(c: CandidateRecord): string[] {
     const bad = unsafePath(p); if (bad) out.push(`${JSON.stringify(p)}: ${bad}`);
     const k = p.toLowerCase(); if (lower.has(k) && lower.get(k) !== p) out.push(`${p} and ${lower.get(k)} differ only by case; a case-insensitive destination would merge them`); lower.set(k, p);
     for (const t of [contents[p], base[p]]) if (typeof t === "string" && t.includes("\0")) out.push(`${p}: contains NUL bytes; only text files are exported`);
-    if (!(p in contents) && !(p in base)) out.push(`${p}: named by the inventory but absent from the candidate's contents`);
+    if (!(p in contents) && !(p in base) && !(p in (c.entries ?? {})) && !(p in (c.baseEntries ?? {}))) out.push(`${p}: named by the inventory but absent from the candidate's contents`);
+  }
+  for (const [p, e] of Object.entries(c.entries ?? {})) {
+    if (!e) continue;
+    if ((e.mode as string) === "160000") out.push(`${p}: a submodule (gitlink) entry is never exported`);
+    if (e.kind === "SYMLINK") { const why = symlinkProblem(p, e.target ?? ""); if (why) out.push(`${p}: ${why}`); }
+    if (e.kind === "BINARY" && (e.size > MAX_BINARY_BYTES || Buffer.from(e.base64 ?? "", "base64").length !== e.size)) out.push(`${p}: the binary payload does not match its recorded size or is over the limit`);
+    if (e.kind === "TEXT" && typeof (c.contents ?? {})[p] !== "string") out.push(`${p}: a text entry without its text`);
   }
   for (const m of c.mutations) if (m.kind === "RENAMED" && (!m.oldPath || !m.newPath)) out.push("a rename without both paths");
   return [...new Set(out)];
 }
 
-/** Patch text for the whole candidate, files in path order so the same candidate always yields the same bytes. */
+const GIT_ENV = { PATH: "/usr/bin:/bin", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0", GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z", LANG: "C" };
+const GIT_FLAGS = ["-c", "core.autocrlf=false", "-c", "core.fileMode=true", "-c", "core.symlinks=true", "-c", "core.quotepath=false", "-c", "user.name=CIE", "-c", "user.email=cie@localhost", "-c", "commit.gpgsign=false"];
+function git(cwd: string, args: string[], input?: Buffer): { status: number | null; stdout: Buffer; stderr: string } {
+  const r = spawnSync("git", [...GIT_FLAGS, ...args], { cwd, env: GIT_ENV, maxBuffer: 64 * 1024 * 1024, timeout: 60_000, input });
+  return { status: r.status, stdout: r.stdout ?? Buffer.alloc(0), stderr: String(r.stderr ?? "") };
+}
+
+/** The base state of every path the candidate changes, written into `dir` (text, binary, symlink and mode as they were). */
+function writeBaseState(dir: string, c: CandidateRecord): void {
+  const text = c.baseContents ?? {}, ents = c.baseEntries ?? {};
+  for (const p of changedPaths({ contents: c.baseContents, entries: c.baseEntries })) {
+    const e = ents[p], t = text[p]; if (e === null || (e === undefined && typeof t !== "string")) continue;
+    const abs = safeJoin(dir, p); mkdirSync(dirname(abs), { recursive: true });
+    if (e?.kind === "SYMLINK") symlinkSync(e.target!, abs);
+    else if (e?.kind === "BINARY") { writeFileSync(abs, Buffer.from(e.base64 ?? "", "base64")); chmodSync(abs, e.mode === "100755" ? 0o755 : 0o644); }
+    else { writeFileSync(abs, t ?? ""); chmodSync(abs, (e?.mode ?? "100644") === "100755" ? 0o755 : 0o644); }
+  }
+}
+
+/** Git's own `diff --binary` over the base state and the candidate state of the changed paths: the canonical patch (issue #91). */
+export function gitPatchFor(c: CandidateRecord): string {
+  const dir = makeScratch("pf-gitpatch-");
+  try {
+    if (git(dir, ["init", "-q", "-b", "main"]).status !== 0) throw new FeatureError("INVALID_SCHEMA", "git is not available to produce the patch");
+    writeBaseState(dir, c); git(dir, ["add", "-A"]);
+    const ci = git(dir, ["commit", "-q", "--allow-empty", "--no-verify", "-m", "base"]); if (ci.status !== 0) throw new FeatureError("INVALID_SCHEMA", `git could not record the base state: ${ci.stderr.slice(0, 160)}`);
+    for (const p of changedPaths({ contents: c.baseContents, entries: c.baseEntries })) rmSync(safeJoin(dir, p), { force: true });
+    applyCandidateToDir(dir, c);
+    git(dir, ["add", "-A"]);
+    const d = git(dir, ["diff", "--cached", "--binary", "--full-index", "-M", "--no-ext-diff", "--no-textconv", "HEAD"]);
+    if (d.status !== 0) throw new FeatureError("INVALID_SCHEMA", `git could not produce the patch: ${d.stderr.slice(0, 160)}`);
+    return d.stdout.toString("utf8");
+  } finally { removeScratch(dir); }
+}
+export const hasNonText = (c: Pick<CandidateRecord, "entries" | "mutations">): boolean => Object.values(c.entries ?? {}).some((e) => e && (e.kind !== "TEXT" || e.mode !== "100644")) || c.mutations.some((m) => m.entryKind || m.beforeKind || m.beforeMode || m.afterMode);
+
+/** Patch text for the whole candidate. GIT_PATCH and BUNDLE come from Git itself; a plain unified diff is text-only and refuses anything else. */
 export function buildPatch(c: CandidateRecord, format: ExportFormat): string {
+  if (format !== "UNIFIED_DIFF") return gitPatchFor(c);
+  if (hasNonText(c)) throw new FeatureError("INVALID_SCHEMA", "this candidate has binary, executable-bit or symlink changes, which a plain unified diff cannot carry; export it as GIT_PATCH");
   const contents = c.contents ?? {}, base = c.baseContents ?? {};
   const parts: string[] = [];
   for (const m of [...c.mutations].sort((x, y) => (x.newPath ?? x.oldPath!).localeCompare(y.newPath ?? y.oldPath!))) {
     // A plain unified diff has no rename syntax: it is a deletion and an addition.
-    if (m.kind === "RENAMED" && format === "UNIFIED_DIFF") parts.push(gitFilePatch(m.oldPath!, base[m.oldPath!] ?? null, null), gitFilePatch(m.newPath!, null, contents[m.newPath!] ?? null));
-    else if (m.kind === "RENAMED") parts.push(gitFilePatch(m.newPath!, base[m.oldPath!] ?? null, contents[m.newPath!] ?? null, m.oldPath!));
+    if (m.kind === "RENAMED") parts.push(gitFilePatch(m.oldPath!, base[m.oldPath!] ?? null, null), gitFilePatch(m.newPath!, null, contents[m.newPath!] ?? null));
     else { const p = (m.newPath ?? m.oldPath)!; parts.push(gitFilePatch(p, base[p] ?? null, contents[p] ?? null)); }
   }
-  const text = parts.join("");
-  // A plain unified diff drops git's extended headers (it is for `patch -p1` and for reading); GIT_PATCH and BUNDLE keep them.
-  return format === "UNIFIED_DIFF" ? text.split("\n").filter((l) => !/^(diff --git |new file mode |deleted file mode |rename (from|to) )/.test(l)).join("\n") : text;
+  // Drop git's extended headers: this form is for `patch -p1` and for reading.
+  return parts.join("").split("\n").filter((l) => !/^(diff --git |new file mode |deleted file mode |rename (from|to) |similarity index )/.test(l)).join("\n");
 }
 
 const ManifestSchema = defineSchema<Record<string, unknown>>("pf.PatchManifest", "1", (m) => m as never);
@@ -167,7 +212,10 @@ export function exportFeaturePatch(d: ExportDeps, actor: Id, i: { candidateHash:
 // ------------------------------------------------------------------------------------------------ destination
 
 const rootOfDir = (dir: string) => contentRoot(entriesFromDirectory(dir, { exclude: [] }));
-const hashOf = (root: string, rel: string): string | null => { try { return sha256(readFileSync(safeJoin(root, rel))); } catch { return null; } };
+/** What is at `rel` in the destination: kind, mode and hash (a symlink is compared by target, never followed). */
+const hereOf = (root: string, rel: string): { hash: string; mode: string; kind: string } | null => { try { const e = readEntry(root, rel); return e ? { hash: e.hash, mode: e.mode, kind: e.kind === "SYMLINK" ? "SYMLINK" : "FILE" } : null; } catch { return null; } };
+const wasHere = (m: FileMutation) => ({ mode: m.beforeMode ?? "100644", kind: (m.beforeKind ?? m.entryKind) === "SYMLINK" ? "SYMLINK" : "FILE" });
+const sameAsBefore = (h: ReturnType<typeof hereOf>, m: FileMutation): boolean => !!h && h.hash === m.beforeHash && h.mode === wasHere(m).mode && h.kind === wasHere(m).kind;
 /** True when `rel` sits inside a nested git repository (a submodule or a vendored checkout), which a patch must not reach into. */
 function insideNestedRepo(root: string, rel: string): boolean {
   const segs = rel.split("/").slice(0, -1); let cur = root;
@@ -200,19 +248,21 @@ export function checkPatchDestination(d: ExportDeps, actor: Id, i: { exportId: I
   for (const m of candidate.mutations) {
     const paths = [m.oldPath, m.newPath].filter((p): p is string => !!p); touched.push(...paths);
     for (const p of paths) { if (policy.denied(p)) { blocked.push("a path in this patch is not accessible in the destination"); continue; } if (insideNestedRepo(dest, p)) blocked.push(`${p} is inside a nested repository (submodule)`); if (dirty.has(p)) conflicts.push(`${p} has uncommitted changes in the destination`); }
-    const here = (p: string) => hashOf(dest, p);
-    if (m.kind === "ADDED") { const h = here(m.newPath!); if (h !== null && h !== m.afterHash) conflicts.push(`${m.newPath} already exists with different content`); }
-    else if (m.kind === "MODIFIED" || m.kind === "DELETED") { const p = m.oldPath!; const h = here(p); if (h === null) conflicts.push(`${p} does not exist in the destination`); else if (h !== m.beforeHash) conflicts.push(`${p} differs from the file the patch was made against`); }
-    else { const h = here(m.oldPath!); if (h !== m.beforeHash) conflicts.push(`${m.oldPath} differs from the file the patch was made against`); if (here(m.newPath!) !== null) conflicts.push(`${m.newPath} already exists`); }
+    if (m.kind === "ADDED") { const h = hereOf(dest, m.newPath!); if (h !== null && !(h.hash === m.afterHash && h.mode === (m.afterMode ?? "100644"))) conflicts.push(`${m.newPath} already exists with different content`); }
+    else if (m.kind === "MODIFIED" || m.kind === "DELETED") { const p = m.oldPath!; const h = hereOf(dest, p); if (h === null) conflicts.push(`${p} does not exist in the destination`); else if (!sameAsBefore(h, m)) conflicts.push(`${p} differs from the file the patch was made against`); }
+    else { const h = hereOf(dest, m.oldPath!); if (!sameAsBefore(h, m)) conflicts.push(`${m.oldPath} differs from the file the patch was made against`); if (hereOf(dest, m.newPath!) !== null) conflicts.push(`${m.newPath} already exists`); }
   }
   // Exact base: the destination's content equals what the candidate was built on, so the result must equal the candidate's own hash.
   const scratch = makeScratch("pf-dest-"); let baseExact = false;
-  try { copyTree(dest, scratch); baseExact = rootOfDir(scratch) === exp.baseHash; } catch (e) { blocked.push(`the destination cannot be copied safely: ${(e as Error).message}`); } finally { removeScratch(scratch); }
+  try { copyTreeKeepLinks(dest, scratch); baseExact = rootOfDir(scratch) === exp.baseHash; } catch (e) { blocked.push(`the destination cannot be copied safely: ${(e as Error).message}`); } finally { removeScratch(scratch); }
   const applies = !conflicts.length && !blocked.length;
   const id = validationHash("pf.ApplicationAssessment", { exportId: exp.id, root: live.contentRootHash, conflicts, blocked, dirty: [...dirty].sort(), baseExact });
   const value: ApplicationAssessment = { schemaVersion: 1, id, applies, conflicts: [...new Set(conflicts)], dirty: touched.filter((p) => dirty.has(p)), exportId: exp.id, baseExact, destinationRoot: live.contentRootHash, blocked: [...new Set(blocked)] };
   return { status: applies ? "COMPLETE" : "PARTIAL", value, evidenceIds: [], diagnostics: [...value.conflicts, ...(value.blocked ?? []), ...(applies && !baseExact ? ["the destination differs from the base elsewhere; apply needs an exact base"] : [])] };
 }
+
+/** The patch text of an export: a bundle wraps it with its manifest. */
+export const patchTextOf = (e: PatchExport): string => { const raw = e.patch ?? ""; if (e.format !== "BUNDLE") return raw; try { return String((JSON.parse(raw) as { patch: string }).patch); } catch { throw new FeatureError("INVALID_SCHEMA", "the bundle is not valid"); } };
 
 /** Apply into a NEW scratch copy of the destination. The destination itself is never written; the receipt names where the result is. */
 export function applyPatchCandidate(d: ExportDeps, actor: Id, i: { exportId: Id; destinationSnapshot: Snapshot; assessmentId: Id; capabilities: string[]; dirtyState?: string[]; idempotencyKey: string }): ApplicationReceipt {
@@ -230,14 +280,13 @@ export function applyPatchCandidate(d: ExportDeps, actor: Id, i: { exportId: Id;
   const work = makeScratch("pf-applied-"); rmSync(work, { recursive: true, force: true });
   const applied: string[] = [], notApplied: string[] = [];
   try {
-    copyTree(dest, work);
-    const contents = candidate.contents ?? {};
-    for (const m of candidate.mutations) {
-      for (const p of [m.oldPath, m.newPath]) { if (p && unsafePath(p)) throw new FeatureError("FORBIDDEN", "unsafe path"); }
-      if (m.oldPath && (m.kind === "DELETED" || m.kind === "RENAMED")) rmSync(safeJoin(work, m.oldPath), { force: true });
-      if (m.newPath && m.kind !== "DELETED") { const p = safeJoin(work, m.newPath); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, contents[m.newPath] ?? ""); }
-      applied.push((m.newPath ?? m.oldPath)!);
-    }
+    copyTreeKeepLinks(dest, work);
+    // Git is the apply engine: it refuses a path below a symlink, creates links and modes, and applies binary deltas. What it produced is then
+    // compared with the candidate's own content hash, and nothing is kept unless they are equal.
+    const patch = patchTextOf(exp);
+    const ap = git(work, ["apply", "--binary", "--whitespace=nowarn", "-"], Buffer.from(patch, "utf8"));
+    if (ap.status !== 0) throw new FeatureError("BLOCKED", `git could not apply the patch to a copy of the destination: ${ap.stderr.split("\n")[0]?.slice(0, 200) ?? ""}`);
+    for (const m of candidate.mutations) applied.push((m.newPath ?? m.oldPath)!);
     const result = rootOfDir(work); const matches = result === candidate.binding.candidateContentHash;
     if (!matches) throw new FeatureError("BLOCKED", "the applied tree does not equal the candidate's content hash; nothing was kept");
     d.fs.putCandidate(candidate, eventFor(request, "PatchApplied", actor, { before: exp.baseHash, after: result, rationale: `applied ${applied.length} file(s) to an isolated copy; destination untouched`, result: "OK" }));

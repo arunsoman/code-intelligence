@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { RoleRunRecord } from "../execution.ts";
-import { copyTree, makeScratch, removeScratch, safeJoin, walkFiles } from "../isolated-exec.ts";
+import { makeScratch, removeScratch, safeJoin, walkFiles } from "../isolated-exec.ts";
+import { applyCandidateToDir, copyTreeKeepLinks } from "./tree.ts";
 import { canonHash, contentRoot, defineSchema, entriesFromDirectory, parseStrictJson, rawHash, type Canon } from "./canon.ts";
 import { FeatureError } from "./errors.ts";
 import { classifyTier } from "./tiers.ts";
@@ -95,7 +96,7 @@ export async function runFeatureValidation(d: ValidationDependencies, i: { candi
   let baseReady = false; let blockedAt = Number.POSITIVE_INFINITY; // earliest phase index with a mandatory non-pass (issue #82)
   try {
     // Copy/hash operations never execute repository code. Check both roots before any runner call.
-    try { copyTree(request.repositoryId, root); baseReady = contentRoot(entriesFromDirectory(root, { exclude: [] })) === candidate.binding.baseContentHash; } catch { baseReady = false; }
+    try { copyTreeKeepLinks(request.repositoryId, root); baseReady = contentRoot(entriesFromDirectory(root, { exclude: [] })) === candidate.binding.baseContentHash; } catch { baseReady = false; }
     for (const check of [...i.plan.checks].sort((a, b) => phases.indexOf(a.phase) - phases.indexOf(b.phase))) {
       const startedAt = new Date().toISOString(); const runId = `run:${randomUUID()}`;
       let status: ValidationStatus = "INCOMPLETE"; let baselineHealth: BaselineHealth = "NOT_RUN";
@@ -119,12 +120,12 @@ export async function runFeatureValidation(d: ValidationDependencies, i: { candi
             return d.runner.run({ cwd: path, argv, capabilities: { commands: [argv], readRoots: [path], writeRoots: [path], network: "DENY", secretRefs: [], limits: { wallMs: Math.max(1, deadline - Date.now()), outputBytes: 1048576, memoryBytes: 536870912, cpuMs: i.wallMs, processes: 32 } } }, i.signal);
           };
           if (check.baseline) {
-            copyTree(root, scratch); const baseline = await runAt(scratch); const capture = captureOutcomes(baseline, check);
+            copyTreeKeepLinks(root, scratch); const baseline = await runAt(scratch); const capture = captureOutcomes(baseline, check);
             baselineHealth = classifyBaseline(baseline, capture.outcomes, capture.complete); roleRuns.push(role(baseline, capture.outcomes, "BASELINE"));
             rmSync(scratch, { recursive: true, force: true }); mkdirSync(scratch);
           }
-          copyTree(root, scratch);
-          for (const [path, text] of Object.entries(candidate.contents ?? {})) { const abs = safeJoin(scratch, path); if (text === null) rmSync(abs, { force: true }); else { mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, text); } }
+          copyTreeKeepLinks(root, scratch);
+          applyCandidateToDir(scratch, candidate);
           if (contentRoot(entriesFromDirectory(scratch, { exclude: [] })) !== candidate.binding.candidateContentHash) { status = "STALE"; gaps.push("materialized candidate content does not match binding"); }
           else if (Date.now() >= deadline || i.signal?.aborted) gaps.push("budget exhausted or cancelled after baseline; candidate not run");
           else {

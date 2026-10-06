@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { FeatureReview, ReviewFile } from "../../../packages/core/src/feature/presentation.ts";
-import { countsLine, criterionEvidence, defaultRepresentation, downloadName, filePosition, filterFiles, lineNotice, pageOf, parseSplitRows, representationDisabled, selectFromGraph, viewerPath } from "../src/build/review-view.ts";
+import { fileBadges, countsLine, criterionEvidence, defaultRepresentation, downloadName, filePosition, filterFiles, lineNotice, pageOf, parseSplitRows, representationDisabled, selectFromGraph, viewerPath } from "../src/build/review-view.ts";
 
 const file = (over: Partial<ReviewFile> = {}): ReviewFile => ({ path: "src/a.ts", kind: "MODIFIED", requirementIds: ["r1"], taskIds: ["t1"], componentIds: ["C28"], attribution: "COMPLETE", gaps: [], ...over });
 const files = [file({ path: "src/export/csv.ts", kind: "ADDED", requirementIds: ["r1"] }), file({ path: "src/domain/Errors.ts", oldPath: "src/errors.ts", kind: "RENAMED", requirementIds: ["r2"] }), file({ path: "src/jobs/old.ts", kind: "DELETED", requirementIds: [] }), file({ path: "docs/export.md", kind: "PLANNED", requirementIds: ["r1", "r2"] })];
@@ -51,4 +51,11 @@ test("AT-70 related criterion evidence lists every recorded result, and 'not run
     results: [{ id: "res1", acceptanceId: "ac1", kind: "UNIT", status: "PASS" }, { id: "res2", acceptanceId: "ac1", kind: "BROWSER", status: "INCOMPLETE" }] } as unknown as FeatureReview;
   assert.deepEqual(criterionEvidence(review, file({ requirementIds: ["r1", "r2"] })), [{ id: "ac1", expectedOutcome: "csv rows", evidence: "UNIT: PASS (res1); BROWSER: INCOMPLETE (res2)" }, { id: "ac2", expectedOutcome: "errors grouped", evidence: "NOT_RUN — no related evidence recorded" }]);
   assert.deepEqual(criterionEvidence(review, file({ requirementIds: [] })), [], "a file with no requirement has no criteria to show");
+});
+
+test("#91 binary files, links and executable-bit changes are labelled in the file list; plain text says nothing extra", () => {
+  assert.deepEqual(fileBadges(file({ entryKind: "BINARY" })), ["binary"]); assert.deepEqual(fileBadges(file({ entryKind: "SYMLINK", target: "v2.md" })), ["symlink → v2.md"]);
+  assert.deepEqual(fileBadges(file({ beforeMode: "100644", afterMode: "100755" })), ["now executable"]); assert.deepEqual(fileBadges(file({ beforeMode: "100755", afterMode: "100644" })), ["no longer executable"]); assert.deepEqual(fileBadges(file({ afterMode: "100755" })), ["executable"]);
+  assert.deepEqual(fileBadges(file()), []); assert.deepEqual(fileBadges(file({ beforeMode: "100644", afterMode: "100644" })), []);
+  assert.equal(filePosition(file({ path: "assets/logo.png", kind: "MODIFIED", entryKind: "BINARY" })), "MODIFIED: assets/logo.png (binary)"); assert.equal(filePosition(file({ path: "scripts/run.sh", kind: "MODIFIED", beforeMode: "100644", afterMode: "100755" })), "MODIFIED: scripts/run.sh (now executable)");
 });

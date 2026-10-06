@@ -10,7 +10,8 @@
 //     reports the unknown-consumer gap: callers outside this repository cannot be enumerated from here.
 import { readFileSync } from "node:fs";
 import { policyFor } from "../access.ts";
-import { copyTree, makeScratch, removeScratch, safeJoin, walkFiles } from "../isolated-exec.ts";
+import { makeScratch, removeScratch, safeJoin, walkFiles } from "../isolated-exec.ts";
+import { applyCandidateToDir, copyTreeKeepLinks } from "./tree.ts";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Store } from "../store.ts";
@@ -130,11 +131,8 @@ export function assessConcurrentChanges(d: CoordDeps, actor: Id, i: { requestIds
   if (!conflicts.length) {
     const scratch = makeScratch("pf-int-");
     try {
-      copyTree(i.snapshot.repositoryId, scratch);
-      for (const c of cands) for (const m of c.mutations) {
-        if (m.oldPath && (m.kind === "DELETED" || m.kind === "RENAMED")) rmSync(safeJoin(scratch, m.oldPath), { force: true });
-        if (m.newPath && m.kind !== "DELETED") { const p = safeJoin(scratch, m.newPath); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, c.contents?.[m.newPath] ?? ""); }
-      }
+      copyTreeKeepLinks(i.snapshot.repositoryId, scratch);
+      for (const c of cands) applyCandidateToDir(scratch, c);
       integrated = contentRoot(entriesFromDirectory(scratch, { exclude: [] }));
     } finally { removeScratch(scratch); }
   }

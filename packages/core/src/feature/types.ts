@@ -126,8 +126,12 @@ export type DecisionRecord = {
   waiver?: { owner: Id; criteria: Id[]; expiresAt: Timestamp; residualRisk: string };
 };
 
+/** One changed path as the candidate holds it (issue #91). TEXT keeps only mode, hash and size here (the text is in `contents`); BINARY carries its bytes; SYMLINK its target. */
+export type CandidateEntry = { kind: "TEXT" | "BINARY" | "SYMLINK"; mode: "100644" | "100755" | "120000"; hash: Hash; size: number; base64?: string; target?: string };
 export type FileMutation = {
   oldPath?: string; newPath?: string; kind: "ADDED" | "MODIFIED" | "DELETED" | "RENAMED"; beforeHash?: Hash; afterHash?: Hash;
+  /** #91: what the file is (absent means text) and its Git mode before and after, so a mode-only change is visible. */
+  entryKind?: CandidateEntry["kind"]; beforeKind?: CandidateEntry["kind"]; beforeMode?: CandidateEntry["mode"]; afterMode?: CandidateEntry["mode"];
   requirementIds: Id[]; taskIds: Id[]; actionIds: Id[]; attribution: "COMPLETE" | "PARTIAL" | "UNATTRIBUTED"; supporting?: boolean;
 };
 export type ModelInvocation = {
@@ -150,6 +154,8 @@ export type CandidateRecord = {
   exports?: PatchExport[]; publication?: PublicationReceipt;
   /** 1.E: text of every changed file as the candidate has it (null = deleted) and as the base had it, so review never depends on a tree that may have moved. */
   contents?: Record<string, string | null>; baseContents?: Record<string, string | null>;
+  /** #91: every changed path with its kind and mode (null = deleted / absent), non-text payloads included. Candidates built before this existed have none and are text at mode 100644. */
+  entries?: Record<string, CandidateEntry | null>; baseEntries?: Record<string, CandidateEntry | null>;
   /** The live repository's content root when the candidate was built; a different value later means the candidate is stale. */
   baseSnapshotRoot?: Hash;
   oracleState?: "ORIGINAL_PRESERVED" | "PROPERTY_CHANGE_PENDING_REVIEW" | "NO_ORACLE";

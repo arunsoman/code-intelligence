@@ -341,3 +341,11 @@ Authority-scoped declarations and publication, per `docs/prompt-to-feature/decis
 - Release plan or T1 operational note: the requester drafts (`C15/draftReleasePlan`), a principal bound for release confirms (`C15/confirmReleasePlan`); an unconfirmed plan is a named gap.
 - The verified demo now needs `validation`, `performance` and `release` bindings (and `publish` for the PR). Without them the same run is REVIEW ONLY, with each refusal listed. The earlier statement that the demo reaches VERIFIED holds only with those bindings.
 - Still open here: a read-only reviewer role (today only the requester can open a request), and UI controls that write declarations (the stages show who declared what).
+
+### 13.2 Binary, mode and symlink candidates (#91, 2026-10-06)
+
+- `feature/tree.ts`: candidate entries (TEXT, BINARY, SYMLINK with Git modes), link-preserving copy, tree diff over content, mode and kind, and one writer (`applyCandidateToDir`) used by validation, integration, publication and export. A symlink must be relative, stay inside the repository, never reach version-control metadata, and no path may pass through one.
+- New edit kinds: `CREATE_BINARY`, `REPLACE_BINARY`, `SET_MODE`, `CREATE_SYMLINK`, `RETARGET_SYMLINK`, `REMOVE_SYMLINK` (a binary is deleted with `DELETE_FILE`). Binary files are capped at 2 MiB each.
+- Git is the canonical engine: `GIT_PATCH` and `BUNDLE` come from `git diff --cached --binary --full-index -M`; apply uses `git apply --binary` on a copy of the destination and keeps nothing unless the result equals the candidate's content hash. A plain unified diff refuses non-text.
+- The security gate lists unscanned binary files as a gap (clearable only by a security-authorised `BINARY-UNSCANNED` suppression), and shows an executable bit or a symlink as a finding. The viewer shows a summary, never bytes as text.
+- Not done: binary analysis, and revert planning for these changes (see `ledger/3.Q.json`).

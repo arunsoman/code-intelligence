@@ -9,10 +9,11 @@
 //   * The PR text is built from allowlisted fields. The prompt's wording is included only when the destination is the repository
 //     of a PRIVATE issue binding; otherwise ids and counts only. The whole text passes the same fail-closed leak guard as the issue trail.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { DraftForge } from "../defect-workflow.ts";
-import { copyTree, makeScratch, removeScratch, safeJoin, sha256 } from "../isolated-exec.ts";
+import { makeScratch, removeScratch, sha256 } from "../isolated-exec.ts";
+import { applyCandidateToDir, copyTreeKeepLinks } from "./tree.ts";
 import type { Store } from "../store.ts";
 import { authorizePublish, type AuthorityConfig } from "./authority.ts";
 import { contentRoot, entriesFromDirectory } from "./canon.ts";
@@ -123,12 +124,9 @@ export async function publishFeaturePR(d: PublishDeps, actor: Id, i: PublishInpu
   git(cloneDir, ["checkout", "--quiet", "--force", "-B", branch, priorHead && ours ? priorHead : candidate.binding.baseCommitHash]);
   // Start from the base tree every time, then write the candidate: files removed by the candidate must be gone.
   git(cloneDir, ["reset", "--quiet", "--hard", candidate.binding.baseCommitHash]); git(cloneDir, ["clean", "-fdq"]);
-  for (const m of candidate.mutations) {
-    if (m.oldPath && (m.kind === "DELETED" || m.kind === "RENAMED")) rmSync(safeJoin(cloneDir, m.oldPath), { force: true });
-    if (m.newPath && m.kind !== "DELETED") { const p = safeJoin(cloneDir, m.newPath); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, candidate.contents?.[m.newPath] ?? ""); }
-  }
+  applyCandidateToDir(cloneDir, candidate);
   const scratch = makeScratch("pf-pub-");
-  try { copyTree(cloneDir, scratch); if (contentRoot(entriesFromDirectory(scratch, { exclude: [] })) !== candidate.binding.candidateContentHash) throw new FeatureError("STALE_REVISION", "the clone's content does not equal the validated candidate (the base may include files that are not committed); nothing was pushed"); }
+  try { copyTreeKeepLinks(cloneDir, scratch); if (contentRoot(entriesFromDirectory(scratch, { exclude: [] })) !== candidate.binding.candidateContentHash) throw new FeatureError("STALE_REVISION", "the clone's content does not equal the validated candidate (the base may include files that are not committed); nothing was pushed"); }
   finally { removeScratch(scratch); }
   git(cloneDir, ["add", "-A"]);
   if ((tryGit(cloneDir, ["status", "--porcelain"]) ?? "").trim()) {

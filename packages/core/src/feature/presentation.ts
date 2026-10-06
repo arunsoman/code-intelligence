@@ -8,7 +8,7 @@ import { unevaluatedModels } from "./builder-eval.ts";
 import { computeEligibility, defaultValidationPlan, validationHash, validationPlanHash } from "./validation.ts";
 import type { AcceptanceCriterion, CandidateRecord, ChangeGraphPage, DecisionRecord, FeatureRecord, FeatureStore, Outcome, OverlapAssessment, PublicationDecision, Requirement, ValidationResult } from "./types.ts";
 import { FeatureError } from "./errors.ts";
-export type ReviewFile = { path: string; oldPath?: string; kind: "ADDED" | "MODIFIED" | "DELETED" | "RENAMED" | "REUSED" | "AFFECTED_UNCHANGED" | "PLANNED"; requirementIds: string[]; taskIds: string[]; componentIds: string[]; attribution: string; gaps: string[] };
+export type ReviewFile = { path: string; oldPath?: string; kind: "ADDED" | "MODIFIED" | "DELETED" | "RENAMED" | "REUSED" | "AFFECTED_UNCHANGED" | "PLANNED"; requirementIds: string[]; taskIds: string[]; componentIds: string[]; attribution: string; gaps: string[]; /** #91: absent means text. */ entryKind?: "BINARY" | "SYMLINK"; beforeMode?: string; afterMode?: string; target?: string };
 export type FeatureReview = {
   prompt: string; requirements: Requirement[]; criteria: AcceptanceCriterion[]; decisions: DecisionRecord[];
   questions: { id: string; text: string; requirementIds: string[]; scope: string; choices: string[]; whyNeeded: string }[];
@@ -19,7 +19,7 @@ export type FeatureReview = {
 };
 export function reviewFiles(request: FeatureRecord, candidate: CandidateRecord | null): ReviewFile[] {
   const componentIds = (ids: string[]) => [...new Set(request.tasks.filter((t) => ids.includes(t.id)).map((t) => t.componentId))];
-  if (candidate) return candidate.mutations.map((m) => ({ path: (m.newPath ?? m.oldPath)!, oldPath: m.oldPath, kind: m.kind, requirementIds: m.requirementIds, taskIds: m.taskIds, componentIds: componentIds(m.taskIds), attribution: m.attribution,
+  if (candidate) return candidate.mutations.map((m) => ({ path: (m.newPath ?? m.oldPath)!, oldPath: m.oldPath, kind: m.kind, requirementIds: m.requirementIds, taskIds: m.taskIds, componentIds: componentIds(m.taskIds), attribution: m.attribution, ...(m.entryKind && m.entryKind !== "TEXT" ? { entryKind: m.entryKind } : {}), ...(m.beforeMode || m.afterMode ? { beforeMode: m.beforeMode, afterMode: m.afterMode } : {}), ...(m.entryKind === "SYMLINK" && m.newPath ? { target: candidate.entries?.[m.newPath]?.target } : {}),
     gaps: ["Attribution links the file mutation to requirements; individual lines do not establish unique causation.", ...(m.attribution !== "COMPLETE" ? ["Some mutation origins are missing."] : [])] }));
   const planned = new Map<string, ReviewFile>();
   for (const t of request.tasks) for (const path of t.plannedEdits) {
