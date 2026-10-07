@@ -6,7 +6,11 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ACCUMULATE, LEDGER, putRevision, setupService } from "./concept-hierarchy-helpers.ts";
+import type { ModelProvider, ModelRequest } from "@cie/schema";
+import { Service } from "../src/service.ts";
+import { Store } from "../src/store.ts";
+import { WorkerClient } from "../src/worker.ts";
+import { ACCUMULATE, LEDGER, fakeWorkerPath, putRevision, setupService } from "./concept-hierarchy-helpers.ts";
 import { ctx as testCtx } from "./helpers.ts";
 
 const files = { "src/ledger.ts": LEDGER, "src/total.ts": ACCUMULATE };
@@ -83,8 +87,53 @@ test("naming goes through the gateway: the offline stub answers, and no egress e
     putRevision(svc.store, "rev-a", repo, files);
     const built = await svc.buildConceptHierarchy(testCtx(), { revision: "rev-a" });
     assert.ok(built.ok);
-    assert.ok(built.value.concepts.every((c) => c.namedBy === "MODEL"), "the offline stub names deterministically");
+    assert.ok(built.value.concepts.every((c) => c.namedBy === "FALLBACK"), "the offline stub's names are mechanical; they are never labelled as a model's");
+    assert.ok(built.value.concepts.every((c) => c.label && c.label.includes(" in ")), "and they are still real, readable labels");
+    assert.match(built.value.versions[0].provider, /^stub\//, "the version says the offline stub wrote them");
     const egress = store.auditEvents(50).filter((e) => String(e.action).startsWith("egress."));
     assert.deepEqual(egress, [], "a non-hosted model never writes egress events");
+  } finally { worker.close(); }
+});
+
+// The case that produced "collect-and-return in CustomerService.editSubagents" everywhere: a hosted model is configured, but sending code
+// structure to it is not approved for the repository, so the gateway quietly has the offline stand-in answer. Those names are
+// mechanical and must say so, the version must say who wrote them, and approving the model later must get real names, not the cache.
+test("a hosted model that is not approved: mechanical names are labelled so, the version names the real author, and approval upgrades them", async () => {
+  const repo = makeServiceRepo();
+  const worker = new WorkerClient(fakeWorkerPath());
+  let hostedCalls = 0;
+  const hosted: ModelProvider = {
+    name: "cloud", model: "big", hosted: true,
+    async generate(req: ModelRequest) {
+      hostedCalls++;
+      const q = JSON.parse(req.question) as { concepts?: { conceptId: string; kind: string }[]; packages?: { conceptId: string; path: string }[] };
+      return { names: [...(q.concepts ?? []).map((c) => ({ conceptId: c.conceptId, name: `domain name for ${c.kind}` })), ...(q.packages ?? []).map((p) => ({ conceptId: p.conceptId, name: "Payments" }))] };
+    },
+  };
+  const svc = new Service(new Store(":memory:"), worker, hosted);
+  try {
+    putRevision(svc.store, "rev-a", repo, files);
+
+    const before = await svc.buildConceptHierarchy(testCtx(), { revision: "rev-a" });
+    assert.ok(before.ok);
+    assert.equal(hostedCalls, 0, "nothing was sent to the hosted model");
+    assert.ok(before.value.concepts.every((c) => c.namedBy === "FALLBACK"), "the stand-in's names are not a model's");
+    assert.ok(before.value.concepts.every((c) => c.label!.includes(" in ")), "they are the mechanical '<shape> in <function>'");
+    assert.match(before.value.versions[0].provider, /^stub\//, "the version records the stand-in, not the model that was configured");
+    assert.ok(before.value.stats!.warnings.some((w) => /not approved/.test(w)), "and says why, so the person can fix it: " + JSON.stringify(before.value.stats!.warnings));
+    assert.equal(before.value.stats!.naming.named, 0);
+
+    svc.store.setAllowHosted(svc.store.revision("rev-a")!.repoRoot, true);
+    const after = await svc.buildConceptHierarchy(testCtx(), { revision: "rev-a" });
+    assert.ok(after.ok);
+    assert.ok(hostedCalls > 0, "now the model is asked");
+    assert.ok(after.value.concepts.every((c) => c.namedBy === "MODEL" && c.label!.startsWith("domain name for ")), "the real names replace the mechanical ones; the old ones were not served from the cache");
+    assert.equal(after.value.versions[0].provider, "cloud/big");
+
+    const calls = hostedCalls;
+    const again = await svc.buildConceptHierarchy(testCtx(), { revision: "rev-a" });
+    assert.ok(again.ok);
+    assert.equal(hostedCalls, calls, "a model's names are cached: the same shapes are not asked again");
+    assert.ok(again.value.stats!.naming.cacheHits > 0);
   } finally { worker.close(); }
 });

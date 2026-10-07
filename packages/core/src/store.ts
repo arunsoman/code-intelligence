@@ -306,6 +306,9 @@ export class Store {
     return (this.db.prepare("select version, revision, created_at, provider, json from semantic_concept_versions where repo_root = ? order by version desc").all(repoRoot) as any[])
       .map((r) => { const snap = JSON.parse(r.json) as { concepts?: unknown[] }; return { version: r.version, revision: r.revision, createdAt: r.created_at, provider: r.provider, concepts: snap.concepts?.length ?? 0 }; });
   }
+  /** The newest hierarchy version number for a repository, without reading any snapshot. 0 when none was built. */
+  latestSemanticVersionNumber(repoRoot: string): number { return Number((this.db.prepare("select max(version) as v from semantic_concept_versions where repo_root = ?").get(repoRoot) as any)?.v ?? 0); }
+  semanticConceptCount(revision: string): number { return Number((this.db.prepare("select count(*) as n from semantic_concepts where revision = ?").get(revision) as any)?.n ?? 0); }
   /** The immutable snapshot of the newest version recorded at or before the given revision, if any. */
   latestSemanticVersionSnapshot(revision: string): Record<string, unknown> | null {
     const root = (this.db.prepare("select repo_root from revisions where id = ?").get(revision) as any)?.repo_root;

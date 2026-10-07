@@ -15,8 +15,16 @@ import type { NamingRequest } from "./types.ts";
 export interface NamingAdapter {
   /** What the cache key names as the model: provider/model string. */
   modelVersion: string;
-  /** One naming request. Returns names, or null when the model is unavailable. */
-  name(req: { purpose: "NAME_CONCEPT" | "NAME_ARCH"; question: string; items: NamingRequest[] }): Promise<{ conceptId: string; name: string }[] | null>;
+  /**
+   * One naming request. Returns names, or null when the model is unavailable. `offline` marks an answer written by the
+   * deterministic offline stand-in (a hosted model that is not approved, or no model at all), not by the configured model:
+   * such a name is mechanical, so it is stored as FALLBACK and never cached as if a model had written it.
+   */
+  name(req: { purpose: "NAME_CONCEPT" | "NAME_ARCH"; question: string; items: NamingRequest[] }): Promise<{ conceptId: string; name: string; offline?: boolean }[] | null>;
+  /** Filled in by the adapter: how many answers came from the configured model and how many from the offline stand-in. */
+  usage?: { model: number; offline: number };
+  /** Filled in by the adapter: why an answer was not the configured model's (not approved, budget used up, ...). */
+  notes?: Set<string>;
 }
 
 export interface NamingResult {
@@ -69,17 +77,20 @@ export async function nameConcepts(
       conceptId: concept.id, kind: concept.kind, features: concept.features, compositionRule: concept.compositionRule,
       members: concept.members.map((m) => ({ entityId: m, name: opts.variables?.get(m) ?? m.split("#").pop() ?? m, file: "" })),
     }));
-    let names: { conceptId: string; name: string }[] | null = null;
+    let names: { conceptId: string; name: string; offline?: boolean }[] | null = null;
     try { names = await opts.adapter.name({ purpose: "NAME_CONCEPT", question: JSON.stringify({ concepts: withMembers }), items: withMembers }); }
     catch { names = null; }
-    const got = new Map((names ?? []).map((n) => [n.conceptId, n.name]));
+    const got = new Map((names ?? []).map((n) => [n.conceptId, n]));
     for (const { concept, cacheKey: key } of batch) {
-      const model = got.get(concept.id);
+      const ans = got.get(concept.id);
+      const text = ans?.name?.trim() ?? "";
       const members = withMembers.find((w) => w.conceptId === concept.id)?.members ?? [];
-      const label = model && model.trim() ? model.trim().slice(0, 60) : mechanicalLabel(concept.kind, members, null);
-      const namedBy = model && model.trim() ? "MODEL" : "FALLBACK";
+      const label = text ? text.slice(0, 60) : mechanicalLabel(concept.kind, members, null);
+      // Only a name the configured model wrote is a MODEL name. The offline stand-in's "<shape> in <function>" is mechanical.
+      const namedBy = text && !ans?.offline ? "MODEL" : "FALLBACK";
       if (namedBy === "MODEL") named++; else fallback++;
-      store.namingCachePut(key, label, namedBy);
+      // An offline answer is not remembered: approving the hosted model later must get real names, not this one back from the cache.
+      if (!ans?.offline) store.namingCachePut(key, label, namedBy);
       out.push({ ...concept, label, namedBy });
     }
   }
@@ -97,7 +108,7 @@ export async function nameConcepts(
     pendingPkgs.push({ node: p, key });
   }
   if (pendingPkgs.length) {
-    let names: { conceptId: string; name: string }[] | null = null;
+    let names: { conceptId: string; name: string; offline?: boolean }[] | null = null;
     try {
       names = await opts.adapter.name({
         purpose: "NAME_ARCH",
@@ -105,13 +116,14 @@ export async function nameConcepts(
         items: pendingPkgs.map(({ node }) => ({ conceptId: node.id, kind: node.kind, features: { modules: node.memberEntityIds.length }, compositionRule: null, members: [{ entityId: node.id, name: node.name, file: node.path }] })),
       });
     } catch { names = null; }
-    const got = new Map((names ?? []).map((n) => [n.conceptId, n.name]));
+    const got = new Map((names ?? []).map((n) => [n.conceptId, n]));
     for (const { node: p, key } of pendingPkgs) {
-      const model = got.get(p.id);
-      const label = model && model.trim() ? model.trim().slice(0, 60) : p.name;
-      const namedBy = model && model.trim() ? "MODEL" : "FALLBACK";
+      const ans = got.get(p.id);
+      const text = ans?.name?.trim() ?? "";
+      const label = text ? text.slice(0, 60) : p.name;
+      const namedBy = text && !ans?.offline ? "MODEL" : "FALLBACK";
       if (namedBy === "MODEL") named++; else fallback++;
-      store.namingCachePut(key, label, namedBy);
+      if (!ans?.offline) store.namingCachePut(key, label, namedBy);
       archOut.push({ ...p, name: label });
       done.add(p.id);
     }

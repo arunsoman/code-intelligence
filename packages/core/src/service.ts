@@ -13,7 +13,7 @@ import { validateChatPlan } from "./chat-plan.ts";
 import { executeChatPlan } from "./chat-execution.ts";
 import { runChatAgent } from "./chat-agent.ts";
 import type {
-  AnalysisBatch, ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptHierarchyView, ConceptStore, ConceptsOutput, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceBundle, EvidenceRef, ExplainResult, ExplanationOutput,
+  AnalysisBatch, ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptHierarchyView, ConceptStore, ConceptsOutput, EntityCode, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceBundle, EvidenceRef, ExplainResult, ExplanationOutput,
   ChartOutput, HypothesesOutput, ModelProvider, ModelRequest, NameArchOutput, NameConceptOutput, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec, SourceSpan,
   DefectDetectionInput, DetectorFinding, BenchmarkPolicy, BenchmarkResult, Fact,
 } from "@cie/schema";
@@ -1684,8 +1684,10 @@ export class Service {
    */
   private namingAdapter(rev: RevisionRow): NamingAdapter {
     const modelVersion = `${this.model.name}/${this.model.model}`;
+    const usage = { model: 0, offline: 0 };
+    const notes = new Set<string>();
     return {
-      modelVersion,
+      modelVersion, usage, notes,
       name: async (req) => {
         const schemaId = req.purpose === "NAME_ARCH" ? SCHEMA_NAME_ARCH : SCHEMA_NAME_CONCEPT;
         const callCtx: CallContext = {
@@ -1694,9 +1696,13 @@ export class Service {
           deadlineMs: Date.now() + 120_000, traceId: `trace-name:${randomUUID()}`,
         };
         const bundle: EvidenceBundle = { id: "naming", revision: rev.id, evidence: [], entities: [], relationships: [], facts: [], coverage: [], unresolved: [], tokenEstimate: 0 };
-        const { result } = await this.callModel<NameConceptOutput & NameArchOutput>(callCtx, rev, { purpose: req.purpose, schemaId, question: req.question, bundle });
+        const { result, provider, note } = await this.callModel<NameConceptOutput & NameArchOutput>(callCtx, rev, { purpose: req.purpose, schemaId, question: req.question, bundle });
         if (!result.ok) return null;
-        return result.value.names.map((n) => ({ conceptId: n.conceptId, name: n.name }));
+        // Who actually answered: the gateway swaps in the offline stand-in when a hosted model is not approved or its budget is spent.
+        const offline = provider === this.offline || provider.name === "stub";
+        if (offline) usage.offline += result.value.names.length; else usage.model += result.value.names.length;
+        if (note) notes.add(note);
+        return result.value.names.map((n) => ({ conceptId: n.conceptId, name: n.name, ...(offline ? { offline: true } : {}) }));
       },
     };
   }
@@ -1709,9 +1715,15 @@ export class Service {
   async buildConceptHierarchy(ctx: CallContext, req: { revision?: string }, control?: JobControl): Promise<ApiResult<ConceptHierarchyView>> {
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
-    const result = await buildHierarchy(this.store, rev.id, { repoRoot: rev.repoRoot, adapter: this.namingAdapter(rev), control, provider: `${this.model.name}/${this.model.model}` });
+    const adapter = this.namingAdapter(rev);
+    const result = await buildHierarchy(this.store, rev.id, { repoRoot: rev.repoRoot, adapter, control, provider: `${this.model.name}/${this.model.model}` });
     control?.commit();
-    const provider = `${this.model.name}/${this.model.model}`;
+    // Record who really wrote the names, not who was configured to: a hosted model that was not approved did not write them.
+    const u = adapter.usage!;
+    const offlineName = `${this.offline.name}/${this.offline.model}`;
+    const provider = u.model === 0 && u.offline > 0 ? offlineName : u.model > 0 && u.offline > 0 ? `${this.model.name}/${this.model.model} (partly ${offlineName})` : `${this.model.name}/${this.model.model}`;
+    // First, so it is the one the person sees in the completion notice: it is the reason the names are what they are.
+    for (const n of [...(adapter.notes ?? [])].reverse()) if (!result.stats.warnings.includes(n)) result.stats.warnings.unshift(n);
     const version = persistHierarchy(this.store, result, provider);
     this.store.audit(actor(ctx), "concept-hierarchy.build", rev.id, {
       version, concepts: result.concepts.length, invariants: result.invariants.length,
@@ -1723,9 +1735,14 @@ export class Service {
   }
 
   /** The read-only hierarchy view: the current version's live tables, or an older version's snapshot. */
-  conceptHierarchy(ctx: CallContext, req: { revision?: string; version?: number }): ApiResult<ConceptHierarchyView> {
+  conceptHierarchy(ctx: CallContext, req: { revision?: string; version?: number; summary?: boolean }): ApiResult<ConceptHierarchyView> {
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
+    // A header or button only needs to know whether a build exists and how big it is; the full view can be megabytes.
+    if (req.summary === true) {
+      const version = this.store.latestSemanticVersionNumber(rev.repoRoot);
+      return ok(ctx, { revision: rev.id, version, versions: [], concepts: [], invariants: [], arch: [], surfaces: [], entryPoints: [], crossPackage: [], links: [], stats: null, summary: { concepts: version ? this.store.semanticConceptCount(rev.id) : 0 } });
+    }
     const versions = this.store.semanticConceptVersions(rev.repoRoot);
     const current = versions[0]?.version ?? 0;
     const want = req.version ?? current;
@@ -2096,6 +2113,34 @@ export class Service {
     const rev = this.store.revision(req.revision);
     if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "unknown revision", retryable: false });
     return ok(ctx, this.resolveMany(rev, [], req.evidenceIds), { revision: rev.id });
+  }
+
+  /** The source of one function-like entity, for the leaf of the concept tree. Access-checked, bounded, and it says when the file has changed since indexing. */
+  entityCode(ctx: CallContext, req: { revision?: string; entityId?: unknown }): ApiResult<EntityCode> {
+    if (!req || typeof req.entityId !== "string" || !req.entityId || req.entityId.length > 600) return fail(ctx, { code: "INVALID_SCHEMA", message: "entityId must be a non-empty string", retryable: false });
+    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
+    const e = this.store.entities(rev.id).find((x) => x.entityId === req.entityId);
+    if (!e) return fail(ctx, { code: "NOT_FOUND", message: "no such code element in this revision", retryable: false });
+    const base = { entityId: e.entityId, name: e.name, kind: e.kind };
+    if (policyFor(this.store, rev.repoRoot).denied(e.file)) return ok(ctx, { ...base, file: "(not shown)", startLine: 0, endLine: 0, text: "", truncated: false, state: "WITHHELD" as const }, { revision: rev.id });
+    const unavailable = (): ApiResult<EntityCode> => ok(ctx, { ...base, file: e.file, startLine: 0, endLine: 0, text: "", truncated: false, state: "UNAVAILABLE" as const }, { revision: rev.id });
+    const span = e.spans[0];
+    if (!span) return unavailable();
+    const path = resolve(rev.repoRoot, span.sourceId), rel = relative(rev.repoRoot, path);
+    if (rel.startsWith("..") || isAbsolute(rel) || !existsSync(path)) return unavailable();
+    try {
+      const buf = readFileSync(path);
+      const stale = createHash("sha256").update(buf).digest("hex") !== span.contentHash;
+      const full = buf.subarray(span.startByte, span.endByteExclusive).toString("utf8");
+      const lines = full.split("\n");
+      const MAX_LINES = 160, MAX_CHARS = 16_000;
+      let text = lines.slice(0, MAX_LINES).join("\n");
+      let truncated = lines.length > MAX_LINES;
+      if (text.length > MAX_CHARS) { text = text.slice(0, MAX_CHARS); truncated = true; }
+      const startLine = buf.subarray(0, span.startByte).toString("utf8").split("\n").length;
+      return ok(ctx, { ...base, file: span.sourceId, startLine, endLine: startLine + lines.length - 1, text, truncated, state: stale ? "STALE" as const : "CURRENT" as const }, { revision: rev.id });
+    } catch { return unavailable(); }
   }
 
   /** File/line for spans that are recorded on findings (the detector's fact location, before any evidence was resolved). */

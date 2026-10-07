@@ -563,6 +563,18 @@ export interface ConceptHierarchyView {
   crossPackage: CrossPackageConcept[];
   links: { conceptId: Id; archNodeId: Id }[];
   stats: HierarchyStats | null;
+  /** Present on a summary-only read: the arrays above are empty and this says how many concepts the current version holds. */
+  summary?: { concepts: number };
+}
+
+/** The source of one function-like entity: the leaf of the concept tree, "a piece of code". Bounded, and honest about a file that changed since it was indexed. */
+export interface EntityCode {
+  entityId: Id; name: string; kind: string; file: string;
+  startLine: number; endLine: number; text: string;
+  /** The text was cut at the display limit; the file has more. */
+  truncated: boolean;
+  /** CURRENT: the file is as indexed. STALE: it changed since, so the lines may have moved. WITHHELD: the caller may not see this file. */
+  state: "CURRENT" | "STALE" | "UNAVAILABLE" | "WITHHELD";
 }
 
 // ---------------------------------------------------------------- F01: cross-repository search and precise navigation

@@ -62,10 +62,12 @@ test("a single-line edit rebuilds one graph and one function's concepts; everyth
     assert.equal(bCredit.id, aCredit.id, "untouched functions keep their concepts verbatim");
     assert.ok(s.conceptsCarried >= 3, JSON.stringify({ carried: s.conceptsCarried, concepts: b.value.concepts.length }));
 
-    // naming: nothing re-asked, everything from the cache (every concept plus the one package node)
-    assert.equal(s.naming.cacheHits, b.value.concepts.length + 1, JSON.stringify(s.naming));
-    assert.equal(s.naming.named, 0, "no new model calls for unchanged shapes");
-    assert.equal(s.naming.fallback, 0);
+    // naming: this service runs on the offline stub, whose names are mechanical. They are labelled FALLBACK and are deliberately
+    // not cached, so approving a hosted model later gets real names instead of these coming back. (That a real model's names are
+    // cached and never re-asked is checked in concept-hierarchy-naming.test.ts.) The stub is deterministic, so the labels are stable.
+    assert.equal(s.naming.cacheHits, 0, JSON.stringify(s.naming));
+    assert.equal(s.naming.named, 0, "the stub is not a model");
+    assert.equal(s.naming.fallback, b.value.concepts.length + 1, "every concept and the package were named mechanically");
 
     // invariants for untouched functions are byte-identical
     const invA = a.value.invariants.filter((i) => !i.subjectEntityId.endsWith("#withdraw")).map((i) => i.id).sort();

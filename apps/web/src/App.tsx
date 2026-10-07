@@ -11,6 +11,9 @@ import { CanvasSkeleton, Loading } from "./Skeleton.tsx";
 import { COMPOSING_CAPTION, EMPTY_NO_INDEX, canvasPhase, emptyStageCopy } from "./loading.ts";
 import { ClaimCard } from "./ClaimCard.tsx";
 import { ConceptBrowser } from "./ConceptBrowser.tsx";
+import { ConceptHierarchyBrowser } from "./ConceptHierarchyBrowser.tsx";
+import { MODE_INFO, browserStorage, hierarchySummary, readConceptMode, writeConceptMode, type ConceptMode } from "./concept-hierarchy-view.ts";
+import type { ConceptHierarchyView } from "@cie/schema";
 import { Outline } from "./Outline.tsx";
 import { Consequences } from "./Consequences.tsx";
 import { TerrainView } from "./TerrainView.tsx";
@@ -117,6 +120,11 @@ export function App() {
   const [announcement, setAnnouncement] = useState("");
   const [exceptions, setExceptions] = useState<ExceptionRow[]>([]);
   const [browsingCards, setBrowsingCards] = useState(false);
+  // Two ways to discover concepts; the choice is remembered. They keep separate stores and never overwrite each other.
+  const [conceptMode, setConceptModeState] = useState<ConceptMode>(() => readConceptMode(browserStorage()));
+  const setConceptMode = (m: ConceptMode) => { setConceptModeState(m); writeConceptMode(m, browserStorage()); };
+  const [browsingHierarchy, setBrowsingHierarchy] = useState(false);
+  const [hierarchyConcepts, setHierarchyConcepts] = useState(0);
   const [jobsOpen, setJobsOpen] = useState(false);
   const [cardPins, setCardPins] = useState<{ title: string; ids: string[] } | null>(null);
   const [audit, setAudit] = useState<{ events: AuditEvent[]; chain: { ok: boolean } } | null>(null);
@@ -129,7 +137,7 @@ export function App() {
     const [s, l] = await Promise.all([call<StatusInfo>("C01", "status"), call<typeof workspaces>("C13", "listWorkspaces")]);
     if (s.ok) {
       setInfo(s.value);
-      if (s.value.revision) { setRepoPath((p) => p || s.value.revision!.repoRoot); const c = await call<ConceptCard[]>("C11", "listConcepts", { revision: s.value.revision.id }); if (c.ok) setCards(c.value); }
+      if (s.value.revision) { setRepoPath((p) => p || s.value.revision!.repoRoot); const c = await call<ConceptCard[]>("C11", "listConcepts", { revision: s.value.revision.id }); if (c.ok) setCards(c.value); const h = await call<ConceptHierarchyView>("C11", "conceptHierarchy", { revision: s.value.revision.id, summary: true }); if (h.ok) setHierarchyConcepts(h.value.version > 0 ? (h.value.summary?.concepts ?? 0) : 0); }
     } else setError(s.error.message);
     if (l.ok) setWorkspaces(l.value);
   }, []);
@@ -220,7 +228,7 @@ export function App() {
   const jobActive = jobs.some((j) => j.state === "QUEUED" || j.state === "RUNNING");
   const runningJob = (kind: string) => jobs.some((j) => j.kind === kind && (j.state === "QUEUED" || j.state === "RUNNING"));
   const indexFb = buttonFeedback({ busy: runningJob("index") });
-  const extractFb = buttonFeedback({ className: "secondary", busy: runningJob("concepts") });
+  const extractFb = buttonFeedback({ className: "secondary", busy: runningJob(MODE_INFO[conceptMode].jobKind) });
   const saveFb = buttonFeedback({ busy: (busy ?? "").startsWith("Saving") });
   const onJobDone = async (j: JobView) => {
     if (j.state === "SUCCEEDED") {
@@ -234,11 +242,16 @@ export function App() {
         setCards(v.cards);
         setNotice(`Extracted ${v.cards.length} concept card(s) with ${v.provider}${v.dropped.length ? `; ${v.dropped.length} dropped (ungrounded)` : ""}.${warnings.length ? ` ${warnings[0]}` : ""}`);
         log("CONCEPTS", String(v.cards.length));
+      } else if (j.kind === "concept-hierarchy") {
+        const v = j.result!.value as ConceptHierarchyView;
+        setHierarchyConcepts(v.concepts.length);
+        setNotice(`Built the concept hierarchy: ${hierarchySummary(v)}.${warnings.length ? ` ${warnings[0]}` : ""}`);
+        log("CONCEPT_HIERARCHY", String(v.concepts.length));
       } else {
         setNotice(`${j.kind} completed.${warnings.length ? ` ${warnings[0]}` : ""}`);
       }
       await refresh();
-    } else if (j.state === "CANCELLED") setNotice(`${j.kind === "index" ? "Indexing" : "Concept extraction"} cancelled. Nothing from that run was saved.`);
+    } else if (j.state === "CANCELLED") setNotice(`${j.kind === "index" ? "Indexing" : j.kind === "concept-hierarchy" ? "Concept hierarchy build" : "Concept extraction"} cancelled. Nothing from that run was saved.`);
     else setError(`${j.error?.code ?? "FAILED"}: ${j.message}`);
   };
   const syncJobs = async () => {
@@ -254,7 +267,7 @@ export function App() {
     const t = setInterval(() => void syncJobs(), 700);
     return () => clearInterval(t);
   }); // eslint-disable-line react-hooks/exhaustive-deps
-  const startJob = async (kind: "index" | "concepts") => {
+  const startJob = async (kind: "index" | "concepts" | "concept-hierarchy") => {
     setError(null); setNotice(null);
     const r = await call<JobView>("C07", "enqueue", kind === "index" ? { kind, repoPath } : { kind, revision: info?.revision?.id }, uuid());
     if (!r.ok) return setError(failMsg(r));
@@ -267,7 +280,7 @@ export function App() {
     await syncJobs();
   };
   const index = () => void startJob("index");
-  const extract = () => void startJob("concepts");
+  const extract = () => void startJob(MODE_INFO[conceptMode].jobKind);
   const toggleHosted = async (allow: boolean) => {
     const root = info?.revision?.repoRoot;
     if (!root) return;
@@ -491,6 +504,10 @@ export function App() {
       {galleryOpen && <VisualsGallery revision={info?.revision?.id} onClose={() => setGalleryOpen(false)} onShow={(it: CatalogEntry, q: string) => { setGalleryOpen(false); void askForm(q, it.formId); }} />}
       {providerWizardOpen && <ProviderWizard revision={info?.revision?.id} onClose={() => setProviderWizardOpen(false)} />}
       {outlineOpen && <Outline rendered={rendered} level={level} onClose={() => setOutlineOpen(false)} onPick={(id) => { const n = rendered.nodes.find((x) => x.id === id); setOutlineOpen(false); if (n) void inspectNode(n); }} />}
+      {browsingHierarchy && (
+        <ConceptHierarchyBrowser revision={info?.revision?.id} jobs={jobs} onShowJobs={() => setJobsOpen(true)} onClose={() => { setBrowsingHierarchy(false); void refresh(); }}
+          onAsk={(p) => { setCardPins(p); setBrowsingHierarchy(false); say("assistant", `Referring to “${p.title}” (${p.ids.length} element(s)). Ask your question; they are in the context.`); }} />
+      )}
       {browsingCards && (
         <ConceptBrowser revision={info?.revision?.id} jobs={jobs} onShowJobs={() => setJobsOpen(true)} onClose={() => { setBrowsingCards(false); void refresh(); }} onVerdict={verdict}
           onAsk={(c) => { setCardPins({ title: c.title, ids: c.members.slice(0, 8) }); setBrowsingCards(false); say("assistant", `Referring to “${c.title}” (${c.members.length} element(s)). Ask your question; they are in the context.`); }} />
@@ -550,6 +567,7 @@ export function App() {
         <ModelMenu current={info?.model ?? null} hosted={!!info?.hosted} call={call} onChanged={refresh} />
         {info?.revision && <span className="chip mono" title={info.revision.repoRoot}>rev {info.revision.id} · {info.revision.fileCount} files</span>}
         {info && info.concepts > 0 && <span className="chip">{info.concepts} concept cards</span>}
+        {hierarchyConcepts > 0 && <span className="chip">{hierarchyConcepts} hierarchy concepts</span>}
         {info?.tests && <span className="chip" title={`Loaded from ${info.tests.found.join(", ")}${info.tests.staleness.length ? `. ${info.tests.staleness.join("; ")}` : ""}`}>tests: {info.tests.tests.passed} pass · {info.tests.tests.failed} fail{info.tests.coverageLinePercent !== null ? ` · ${info.tests.coverageLinePercent}% covered` : ""}{info.tests.staleness.length ? " ⚠" : ""}</span>}
         {busy && <span className="chip busy" role="status">{busy}</span>}
         <button className="secondary small push" accessKey="k" title="Cross-repository search (Ctrl+K): revision-bound text, symbol and regex search, then jump to definitions and references" aria-keyshortcuts="Ctrl+K" onClick={() => setSearchOpen(true)}>Search</button>
@@ -580,7 +598,7 @@ export function App() {
             await withBusy("Switching branch", async () => {
               const r = await call<RepositoryGitInfo>("C01", "switchBranch", { repoPath: git.repoRoot, branch, kind, expectedHead: git.head, expectedBranch: git.branch });
               if (!r.ok) throw new Error(r.error.message);
-              setView(null); setClaimMap({}); setSelection([]); setCellSel([]); setCards([]); setMessages([]); setDrawer(null); setCode(null); setStale(null); setChanges(null); setCardPins(null); setEditorFocus([]);
+              setView(null); setClaimMap({}); setSelection([]); setCellSel([]); setCards([]); setHierarchyConcepts(0); setMessages([]); setDrawer(null); setCode(null); setStale(null); setChanges(null); setCardPins(null); setEditorFocus([]);
               setWs({ version: 0 }); setWsName("");
               setInfo((s) => s ? { ...s, revision: null, concepts: 0 } : s);
               setNotice(`Switched to ${r.value.branch}. Indexing the checkout…`);
@@ -593,7 +611,12 @@ export function App() {
             <button className="secondary" onClick={() => setPicking(true)} disabled={!!busy || jobActive}>Browse…</button>
             <button onClick={index} disabled={!repoPath || !!busy || jobActive} className={indexFb.className} aria-busy={indexFb["aria-busy"]} title="Index the selected repository">{indexFb.spinner && <span className="spinner" aria-hidden="true" />}Index</button>
           </div>
-          <button className={extractFb.className} onClick={extract} disabled={!info?.revision || !!busy || jobActive} aria-busy={extractFb["aria-busy"]} title="Extract capabilities, failure modes, invariants and workflows">{extractFb.spinner && <span className="spinner" aria-hidden="true" />}Extract concepts{cards.length ? ` (${cards.length})` : ""}</button>
+          <div className="segmented" role="radiogroup" aria-label="How to discover concepts">
+            {(["hierarchy", "cards"] as const).map((m) => (
+              <button key={m} type="button" role="radio" aria-checked={conceptMode === m} className={conceptMode === m ? "on" : ""} disabled={jobActive} title={MODE_INFO[m].help} onClick={() => setConceptMode(m)}>{MODE_INFO[m].label}</button>
+            ))}
+          </div>
+          <button className={extractFb.className} onClick={extract} disabled={!info?.revision || !!busy || jobActive} aria-busy={extractFb["aria-busy"]} title={MODE_INFO[conceptMode].help}>{extractFb.spinner && <span className="spinner" aria-hidden="true" />}{MODE_INFO[conceptMode].button}{conceptMode === "cards" ? (cards.length ? ` (${cards.length})` : "") : (hierarchyConcepts ? ` (${hierarchyConcepts})` : "")}</button>
           {info?.hosted && info.revision && (
             <div className="egress">
               <label><input type="checkbox" checked={info.allowHosted} onChange={(e) => void toggleHosted(e.target.checked)} /> Allow the hosted model for this repo</label>
@@ -602,6 +625,7 @@ export function App() {
                 : "Not approved: answers use the offline model, and nothing leaves this machine."}</p>
             </div>
           )}
+          {hierarchyConcepts > 0 && <button className="secondary" onClick={() => setBrowsingHierarchy(true)}>Browse concept hierarchy</button>}
           {cards.length > 0 && <button className="secondary" onClick={() => setBrowsingCards(true)}>Browse concept cards</button>}
         </section>
 

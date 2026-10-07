@@ -184,5 +184,6 @@ export function persistHierarchy(store: Store, result: HierarchyBuildResult, pro
   return store.replaceSemanticConcepts(
     result.revision,
     { concepts: result.concepts, invariants: result.invariants, arch: result.arch, links: result.links, snapshot },
+    provider,
   );
 }

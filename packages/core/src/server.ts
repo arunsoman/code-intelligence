@@ -75,6 +75,10 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
     "C11/extractConcepts": { mutating: true, run: (c, b) => svc.extractConcepts(c, b) },
     "C11/listConcepts": { mutating: false, run: (c, b) => svc.listConcepts(c, b) },
     "C11/conceptStore": { mutating: false, run: (c, b) => svc.conceptStore(c, b) },
+    // The dual-axis hierarchy. Building it is a background job (C07/enqueue, kind "concept-hierarchy"); this only reads a saved version.
+    "C11/conceptHierarchy": { mutating: false, run: (c, b) => svc.conceptHierarchy(c, b ?? {}) },
+    // The source of one function-like element: the leaf of the concept tree.
+    "C11/conceptCode": { mutating: false, run: (c, b) => svc.entityCode(c, b ?? {}) },
     "C19/refresh": { mutating: false, run: (c, b) => svc.refreshView(c, b) },
     "C19/overlays": { mutating: false, run: (c, b) => svc.overlays(c, b) },
     "C19/setOverride": { mutating: true, run: (c, b) => svc.setOverride(c, b) },
