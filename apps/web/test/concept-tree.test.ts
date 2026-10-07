@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ArchConcept, ConceptHierarchyView, SemanticConcept } from "@cie/schema";
 import {
-  DEFAULT_LAYOUT, PAGE, ZOOMS, buildMeaningTree, buildStructureTree, clip, conceptsOfEntity, defaultExpanded, familyOf, layoutTree, matchesFor, visibleTree, zoomToFit, type TreeNode,
+  DEFAULT_LAYOUT, GENERIC_WORDS, PAGE, ZOOMS, buildDomainTree, buildMeaningTree, buildStructureTree, clip, conceptsOfEntity, defaultExpanded, familyOf, layoutTree, joinAffixes, matchesFor, splitIdentifier, stemWord, visibleTree, zoomToFit, type TreeNode,
 } from "../src/concept-tree.ts";
 
 const arch = (id: string, kind: ArchConcept["kind"], name: string, parent: string | null, children: string[], member?: string): ArchConcept =>
@@ -159,4 +159,148 @@ test("fit picks the largest zoom that still shows the whole width, and never goe
   assert.equal(ZOOMS[zoomToFit(1000, 1000)], 1, "an exact fit counts");
   assert.equal(ZOOMS[zoomToFit(1000, 900)], 0.8);
   assert.equal(zoomToFit(5000, 300), 0, "too wide even at the smallest zoom: the smallest, and the page scrolls");
+});
+
+// ---------------------------------------------------------------- domain view
+
+/** A small service-shaped repository: files, classes and methods, each function carrying one concept so none is dropped. */
+const repo = (spec: [file: string, fns: string[]][], pkgName = "payments"): ConceptHierarchyView => {
+  const arch: ArchConcept[] = [arch_("repo", "repo", "repo", null, ["pkg"]), arch_("pkg", "package", pkgName, "repo", [])];
+  const cs: SemanticConcept[] = [], links: ConceptHierarchyView["links"] = [];
+  spec.forEach(([file, names], i) => {
+    const mid = `m${i}`;
+    arch.push(arch_(mid, "module", file.split("/").pop()!, "pkg", []));
+    arch.find((n) => n.id === "pkg")!.children.push(mid);
+    names.forEach((full, j) => {
+      const dot = full.lastIndexOf("."), method = dot > 0 ? full.slice(dot + 1) : full;
+      const fid = `f${i}_${j}`, entityId = `function:${file}#${full}`;
+      arch.push({ ...arch_(fid, "function", method, mid, [], entityId) });
+      arch.find((n) => n.id === mid)!.children.push(fid);
+      const c = concept(`c${i}_${j}`, j % 2 ? "guarded-write" : "collect-and-return", [entityId]);
+      cs.push(c);
+      for (const a of [fid, mid, "pkg", "repo"]) links.push({ conceptId: c.id, archNodeId: a });
+    });
+  });
+  return view({ arch, concepts: cs, links });
+};
+const arch_ = arch; // the fixture helper above is named `arch`; this keeps the call sites readable
+const labels = (n: TreeNode): string[] => n.children.map((c) => c.label);
+const find = (n: TreeNode, label: string): TreeNode | undefined => flat(n).find((x) => x.label === label);
+
+test("words are split out of identifiers, singularised, and the code's own plumbing words are not domains", () => {
+  assert.deepEqual(splitIdentifier("SubAccountControllerService"), ["sub", "account", "controller", "service"]);
+  assert.deepEqual(splitIdentifier("parseXMLHttpRequest"), ["parse", "xml", "http", "request"], "an acronym keeps its letters and the next word starts at the next capital");
+  assert.deepEqual(splitIdentifier("x_1_ab"), [], "fragments under three letters and numbers are not words");
+  assert.deepEqual(["merchants", "categories", "addresses", "status", "analysis", "address", "balances"].map(stemWord), ["merchant", "category", "address", "status", "analysis", "address", "balance"]);
+  for (const w of ["service", "controller", "get", "handler", "util", "dto"]) assert.ok(GENERIC_WORDS.has(w), w);
+  for (const w of ["merchant", "ledger", "payment", "customer"]) assert.ok(!GENERIC_WORDS.has(w), `${w} is a domain word`);
+});
+
+test("domain view: the vocabulary of the file and class groups first; the words of the methods split a big group further", () => {
+  const v = repo([
+    ["src/customer/customer.service.ts", ["CustomerService.addMerchant", "CustomerService.getMerchantList", "CustomerService.removeMerchant", "CustomerService.listAgents", "CustomerService.addAgent", "CustomerService.dropAgent"]],
+    ["src/topup/topup.service.ts", ["TopupService.createTopup", "TopupService.getTopupTotal", "TopupService.cancelTopup"]],
+    ["src/auth/auth.controller.ts", ["AuthController.login", "AuthController.logout"]],
+  ]);
+  const root = buildDomainTree(v)!;
+  assert.deepEqual([root.kind, root.label, root.sub], ["root", "Domains", "11 functions"]);
+  const top = labels(root);
+  for (const d of ["Customer", "Topup"]) assert.ok(top.includes(d), `${d} in ${top}`);
+  assert.ok(!top.some((n) => ["Service", "Controller", "Get", "Add"].includes(n)), "no domain is a plumbing word: " + top);
+  const customer = find(root, "Customer")!;
+  assert.equal(customer.kind, "domain");
+  assert.ok(customer.children.some((c) => c.kind === "function" && c.label === "addMerchant"), "a small group lists its code directly");
+  assert.match(customer.sub, /^\d+ functions? · mainly payments$/, "and says where it mostly lives, using the package's name");
+
+  const finer = buildDomainTree(v, { splitAbove: 4 })!;
+  const under = find(find(finer, "Customer")!, "Merchant");
+  assert.ok(under && under.kind === "domain", "over the limit, the method words become sub-domains: " + labels(find(finer, "Customer")!));
+  assert.ok(under!.children.map((c) => c.label).includes("addMerchant"), "with the code underneath");
+  assert.ok(labels(find(finer, "Customer")!).includes("Agent"));
+});
+
+test("domain view: every function appears exactly once, and the result does not depend on the order the code was listed", () => {
+  const spec: [string, string[]][] = [
+    ["src/customer/customer.service.ts", ["CustomerService.addMerchant", "CustomerService.getMerchantList", "CustomerService.listCustomers", "CustomerService.countCustomers"]],
+    ["src/topup/topup.service.ts", ["TopupService.createTopup", "TopupService.getTopupTotal", "TopupService.cancelTopup"]],
+    ["src/misc/zzz.ts", ["lonely"]],
+  ];
+  const a = buildDomainTree(repo(spec))!;
+  const leaves = flat(a).filter((n) => n.kind === "function").map((n) => n.entityId);
+  const all = spec.flatMap(([f, ns]) => ns.map((n) => `function:${f}#${n}`));
+  assert.deepEqual([...leaves].sort(), [...all].sort(), "none lost, none twice");
+  const shuffled = buildDomainTree(repo([...spec].reverse().map(([f, ns]) => [f, [...ns].reverse()] as [string, string[]])))!;
+  const shape = (n: TreeNode): unknown => [n.label, n.kind, n.children.map(shape)];
+  assert.deepEqual(shape(shuffled), shape(a), "same code, same tree");
+});
+
+test("domain view: a compound like submerchant is filed under merchant, and a word that fits no group goes under Other", () => {
+  const v = repo([
+    ["src/merchant/merchant.ts", ["Merchant.addMerchant", "Merchant.editMerchant", "Merchant.dropMerchant"]],
+    ["src/submerchant/submerchant.ts", ["Submerchant.addSubmerchant", "Submerchant.editSubmerchant"]],
+    ["src/odd/thing.ts", ["thingOne"]],
+  ]);
+  const root = buildDomainTree(v)!;
+  const merchant = labels(root).indexOf("Merchant") >= 0 ? find(root, "Merchant")! : undefined;
+  assert.ok(merchant, labels(root).join());
+  assert.ok(!labels(root).includes("Submerchant"), "not a top-level domain of its own");
+  assert.ok(labels(merchant).includes("Submerchant"), "nested under its parent: " + labels(merchant));
+  const other = find(root, "Other")!;
+  assert.ok(other && other.children.some((c) => c.label === "thingOne"), "a function with no shared word is still listed");
+  assert.equal(labels(root).at(-1), "Other", "Other is always last");
+  assert.ok(!find(buildDomainTree(repo([["src/address/address.ts", ["Address.a1x", "Address.b2x"]]]))!, "Dress"), "address is never filed under dress");
+});
+
+test("domain view: a big group is split by its next most distinctive word, and a word in a quarter of all code is not a domain", () => {
+  const many: [string, string[]][] = [];
+  for (const area of ["alpha", "beta", "gamma", "delta"]) many.push([`src/${area}/${area}.ts`, Array.from({ length: 11 }, (_, i) => `Customer${area[0].toUpperCase() + area.slice(1)}.${i % 2 ? "loadPayment" : "loadRefund"}${area}${i}`)]);
+  const v = repo(many);
+  const root = buildDomainTree(v, { minCluster: 3, splitAbove: 8 })!;
+  const flatKinds = flat(root).filter((n) => n.kind === "domain").map((n) => n.label.toLowerCase());
+  assert.ok(!flatKinds.includes("customer"), "'customer' is in every function, so it separates nothing: " + flatKinds);
+  for (const area of ["alpha", "beta", "gamma", "delta"]) assert.ok(flatKinds.includes(area), `${area} in ${flatKinds}`);
+  const alpha = find(root, "Alpha")!;
+  assert.ok(flat(alpha).filter((n) => n.kind === "function").length === 11);
+  const deep = buildDomainTree(v, { minCluster: 3, splitAbove: 4 })!;
+  assert.ok(flat(deep).some((n) => n.kind === "domain" && n.id.split(">").length >= 2), "a group over the limit is split again");
+});
+
+test("domain view: concepts are counted once at every level, and code with no concept is shown only on request", () => {
+  const spec: [string, string[]][] = [["src/customer/customer.ts", ["Customer.addMerchant", "Customer.getMerchantList", "Customer.dropMerchant"]], ["src/ledger/ledger.ts", ["Ledger.postEntry", "Ledger.voidEntry"]]];
+  const v = repo(spec);
+  const root = buildDomainTree(v)!;
+  assert.equal(root.count, 5, "five functions, one concept each");
+  for (const d of root.children.filter((c) => c.kind === "domain")) assert.equal(d.count, flat(d).filter((n) => n.kind === "function").length, d.label);
+  const noConcepts = view({ arch: v.arch, concepts: [], links: [] });
+  assert.equal(buildDomainTree(noConcepts), null, "nothing with a concept, nothing drawn");
+  const all = buildDomainTree(noConcepts, { onlyWithConcepts: false })!;
+  assert.equal(flat(all).filter((n) => n.kind === "function").length, 5);
+  assert.ok(flat(all).filter((n) => n.kind === "function").every((n) => n.sub.endsWith("no concept")));
+});
+
+test("domain view: it can be drawn and searched like the other trees", () => {
+  const v = repo([["src/customer/customer.ts", ["Customer.addMerchant", "Customer.getMerchantList", "Customer.dropMerchant"]], ["src/ledger/ledger.ts", ["Ledger.postEntry", "Ledger.voidEntry"]]]);
+  const root = buildDomainTree(v)!;
+  const lay = layoutTree(visibleTree(root, defaultExpanded(root, 2)));
+  assert.ok(lay.nodes.length > 3 && lay.links.length === lay.nodes.length - 1);
+  assert.ok(matchesFor(root, "voidEntry").matches.size >= 1);
+  assert.ok(matchesFor(root, "merchant").matches.size >= 1, "by the domain word");
+});
+
+test("domain view: a prefix like sub joins the word it modifies, so SubAgent files under Agent and 'sub' is never a domain", () => {
+  assert.deepEqual(joinAffixes(["sub", "account", "controller"]), ["subaccount", "controller"]);
+  assert.deepEqual(joinAffixes(["sub", "id"]), ["sub", "id"], "a prefix before a very short word is left alone");
+  assert.deepEqual(joinAffixes(["subtotal"]), ["subtotal"]);
+  const v = repo([
+    ["src/agent/agent.ts", ["Agent.addAgent", "Agent.editAgent", "Agent.dropAgent"]],
+    ["src/sub/sub-agent.ts", ["SubAgent.addSubAgent", "SubAgent.editSubAgent"]],
+  ]);
+  const root = buildDomainTree(v)!;
+  assert.ok(!labels(root).includes("Sub"), "'sub' on its own is not a domain: " + labels(root));
+  const agent = find(root, "Agent")!;
+  assert.ok(agent && labels(agent).includes("Subagent"), "the compound is nested under its parent: " + labels(root) + " / " + (agent ? labels(agent) : ""));
+});
+
+test("domain view: words that describe the code rather than the product (select, recursive, parameter, status) are not domains", () => {
+  for (const w of ["select", "recursive", "parameter", "status", "sub"]) assert.ok(GENERIC_WORDS.has(w), w);
 });

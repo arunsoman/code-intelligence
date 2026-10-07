@@ -5,12 +5,15 @@
 //   "What it does"    — shape families (guarded-write, loop-accumulate, ...), the specialisations composed from them
 //                       (debit-form, credit-form, transfer-form), the concepts themselves, then the functions that
 //                       show them. The leaf is again a piece of code.
+//   "Domain view"     — functions grouped by the words their names and paths share (merchant, ledger, fraud, ...), most
+//                       distinctive word first, big groups split by the next word. The leaf is again a piece of code.
 // Concepts are not related to each other beyond that: the analysis that would find deeper specialisation between
-// concepts (NMF/FCA) is a disabled stub, so this never invents a business taxonomy.
+// concepts (NMF/FCA) is a disabled stub, so none of this invents a business taxonomy. The domain view reads vocabulary,
+// not meaning: it can only find domains the code actually names.
 import type { ConceptHierarchyView, SemanticConcept } from "@cie/schema";
 import { conceptTitle } from "./concept-hierarchy-view.ts";
 
-export type TreeKind = "root" | "repo" | "package" | "module" | "class" | "function" | "family" | "variant" | "concept" | "more";
+export type TreeKind = "root" | "repo" | "package" | "module" | "class" | "function" | "family" | "variant" | "concept" | "domain" | "more";
 
 export interface TreeNode {
   id: string;
@@ -113,6 +116,153 @@ export function buildMeaningTree(view: ConceptHierarchyView): TreeNode | null {
 /** The concepts a piece of code takes part in. */
 export function conceptsOfEntity(view: ConceptHierarchyView, entityId: string): SemanticConcept[] {
   return view.concepts.filter((c) => c.members.includes(entityId));
+}
+
+// ---------------------------------------------------------------- domain view
+
+/** Words that say what a piece of code is made of, not what it is about. Plus a data-driven cut for words that are everywhere in this repository. */
+export const GENERIC_WORDS = new Set((
+  "service services controller controllers component components module modules handler handlers util utils helper helpers impl base abstract factory manager provider providers index main test tests spec mock mocks stub fixture fixtures " +
+  "get set add remove update delete create find list load save init initialize handle process run build make new for the and with from into http https params param data info item items value values result results response responses " +
+  "request requests req res dto model models types type config configuration constants constant common shared core app src lib libs packages package apps api web server client clients default internal private public static async await " +
+  "function method class object string number array map filter reduce each all any one two not non has can should will does did use using used check validate validation parse format convert transform resolve compute calculate count total " +
+  "name names key keys ref refs dist node target generated gen version versions event events action actions state store reducer effect effects guard guards interceptor pipe pipes directive routing router route routes view views page pages " +
+  "form forms dialog modal button table row rows column columns cell cells field fields label labels text html css json xml url uri path file files dir folder line lines word words char chars byte bytes bit bits size length offset limit " +
+  "next prev previous first last start end begin stop open close read write send receive post put patch fetch call calls invoke execute exec off was were been being have had may might must could would shall on is are " +
+  "select selected selector recursive recursively parameter parameters status option options current change changes toggle show hide clear reset refresh submit cancel confirm detail details summary sub super multi"
+).split(/\s+/));
+
+/** "SubAccountControllerService" -> ["sub", "account", "controller", "service"]. Short and numeric fragments are dropped. */
+export function splitIdentifier(s: string): string[] {
+  return (s.match(/[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+/g) ?? []).map((t) => t.toLowerCase()).filter((t) => t.length >= 3 && !/^\d+$/.test(t));
+}
+/** "sub" + "agent" -> "subagent": a trusted prefix joins the word it modifies, so it can be filed under that word instead of being a word itself. */
+export function joinAffixes(words: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i], next = words[i + 1];
+    if (AFFIX_LIST.includes(w) && next && next.length >= 4) { out.push(w + next); i++; } else out.push(w);
+  }
+  return out;
+}
+const AFFIX_LIST = ["sub", "super", "multi"];
+/** Crude singularising so "merchants" and "merchant" are one word. Not linguistics. */
+export function stemWord(t: string): string {
+  if (t.length > 4 && t.endsWith("ies")) return t.slice(0, -3) + "y";
+  if (t.length > 5 && /(sses|ches|shes|xes)$/.test(t)) return t.slice(0, -2);
+  if (t.length > 4 && t.endsWith("s") && !/(ss|us|is)$/.test(t)) return t.slice(0, -1);
+  return t;
+}
+/** A compound like "submerchant" belongs under "merchant". Only these prefixes are trusted, so "address" is never filed under "dress". */
+const AFFIXES = AFFIX_LIST;
+const titleCase = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+const baseName = (p: string) => p.split("/").pop() ?? p;
+
+export interface DomainOptions {
+  onlyWithConcepts?: boolean;
+  /** Smallest group worth a name. Defaults to 2 for a small repository, 3 otherwise. */
+  minCluster?: number;
+  /** A group bigger than this is split by its next most distinctive word. */
+  splitAbove?: number;
+  maxDepth?: number;
+}
+interface DomainFn { id: string; entityId: string; name: string; file: string; pkg: string; concepts: SemanticConcept[]; w: Map<string, number> }
+
+export function buildDomainTree(view: ConceptHierarchyView, o: DomainOptions = {}): TreeNode | null {
+  const only = o.onlyWithConcepts ?? true;
+  const concepts = new Map(view.concepts.map((c) => [c.id, c]));
+  const at = new Map<string, SemanticConcept[]>();
+  for (const l of view.links) { const c = concepts.get(l.conceptId); if (c) at.set(l.archNodeId, [...(at.get(l.archNodeId) ?? []), c]); }
+  const byId = new Map(view.arch.map((n) => [n.id, n]));
+  const pkgOf = (id: string): string => { let cur = byId.get(id)?.parent ? byId.get(byId.get(id)!.parent!) : undefined, guard = 0; while (cur && guard++ < 64) { if (cur.kind === "package") return cur.name; cur = cur.parent ? byId.get(cur.parent) : undefined; } return ""; };
+
+  // One record per function: the words in its path, its class and its own name.
+  const fns: DomainFn[] = [];
+  for (const n of view.arch) {
+    if (n.kind !== "function") continue;
+    const entityId = n.memberEntityIds[0];
+    if (!entityId) continue;
+    const cs = [...new Map((at.get(n.id) ?? []).map((c) => [c.id, c])).values()];
+    if (only && cs.length === 0) continue;
+    const file = /^[a-z]+:([^#]+)/.exec(entityId)?.[1] ?? "";
+    const full = entityId.includes("#") ? entityId.slice(entityId.lastIndexOf("#") + 1) : n.name;
+    const dot = full.lastIndexOf("."), cls = dot > 0 ? full.slice(0, dot) : "", method = dot > 0 ? full.slice(dot + 1) : full;
+    const w = new Map<string, number>();
+    const add = (raw: string, weight: number) => { const t = stemWord(raw); if (GENERIC_WORDS.has(raw) || GENERIC_WORDS.has(t) || t.length < 3) return; w.set(t, Math.min(2, (w.get(t) ?? 0) + weight)); };
+    for (const t of joinAffixes(splitIdentifier(baseName(file).replace(/\.[^.]+$/, "").replace(/\.[^.]+$/, "")))) add(t, 1);
+    for (const d of file.split("/").slice(0, -1)) for (const t of new Set(joinAffixes(splitIdentifier(d)))) add(t, 0.5);
+    for (const t of joinAffixes(splitIdentifier(cls))) add(t, 1);
+    for (const t of joinAffixes(splitIdentifier(method))) add(t, 1);
+    fns.push({ id: n.id, entityId, name: n.name, file, pkg: pkgOf(n.id), concepts: cs, w });
+  }
+  if (fns.length === 0) return null;
+
+  const N = fns.length;
+  const minCluster = o.minCluster ?? (N < 60 ? 2 : 3), splitAbove = o.splitAbove ?? 30, maxDepth = o.maxDepth ?? 4;
+  const df = new Map<string, number>();
+  for (const f of fns) for (const t of f.w.keys()) df.set(t, (df.get(t) ?? 0) + 1);
+  // A word in a quarter of all functions says nothing about which part of the product it is. (Skipped for tiny repositories, where everything is common.)
+  const capped = (t: string) => N >= 40 && (df.get(t) ?? 0) / N > 0.25;
+
+  const leaf = (f: DomainFn): TreeNode => ({
+    id: `fn:${f.id}`, kind: "function", label: f.name, sub: `${baseName(f.file)} · ${f.concepts.length ? [...new Set(f.concepts.map((c) => c.kind))].join(", ") : "no concept"}`,
+    count: f.concepts.length, badges: countKinds(f.concepts), children: [], entityId: f.entityId,
+  });
+
+  // Group `group` by the most distinctive word each function still has. Returns the named groups and the functions no word fits.
+  const split = (group: DomainFn[], used: ReadonlySet<string>, path: string[], depth: number): { nodes: TreeNode[]; rest: DomainFn[] } => {
+    const local = new Map<string, number>();
+    for (const f of group) for (const t of f.w.keys()) if (!used.has(t) && !capped(t)) local.set(t, (local.get(t) ?? 0) + 1);
+    let allowed = new Set([...local].filter(([, n]) => n >= minCluster && n < group.length).map(([t]) => t));
+    let assigned = new Map<string, DomainFn[]>(), rest: DomainFn[] = [];
+    for (let pass = 0; pass < 6; pass++) {
+      assigned = new Map(); rest = [];
+      for (const f of group) {
+        let best: string | null = null, bestScore = -Infinity;
+        // Coarse first: a word that covers many functions, and comes from the file or class name, names the group; finer words split it later.
+        for (const t of f.w.keys()) { if (!allowed.has(t)) continue; const sc = (f.w.get(t) ?? 0) * (1 + Math.log(local.get(t) ?? 1)); if (sc > bestScore || (sc === bestScore && best !== null && t < best)) { best = t; bestScore = sc; } }
+        if (best === null) rest.push(f); else assigned.set(best, [...(assigned.get(best) ?? []), f]);
+      }
+      const small = [...assigned].filter(([, g]) => g.length < minCluster).map(([t]) => t);
+      if (small.length === 0) break;
+      allowed = new Set([...allowed].filter((t) => !small.includes(t)));
+    }
+    const terms = [...assigned.keys()].sort((a, b) => assigned.get(b)!.length - assigned.get(a)!.length || a.localeCompare(b));
+    const nodeFor = (term: string, members: DomainFn[], nested: TreeNode[]): TreeNode => {
+      const here = [...path, term];
+      const inner = members.length > splitAbove && depth < maxDepth ? split(members, new Set([...used, term]), here, depth + 1) : { nodes: [] as TreeNode[], rest: members };
+      return { id: `domain:${here.join(">")}`, kind: "domain", label: titleCase(term), sub: "", count: 0, badges: [], children: [...inner.nodes, ...nested, ...inner.rest.map(leaf)] };
+    };
+    // "submerchant" is filed under "merchant" when both exist at this level.
+    const nestedUnder = new Map<string, string[]>();
+    for (const t of terms) for (const a of AFFIXES) { const base = t.startsWith(a) ? t.slice(a.length) : ""; if (base.length >= 4 && assigned.has(base)) { nestedUnder.set(base, [...(nestedUnder.get(base) ?? []), t]); break; } }
+    const nestedTerms = new Set([...nestedUnder.values()].flat());
+    const nodes = terms.filter((t) => !nestedTerms.has(t)).map((t) => nodeFor(t, assigned.get(t)!, (nestedUnder.get(t) ?? []).map((c) => nodeFor(c, assigned.get(c)!, []))));
+    return { nodes, rest };
+  };
+
+  const top = split(fns, new Set(), [], 0);
+  const topNodes = [...top.nodes];
+  if (top.rest.length) topNodes.push({ id: "domain:other", kind: "domain", label: "Other", sub: "", count: 0, badges: [], children: top.rest.map(leaf) });
+
+  // Roll the functions and concepts up, once each, and describe each group in words.
+  const leafFn = new Map(fns.map((f) => [`fn:${f.id}`, f]));
+  const finish = (n: TreeNode): { fns: DomainFn[]; concepts: Map<string, SemanticConcept> } => {
+    if (n.kind === "function") { const f = leafFn.get(n.id)!; return { fns: [f], concepts: new Map(f.concepts.map((c) => [c.id, c])) }; }
+    const fs: DomainFn[] = [], cs = new Map<string, SemanticConcept>();
+    for (const c of n.children) { const r = finish(c); fs.push(...r.fns); for (const [k, v] of r.concepts) cs.set(k, v); }
+    const pk = new Map<string, number>();
+    for (const f of fs) if (f.pkg) pk.set(f.pkg, (pk.get(f.pkg) ?? 0) + 1);
+    const top1 = [...pk].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+    n.count = cs.size; n.badges = countKinds([...cs.values()]);
+    n.sub = `${plural(fs.length, "function")}${top1 && top1[1] / fs.length >= 0.6 && top1[0] !== "root" ? ` · mainly ${top1[0]}` : ""}`;
+    n.children.sort((a, b) => (a.kind === "function" ? 1 : 0) - (b.kind === "function" ? 1 : 0) || (a.id === "domain:other" ? 1 : 0) - (b.id === "domain:other" ? 1 : 0) || b.count - a.count || a.label.localeCompare(b.label));
+    return { fns: fs, concepts: cs };
+  };
+  const root: TreeNode = { id: "root:domain", kind: "root", label: "Domains", sub: "", count: 0, badges: [], children: topNodes };
+  finish(root);
+  root.sub = plural(N, "function");
+  return root;
 }
 
 // ---------------------------------------------------------------- what is drawn

@@ -3,21 +3,22 @@ import type { ConceptHierarchyView, EntityCode } from "@cie/schema";
 import { call } from "./api.ts";
 import { SOUNDNESS } from "./concept-hierarchy-view.ts";
 import {
-  DEFAULT_LAYOUT, PAGE, ZOOMS, buildMeaningTree, buildStructureTree, clip, conceptsOfEntity, defaultExpanded, layoutTree, matchesFor, visibleTree, zoomToFit, type PNode, type TreeKind, type TreeNode,
+  DEFAULT_LAYOUT, PAGE, ZOOMS, buildDomainTree, buildMeaningTree, buildStructureTree, clip, conceptsOfEntity, defaultExpanded, layoutTree, matchesFor, visibleTree, zoomToFit, type PNode, type TreeKind, type TreeNode,
 } from "./concept-tree.ts";
 
-type Lens = "structure" | "meaning";
+type Lens = "domain" | "structure" | "meaning";
 const LENS: Record<Lens, { label: string; help: string; depth: number }> = {
+  domain: { label: "Domain view", help: "Functions grouped by the words their names and paths share (merchant, ledger, fraud, ...): the broadest meaningful word first, then finer words inside big groups. This reads the code's vocabulary, not its meaning, so it can only find domains the code names. Plumbing words (service, handler, get, ...) are ignored.", depth: 1 },
   structure: { label: "Where it lives", help: "The code's own containment: repository, package, module, class, function. Concepts are counted at each level; the function is the piece of code.", depth: 2 },
   meaning: { label: "What it does", help: "Shape families, the shapes composed from them, the concepts, then the functions that show them. Concepts are not related to each other beyond this.", depth: 1 },
 };
 /** What each kind of node is called in the legend and in its own text, so colour is never the only cue. */
-const KIND_WORD: Record<TreeKind, string> = { root: "all", repo: "repository", package: "package", module: "module", class: "class", function: "code", family: "shape family", variant: "composed shape", concept: "concept", more: "more" };
-const LEGEND: TreeKind[] = ["repo", "package", "module", "class", "family", "variant", "concept", "function"];
+const KIND_WORD: Record<TreeKind, string> = { domain: "domain", root: "all", repo: "repository", package: "package", module: "module", class: "class", function: "code", family: "shape family", variant: "composed shape", concept: "concept", more: "more" };
+const LEGEND: TreeKind[] = ["domain", "repo", "package", "module", "class", "family", "variant", "concept", "function"];
 interface Props { revision: string; view: ConceptHierarchyView; onAsk: (pin: { title: string; ids: string[] }) => void }
 
 export function ConceptTreeGraph({ revision, view, onAsk }: Props) {
-  const [lens, setLens] = useState<Lens>("structure");
+  const [lens, setLens] = useState<Lens>("domain");
   const [onlyWith, setOnlyWith] = useState(true);
   const [query, setQuery] = useState("");
   const [zoom, setZoom] = useState(2);
@@ -29,7 +30,7 @@ export function ConceptTreeGraph({ revision, view, onAsk }: Props) {
   const [code, setCode] = useState<{ id: string; value?: EntityCode; error?: string } | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
 
-  const root = useMemo<TreeNode | null>(() => (lens === "structure" ? buildStructureTree(view, { onlyWithConcepts: onlyWith }) : buildMeaningTree(view)), [view, lens, onlyWith]);
+  const root = useMemo<TreeNode | null>(() => (lens === "domain" ? buildDomainTree(view, { onlyWithConcepts: onlyWith }) : lens === "structure" ? buildStructureTree(view, { onlyWithConcepts: onlyWith }) : buildMeaningTree(view)), [view, lens, onlyWith]);
   // A different tree starts at its top again; the user's own opening and closing is kept while they stay on one tree.
   useEffect(() => {
     const start = root ? defaultExpanded(root, LENS[lens].depth) : new Set<string>();
@@ -72,7 +73,7 @@ export function ConceptTreeGraph({ revision, view, onAsk }: Props) {
           {(Object.keys(LENS) as Lens[]).map((l) => <button key={l} type="button" role="radio" aria-checked={lens === l} className={lens === l ? "on" : ""} title={LENS[l].help} onClick={() => setLens(l)}>{LENS[l].label}</button>)}
         </div>
         <label>Find <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="name, shape or file" /></label>
-        {lens === "structure" && <label className="inline"><input type="checkbox" checked={onlyWith} onChange={(e) => setOnlyWith(e.target.checked)} /> only code with concepts</label>}
+        {lens !== "meaning" && <label className="inline"><input type="checkbox" checked={onlyWith} onChange={(e) => setOnlyWith(e.target.checked)} /> only code with concepts</label>}
         <span className="grow" />
         <button className="secondary" onClick={() => root && setExpanded(defaultExpanded(root, 1))}>Collapse</button>
         <button className="secondary" onClick={() => root && setExpanded(defaultExpanded(root, LENS[lens].depth + 1))}>Open one more level</button>
@@ -84,7 +85,7 @@ export function ConceptTreeGraph({ revision, view, onAsk }: Props) {
       <p className="muted small">{LENS[lens].help}{query && ` ${found.matches.size ? `${found.matches.size} match(es) opened.` : "No match."}`}</p>
       <div className="tree-split">
         <div className="tree-scroll" ref={scroller} tabIndex={0} aria-label="Concept tree, scrollable">
-          {!layout && <p className="muted">{lens === "structure" ? "No code with concepts to draw." : "No concepts to draw."}</p>}
+          {!layout && <p className="muted">{lens === "meaning" ? "No concepts to draw." : "No code with concepts to draw."}</p>}
           {layout && (
             <svg width={layout.width * scale} height={layout.height * scale} viewBox={`0 0 ${layout.width} ${layout.height}`} role="tree" aria-label={LENS[lens].label}>
               <g aria-hidden="true">{layout.links.map((l) => <path key={l.id} d={l.d} className="tlink" />)}</g>

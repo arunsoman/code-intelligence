@@ -646,6 +646,7 @@ header { flex-wrap: wrap; }
 .tnode.k-root rect, .tnode.k-repo rect { stroke: var(--ink); }
 .tnode.k-package rect, .tnode.k-module rect, .tnode.k-class rect { stroke: var(--fact); }
 .tnode.k-family rect, .tnode.k-variant rect { stroke: var(--fog); }
+.tnode.k-domain rect { stroke: var(--hyp); }
 .tnode.k-concept rect { stroke: var(--inference); }
 .tnode.k-function rect { stroke: var(--ok); }
 .tnode.k-more rect { stroke-dasharray: 4 3; }
@@ -658,7 +659,7 @@ header { flex-wrap: wrap; }
 .tree-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin: 0; }
 .tkey::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 4px; border: 2px solid var(--line); border-radius: 3px; vertical-align: -1px; }
 .tkey.k-repo::before { border-color: var(--ink); } .tkey.k-package::before, .tkey.k-module::before, .tkey.k-class::before { border-color: var(--fact); }
-.tkey.k-family::before, .tkey.k-variant::before { border-color: var(--fog); } .tkey.k-concept::before { border-color: var(--inference); } .tkey.k-function::before { border-color: var(--ok); }
+.tkey.k-family::before, .tkey.k-variant::before { border-color: var(--fog); } .tkey.k-domain::before { border-color: var(--hyp); } .tkey.k-concept::before { border-color: var(--inference); } .tkey.k-function::before { border-color: var(--ok); }
 @media (max-width: 900px) { .tree-split { grid-template-columns: 1fr; grid-template-rows: minmax(260px, 1fr) minmax(160px, 40%); } }
 .row.tree-bar > * { flex: 0 0 auto; }
 .row.tree-bar > .grow { flex: 1 1 auto; }
