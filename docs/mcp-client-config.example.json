@@ -1,0 +1,9 @@
+{
+  "$comment": "F12 §1.3/§8: one entry adds CIE to an agent host. The adapter is a separate process over stdio; it talks to the already-running local gateway on loopback only. No account, no remote endpoint. Start the gateway first (npm start).",
+  "mcpServers": {
+    "cie": {
+      "command": "cie",
+      "args": ["mcp"]
+    }
+  }
+}
