@@ -351,7 +351,9 @@ export class Service {
     "C32/listReleases": (c, b) => this.releaseResult(c, () => this.releases.listReleases(c.actor.tenantId, b.limit)),
     "C32/getRelease": (c, b) => this.releaseResult(c, () => this.releases.getRelease(b.releaseId)),
     "C32/previewMilestone": (c, b) => this.releaseResult(c, () => this.releases.previewMilestone(b.releaseId)),
-    "C32/freezeScope": (c, b) => this.releaseResult(c, () => this.releases.freezeScope(b.releaseId, c.actor.principalId, b.expectedVersion)),
+    "C32/listMilestones": (c, b) => this.releaseResult(c, () => this.releases.listMilestones(String(b.owner ?? ""), String(b.repo ?? ""))),
+    "C32/lookupIssue": (c, b) => this.releaseResult(c, () => this.releases.lookupReleaseIssue(b.releaseId, Number(b.number))),
+    "C32/freezeScope": (c, b) => this.releaseResult(c, () => this.releases.freezeScope(b.releaseId, c.actor.principalId, b.expectedVersion, b.selection)),
     "C32/assessScopeChange": (c, b) => this.releaseResult(c, () => this.releases.assessScopeChange(b.releaseId, c.actor.principalId, b.fromVersion, b.toVersion)),
     "C32/assessReleaseItem": (c, b) => this.releaseResult(c, () => this.releases.assessItem(b.releaseId, c.actor.principalId, b.issueNumber)),
     "C32/getReleaseReadiness": async (c, b) => {
@@ -384,20 +386,36 @@ export class Service {
    * handles authentication). When `gh` is unavailable this answers with no issues rather than guessing — the
    * same "say I can't determine this" rule the rest of the system follows. */
   private releaseAdapters(): ReleaseAdapters {
+    /** One `gh` read. A failure is reported with GitHub's own reason rather than read as "nothing there". */
+    const ghJson = (args: string[], what: string): unknown => {
+      if (!isGhInstalled()) throw new ReleaseError("PROVIDER_UNAVAILABLE", "the GitHub CLI (gh) is not installed or not signed in, so GitHub cannot be read");
+      try {
+        return JSON.parse(execFileSync("gh", args, { encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "pipe"] }) || "[]");
+      } catch (e) {
+        const text = String((e as { stderr?: unknown }).stderr ?? (e as Error).message);
+        if (/not found|404/i.test(text)) throw new ReleaseError("NOT_FOUND", `GitHub has no ${what}`);
+        if (/invalid|422|validation/i.test(text) && /milestone/i.test(what)) throw new ReleaseError("NOT_FOUND", `GitHub has no ${what}`);
+        throw new ReleaseError("PROVIDER_UNAVAILABLE", `GitHub could not be read for ${what}: ${text.split("\n")[0]!.trim() || "unknown error"}`, true);
+      }
+    };
     return {
       milestoneIssues: (milestone) => {
-        if (!isGhInstalled()) return [];
-        try {
-          const out = execFileSync(
-            "gh",
-            ["api", `repos/${milestone.owner}/${milestone.repo}/issues`, "-f", `milestone=${milestone.number}`, "-f", "state=all", "-f", "per_page=100"],
-            { encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "ignore"] },
-          );
-          const parsed = JSON.parse(out || "[]");
-          return (Array.isArray(parsed) ? parsed : [])
-            .filter((i: any) => !i.pull_request)
-            .map((i: any) => ({ number: Number(i.number), title: String(i.title ?? ""), state: i.state === "closed" ? "closed" as const : "open" as const }));
-        } catch { return []; }
+        const parsed = ghJson(["api", "--method", "GET", `repos/${milestone.owner}/${milestone.repo}/issues`, "-f", `milestone=${milestone.number}`, "-f", "state=all", "-f", "per_page=100"], `milestone #${milestone.number} of ${milestone.owner}/${milestone.repo}`);
+        return (Array.isArray(parsed) ? parsed : [])
+          .filter((i: any) => !i.pull_request)
+          .map((i: any) => ({ number: Number(i.number), title: String(i.title ?? ""), state: i.state === "closed" ? "closed" as const : "open" as const }));
+      },
+      listMilestones: (owner, repo) => {
+        const parsed = ghJson(["api", "--method", "GET", `repos/${owner}/${repo}/milestones`, "-f", "state=all", "-f", "per_page=100"], `${owner}/${repo}`);
+        return (Array.isArray(parsed) ? parsed : []).map((m: any) => ({
+          number: Number(m.number), title: String(m.title ?? ""), state: m.state === "closed" ? "closed" as const : "open" as const,
+          openIssues: Number(m.open_issues ?? 0), closedIssues: Number(m.closed_issues ?? 0),
+        }));
+      },
+      issue: (owner, repo, number) => {
+        const i: any = ghJson(["api", "--method", "GET", `repos/${owner}/${repo}/issues/${number}`], `issue #${number} of ${owner}/${repo}`);
+        if (i?.pull_request) throw new ReleaseError("INVALID_SCHEMA", `#${number} is a pull request, not an issue`);
+        return { number: Number(i.number), title: String(i.title ?? ""), state: i.state === "closed" ? "closed" as const : "open" as const };
       },
     };
   }

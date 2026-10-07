@@ -102,6 +102,7 @@ export function App() {
   const [releasesOpen, setReleasesOpen] = useState(false);
   const [boardOpen, setBoardOpen] = useState(false);
   const [lensOpen, setLensOpen] = useState(false);
+  const [lensReleaseId, setLensReleaseId] = useState<string | undefined>(undefined);
   const [searchOpen, setSearchOpen] = useState(false);
   const [hotspotsOpen, setHotspotsOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
@@ -532,7 +533,7 @@ export function App() {
           />
         )}
         {campaignsOpen && <CampaignPanel onClose={() => setCampaignsOpen(false)} />}
-        {releasesOpen && <ReleaseWizardPanel onClose={() => setReleasesOpen(false)} />}
+        {releasesOpen && <ReleaseWizardPanel onClose={() => setReleasesOpen(false)} onOpenLens={(releaseId) => { setReleasesOpen(false); setLensReleaseId(releaseId); setLensOpen(true); }} />}
         {boardOpen && (
           <ReleaseBoardPanel
             onClose={() => setBoardOpen(false)}
@@ -540,7 +541,7 @@ export function App() {
             onOpenNew={(releaseId) => { setBoardOpen(false); setBuildContext({ releaseId }); setBuildOpen(true); }}
           />
         )}
-        {lensOpen && <ReleaseLensPanel onClose={() => setLensOpen(false)} />}
+        {lensOpen && <ReleaseLensPanel releaseId={lensReleaseId} onClose={() => { setLensOpen(false); setLensReleaseId(undefined); }} onOpenScope={() => { setLensOpen(false); setLensReleaseId(undefined); setReleasesOpen(true); }} />}
         {searchOpen && repoPath && <SearchPanel repoPath={repoPath} revision={revision} onClose={() => setSearchOpen(false)} />}
         {hotspotsOpen && repoPath && <HotspotPanel repoPath={repoPath} revision={revision} onClose={() => setHotspotsOpen(false)} />}
         {insightsOpen && revision && <InsightsPanel revision={revision} view={view} onClose={() => setInsightsOpen(false)} onAsk={askFromInsights} onReindexed={refresh} />}
@@ -562,7 +563,7 @@ export function App() {
         <button className="secondary small" onClick={() => setCampaignsOpen(true)} title="Coordinated multi-repository changes: freeze a versioned population, plan a dependency-ordered canary rollout, review each child independently, run joint compatibility checks, and publish per-child draft PRs">Campaigns</button>
         <button className="secondary small" onClick={() => setReleasesOpen(true)} title="Release scope: freeze what's in a release against a GitHub milestone. An issue added to the milestone later needs assessment before it counts, never silently in scope.">Releases</button>
         <button className="secondary small" onClick={() => setBoardOpen(true)} title="Release Board: every feature request building toward a release, for dev and QA. QA approves a candidate as a genuinely different person, never a self-approval.">Release Board</button>
-        <button className="secondary small" onClick={() => setLensOpen(true)} title="Release Lens: one evidence ledger for a release's go/no-go, viewed through a stakeholder lens. The lens only reorders rows; it never recomputes them.">Release Lens</button>
+        <button className="secondary small" onClick={() => { setLensReleaseId(undefined); setLensOpen(true); }} title="Release Lens: one evidence ledger for a release's go/no-go, viewed through a stakeholder lens. The lens only reorders rows; it never recomputes them.">Release Lens</button>
         <button className="secondary small" disabled={!revision} onClick={() => setInsightsOpen(true)}>Insights</button>
         <button className="secondary small" disabled={!revision} onClick={() => setInvestigationsOpen(true)}>Investigations</button>
         <button className="link" onClick={openAudit}>Audit log</button>

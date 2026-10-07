@@ -38,6 +38,26 @@ export interface ReleaseScopeIssue {
 export interface ReleaseAdapters {
   /** Every issue currently in the release's milestone, as the host sees it right now. */
   milestoneIssues(milestone: ReleaseMilestoneRef): ReleaseScopeIssue[];
+  /** The repository's milestones, for the wizard's picker. Throws a ReleaseError when the host cannot say. */
+  listMilestones?(owner: string, repo: string): ReleaseMilestoneInfo[];
+  /** One issue by number (to add an issue from outside the milestone). Throws a ReleaseError when not found. */
+  issue?(owner: string, repo: string, number: number): ReleaseScopeIssue;
+}
+
+export interface ReleaseMilestoneInfo {
+  number: number;
+  title: string;
+  state: "open" | "closed";
+  openIssues: number;
+  closedIssues: number;
+}
+
+/** Which issues a freeze commits to. Omitted = every milestone issue (the original behaviour). */
+export interface FreezeSelection {
+  /** Issue numbers committed to the release; every other milestone issue is recorded as EXCLUDED (stretch). */
+  include: number[];
+  /** Issues added by number from outside the milestone; they are committed to scope. */
+  manual?: number[];
 }
 
 const nowIso = () => new Date().toISOString();
@@ -164,12 +184,25 @@ export class ReleaseScope {
 
   // ---------------------------------------------------------------- freezeScope
 
-  freezeScope(releaseId: string, actor: string, expectedVersion: number): { scopeVersion: number; scopeHash: string; items: ReleaseItemView[] } {
+  freezeScope(releaseId: string, actor: string, expectedVersion: number, selection?: FreezeSelection): { scopeVersion: number; scopeHash: string; items: ReleaseItemView[] } {
     const r = this.release(releaseId);
     if (r.state === "CANCELLED") throw new ReleaseError("VERSION_CONFLICT", "release is cancelled");
     if (r.version !== expectedVersion) throw new ReleaseError("VERSION_CONFLICT", `release is at version ${r.version}`);
-    const issues = this.adapters.milestoneIssues(r.milestone);
+    const milestoneIssues = this.adapters.milestoneIssues(r.milestone);
+    // Issues added by number earlier stay in the population on a re-freeze; new ones are looked up now.
+    const manualNumbers = new Set([...this.manualIssues(releaseId), ...(selection?.manual ?? [])]);
+    const inMilestone = new Set(milestoneIssues.map((i) => i.number));
+    const extra: ReleaseScopeIssue[] = [];
+    for (const n of manualNumbers) {
+      if (inMilestone.has(n)) continue;
+      const known = this.item(releaseId, n);
+      if (known && !(selection?.manual ?? []).includes(n)) { extra.push({ number: n, title: known.title, state: known.issue_state }); continue; }
+      extra.push(this.lookupIssue(r.milestone, n));
+    }
+    const issues = [...milestoneIssues, ...extra];
     if (!issues.length) throw new ReleaseError("INSUFFICIENT_EVIDENCE", "the milestone has no issues");
+    const chosen = selection ? new Set([...selection.include, ...manualNumbers]) : null;
+    if (chosen && ![...chosen].some((n) => issues.some((i) => i.number === n))) throw new ReleaseError("INSUFFICIENT_EVIDENCE", "choose at least one issue to commit to this release");
 
     const hash = sha256(canonical(issues.map((i) => i.number).sort((a, b) => a - b)));
     const prev = this.currentScopeVersion(releaseId);
@@ -187,11 +220,14 @@ export class ReleaseScope {
       } else {
         // An issue seen for the first time after freeze is not silently accepted: v1 items start ASSESSED,
         // later additions do not (mirrors F08-A2).
-        const assessment: AssessmentState = version === 1 ? "ASSESSED" : "NEEDS_ASSESSMENT";
+        const assessment: AssessmentState = version === 1 || manualNumbers.has(issue.number) ? "ASSESSED" : "NEEDS_ASSESSMENT";
+        const left = chosen !== null && !chosen.has(issue.number);
+        const reason = left ? "stretch — left out of scope at freeze" : manualNumbers.has(issue.number) ? "added by number" : version === 1 ? null : "added to the milestone after freeze";
         this.db().prepare(
           "insert into release_items(release_id, issue_number, scope_version, title, issue_state, state, assessment_state, reason, updated_at) values (?,?,?,?,?,?,?,?,?)",
-        ).run(releaseId, issue.number, version, issue.title, issue.state, "IN_SCOPE", assessment, version === 1 ? null : "added to the milestone after freeze", this.now());
-        this.append(releaseId, actor, "ITEM_ADDED", issue.number, { scopeVersion: version, assessment });
+        ).run(releaseId, issue.number, version, issue.title, issue.state, left ? "EXCLUDED" : "IN_SCOPE", left ? "ASSESSED" : assessment, reason, this.now());
+        this.append(releaseId, actor, "ITEM_ADDED", issue.number, { scopeVersion: version, assessment, manual: manualNumbers.has(issue.number) });
+        if (left) this.append(releaseId, actor, "ITEM_STATE", issue.number, { state: "EXCLUDED", reason });
       }
     }
 
@@ -266,6 +302,28 @@ export class ReleaseScope {
   previewMilestone(releaseId: string): { issues: ReleaseScopeIssue[] } {
     const r = this.release(releaseId);
     return { issues: this.adapters.milestoneIssues(r.milestone) };
+  }
+
+  /** The repository's milestones — the wizard's picker. Needs no release yet. */
+  listMilestones(owner: string, repo: string): { milestones: ReleaseMilestoneInfo[] } {
+    if (!this.adapters.listMilestones) throw new ReleaseError("NOT_IMPLEMENTED", "this host cannot list milestones");
+    return { milestones: this.adapters.listMilestones(owner, repo) };
+  }
+
+  /** Look an issue up by number so it can be added to scope from outside the milestone. */
+  lookupIssue(milestone: ReleaseMilestoneRef, number: number): ReleaseScopeIssue {
+    if (!this.adapters.issue) throw new ReleaseError("NOT_IMPLEMENTED", "this host cannot look issues up");
+    if (!Number.isInteger(number) || number <= 0) throw new ReleaseError("INVALID_SCHEMA", "an issue number is a positive whole number");
+    return this.adapters.issue(milestone.owner, milestone.repo, number);
+  }
+
+  lookupReleaseIssue(releaseId: string, number: number): ReleaseScopeIssue {
+    return this.lookupIssue(this.release(releaseId).milestone, number);
+  }
+
+  /** Issue numbers added to this release by number rather than through the milestone. */
+  private manualIssues(releaseId: string): number[] {
+    return this.events(releaseId).filter((e) => e.type === "ITEM_ADDED" && e.issueNumber !== null && (e.payload as any).manual === true).map((e) => e.issueNumber as number);
   }
 
   listReleases(tenantId: string, limit = 50): Release[] {

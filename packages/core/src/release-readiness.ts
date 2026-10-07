@@ -22,6 +22,8 @@ export interface ReadinessRow {
   /** Stakeholder lenses this row is primary evidence for (pm, dev, arch, qa, sec, ops, relmgmt). */
   domain: string[];
   status: RowStatus;
+  /** "fact" is read straight from a source; "inference" is derived from one (drawn dashed in the Lens). */
+  kind?: "fact" | "inference";
   measure: string;
   detail: string;
   source: string;
@@ -164,6 +166,11 @@ export async function buildReleaseReadiness(deps: ReadinessDeps, input: Readines
     });
   }
 
+  // ---- rows whose producers exist in the product but are not wired to a release yet. They say so, never guess.
+  rows.push({ ...unknown("arch", "Architecture alignment", ["arch"], "Not wired to a release yet: tracing this release's structural changes against its design document needs the C23 archaeology producer, which is not connected to releases.", "C23 archaeology · V1 map"), kind: "inference" });
+  rows.push({ ...unknown("confidence", "Test-confidence coverage", ["qa"], "Not wired to a release yet: the V12 test-confidence map is not connected to releases, so which behaviors have an asserting test is not determined.", "V12 test-confidence map"), kind: "inference" });
+  rows.push(unknown("compliance", "Compliance audit trail", ["relmgmt"], "Not wired to a release yet: the C18 provenance ledger is not connected to releases, so whether every change traces to a commit, PR or CI run is not determined.", "C18 provenance ledger"));
+
   // ---- operational readiness: RUNBOOK.md, a health-shaped route, structured logging — presence only
   if (!input.revisionId) {
     rows.push(unknown("ops", "Operational readiness", ["ops"], "No indexed revision was supplied for this release's repository.", "C06 route scan · ops-readiness.ts"));
@@ -186,6 +193,7 @@ export async function buildReleaseReadiness(deps: ReadinessDeps, input: Readines
   }
 
   const severity: Record<RowStatus, number> = { blocked: 0, warn: 1, unknown: 2, pass: 3 };
+  for (const row of rows) row.kind ??= "fact";
   rows.sort((a, b) => severity[a.status] - severity[b.status]);
 
   const blocked = rows.filter((r) => r.status === "blocked").length;

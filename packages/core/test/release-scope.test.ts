@@ -15,11 +15,16 @@ function spec(over: Partial<ReleaseSpec> = {}): ReleaseSpec {
 class Harness {
   store = new Store(":memory:");
   issues: ReleaseScopeIssue[] = [];
+  elsewhere: ReleaseScopeIssue[] = [];
   engine: ReleaseScope;
   private tick = 0;
 
   constructor() {
-    const adapters: ReleaseAdapters = { milestoneIssues: () => this.issues };
+    const adapters: ReleaseAdapters = {
+      milestoneIssues: () => this.issues,
+      listMilestones: () => [{ number: 7, title: "v2.5.0", state: "open", openIssues: 2, closedIssues: 1 }],
+      issue: (_o, _r, n) => { const found = this.elsewhere.find((i) => i.number === n); if (!found) throw new ReleaseError("NOT_FOUND", `GitHub has no issue #${n}`); return found; },
+    };
     this.engine = new ReleaseScope(this.store, adapters, () => new Date(1_700_000_000_000 + (this.tick++) * 1000).toISOString());
   }
 
@@ -164,5 +169,48 @@ describe("getRelease", () => {
     assert.equal(view.counts.IN_SCOPE, 3);
     assert.equal(view.needsAssessment, 1);
     assert.equal(view.scope?.version, 2);
+  });
+});
+
+describe("selective freeze", () => {
+  test("issues left out are recorded EXCLUDED as stretch; the rest are IN_SCOPE", () => {
+    const h = new Harness();
+    h.issues = [issue(1), issue(2), issue(3)];
+    const r = h.engine.createRelease("p1", "t", spec());
+    const result = h.engine.freezeScope(r.releaseId, "p1", h.version(r.releaseId), { include: [1, 3] });
+    assert.deepEqual(h.engine.inScopeIssues(r.releaseId).sort(), [1, 3]);
+    const left = result.items.find((i) => i.issueNumber === 2)!;
+    assert.equal(left.state, "EXCLUDED");
+    assert.match(left.reason ?? "", /stretch/);
+  });
+
+  test("an issue added by number joins scope and survives a re-freeze", () => {
+    const h = new Harness();
+    h.issues = [issue(1)];
+    h.elsewhere = [issue(99, "from elsewhere")];
+    const r = h.engine.createRelease("p1", "t", spec());
+    h.engine.freezeScope(r.releaseId, "p1", h.version(r.releaseId), { include: [1], manual: [99] });
+    assert.deepEqual(h.engine.inScopeIssues(r.releaseId).sort((a, b) => a - b), [1, 99]);
+    h.engine.freezeScope(r.releaseId, "p1", h.version(r.releaseId));
+    const view = h.engine.getRelease(r.releaseId);
+    assert.equal(view.items.find((i) => i.issueNumber === 99)!.state, "IN_SCOPE");
+  });
+
+  test("refuses a freeze that commits to nothing", () => {
+    const h = new Harness();
+    h.issues = [issue(1)];
+    const r = h.engine.createRelease("p1", "t", spec());
+    assert.throws(() => h.engine.freezeScope(r.releaseId, "p1", h.version(r.releaseId), { include: [] }), ReleaseError);
+  });
+
+  test("an unknown issue number is refused with a clear error", () => {
+    const h = new Harness();
+    const r = h.engine.createRelease("p1", "t", spec());
+    assert.throws(() => h.engine.lookupReleaseIssue(r.releaseId, 404), /no issue #404/);
+  });
+
+  test("lists the repository's milestones", () => {
+    const h = new Harness();
+    assert.equal(h.engine.listMilestones("acme", "widgets").milestones[0]!.title, "v2.5.0");
   });
 });
