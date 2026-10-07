@@ -13,13 +13,14 @@ import { validateChatPlan } from "./chat-plan.ts";
 import { executeChatPlan } from "./chat-execution.ts";
 import { runChatAgent } from "./chat-agent.ts";
 import type {
-  AnalysisBatch, ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptStore, ConceptsOutput, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceRef, ExplainResult, ExplanationOutput,
-  ChartOutput, HypothesesOutput, ModelProvider, ModelRequest, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec, SourceSpan,
+  AnalysisBatch, ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptHierarchyView, ConceptStore, ConceptsOutput, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceBundle, EvidenceRef, ExplainResult, ExplanationOutput,
+  ChartOutput, HypothesesOutput, ModelProvider, ModelRequest, NameArchOutput, NameConceptOutput, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec, SourceSpan,
   DefectDetectionInput, DetectorFinding, BenchmarkPolicy, BenchmarkResult, Fact,
 } from "@cie/schema";
-import { SCHEMA_CHALLENGE, SCHEMA_CONCEPTS, SCHEMA_EXPLANATION, SCHEMA_HYPOTHESES, SCHEMA_REPRESENTATION } from "@cie/schema";
+import { SCHEMA_CHALLENGE, SCHEMA_CONCEPTS, SCHEMA_EXPLANATION, SCHEMA_HYPOTHESES, SCHEMA_NAME_ARCH, SCHEMA_NAME_CONCEPT, SCHEMA_REPRESENTATION } from "@cie/schema";
 import { applyVerdict, gateClaim, modelText, wilson, withChallenge } from "./claims.ts";
 import { claimOf } from "./forms/common.ts";
+import { buildHierarchy, persistHierarchy, type NamingAdapter } from "./concept-hierarchy/index.ts";
 import { cardsFromOutput, chunkSymbols, mergeCards } from "./concepts.ts";
 import { buildFailureGraph, buildInvariantGraph } from "./forms/causal.ts";
 import { short } from "./forms/common.ts";
@@ -1358,8 +1359,8 @@ export class Service {
   }
 
   // ---------------------------------------------------------------- C07 jobs
-  /** Start indexing or concept extraction in the background. Returns the job at once; poll getJob for progress. */
-  enqueueJob(ctx: CallContext, req: { kind: "index" | "concepts"; repoPath?: string; revision?: string }): ApiResult<JobView & { deduped?: boolean }> {
+  /** Start indexing, concept extraction, or hierarchy building in the background. Returns the job at once; poll getJob for progress. */
+  enqueueJob(ctx: CallContext, req: { kind: "index" | "concepts" | "concept-hierarchy"; repoPath?: string; revision?: string }): ApiResult<JobView & { deduped?: boolean }> {
     if (req.kind === "index") {
       if (!req.repoPath || !isAbsolute(req.repoPath)) return fail(ctx, { code: "INVALID_SCHEMA", message: "repoPath must be an absolute path", retryable: false });
       const repoPath = req.repoPath;
@@ -1370,7 +1371,12 @@ export class Service {
       if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index a repository first", retryable: false });
       return ok(ctx, this.jobs.enqueue(ctx, { kind: "concepts", params: { revision: rev.id, repoPath: rev.repoRoot }, run: (jctx, control) => this.extractConcepts(jctx, { revision: rev.id }, control) }));
     }
-    return fail(ctx, { code: "INVALID_SCHEMA", message: "kind must be index or concepts", retryable: false });
+    if (req.kind === "concept-hierarchy") {
+      const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+      if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index a repository first", retryable: false });
+      return ok(ctx, this.jobs.enqueue(ctx, { kind: "concept-hierarchy", params: { revision: rev.id, repoPath: rev.repoRoot }, run: (jctx, control) => this.buildConceptHierarchy(jctx, { revision: rev.id }, control) }));
+    }
+    return fail(ctx, { code: "INVALID_SCHEMA", message: "kind must be index, concepts or concept-hierarchy", retryable: false });
   }
 
   getJob(ctx: CallContext, req: { jobId: string }): ApiResult<JobView> {
@@ -1667,6 +1673,102 @@ export class Service {
   listConcepts(ctx: CallContext, req: { revision?: string }): ApiResult<ConceptCard[]> {
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     return rev ? ok(ctx, this.store.concepts(rev.id), { revision: rev.id }) : fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
+  }
+
+  // ---------------------------------------------------------------- concept hierarchy (dual-axis)
+  /**
+   * Naming runs through the same gateway path as every model call (egress, budget, audit), but its
+   * result is a label, never a claim: it is stored in the naming cache and on the concept, and the
+   * claims/verdicts tables are untouched. `modelVersion` in the cache key keeps names from one model
+   * from leaking into another's cache.
+   */
+  private namingAdapter(rev: RevisionRow): NamingAdapter {
+    const modelVersion = `${this.model.name}/${this.model.model}`;
+    return {
+      modelVersion,
+      name: async (req) => {
+        const schemaId = req.purpose === "NAME_ARCH" ? SCHEMA_NAME_ARCH : SCHEMA_NAME_CONCEPT;
+        const callCtx: CallContext = {
+          requestId: `req-name:${randomUUID()}`, idempotencyKey: `naming:${rev.id}:${randomUUID()}`,
+          actor: { principalId: "system", tenantId: "local", sessionId: "system" },
+          deadlineMs: Date.now() + 120_000, traceId: `trace-name:${randomUUID()}`,
+        };
+        const bundle: EvidenceBundle = { id: "naming", revision: rev.id, evidence: [], entities: [], relationships: [], facts: [], coverage: [], unresolved: [], tokenEstimate: 0 };
+        const { result } = await this.callModel<NameConceptOutput & NameArchOutput>(callCtx, rev, { purpose: req.purpose, schemaId, question: req.question, bundle });
+        if (!result.ok) return null;
+        return result.value.names.map((n) => ({ conceptId: n.conceptId, name: n.name }));
+      },
+    };
+  }
+
+  /**
+   * Build the dual-axis hierarchy for a revision: graphs → motifs → concepts → invariants →
+   * architecture → links → anchoring → naming. Job-controlled like concept extraction; everything is
+   * written in one persist step at the end, so a cancelled run leaves nothing behind.
+   */
+  async buildConceptHierarchy(ctx: CallContext, req: { revision?: string }, control?: JobControl): Promise<ApiResult<ConceptHierarchyView>> {
+    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
+    const result = await buildHierarchy(this.store, rev.id, { repoRoot: rev.repoRoot, adapter: this.namingAdapter(rev), control, provider: `${this.model.name}/${this.model.model}` });
+    control?.commit();
+    const provider = `${this.model.name}/${this.model.model}`;
+    const version = persistHierarchy(this.store, result, provider);
+    this.store.audit(actor(ctx), "concept-hierarchy.build", rev.id, {
+      version, concepts: result.concepts.length, invariants: result.invariants.length,
+      archNodes: result.arch.length, crossPackage: result.crossPackage.length, fullRebuild: result.stats.fullRebuild,
+      pdgsReused: result.stats.pdgs.reused, namingCacheHits: result.stats.naming.cacheHits,
+    });
+    const view = this.hierarchyView(rev, version, result);
+    return ok(ctx, view, { revision: rev.id, warnings: result.stats.warnings });
+  }
+
+  /** The read-only hierarchy view: the current version's live tables, or an older version's snapshot. */
+  conceptHierarchy(ctx: CallContext, req: { revision?: string; version?: number }): ApiResult<ConceptHierarchyView> {
+    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
+    const versions = this.store.semanticConceptVersions(rev.repoRoot);
+    const current = versions[0]?.version ?? 0;
+    const want = req.version ?? current;
+    if (!want) {
+      return ok(ctx, { revision: rev.id, version: 0, versions: [], concepts: [], invariants: [], arch: [], surfaces: [], entryPoints: [], crossPackage: [], links: [], stats: null });
+    }
+    if (want === current) {
+      const snapshot = this.store.latestSemanticVersionSnapshot(rev.id);
+      return ok(ctx, {
+        revision: rev.id, version: want, versions,
+        concepts: this.store.semanticConcepts(rev.id),
+        invariants: (snapshot?.invariants as ConceptHierarchyView["invariants"]) ?? [],
+        arch: this.store.archNodes(rev.id),
+        surfaces: (snapshot?.surfaces as ConceptHierarchyView["surfaces"]) ?? [],
+        entryPoints: [], crossPackage: (snapshot?.crossPackage as ConceptHierarchyView["crossPackage"]) ?? [],
+        links: this.store.crossAxisLinks(rev.id),
+        stats: (snapshot?.stats as ConceptHierarchyView["stats"]) ?? null,
+      });
+    }
+    const snap = this.store.semanticConceptVersion(rev.repoRoot, want);
+    if (!snap) return fail(ctx, { code: "NOT_FOUND", message: `no hierarchy version ${want}`, retryable: false });
+    const versionRevision = versions.find((v) => v.version === want)?.revision ?? rev.id;
+    return ok(ctx, {
+      revision: versionRevision, version: want, versions,
+      concepts: (snap.concepts as ConceptHierarchyView["concepts"]),
+      invariants: (snap.invariants as ConceptHierarchyView["invariants"]),
+      arch: this.store.archNodes(versionRevision),
+      surfaces: (snap.surfaces as ConceptHierarchyView["surfaces"]),
+      entryPoints: [], crossPackage: (snap.crossPackage as ConceptHierarchyView["crossPackage"]),
+      links: this.store.crossAxisLinks(versionRevision),
+      stats: null,
+    });
+  }
+
+  private hierarchyView(rev: RevisionRow, version: number, result: Awaited<ReturnType<typeof buildHierarchy>>): ConceptHierarchyView {
+    return {
+      revision: rev.id, version,
+      versions: this.store.semanticConceptVersions(rev.repoRoot),
+      concepts: result.concepts, invariants: result.invariants, arch: result.arch,
+      surfaces: result.surfaces, entryPoints: result.entryPoints, crossPackage: result.crossPackage,
+      links: result.links.map(({ conceptId, archNodeId }) => ({ conceptId, archNodeId })),
+      stats: result.stats,
+    };
   }
 
   // ---------------------------------------------------------------- views

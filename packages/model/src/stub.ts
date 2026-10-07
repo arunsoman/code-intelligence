@@ -1,6 +1,6 @@
 // Deterministic offline provider. It only reasons over the bundle it is given, so it works as a
 // reference for what a real provider may cite: evidence ids that exist in `bundle.evidence`.
-import type { ChallengeOutput, ChartOutput, ConceptsOutput, EvidenceBundle, ExplanationOutput, HypothesesOutput, ModelProvider, ModelRequest, RepresentationOutput, Relationship } from "@cie/schema";
+import type { ChallengeOutput, ChartOutput, ConceptsOutput, EvidenceBundle, ExplanationOutput, HypothesesOutput, ModelProvider, ModelRequest, NameArchOutput, NameConceptOutput, RepresentationOutput, Relationship } from "@cie/schema";
 
 const dirOf = (file: string) => {
   const parts = file.split("/");
@@ -299,6 +299,21 @@ function hypothesize(req: ModelRequest): HypothesesOutput {
   return { hypotheses: out.slice(0, 8) };
 }
 
+/** Offline naming is deliberately mechanical: kind plus the first member's own name. */
+function nameConcepts(req: ModelRequest): NameConceptOutput | NameArchOutput {
+  const parsed = JSON.parse(req.question) as { concepts?: { conceptId: string; kind: string; members?: { name: string }[] }[]; packages?: { conceptId: string; path: string }[] };
+  if (parsed.packages) {
+    return { names: parsed.packages.map((p) => ({ conceptId: p.conceptId, name: p.path.split("/").pop() ?? p.path, rationale: "the offline model uses the directory name" })) };
+  }
+  const concepts = parsed.concepts ?? [];
+  return {
+    names: concepts.map((c) => {
+      const first = c.members?.[0]?.name ?? "code";
+      return { conceptId: c.conceptId, name: `${c.kind} in ${first}`.slice(0, 60), rationale: "the offline model names the shape and its site" };
+    }),
+  };
+}
+
 export class StubProvider implements ModelProvider {
   readonly name = "stub";
   readonly model = "deterministic-graph-v1";
@@ -314,6 +329,8 @@ export class StubProvider implements ModelProvider {
       case "CHART": return chart(req);
       // Routing by judgment needs a language model; offline, the rule and similarity layers have already answered.
       case "ROUTE": return { form: null, confidence: 0, reason: "the offline model does not route" };
+      // Naming is a transformation of what is already known, so the stub can do it deterministically.
+      case "NAME_CONCEPT": case "NAME_ARCH": return nameConcepts(req);
     }
   }
 }

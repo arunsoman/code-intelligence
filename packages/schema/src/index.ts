@@ -173,7 +173,7 @@ export interface ViewMatrix {
 
 // ---- Jobs (C07): long work that runs in the background and can be cancelled ----
 // "pr-analysis": F02 — a pull request's base and head are indexed, compared, analysed and gated in one background job.
-export type JobKind = "index" | "concepts" | "investigate" | "defect-detect" | "defect-experiment" | "pr-analysis" | "search-index" | "dependency-scan" | "history-analysis" | "campaign-advance" | "campaign-joint-check" | "feature-build" | "feature-validate" | "feature-apply" | "runtime-introspect";
+export type JobKind = "index" | "concepts" | "concept-hierarchy" | "investigate" | "defect-detect" | "defect-experiment" | "pr-analysis" | "search-index" | "dependency-scan" | "history-analysis" | "campaign-advance" | "campaign-joint-check" | "feature-build" | "feature-validate" | "feature-apply" | "runtime-introspect";
 export type JobState = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 export interface JobView {
   id: Id; kind: JobKind; state: JobState;
@@ -235,6 +235,8 @@ export const SCHEMA_CHALLENGE = "challenge.v1";
 export const SCHEMA_ROUTE = "route.v1";
 export const SCHEMA_HYPOTHESES = "hypotheses.v1";
 export const SCHEMA_CHART = "chart.v1";
+export const SCHEMA_NAME_CONCEPT = "name-concept.v1";
+export const SCHEMA_NAME_ARCH = "name-arch.v1";
 
 export const RepresentationOutput = z.object({
   caption: z.string().max(400),
@@ -334,6 +336,19 @@ export const RouteOutput = z.object({
 }).strict();
 export type RouteOutput = z.infer<typeof RouteOutput>;
 
+// ---- Concept-hierarchy naming (plan §0.7): the model only NAMES, it never asserts ----
+// The result is a label attached to a structural identity computed offline. Names are short, and a
+// rationale is stored beside them so a bad name is auditable without being trusted.
+const nameEntry = z.object({
+  conceptId: z.string().max(120),
+  name: z.string().min(1).max(60),
+  rationale: z.string().max(300).default("")
+});
+export const NameConceptOutput = z.object({ names: z.array(nameEntry).max(40) }).strict();
+export type NameConceptOutput = z.infer<typeof NameConceptOutput>;
+export const NameArchOutput = z.object({ names: z.array(nameEntry).max(40) }).strict();
+export type NameArchOutput = z.infer<typeof NameArchOutput>;
+
 export const OUTPUT_SCHEMAS = {
   [SCHEMA_REPRESENTATION]: RepresentationOutput,
   [SCHEMA_EXPLANATION]: ExplanationOutput,
@@ -342,11 +357,13 @@ export const OUTPUT_SCHEMAS = {
   [SCHEMA_ROUTE]: RouteOutput,
   [SCHEMA_HYPOTHESES]: HypothesesOutput,
   [SCHEMA_CHART]: ChartOutput,
+  [SCHEMA_NAME_CONCEPT]: NameConceptOutput,
+  [SCHEMA_NAME_ARCH]: NameArchOutput,
 } as const;
 
 // ---- Model gateway interface ----
 export interface ModelRequest {
-  purpose: "REPRESENT" | "EXPLAIN" | "EXTRACT" | "CHALLENGE" | "ROUTE" | "HYPOTHESIZE" | "CHART"; schemaId: keyof typeof OUTPUT_SCHEMAS;
+  purpose: "REPRESENT" | "EXPLAIN" | "EXTRACT" | "CHALLENGE" | "ROUTE" | "HYPOTHESIZE" | "CHART" | "NAME_CONCEPT" | "NAME_ARCH"; schemaId: keyof typeof OUTPUT_SCHEMAS;
   question: string; bundle: EvidenceBundle; selected?: Id[];
   /** For a bounded model task such as generating a chart plan. */
   instructions?: string;
@@ -443,6 +460,109 @@ export interface ConceptStore {
   claims: Record<Id, Claim>;
   diff: { against: number; added: string[]; removed: string[]; changed: string[] } | null;
   statedConfidence: { level: "high" | "medium" | "low"; cards: number; confirmed: number; refuted: number; unjudged: number; band: { lower: number; upper: number; n: number } | null; note: string }[];
+}
+
+// ---------------------------------------------------------------- concept hierarchy (dual-axis)
+// Axis A is the architectural containment tree (repo → package → module → class → function); axis B is
+// the semantic layer mined from program dependence graphs. The two meet only in cross_axis_links and
+// in cross-package concepts. Everything here is additive over the envelope and never a claim: labels
+// name structures, they do not assert behaviour.
+export type LanguageSoundnessTier = "verified" | "supported" | "speculative";
+
+/** A semantic concept: a structural shape mined offline, optionally carrying a model-provided name. */
+export interface SemanticConcept {
+  id: Id; revision: RevisionId;
+  /** The motif or composed form: "guarded-write", "loop-accumulate", "debit-form", "transfer-form", ... */
+  kind: string;
+  /** The model's name, or a mechanical fallback; null until named. Never gated as a claim. */
+  label: string | null;
+  namedBy: "MODEL" | "FALLBACK" | null;
+  members: Id[];
+  evidenceIds: Id[];
+  canonicalMotifHash: string;
+  compositionRule: string | null;
+  /** Histogram over motif ids and captured operators; the anchoring feature vector. */
+  features: Record<string, number>;
+  soundness: { tier: LanguageSoundnessTier; basis: string };
+  source: "MOTIF" | "COMPOSITION" | "MODEL";
+}
+
+/** A language-level invariant with its soundness tier: "verified" only from explicit assertions. */
+export interface Invariant {
+  id: Id; revision: RevisionId;
+  subjectEntityId: Id;
+  variable: string;
+  statement: string;
+  tier: LanguageSoundnessTier;
+  basis: string;
+  /** The first identifier the guarding condition reads, when one exists. */
+  guardCondition: string | null;
+  evidenceIds: Id[];
+  /** Nodes in the guarded region (diagnostic). */
+  members: number;
+}
+
+/** One node of the architectural containment tree. */
+export interface ArchConcept {
+  id: Id; revision: RevisionId;
+  kind: "repo" | "package" | "module" | "class" | "function";
+  name: string;
+  path: string;
+  parent: Id | null;
+  memberEntityIds: Id[];
+  children: Id[];
+}
+
+/** What a module exports, from the compiler; feeds the export-surface rename rule. */
+export interface ExportSurface {
+  moduleId: Id;
+  modulePath: string;
+  exports: { name: string; kind: "function" | "class" | "interface" | "type" | "value" | "reexport" }[];
+}
+
+/** A shallow, name-based entry point; deliberately not a heuristic framework. */
+export interface EntryPoint {
+  entityId: Id;
+  kind: "symbol";
+  file: string;
+  detail: string;
+}
+
+/** A semantic concept whose members span more than one package. */
+export interface CrossPackageConcept {
+  id: Id; revision: RevisionId;
+  label: string | null;
+  packages: string[];
+  memberConceptIds: Id[];
+  evidenceIds: Id[];
+}
+
+/** The measured outcome of one build: what was reused, what moved, what was asked of the model. */
+export interface HierarchyStats {
+  fullRebuild: boolean;
+  changedFileRatio: number;
+  files: { changed: number; total: number };
+  pdgs: { built: number; reused: number; skipped: number; unresolved: number };
+  conceptsCarried: number;
+  renamed: number;
+  naming: { named: number; fallback: number; cacheHits: number };
+  phasesMs: Record<string, number>;
+  warnings: string[];
+}
+
+/** The read-only view over one hierarchy build. */
+export interface ConceptHierarchyView {
+  revision: RevisionId;
+  version: number;
+  versions: { version: number; revision: RevisionId; createdAt: string; provider: string; concepts: number }[];
+  concepts: SemanticConcept[];
+  invariants: Invariant[];
+  arch: ArchConcept[];
+  surfaces: ExportSurface[];
+  entryPoints: EntryPoint[];
+  crossPackage: CrossPackageConcept[];
+  links: { conceptId: Id; archNodeId: Id }[];
+  stats: HierarchyStats | null;
 }
 
 // ---------------------------------------------------------------- F01: cross-repository search and precise navigation
