@@ -96,3 +96,22 @@ The product has **one** source-host connector: **GitHub**. There is no multi-for
 8. [F08 — Coordinated multi-repository changes](F08-coordinated-multi-repository-changes.md)
 9. [F09 — Readable semantic zoom and camera transitions](F09-readable-semantic-zoom.md)
 10. [F10 — Bounded workflow digital twin](F10-bounded-workflow-digital-twin.md)
+
+## Second set: closing the gaps against review and code-intelligence competitors (F11–F19)
+
+Written 7 October 2026 after a competitor comparison and a read of the repository. These are proposals; nothing in them is built. Start with the system study, which records what already exists (several of these capabilities are partly present in the prompt-to-feature pipeline) and corrects the first-pass gap list.
+
+| Doc | Feature | Priority | Depends on |
+|---|---|---|---|
+| [Study](STUDY-F11-F19-system-study.md) | System study: seams, constraints, corrected gap map, dependency order | — | — |
+| [F11](F11-blast-radius-pr-check.md) | Cited impact comment on every PR (distribution wedge) | P1 | F02 |
+| [F12](F12-mcp-agent-context-server.md) | MCP server: cited analysis for coding agents | P1 | none |
+| [F13](F13-pr-summary-and-walkthrough.md) | PR summary, reading order, description-versus-change check | P2 | F11 S1 |
+| [F14](F14-pr-thread-chat.md) | `/cie` commands and chat in the PR thread | P2 | F11 S1, F19 S1 |
+| [F15](F15-reviewer-feedback-loop.md) | Per-repository mutes and ranking weights from reviewer labels | P1 | F11, F14 grammar |
+| [F16](F16-validated-inline-fix-suggestions.md) | Validated one-click inline fix suggestions | P2 | F11, F19 S4 |
+| [F17](F17-ticket-acceptance-compliance.md) | Ticket and acceptance-criteria check per PR | P2 | F11 |
+| [F18](F18-generated-tests-that-earn-their-place.md) | Generated tests with an enforced acceptance rule | P3 | F11, F16 |
+| [F19](F19-multi-forge-support.md) | Forge abstraction; GitLab, Bitbucket, Azure DevOps | P1 (extraction), P3 (forges) | none |
+
+Recommended order: F19 S1 (quiet interface extraction) with F12 and F11 S0–S2 in parallel; then F13, F15, F17; then F14, F18, F16; new forges last. F11 §14 (retrospective evaluation) comes first and decides whether the PR-comment family is worth building further.
