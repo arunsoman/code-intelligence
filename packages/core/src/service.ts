@@ -37,6 +37,8 @@ import { PrAnalysis, PrCheckError, resolvePr, type PrRef } from "./pr-analysis.t
 import { Profiles, ProfileCheckError } from "./profiles-analysis.ts";
 import { Tasks, TaskError } from "./execution.ts";
 import { GitHubCheckPublisher, newGrant } from "./pr-publish.ts";
+import { explainImpactItem, validateImpactPolicy } from "./impact-report.ts";
+import { renderImpactComment } from "./impact-render.ts";
 import { githubRemote, isGhInstalled } from "./gh.ts";
 import type { PrAnalysisView } from "@cie/schema";
 import { overviewSeeds } from "./overview.ts";
@@ -1253,6 +1255,43 @@ export class Service {
       const grant = newGrant(this.store, { repositoryId: analysis.repository_id, headHash: analysis.head_hash, decisionId: b.decisionId ?? undefined, principalId: actor(c), ttlMs: 60_000 });
       const receipt = await this.prPublisher.publish(grant.id, { repositoryId: analysis.repository_id, prNumber: Number(b.prNumber), analysisId: analysis.id, decisionId: b.decisionId ?? undefined, principalId: actor(c), kind: b.kind ?? "STATUS", alsoComment: !!b.alsoComment });
       return ok(c, receipt, { completeness: receipt.state === "PUBLISHED" ? "COMPLETE" : "PARTIAL" });
+    },
+    // ---- F11: the cited impact report and the blast-radius comment (§8) ----
+    "C23/getImpactReport": (c, b) => {
+      if (typeof b?.analysisId !== "string") return fail(c, { code: "INVALID_SCHEMA", message: "give an analysisId", retryable: false });
+      const report = this.pr.impactReportOf(b.analysisId);
+      if (!report) return fail(c, { code: "NOT_FOUND", message: "no impact report for this analysis; run C23/analyzePullRequest first", retryable: false });
+      return ok(c, report, { revision: this.pr.row(b.analysisId)?.head_revision ?? undefined });
+    },
+    "C23/explainImpactItem": (c, b) => {
+      if (typeof b?.analysisId !== "string" || typeof b?.itemId !== "string") return fail(c, { code: "INVALID_SCHEMA", message: "give an analysisId and an itemId", retryable: false });
+      const report = this.pr.impactReportOf(b.analysisId);
+      if (!report) return fail(c, { code: "NOT_FOUND", message: "no impact report for this analysis; run C23/analyzePullRequest first", retryable: false });
+      return ok(c, explainImpactItem(report, b.itemId));
+    },
+    "C30/previewImpactComment": (c, b) => {
+      if (typeof b?.analysisId !== "string") return fail(c, { code: "INVALID_SCHEMA", message: "give an analysisId", retryable: false });
+      const row = this.pr.row(b.analysisId);
+      const report = this.pr.impactReportOf(b.analysisId);
+      if (!row || !report) return fail(c, { code: "NOT_FOUND", message: "no impact report for this analysis; run C23/analyzePullRequest first", retryable: false });
+      const policyCheck = b?.policy !== undefined ? validateImpactPolicy(b.policy) : { ok: true as const, policy: undefined };
+      if (!policyCheck.ok) return fail(c, { code: "INVALID_SCHEMA", message: policyCheck.problems.join("; ").slice(0, 300), retryable: false });
+      const denied = this.store.deniedPrefixes(row.repo_root);
+      const resolveEvidence = (id: string) => !!this.store.evidence(row.head_revision ?? "", id);
+      const reviewUrl = this.prPublisher.selfUrl ? `${this.prPublisher.selfUrl}/#pr=${b.analysisId}` : undefined;
+      const rendered = renderImpactComment({ report, analysisState: row.state, policy: policyCheck.policy, deniedPrefixes: denied, resolveEvidence, reviewUrl });
+      const hashRow = this.store.db.prepare("select report_hash from impact_reports where analysis_id = ?").get(b.analysisId) as { report_hash: string } | undefined;
+      return ok(c, { markdown: rendered.markdown, reportHash: hashRow?.report_hash ?? "", silent: rendered.silent, cuts: rendered.cuts }, { completeness: rendered.cuts.length ? "PARTIAL" : "COMPLETE", warnings: rendered.cuts });
+    },
+    "C30/publishImpactComment": async (c, b) => {
+      if (typeof b?.analysisId !== "string") return fail(c, { code: "INVALID_SCHEMA", message: "give an analysisId", retryable: false });
+      const row = this.pr.row(b.analysisId);
+      if (!row) return fail(c, { code: "NOT_FOUND", message: "no such analysis", retryable: false });
+      const policyCheck = b?.policy !== undefined ? validateImpactPolicy(b.policy) : { ok: true as const, policy: undefined };
+      if (!policyCheck.ok) return fail(c, { code: "INVALID_SCHEMA", message: policyCheck.problems.join("; ").slice(0, 300), retryable: false });
+      const grant = newGrant(this.store, { repositoryId: row.repository_id, headHash: row.head_hash, principalId: actor(c), operation: "PUBLISH_IMPACT", ttlMs: 60_000 });
+      const receipt = await this.prPublisher.publishImpact(grant.id, { repositoryId: row.repository_id, prNumber: row.pr_number, analysisId: b.analysisId, policy: policyCheck.policy });
+      return ok(c, receipt, { completeness: receipt.state === "PUBLISHED" ? "COMPLETE" : receipt.state === "PREPARED" ? "COMPLETE" : "PARTIAL" });
     },
     // ---- C04: a forge webhook in (HMAC-verified, replay-safe; pull_request events only) ----
     "C04/ingestWebhook": async (c, b) => { try { return ok(c, await this.ingestWebhook(b ?? {})); } catch (e) { const msg = String((e as Error).message ?? e).slice(0, 300); return fail(c, { code: (e as PrCheckError).code === "FORBIDDEN" ? "FORBIDDEN" as const : "INVALID_SCHEMA" as const, message: msg, retryable: false }); } },

@@ -789,6 +789,35 @@ export interface PrAnalysisView {
   decision?: GateDecisionView;
 }
 
+// ---------------------------------------------------------------- F11: the cited impact report (§6.2)
+
+/** The section an impact item belongs to (§6.2). S4 kinds (RACE_WINDOW, REMOVAL, OWNERSHIP, TERRAIN) are reserved. */
+export type ImpactItemKind = "CONSEQUENCE" | "TEST_IMPACT" | "REACH" | "RACE_WINDOW" | "REMOVAL" | "OWNERSHIP" | "TERRAIN" | "FOG";
+/** Honest label (§7.1.2): FACT only for a single directly-observed fact; INFERENCE for derived reachability; FOG for what could not be determined. */
+export type ImpactClaimClass = "FACT" | "INFERENCE" | "HYPOTHESIS" | "FOG";
+export interface ImpactItem {
+  id: string;
+  kind: ImpactItemKind;
+  claimClass: ImpactClaimClass;
+  /** One sentence, no causal or certainty wording (§7.6.3); attacker-controlled text is escaped at render time. */
+  text: string;
+  subjectEntityIds: string[];
+  /** Stored evidence ids backing the line (F11-A3); Fog lines and TEST_IMPACT carry none by design. */
+  evidenceIds: string[];
+  citations: { path: string; startLine: number; endLine: number }[];
+  rank: { score: number; factors: { name: string; value: number; weight: number }[] };
+  calibration: "uncalibrated" | "calibrated";
+  suppressed?: { reason: "BELOW_THRESHOLD" | "DUPLICATE" | "PATH_WITHHELD" | "LENGTH_BUDGET" };
+}
+export interface ImpactReport {
+  analysisId: string; headHash: string; baseHash: string; generatedAt: string; schemaVersion: 1;
+  surfaced: ImpactItem[];
+  suppressed: ImpactItem[];
+  reach: { changedSymbols: number; dependents: number; files: number; hotspotFiles: number; thinOwnershipFiles: number };
+  coverage: { languages: { id: string; analysedFiles: number; skippedFiles: number }[]; evidenceComplete: boolean };
+  fog: ImpactItem[];
+}
+
 export type CheckKind = "STATUS" | "CHECK_RUN" | "COMMENT";
 export interface PublicationReceipt {
   publicationId: string; forge: string; repositoryId: string; headHash: string;

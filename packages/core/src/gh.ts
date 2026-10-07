@@ -15,7 +15,9 @@ export function isGhInstalled(): boolean {
   catch { return false; }
 }
 
-/** Ask `gh` for the currently active token. The token is read at call time and never stored. */
+/** Ask `gh` for the currently active token. The token is read at call time and never stored. On a CI runner `gh`
+ * may be absent while GITHUB_TOKEN (or GH_TOKEN) is injected by the workflow: accept those as a fallback, still
+ * read at call time, never persisted. */
 export function ghAuthToken(host = "github.com"): { ok: true; token: string } | { ok: false; reason: string } {
   try {
     const args = host === "github.com" ? ["auth", "token"] : ["auth", "token", "-h", host];
@@ -23,6 +25,10 @@ export function ghAuthToken(host = "github.com"): { ok: true; token: string } | 
     if (!token) return { ok: false, reason: "gh auth token returned empty" };
     return { ok: true, token };
   } catch (e) {
+    if (host === "github.com") {
+      const env = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
+      if (env) return { ok: true, token: env };
+    }
     return { ok: false, reason: String((e as Error).message ?? e).replace(/\n/g, "; ").slice(0, 200) };
   }
 }
