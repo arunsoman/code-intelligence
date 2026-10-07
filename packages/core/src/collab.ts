@@ -6,6 +6,7 @@ import type { ApiError, ViewSpec } from "@cie/schema";
 import { applyVerdict } from "./claims.ts";
 import { Security } from "./security.ts";
 import type { Store } from "./store.ts";
+import { composeAnswer } from "./answer.ts";
 import { WorkspaceLog, type ResumedWorkspace, type WorkspaceEvent } from "./workspaces.ts";
 
 export type Role = "viewer" | "editor" | "owner";
@@ -101,6 +102,9 @@ export class Collab {
       const keep = new Set<string>();
       const nodes = w.state.view.nodes.filter((n) => { const d = acc.denied(n.file); if (d) withheld++; else keep.add(n.id); return !d; });
       const view: ViewSpec = { ...w.state.view, nodes, edges: w.state.view.edges.filter((e) => keep.has(e.fromNodeId) && keep.has(e.toNodeId)), groups: w.state.view.groups.map((g) => ({ ...g, childNodeIds: g.childNodeIds.filter((c) => keep.has(c)) })), hidden: [] };
+      // The written answer names specific elements, so a reader missing some of those elements cannot keep the original
+      // text (it was composed from the full view); it is rebuilt from what this reader can actually see, or dropped.
+      if (withheld && view.answer !== undefined) view.answer = composeAnswer(view);
       w.state.view = view;
     }
     const pinsBefore = w.state.pins.length, notesBefore = Object.keys(w.state.notes).length;

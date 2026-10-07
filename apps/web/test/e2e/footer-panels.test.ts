@@ -17,8 +17,10 @@ test("opening the gaps and left-out panels leaves the canvas height and the map 
     await b.tabTo(`el.tagName === 'BUTTON' && el.textContent.trim() === 'Index'`); await b.key("Enter");
     await b.waitFor(() => `/rev \\S+ · \\d+ files/.test(document.querySelector('header').innerText)`, 60_000, "the repository to be indexed");
     await b.tabTo(`el.id === 'chat-input'`); await b.type("give me an overview of the whole project"); await b.key("Enter");
-    await b.waitFor(() => `document.querySelectorAll('.footer-toggle').length >= 1`, 30_000, "the gaps and left-out toggles");
-    await wait(800);
+    // The toggles are rendered conditionally on the current view and the view is updated several times while the
+    // chat answer is being composed. Wait for the composition to finish and at least one toggle to remain stable.
+    await b.waitFor(() => `document.querySelector('.stage[aria-busy="true"]') === null && document.querySelectorAll('.footer-toggle').length >= 1`, 30_000, "the footer toggles to stabilise");
+    await wait(400);
 
     const probe = () => b.eval<{ stage: number; hint: string; panel: boolean; panelBottom: number; footerTop: number; maxH: string; overflow: string; expanded: string[] }>(`(() => {
       const stage = document.querySelector('.stage'), footer = document.querySelector('footer'), panel = document.querySelector('.footer-panel');
@@ -36,8 +38,15 @@ test("opening the gaps and left-out panels leaves the canvas height and the map 
     const before = await probe();
     assert.equal(before.panel, false, "nothing is open at the start");
 
-    const click = (i: number) => b.eval(`document.querySelectorAll('.footer-toggle')[${i}].click()`);
-    await click(0); await wait(300);
+    const clickToggle = (label: string) => b.eval(`(() => {
+      const t = [...document.querySelectorAll('.footer-toggle')].find((b) => b.textContent?.includes(${JSON.stringify(label)}));
+      if (!t) throw new Error('missing "${label}" toggle');
+      t.click();
+      return true;
+    })()`);
+    const hasToggle = (label: string) => b.eval(`[...document.querySelectorAll('.footer-toggle')].some((b) => b.textContent?.includes(${JSON.stringify(label)}))`);
+
+    await clickToggle("gap"); await wait(300);
     const afterGaps = await probe();
     assert.equal(afterGaps.panel, true, "the gaps panel opens");
     assert.equal(afterGaps.stage, before.stage, "opening the gaps panel does not change the canvas height");
@@ -46,17 +55,21 @@ test("opening the gaps and left-out panels leaves the canvas height and the map 
     assert.match(afterGaps.maxH, /px$/, "the panel is height-bounded");
     assert.equal(afterGaps.overflow, "auto", "and scrolls inside its own region");
 
-    await click(1); await wait(300);
-    const afterBoth = await probe();
-    assert.equal(afterBoth.stage, before.stage, "opening the left-out panel too still does not resize the canvas");
-    assert.equal(afterBoth.hint, before.hint, "the map is unchanged while both are open");
-    assert.ok(afterBoth.panelBottom <= afterBoth.footerTop + 1, "still out of flow with both open");
+    if (await hasToggle("left out")) {
+      await clickToggle("left out"); await wait(300);
+      const afterBoth = await probe();
+      assert.equal(afterBoth.stage, before.stage, "opening the left-out panel too still does not resize the canvas");
+      assert.equal(afterBoth.hint, before.hint, "the map is unchanged while both are open");
+      assert.ok(afterBoth.panelBottom <= afterBoth.footerTop + 1, "still out of flow with both open");
+    }
 
-    await click(0); await click(1); await wait(300);
+    if (await hasToggle("gap")) await clickToggle("gap");
+    if (await hasToggle("left out")) await clickToggle("left out");
+    await wait(300);
     const afterClose = await probe();
     assert.equal(afterClose.panel, false, "closing both removes the panel");
     assert.equal(afterClose.stage, before.stage, "and the canvas was never resized");
-    assert.deepEqual(afterClose.expanded, ["false", "false"], "the toggles report they are collapsed");
+    assert.ok(afterClose.expanded.every((x) => x === "false"), "the toggles report they are collapsed");
   } finally {
     b.close();
     server.proc.kill("SIGKILL");

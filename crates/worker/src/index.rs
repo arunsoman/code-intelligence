@@ -1,6 +1,7 @@
 //! Repository walk (C04 local ingestion) + cross-file resolution (C05 resolveSemantics / C09 graph).
 //! With a provided `ChangeSet` (per-file content hashes of the previously indexed revision) only
 //! changed files are re-parsed; the rest reuse cached parses, and diagnostics report what was reused.
+use crate::frameworks::{FrameworkContext, FrameworkEntityKind};
 use crate::language::{parse_ts, RawFile};
 use crate::polyglot::{parse_go, parse_java, parse_python};
 use crate::rust_language::parse_rust;
@@ -10,10 +11,14 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
+use ignore::WalkBuilder;
 
+// Directories skipped regardless of .gitignore (defense in depth: a repo that forgot to ignore its own
+// dependency/build output still shouldn't be indexed). .gitignore, .git/info/exclude and the global git
+// excludes file are honoured on top of this list by `ignore::WalkBuilder` (same crate ripgrep uses), so a
+// project's own ignore rules — not just this fixed list — keep generated and vendored files out of the index.
 const SKIP_DIRS: &[&str] = &["node_modules", ".git", "dist", "build", "target", ".next", "coverage", "__pycache__", ".venv", "venv", ".gradle", ".idea", "vendor", "site-packages"];
-pub const ANALYZER_VERSION: &str = "worker-0.3.0/tree-sitter-typescript-0.23+rust-0.24+nirdosha-v2+defect-semantic-v1";
+pub const ANALYZER_VERSION: &str = "worker-0.4.0/tree-sitter-typescript-0.23+rust-0.24+nirdosha-v2+defect-semantic-v1+gitignore-aware-walk";
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -30,6 +35,14 @@ struct FileRec {
     raw: RawFile,
     /// entity id per raw symbol index
     ids: Vec<String>,
+}
+
+fn is_config_file(rel: &str) -> bool {
+    let n = std::path::Path::new(rel).file_name().and_then(|s| s.to_str()).unwrap_or("");
+    matches!(n,
+        "package.json" | "tsconfig.json" | "nest-cli.json" | "pom.xml" | ".env" | ".env.local"
+    ) || n.starts_with("application") && (n.ends_with(".yml") || n.ends_with(".yaml") || n.ends_with(".properties"))
+      || n.starts_with(".env.")
 }
 
 // ---- parse cache (incremental re-index; CE-3 region-level reuse) ----
@@ -200,18 +213,24 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>, base: Option<&BaseRe
         return Err(format!("not a directory: {}", root.display()));
     }
     let root = root.canonicalize().map_err(|e| e.to_string())?;
-    let mut paths: Vec<PathBuf> = WalkDir::new(&root)
-        .into_iter()
+    let mut paths: Vec<PathBuf> = WalkBuilder::new(&root)
+        // Honour .gitignore even when the root is not (yet) a git checkout — e.g. a directory copied
+        // without its .git folder should still keep its generated/vendored files out of the index.
+        .require_git(false)
         .filter_entry(|e| {
-            !(e.file_type().is_dir() && e.file_name().to_str().map_or(false, |n| SKIP_DIRS.contains(&n)))
+            !(e.file_type().map_or(false, |ft| ft.is_dir()) && e.file_name().to_str().map_or(false, |n| SKIP_DIRS.contains(&n)))
         })
+        .build()
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
+        .filter(|e| e.file_type().map_or(false, |ft| ft.is_file()))
         .map(|e| e.into_path())
         .filter(|p| {
             let n = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            let ext = p.extension().and_then(|s| s.to_str());
+            let rel = p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
             !n.ends_with(".d.ts")
-                && matches!(p.extension().and_then(|s| s.to_str()), Some("ts" | "tsx" | "mts" | "cts" | "rs" | "nir" | "java" | "go" | "py"))
+                && (is_config_file(&rel)
+                    || matches!(ext, Some("ts" | "tsx" | "mts" | "cts" | "rs" | "nir" | "java" | "go" | "py" | "yml" | "yaml" | "properties")))
         })
         .collect();
     paths.sort();
@@ -301,10 +320,28 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>, base: Option<&BaseRe
         }
         let mut raw = match p.extension().and_then(|s| s.to_str()) {
             Some("rs" | "nir") => parse_rust(&src, rel.ends_with(".nir")),
-            Some("java") => parse_java(&src, &rel),
+            Some("java") => {
+                let mut raw = parse_java(&src, &rel);
+                crate::frameworks::apply(&mut raw, FrameworkContext { rel: &rel, src: &src, project_root: &root });
+                raw
+            }
             Some("go") => parse_go(&src, &rel),
             Some("py") => parse_python(&src, &rel),
-            _ => parse_ts(&src, rel.ends_with(".tsx")),
+            Some("yml" | "yaml" | "properties") => {
+                let mut raw = crate::language::RawFile::default();
+                crate::frameworks::apply(&mut raw, FrameworkContext { rel: &rel, src: &src, project_root: &root });
+                raw
+            }
+            _ if is_config_file(&rel) => {
+                let mut raw = crate::language::RawFile::default();
+                crate::frameworks::apply(&mut raw, FrameworkContext { rel: &rel, src: &src, project_root: &root });
+                raw
+            }
+            _ => {
+                let mut raw = parse_ts(&src, rel.ends_with(".tsx"));
+                crate::frameworks::apply(&mut raw, FrameworkContext { rel: &rel, src: &src, project_root: &root });
+                raw
+            }
         };
         if rel.ends_with(".nir") { if let Some(ir)=nirdosha_ir.as_mut() { ir.merge(&rel,&hash,&mut raw); } }
         if raw.had_errors {
@@ -700,22 +737,10 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>, base: Option<&BaseRe
         }
     }
 
-    // Keep reads of fields that some function writes (the data-lineage view needs both sides), one fact per reader and field.
-    let written: std::collections::HashSet<String> = batch.facts.iter().filter(|f| f.predicate == "writes").filter_map(|f| f.object["value"].as_str().map(String::from)).collect();
-    let mut seen_reads: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
-    for (rel, hash, subject, field, qualifier, start, end) in pending_reads {
-        if !written.contains(&field) || !seen_reads.insert((subject.clone(), field.clone())) {
-            continue;
-        }
-        batch.facts.push(Fact {
-            id: format!("fact:reads:{rel}:{start}"),
-            subject,
-            predicate: "reads".into(),
-            object: json!({"kind":"ScalarValue","value":field,"qualifier":qualifier}),
-            evidence: vec![evidence(&rel, &hash, start, end, "STATIC_PARSED")],
-            resolution: "PARSED",
-        });
-    }
+    // Framework metadata resolution: turn plugin output into typed Entity/Fact/Relationship rows.
+    // This runs before the per-file call-resolution loop so that framework relationships (injects,
+    // exposes_route, uses_transaction) are available to the rest of the pipeline.
+    resolve_framework_metadata(&mut batch, &recs, &known_files, &evidence, &span);
 
     // Join publishers to subscribers by literal topic. This is a string-key join, so it stays PARSED.
     for (topic, from, pev) in &pubs {
@@ -735,6 +760,23 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>, base: Option<&BaseRe
                 );
             }
         }
+    }
+
+    // Keep reads of fields that some function writes (the data-lineage view needs both sides), one fact per reader and field.
+    let written: std::collections::HashSet<String> = batch.facts.iter().filter(|f| f.predicate == "writes").filter_map(|f| f.object["value"].as_str().map(String::from)).collect();
+    let mut seen_reads: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    for (rel, hash, subject, field, qualifier, start, end) in pending_reads {
+        if !written.contains(&field) || !seen_reads.insert((subject.clone(), field.clone())) {
+            continue;
+        }
+        batch.facts.push(Fact {
+            id: format!("fact:reads:{rel}:{start}"),
+            subject,
+            predicate: "reads".into(),
+            object: json!({"kind":"ScalarValue","value":field,"qualifier":qualifier}),
+            evidence: vec![evidence(&rel, &hash, start, end, "STATIC_PARSED")],
+            resolution: "PARSED",
+        });
     }
 
     // Git history (HISTORY evidence), when the root is inside a work tree.
@@ -917,6 +959,344 @@ fn rust_module_candidates(base: &str, known: &HashMap<String, usize>) -> Option<
         .find_map(|c| known.get(&c).copied())
 }
 
+fn resolve_framework_metadata<E, S>(
+    batch: &mut AnalysisBatch,
+    recs: &[FileRec],
+    known_files: &HashMap<String, usize>,
+    evidence: E,
+    span: S,
+)
+where
+    E: Fn(&str, &str, usize, usize, &'static str) -> EvidenceRef,
+    S: Fn(&str, &str, usize, usize) -> SourceSpan,
+{
+    // Build a map: simple class name -> file index where a class/interface of that short name is declared.
+    let mut class_to_file: HashMap<String, usize> = HashMap::new();
+    for (fi, rec) in recs.iter().enumerate() {
+        for s in &rec.raw.symbols {
+            if s.kind == "class" || s.kind == "interface" {
+                let short = s.qualified.split('.').next().unwrap_or(&s.qualified).to_string();
+                class_to_file.entry(short).or_insert(fi);
+            }
+        }
+    }
+
+    fn pkg_lang(rel: &str) -> bool { rel.ends_with(".go") || rel.ends_with(".java") }
+    fn dir_of(rel: &str) -> String {
+        let d = rel.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
+        if rel.ends_with(".java") {
+            for root in ["/src/main/java/", "/src/test/java/"] { if let Some((pre, post)) = d.split_once(root.trim_end_matches('/')) { return format!("{pre}|{}", post.trim_start_matches('/')); } }
+            for root in ["src/main/java", "src/test/java"] { if let Some(post) = d.strip_prefix(root) { return format!("|{}", post.trim_start_matches('/')); } }
+        }
+        d
+    }
+    let mut dir_files: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, r) in recs.iter().enumerate() { if pkg_lang(&r.rel) { dir_files.entry(dir_of(&r.rel)).or_default().push(i); } }
+    let siblings = |file_idx: usize| -> Vec<usize> {
+        let r = &recs[file_idx].rel;
+        if pkg_lang(r) { dir_files.get(&dir_of(r)).cloned().unwrap_or_default() } else { vec![file_idx] }
+    };
+    fn find_symbol(recs: &[FileRec], file_idx: usize, name: &str) -> Option<String> {
+        let r = &recs[file_idx];
+        r.raw.symbols.iter().position(|s| s.qualified == name && s.kind != "method").map(|i| r.ids[i].clone())
+    }
+    fn find_symbol_pkg(recs: &[FileRec], file_idx: usize, name: &str, siblings: &dyn Fn(usize) -> Vec<usize>) -> Option<String> {
+        find_symbol(recs, file_idx, name).or_else(|| siblings(file_idx).into_iter().filter(|i| *i != file_idx).find_map(|i| find_symbol(recs, i, name)))
+    }
+
+    let resolve_type = |fi: usize, ty: &str, recs: &[FileRec], class_to_file: &HashMap<String, usize>, siblings: &dyn Fn(usize) -> Vec<usize>| -> Option<String> {
+        let simple = ty.split('<').next().unwrap_or(ty).rsplit('.').next().unwrap_or(ty).trim();
+        // Prefer same package.
+        for si in siblings(fi) {
+            if let Some(id) = find_symbol(recs, si, simple) { return Some(id); }
+        }
+        // Then any file.
+        let fi = class_to_file.get(simple)?;
+        find_symbol(recs, *fi, simple)
+    };
+
+    let resolve_name = |fi: usize, name: &str, recs: &[FileRec], class_to_file: &HashMap<String, usize>, siblings: &dyn Fn(usize) -> Vec<usize>| -> Option<String> {
+        let simple = name.split('<').next().unwrap_or(name).rsplit('.').next().unwrap_or(name).trim();
+        for si in siblings(fi) {
+            if let Some(id) = find_symbol(recs, si, simple) { return Some(id); }
+        }
+        let fi = class_to_file.get(simple)?;
+        find_symbol(recs, *fi, simple)
+    };
+
+    fn public_kind(framework: &str, kind: FrameworkEntityKind) -> String {
+        let fw_slug = framework.replace('-', "_");
+        let kind_suffix = match kind {
+            FrameworkEntityKind::GatewayRoute => "route",
+            FrameworkEntityKind::GatewayFilter => "filter",
+            _ => kind.as_str(),
+        };
+        format!("{}_{}", fw_slug, kind_suffix)
+    }
+
+    // First pass: emit framework entities and remember their id mapping.
+    let mut framework_entity_id: HashMap<String, String> = HashMap::new();
+    for (fi, rec) in recs.iter().enumerate() {
+        let fid = format!("file:{}", rec.rel);
+        for m in &rec.raw.framework_metadata {
+            let entity_id = match m.kind {
+                FrameworkEntityKind::Controller | FrameworkEntityKind::Provider | FrameworkEntityKind::Guard | FrameworkEntityKind::Module => {
+                    // Module-member provider rows (e.g., controllers/providers/imports/exports of a NestJS module)
+                    // may reference classes declared in other files. Resolve them by name when there is no local symbol.
+                    let is_module_member = m.kind == FrameworkEntityKind::Provider && m.properties.get("relation").is_some();
+                    let subject = if is_module_member {
+                        resolve_name(fi, &m.name, recs, &class_to_file, &siblings)
+                            .or_else(|| m.subject_symbol.and_then(|i| rec.ids.get(i).cloned()))
+                            .unwrap_or_else(|| fid.clone())
+                    } else {
+                        m.subject_symbol.and_then(|i| rec.ids.get(i).cloned()).unwrap_or_else(|| fid.clone())
+                    };
+                    framework_entity_id.insert(format!("{}:{}:{}", rec.rel, m.kind.as_str(), m.name), subject.clone());
+                    subject
+                }
+                FrameworkEntityKind::Route | FrameworkEntityKind::MessageListener | FrameworkEntityKind::GatewayRoute | FrameworkEntityKind::GatewayFilter => {
+                    let id = if matches!(m.kind, FrameworkEntityKind::GatewayRoute | FrameworkEntityKind::GatewayFilter) {
+                        format!("{}:{}:{}:{}", m.framework, m.kind.as_str(), rec.rel, m.name)
+                    } else {
+                        format!("{}:{}:{}:{}", m.framework, m.kind.as_str(), rec.rel, m.start)
+                    };
+                    batch.entities.push(Entity {
+                        entity_id: id.clone(),
+                        kind: public_kind(m.framework, m.kind),
+                        name: m.name.clone(),
+                        file: rec.rel.clone(),
+                        spans: vec![span(&rec.rel, &rec.hash, m.start, m.end)],
+                        symbol_hash: None,
+                    });
+                    framework_entity_id.insert(format!("{}:{}:{}", rec.rel, m.kind.as_str(), m.name), id.clone());
+                    id
+                }
+                FrameworkEntityKind::Inject | FrameworkEntityKind::Transaction | FrameworkEntityKind::ConfigValue => {
+                    let subject = m.subject_symbol.and_then(|i| rec.ids.get(i).cloned()).unwrap_or_else(|| fid.clone());
+                    framework_entity_id.insert(format!("{}:{}:{}", rec.rel, m.kind.as_str(), m.name), subject);
+                    continue;
+                }
+                _ => {
+                    let id = format!("{}:{}:{}:{}", m.framework, m.kind.as_str(), rec.rel, m.start);
+                    batch.entities.push(Entity {
+                        entity_id: id.clone(),
+                        kind: public_kind(m.framework, m.kind),
+                        name: m.name.clone(),
+                        file: rec.rel.clone(),
+                        spans: vec![span(&rec.rel, &rec.hash, m.start, m.end)],
+                        symbol_hash: None,
+                    });
+                    framework_entity_id.insert(format!("{}:{}:{}", rec.rel, m.kind.as_str(), m.name), id.clone());
+                    id
+                }
+            };
+
+            if let Some(parent) = &m.parent {
+                let parent_kind = match m.kind {
+                    FrameworkEntityKind::Route => "controller",
+                    FrameworkEntityKind::GatewayFilter => "gateway_route",
+                    FrameworkEntityKind::MessageListener => "provider",
+                    _ => "module",
+                };
+                let key = format!("{}:{}:{}", rec.rel, parent_kind, parent);
+                let parent_id = framework_entity_id.get(&key).cloned()
+                    .or_else(|| rec.raw.symbols.iter().position(|s| s.qualified == *parent || s.qualified.split('.').next() == Some(parent)).map(|i| rec.ids[i].clone()));
+                if let Some(parent_id) = parent_id {
+                    batch.relationships.push(Relationship {
+                        id: format!("rel:framework:contains:{}->{}", parent_id, entity_id),
+                        from: parent_id,
+                        to: entity_id,
+                        kind: "contains".into(),
+                        evidence: vec![evidence(&rec.rel, &rec.hash, m.start, m.end, "STATIC_RESOLVED")],
+                        resolution: "RESOLVED",
+                        label: Some(m.kind.as_str().to_string()),
+                    });
+                }
+            }
+        }
+    }
+
+    // Second pass: emit facts and relationships.
+    for (fi, rec) in recs.iter().enumerate() {
+        let fid = format!("file:{}", rec.rel);
+        for m in &rec.raw.framework_metadata {
+            let ev = evidence(&rec.rel, &rec.hash, m.start, m.end, "STATIC_RESOLVED");
+            match m.kind {
+                FrameworkEntityKind::Route => {
+                    let subject = framework_entity_id.get(&format!("{}:route:{}", rec.rel, m.name)).cloned().unwrap_or_else(|| fid.clone());
+                    let method = m.properties.get("method").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let path = m.properties.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let handler = m.properties.get("handler").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let kind = m.properties.get("kind").and_then(|v| v.as_str()).map(String::from);
+                    let mut value = json!({"method":method,"path":path,"handler":handler});
+                    if let Some(k) = kind {
+                        value["kind"] = json!(k);
+                    }
+                    batch.facts.push(Fact {
+                        id: format!("fact:route:{}:{}", rec.rel, m.start),
+                        subject: subject.clone(),
+                        predicate: "route".into(),
+                        object: json!({"kind":"ScalarValue","value":value}),
+                        evidence: vec![ev.clone()],
+                        resolution: "STATIC_RESOLVED",
+                    });
+                    if let Some(parent) = &m.parent {
+                        let parent_key = format!("{}:controller:{}", rec.rel, parent);
+                        if let Some(parent_id) = framework_entity_id.get(&parent_key).cloned() {
+                            batch.relationships.push(Relationship {
+                                id: format!("rel:exposes_route:{}->{}", parent_id, subject),
+                                from: parent_id,
+                                to: subject,
+                                kind: "exposes_route".into(),
+                                evidence: vec![ev],
+                                resolution: "STATIC_RESOLVED",
+                                label: Some(format!("{} {}", method, path)),
+                            });
+                        }
+                    }
+                }
+                FrameworkEntityKind::Inject => {
+                    let target_name = m.properties.get("target").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let ty = m.properties.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let qualifier = m.properties.get("qualifier").and_then(|v| v.as_str());
+                    let kind = m.properties.get("kind").and_then(|v| v.as_str()).unwrap_or("field").to_string();
+                    let value = m.properties.get("value").cloned();
+                    let subject = m.subject_symbol.and_then(|i| rec.ids.get(i).cloned()).unwrap_or_else(|| fid.clone());
+                    let dependency = resolve_type(fi, &ty, recs, &class_to_file, &siblings);
+                    batch.facts.push(Fact {
+                        id: format!("fact:injected:{}:{}", rec.rel, m.start),
+                        subject: subject.clone(),
+                        predicate: "injected".into(),
+                        object: json!({"kind":"ScalarValue","value":{"target":target_name,"type":ty,"qualifier":qualifier,"injectKind":kind,"value":value}}),
+                        evidence: vec![ev.clone()],
+                        resolution: "STATIC_RESOLVED",
+                    });
+                    if let Some(dep_id) = dependency {
+                        batch.relationships.push(Relationship {
+                            id: format!("rel:injects:{}->{}", subject, dep_id),
+                            from: subject,
+                            to: dep_id,
+                            kind: "injects".into(),
+                            evidence: vec![ev],
+                            resolution: "STATIC_RESOLVED",
+                            label: qualifier.map(|q| format!("@Qualifier(\"{}\")", q)),
+                        });
+                    }
+                }
+                FrameworkEntityKind::Transaction => {
+                    let subject = m.subject_symbol.and_then(|i| rec.ids.get(i).cloned()).unwrap_or_else(|| fid.clone());
+                    let source = m.properties.get("source").and_then(|v| v.as_str()).unwrap_or("class").to_string();
+                    let is_constructor = m.properties.get("constructor").and_then(|v| v.as_bool()).unwrap_or(false);
+                    batch.facts.push(Fact {
+                        id: format!("fact:framework:tx:{}:{}", rec.rel, m.start),
+                        subject: subject.clone(),
+                        predicate: "uses_transaction".into(),
+                        object: json!({"kind":"ScalarValue","value":true,"framework":"spring","source":source,"constructor":is_constructor}),
+                        evidence: vec![ev],
+                        resolution: "STATIC_RESOLVED",
+                    });
+                }
+                FrameworkEntityKind::Provider | FrameworkEntityKind::Controller | FrameworkEntityKind::Guard | FrameworkEntityKind::Interceptor | FrameworkEntityKind::Module => {
+                    // Skip module-member provider rows (they only exist to build module contains edges).
+                    let is_module_member = m.kind == FrameworkEntityKind::Provider && m.properties.get("relation").is_some();
+                    if is_module_member { continue; }
+                    let subject = m.subject_symbol.and_then(|i| rec.ids.get(i).cloned()).unwrap_or_else(|| fid.clone());
+                    batch.facts.push(Fact {
+                        id: format!("fact:framework:{}:{}:{}", m.kind.as_str(), rec.rel, m.start),
+                        subject,
+                        predicate: "framework_role".into(),
+                        object: json!({"kind":"ScalarValue","value":{"framework":m.framework,"role":m.kind.as_str(),"name":m.name,"properties":m.properties}}),
+                        evidence: vec![ev],
+                        resolution: "STATIC_RESOLVED",
+                    });
+                }
+                FrameworkEntityKind::GatewayRoute => {
+                    let subject = framework_entity_id.get(&format!("{}:gateway_route:{}", rec.rel, m.name)).cloned().unwrap_or_else(|| fid.clone());
+                    let id = m.properties.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let uri = m.properties.get("uri").and_then(|v| v.as_str()).map(String::from);
+                    let predicates = m.properties.get("predicates").cloned().unwrap_or(serde_json::Value::Null);
+                    let filters = m.properties.get("filters").cloned().unwrap_or(serde_json::Value::Null);
+                    batch.facts.push(Fact {
+                        id: format!("fact:gateway_route:{}:{}", rec.rel, m.name),
+                        subject: subject.clone(),
+                        predicate: "gateway_route".into(),
+                        object: json!({"kind":"ScalarValue","value":{"id":id,"uri":uri,"predicates":predicates,"filters":filters}}),
+                        evidence: vec![ev],
+                        resolution: "STATIC_RESOLVED",
+                    });
+                }
+                FrameworkEntityKind::GatewayFilter => {
+                    let subject = framework_entity_id.get(&format!("{}:gateway_filter:{}", rec.rel, m.name)).cloned().unwrap_or_else(|| fid.clone());
+                    let name = m.properties.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let args = m.properties.get("args").cloned().unwrap_or(serde_json::Value::Null);
+                    batch.facts.push(Fact {
+                        id: format!("fact:gateway_filter:{}:{}", rec.rel, m.name),
+                        subject: subject.clone(),
+                        predicate: "gateway_filter".into(),
+                        object: json!({"kind":"ScalarValue","value":{"name":name,"args":args}}),
+                        evidence: vec![ev.clone()],
+                        resolution: "STATIC_RESOLVED",
+                    });
+                    // Custom GatewayFilter classes also carry a framework_role fact so guard/permission tooling can consume them uniformly.
+                    if m.subject_symbol.is_some() {
+                        batch.facts.push(Fact {
+                            id: format!("fact:framework:gateway_filter:{}:{}", rec.rel, m.name),
+                            subject: subject.clone(),
+                            predicate: "framework_role".into(),
+                            object: json!({"kind":"ScalarValue","value":{"framework":m.framework,"role":"gateway_filter","name":m.name,"properties":m.properties}}),
+                            evidence: vec![ev.clone()],
+                            resolution: "STATIC_RESOLVED",
+                        });
+                    }
+                    if let Some(parent) = &m.parent {
+                        let parent_key = format!("{}:gateway_route:{}", rec.rel, parent);
+                        if let Some(parent_id) = framework_entity_id.get(&parent_key).cloned() {
+                            batch.relationships.push(Relationship {
+                                id: format!("rel:uses_filter:{}->{}", parent_id, subject),
+                                from: parent_id,
+                                to: subject,
+                                kind: "uses_filter".into(),
+                                evidence: vec![ev],
+                                resolution: "STATIC_RESOLVED",
+                                label: Some(name),
+                            });
+                        }
+                    }
+                }
+                FrameworkEntityKind::ConfigValue => {
+                    let key = m.properties.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let value = m.properties.get("value").cloned().unwrap_or(serde_json::Value::Null);
+                    let source = m.properties.get("source").and_then(|v| v.as_str()).unwrap_or("config").to_string();
+                    let is_secret = key.to_ascii_uppercase().contains("TOKEN") || key.to_ascii_uppercase().contains("PASSWORD") || key.to_ascii_uppercase().contains("SECRET") || key.to_ascii_uppercase().contains("KEY");
+                    let redacted = if is_secret { serde_json::Value::String("***".to_string()) } else { value.clone() };
+                    batch.facts.push(Fact {
+                        id: format!("fact:config_value:{}:{}:{}", rec.rel, m.name, m.start),
+                        subject: fid.clone(),
+                        predicate: "config_value".into(),
+                        object: json!({"kind":"ScalarValue","value":{"key":key,"source":source,"redacted":redacted,"has_secret":is_secret}}),
+                        evidence: vec![ev],
+                        resolution: "STATIC_RESOLVED",
+                    });
+                    // Emit active_profile fact when the key is a profile activator.
+                    if key == "spring.profiles.active" || key == "SPRING_PROFILES_ACTIVE" {
+                        if let Some(profile) = value.as_str() {
+                            batch.facts.push(Fact {
+                                id: format!("fact:active_profile:{}:{}", rec.rel, m.start),
+                                subject: fid.clone(),
+                                predicate: "active_profile".into(),
+                                object: json!({"kind":"ScalarValue","value":{"profile":profile,"source":source}}),
+                                evidence: vec![evidence(&rec.rel, &rec.hash, m.start, m.end, "STATIC_RESOLVED")],
+                                resolution: "STATIC_RESOLVED",
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -980,6 +1360,61 @@ mod revision_tests {
         let _ = std::fs::remove_dir_all(&dst);
         assert_ne!(a.revision, b.revision);
         assert_eq!(a.entities.len(), b.entities.len());
+    }
+}
+
+#[cfg(test)]
+mod gitignore_tests {
+    use super::*;
+
+    fn write(path: &Path, content: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn a_file_under_a_gitignored_directory_is_not_indexed() {
+        let dir = std::env::temp_dir().join(format!("cie-gitignore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(&dir.join(".gitignore"), "generated/\n");
+        write(&dir.join("src/kept.ts"), "export function keptFunction() {}\n");
+        write(&dir.join("generated/skip.ts"), "export function shouldNotAppear() {}\n");
+
+        let b = index_repo(&dir, None, None).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(b.entities.iter().any(|e| e.file == "src/kept.ts"), "a non-ignored file is still indexed");
+        assert!(!b.entities.iter().any(|e| e.file == "generated/skip.ts"), "a .gitignore'd file is never indexed");
+    }
+
+    #[test]
+    fn a_hardcoded_skip_dir_is_excluded_even_when_not_gitignored() {
+        // Defense in depth: SKIP_DIRS still applies regardless of what .gitignore says (or doesn't say).
+        let dir = std::env::temp_dir().join(format!("cie-gitignore-skipdirs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(&dir.join("src/kept.ts"), "export function keptFunction() {}\n");
+        write(&dir.join("node_modules/vendor/pkg.ts"), "export function vendorFunction() {}\n");
+
+        let b = index_repo(&dir, None, None).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(b.entities.iter().any(|e| e.file == "src/kept.ts"));
+        assert!(!b.entities.iter().any(|e| e.file.contains("node_modules")), "node_modules is excluded regardless of .gitignore content");
+    }
+
+    #[test]
+    fn a_nested_gitignore_is_also_honoured() {
+        let dir = std::env::temp_dir().join(format!("cie-gitignore-nested-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(&dir.join("pkg/.gitignore"), "local-only.ts\n");
+        write(&dir.join("pkg/local-only.ts"), "export function localOnlyFunction() {}\n");
+        write(&dir.join("pkg/shared.ts"), "export function sharedFunction() {}\n");
+
+        let b = index_repo(&dir, None, None).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(b.entities.iter().any(|e| e.file == "pkg/shared.ts"));
+        assert!(!b.entities.iter().any(|e| e.file == "pkg/local-only.ts"), "a nested .gitignore's rule is honoured too, not just the repo root's");
     }
 }
 
@@ -1103,6 +1538,142 @@ mod behavior_tests {
         assert_eq!(h.object["value"]["lastSubject"], "second");
         assert_eq!(h.evidence[0].class, "HISTORY");
         assert_eq!(h.resolution, "OBSERVED");
+    }
+}
+
+#[cfg(test)]
+mod spring_tests {
+    use super::*;
+
+    fn fixture() -> AnalysisBatch {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/spring-repo");
+        index_repo(&root, None, None).unwrap()
+    }
+
+    #[test]
+    fn extracts_spring_routes_and_injection() {
+        let b = fixture();
+        // Controllers and providers are framework-annotated existing class entities.
+        assert!(b.facts.iter().any(|f| f.predicate == "framework_role" && f.object["value"]["role"] == "controller" && f.subject.contains("PaymentController")));
+        assert!(b.facts.iter().any(|f| f.predicate == "framework_role" && f.object["value"]["role"] == "provider" && f.subject.contains("PaymentService")));
+        // Spring Security guard recognised from @PreAuthorize.
+        assert!(b.facts.iter().any(|f| f.predicate == "framework_role" && f.object["value"]["role"] == "guard" && f.subject.contains("PaymentController.create")));
+
+        // Route entity and fact.
+        assert!(b.entities.iter().any(|e| e.kind == "spring_route" && e.name.contains("POST")));
+        let route_fact = b.facts.iter().find(|f| f.predicate == "route" && f.object["value"]["path"] == "/payments/{userId}").unwrap();
+        assert_eq!(route_fact.object["value"]["method"], "POST");
+
+        // Constructor injection: PaymentService injects UserRepository, PaymentController injects PaymentService.
+        assert!(b.relationships.iter().any(|r| r.kind == "injects" && r.from.contains("PaymentService.PaymentService") && r.to.contains("UserRepository")));
+        assert!(b.relationships.iter().any(|r| r.kind == "injects" && r.from.contains("PaymentController.PaymentController") && r.to.contains("PaymentService")));
+
+        // Transactional method. The framework indexer adds framework:"spring".
+        assert!(b.facts.iter().any(|f| f.predicate == "uses_transaction" && f.subject.contains("PaymentService.charge") && f.object["framework"] == "spring"));
+
+        // Controller exposes route.
+        assert!(b.relationships.iter().any(|r| r.kind == "exposes_route" && r.from.contains("PaymentController") && r.label.as_deref() == Some("POST /payments/{userId}")));
+    }
+
+    #[test]
+    fn extracts_spring_cloud_gateway_routes_and_filters() {
+        let b = fixture();
+        // Java DSL routes.
+        assert!(b.entities.iter().any(|e| e.kind == "spring_cloud_gateway_route" && e.name == "payments"));
+        assert!(b.entities.iter().any(|e| e.kind == "spring_cloud_gateway_route" && e.name == "orders"));
+        assert!(b.facts.iter().any(|f| f.predicate == "gateway_route" && f.object["value"]["id"] == "payments"));
+
+        // Filters emitted by the DSL (camelCase method names).
+        assert!(b.entities.iter().any(|e| e.kind == "spring_cloud_gateway_filter" && e.name.contains("stripPrefix")));
+        assert!(b.entities.iter().any(|e| e.kind == "spring_cloud_gateway_filter" && e.name.contains("circuitBreaker")));
+        assert!(b.entities.iter().any(|e| e.kind == "spring_cloud_gateway_filter" && e.name.contains("retry")));
+
+        // Route-to-filter relationships.
+        assert!(b.relationships.iter().any(|r| r.kind == "uses_filter" && r.from.contains("payments") && r.to.contains("stripPrefix")));
+        assert!(b.relationships.iter().any(|r| r.kind == "uses_filter" && r.from.contains("orders") && r.to.contains("retry")));
+
+        // Custom GatewayFilter class.
+        assert!(b.facts.iter().any(|f| f.predicate == "framework_role" && f.object["value"]["role"] == "gateway_filter" && f.subject.contains("AuthFilter")));
+
+        // YAML route.
+        assert!(b.entities.iter().any(|e| e.kind == "spring_cloud_gateway_route" && e.name == "payments-route"));
+        assert!(b.facts.iter().any(|f| f.predicate == "gateway_filter" && f.object["value"]["name"] == "StripPrefix"));
+        assert!(b.facts.iter().any(|f| f.predicate == "gateway_filter" && f.object["value"]["name"] == "CircuitBreaker"));
+    }
+}
+
+#[cfg(test)]
+mod nestjs_tests {
+    use super::*;
+
+    fn fixture() -> AnalysisBatch {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/nestjs-repo");
+        index_repo(&root, None, None).unwrap()
+    }
+
+    #[test]
+    fn extracts_nestjs_controllers_providers_routes_and_injection() {
+        let b = fixture();
+
+        // Framework roles annotate class entities.
+        assert!(b.facts.iter().any(|f| f.predicate == "framework_role" && f.object["value"]["role"] == "controller" && f.subject.contains("UsersController")));
+        assert!(b.facts.iter().any(|f| f.predicate == "framework_role" && f.object["value"]["role"] == "provider" && f.subject.contains("UsersService")));
+        assert!(b.facts.iter().any(|f| f.predicate == "framework_role" && f.object["value"]["role"] == "module" && f.subject.contains("AppModule")));
+        assert!(b.facts.iter().any(|f| f.predicate == "framework_role" && f.object["value"]["role"] == "guard" && f.subject.contains("AuthGuard")));
+
+        // Route entity and fact.
+        assert!(b.facts.iter().any(|f| f.predicate == "route" && f.object["value"]["path"] == "/users" && f.object["value"]["method"] == "GET"));
+        assert!(b.entities.iter().any(|e| e.kind == "nestjs_route" && e.name.contains("GET")));
+
+        // Constructor injection: UsersController injects UsersService.
+        assert!(b.relationships.iter().any(|r| r.kind == "injects" && r.from.contains("UsersController") && r.to.contains("UsersService")));
+
+        // Module contains its own controller/provider.
+        assert!(b.relationships.iter().any(|r| r.kind == "contains" && r.from.contains("UsersModule") && r.to.contains("UsersController")));
+        assert!(b.relationships.iter().any(|r| r.kind == "contains" && r.from.contains("UsersModule") && r.to.contains("UsersService")));
+    }
+}
+
+#[cfg(test)]
+mod express_tests {
+    use super::*;
+
+    fn fixture() -> AnalysisBatch {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/express-repo");
+        index_repo(&root, None, None).unwrap()
+    }
+
+    #[test]
+    fn extracts_express_routes_and_middleware() {
+        let b = fixture();
+        assert!(b.facts.iter().any(|f| f.predicate == "route" && f.object["value"]["path"] == "/health" && f.object["value"]["method"] == "GET"));
+        assert!(b.facts.iter().any(|f| f.predicate == "route" && f.object["value"]["path"] == "/login" && f.object["value"]["method"] == "POST"));
+        assert!(b.facts.iter().any(|f| f.predicate == "route" && f.object["value"]["path"] == "/" && f.object["value"]["method"] == "GET"));
+        assert!(b.facts.iter().any(|f| f.predicate == "route" && f.object["value"]["path"] == "/:id" && f.object["value"]["method"] == "GET"));
+        assert!(b.entities.iter().any(|e| e.kind == "express_route" && e.name == "GET /health"));
+        assert!(b.entities.iter().any(|e| e.kind == "express_middleware" && e.name == "requireAuth"));
+    }
+}
+
+#[cfg(test)]
+mod nextjs_tests {
+    use super::*;
+
+    fn fixture() -> AnalysisBatch {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/nextjs-repo");
+        index_repo(&root, None, None).unwrap()
+    }
+
+    #[test]
+    fn extracts_nextjs_routes_and_actions() {
+        let b = fixture();
+        assert!(b.facts.iter().any(|f| f.predicate == "route" && f.object["value"]["path"] == "/" && f.object["value"]["method"] == "GET"));
+        assert!(b.facts.iter().any(|f| f.predicate == "route" && f.object["value"]["path"] == "/users/:id" && f.object["value"]["method"] == "GET"));
+        assert!(b.facts.iter().any(|f| f.predicate == "route" && f.object["value"]["path"] == "/api/users" && f.object["value"]["method"] == "GET"));
+        assert!(b.facts.iter().any(|f| f.predicate == "route" && f.object["value"]["path"] == "/api/users" && f.object["value"]["method"] == "POST"));
+        assert!(b.facts.iter().any(|f| f.predicate == "route" && f.object["value"]["path"] == "/blog/:slug" && f.object["value"]["method"] == "GET"));
+        assert!(b.entities.iter().any(|e| e.kind == "nextjs_route" && e.name.contains("/users/:id")));
+        assert!(b.facts.iter().any(|f| f.predicate == "route" && f.object["value"]["kind"] == "server_action"));
     }
 }
 

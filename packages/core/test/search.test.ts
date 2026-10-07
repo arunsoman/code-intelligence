@@ -336,3 +336,34 @@ test("path globs: restricted globs work, {a,b} is refused rather than approximat
   assert.match(bad.error.message, /\{a,b\}|alternatives/);
   assert.throws(() => globRegExp("src/{a,b}"));
 });
+test("AUTO reads a question or a near-miss spelling as the code names it mentions, and says so", async () => {
+  const s = await setup();
+  await s.svc.search.buildForRepository(FIXTURE);
+  const sentence = await s.svc.search.search(ctx(), { query: "what does findByEmail return?", mode: "AUTO" });
+  assert.ok(!("ok" in sentence));
+  assert.deepEqual(sentence.readAs, [{ text: "findByEmail", name: "findByEmail", how: "exact" }]);
+  const def = sentence.hits.find((h) => h.symbol?.symbolId === "function:src/db/users.ts#findByEmail");
+  assert.ok(def, "the definition is found from inside the sentence");
+  assert.equal(def.rationale[0], "the query names findByEmail");
+  const typo = await s.svc.search.search(ctx(), { query: "findByEmial", mode: "AUTO" });
+  assert.ok(!("ok" in typo));
+  assert.deepEqual(typo.readAs, [{ text: "findByEmial", name: "findByEmail", how: "fuzzy" }]);
+  assert.match(typo.hits[0].rationale[0], /read “findByEmial” as findByEmail/);
+  // An identifier that finds its own definitions is not reinterpreted; explicit modes never are.
+  const exact = await s.svc.search.search(ctx(), { query: "findByEmail", mode: "AUTO" });
+  assert.ok(!("ok" in exact)); assert.equal(exact.readAs, undefined);
+  const literal = await s.svc.search.search(ctx(), { query: "findByEmial", mode: "LITERAL" });
+  assert.ok(!("ok" in literal)); assert.equal(literal.readAs, undefined); assert.equal(literal.hits.length, 0);
+  const symbol = await s.svc.search.search(ctx(), { query: "findByEmial", mode: "SYMBOL" });
+  assert.ok(!("ok" in symbol)); assert.equal(symbol.readAs, undefined);
+});
+
+test("a reading never reveals a symbol in a path the caller may not see", async () => {
+  const s = await setup();
+  await s.svc.search.buildForRepository(FIXTURE);
+  s.svc.store.denyPath(FIXTURE, "src/db");
+  const r = await s.svc.search.search(ctx(), { query: "findByEmial", mode: "AUTO" });
+  assert.ok(!("ok" in r));
+  assert.equal(r.readAs, undefined, "no 'read as findByEmail' for a denied definition");
+  assert.doesNotMatch(JSON.stringify(r), /findByEmail|src\/db/);
+});

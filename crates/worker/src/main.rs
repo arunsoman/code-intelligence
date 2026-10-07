@@ -1,6 +1,8 @@
 //! Rust worker (contracts §10): C04–C09 collapsed. Speaks length-prefixed JSON on stdio.
 mod dataflow;
+mod frameworks;
 mod index;
+mod canon;
 mod language;
 mod metrics;
 mod model;
@@ -89,9 +91,9 @@ fn handle(req: &Value) -> Value {
     let result: Result<Value, (&str, String)> = match op {
         "ping" => Ok(json!({"pong": true, "analyzerVersion": index::ANALYZER_VERSION})),
         "languageCapabilities" => Ok(json!({"languages": {
-            "typescript": ["PARSED", "RESOLVED(relative imports, same-file, namespace)"],
+            "typescript": ["PARSED", "RESOLVED(relative imports, same-file, namespace)", "NestJS: controllers, providers, modules, routes, constructor injection, guards, interceptors", "Express/Fastify: static routes and middleware", "Next.js: app/pages router routes and server actions"],
             "rust": ["PARSED", "RESOLVED(crate/self/super modules, same-file, imported functions)"],
-            "java": ["PARSED", "RESOLVED(imports, same package, calls through fields and parameters of a declared type)", "Spring: @Transactional, @KafkaListener/@RabbitListener/@JmsListener, template sends"],
+            "java": ["PARSED", "RESOLVED(imports, same package, calls through fields and parameters of a declared type)", "Spring: controllers, providers, constructor injection, @Transactional, @*Mapping routes, message listeners, Spring Cloud Gateway routes/filters/YAML"],
             "go": ["PARSED", "RESOLVED(package imports, same package, methods on receivers and typed struct fields)"],
             "python": ["PARSED", "RESOLVED(absolute, relative and aliased imports, self methods, attributes typed by annotated parameters)"],
             "nirdosha-v2": ["PARSED_AS_RUST", "RESOLVED(path modules, crate modules, Nirdosha screen macros)"]

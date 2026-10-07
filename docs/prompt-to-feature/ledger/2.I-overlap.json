@@ -1,0 +1,46 @@
+{
+  "C10": {
+    "title": "Overlap and plans (task 2.I)",
+    "items": [
+      {
+        "item": "PF-057/062 related-capability search with disclosed coverage, access and staleness",
+        "tests": [
+          "PF-057/062 related capabilities",
+          "PF-062 availability is reported",
+          "access and input checks for the search"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "AT-49..54/AT-60 overlap relationships and decisions",
+        "tests": [
+          "AT-49 request X+Y",
+          "AT-51 a similar feature",
+          "AT-52 an implemented capability",
+          "AT-53 a high-similarity",
+          "AT-54 an existing capability",
+          "AT-50/AT-60 the same feature",
+          "PF-058 without evidence"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PF-059/060 reuse impact and verification evidence rules",
+        "tests": [
+          "comparison input checks",
+          "PF-059/060 reuse impact",
+          "evidence rules and helpers"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PF-018/PF-059 change plans from the overlap result",
+        "tests": [
+          "PF-018 planFeatureChange",
+          "PF-059/AT-60 planReuseChange"
+        ],
+        "state": "done"
+      }
+    ]
+  }
+}

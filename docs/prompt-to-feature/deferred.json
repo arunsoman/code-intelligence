@@ -1,0 +1,9 @@
+{
+ "AT-08": "no detector compares existing code with approved policies: the finding kind IMPLEMENTATION_MISMATCH exists but nothing produces it",
+ "AT-09": "stale work is listed with the reason (tested); the justification for reusing unaffected evidence is not produced",
+ "AT-38": "release-plan fields and revert planning exist (PF-049); validating behaviour with the flag off and on, and handling of irreversible effects, is not implemented",
+ "AT-58": "no check compares a reused capability's declared workload with the new context (for example synchronous reuse under asynchronous load); performance risk triggers read added lines only",
+ "AT-61": "no detector derives which keyboard, error-state and localisation criteria apply to a new UI change; those are checked only through a browser journey plan someone supplies (needs the browser-gate decisions in #98)",
+ "AT-66": "slice 1 has no external effects (plan A5); provider reconciliation is not built",
+ "AT-83": "bounded loading, paging and truthful truncation are tested for the file list and viewer; there is no narrow-viewport browser run of the Build dialog"
+}

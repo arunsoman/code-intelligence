@@ -1,0 +1,37 @@
+{
+  "C19": {
+    "title": "Wizard stages: Clarify, Plan, Changes (task 2.N)",
+    "items": [
+      {
+        "item": "PF-064/071 review model from recorded inventory; AT-70/71 questions, criteria, counts and eligibility",
+        "tests": [
+          "PF-064/071 the review model",
+          "AT-70/71 featureReview",
+          "C01/openFeatureWorkspace carries"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PF-072/AT-73 bounded change graph, accessible list and paged file reads",
+        "tests": [
+          "PF-072/AT-73",
+          "C19/compileChangeGraph",
+          "PF-072 paged file reads"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "web view logic: filters, paging, graph/list equivalence, viewer rules, line links, criterion evidence",
+        "tests": [
+          "PF-071 file filters",
+          "PF-072 paging",
+          "AT-71/73 graph and list",
+          "PF-072 file viewer rules",
+          "PF-075 line links",
+          "AT-70 related criterion evidence"
+        ],
+        "state": "done"
+      }
+    ]
+  }
+}

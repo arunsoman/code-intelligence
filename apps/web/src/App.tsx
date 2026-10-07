@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiResult, AuditEvent, JobView, ChangesSince, Claim, ConceptCard, ConverseResult, EditorContext, ExplainResult, MapOverlays, MatrixAxis, MatrixCell, ResolvedEvidence, RevisionInfo, SavedState, StatusInfo, VerdictKind, ViewNode, ViewSpec, WorkspaceOpen } from "@cie/schema";
 import { call } from "./api.ts";
+import { RepositoryGit } from "./RepositoryGit.tsx";
+import type { RepositoryGitInfo } from "@cie/schema";
 import { buttonFeedback } from "./button.ts";
 import { Canvas } from "./Canvas.tsx";
 import { ChatPanel, type Message } from "./ChatPanel.tsx";
+import { ModelMenu } from "./ModelMenu.tsx";
 import { CanvasSkeleton, Loading } from "./Skeleton.tsx";
 import { COMPOSING_CAPTION, EMPTY_NO_INDEX, canvasPhase, emptyStageCopy } from "./loading.ts";
 import { ClaimCard } from "./ClaimCard.tsx";
@@ -14,12 +17,17 @@ import { TerrainView } from "./TerrainView.tsx";
 import { MatrixView } from "./MatrixView.tsx";
 import { JobBar } from "./JobBar.tsx";
 import { VisualsGallery, type CatalogEntry } from "./VisualsGallery.tsx";
+import { ProviderWizard } from "./ProviderWizard.tsx";
 import { FolderPicker } from "./FolderPicker.tsx";
 import { DefectPanel } from "./DefectPanel.tsx";
 import { PrPanel } from "./PrPanel.tsx";
 import { ProfilePanel } from "./ProfilePanel.tsx";
 import { TaskPanel } from "./TaskPanel.tsx";
+import { BuildFeature } from "./build/BuildFeature.tsx";
 import { CampaignPanel } from "./CampaignPanel.tsx";
+import { ReleaseWizardPanel } from "./ReleaseWizardPanel.tsx";
+import { ReleaseBoardPanel } from "./ReleaseBoardPanel.tsx";
+import { ReleaseLensPanel } from "./ReleaseLensPanel.tsx";
 import { SearchPanel } from "./SearchPanel.tsx";
 import { HotspotPanel } from "./HotspotPanel.tsx";
 import { InsightsPanel } from "./InsightsPanel.tsx";
@@ -83,11 +91,17 @@ export function App() {
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [fitTick, setFitTick] = useState(0);
   const [galleryOpen, setGalleryOpen] = useState(false);
+  const [providerWizardOpen, setProviderWizardOpen] = useState(false);
   const [defectsOpen, setDefectsOpen] = useState(false);
   const [prOpen, setPrOpen] = useState(false);
   const [profilesOpen, setProfilesOpen] = useState(false);
   const [tasksOpen, setTasksOpen] = useState(false);
+  const [buildOpen, setBuildOpen] = useState(false);
+  const [buildContext, setBuildContext] = useState<{ releaseId?: string; requestId?: string } | null>(null);
   const [campaignsOpen, setCampaignsOpen] = useState(false);
+  const [releasesOpen, setReleasesOpen] = useState(false);
+  const [boardOpen, setBoardOpen] = useState(false);
+  const [lensOpen, setLensOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [hotspotsOpen, setHotspotsOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
@@ -107,7 +121,7 @@ export function App() {
   const [audit, setAudit] = useState<{ events: AuditEvent[]; chain: { ok: boolean } } | null>(null);
 
   const log = useCallback((kind: string, detail?: string) => setEvents((e) => [...e, { kind, at: now(), detail }].slice(-200)), []);
-  const say = useCallback((role: Message["role"], text: string, isError = false) => setMessages((m) => [...m, { role, text, at: now(), error: isError }].slice(-200)), []);
+  const say = useCallback((role: Message["role"], text: string, isError = false, thinking?: string) => setMessages((m) => [...m, { role, text, at: now(), error: isError, ...(thinking ? { thinking } : {}) }].slice(-200)), []);
   const mergeClaims = useCallback((cs: Claim[]) => setClaimMap((m) => ({ ...m, ...Object.fromEntries(cs.map((c) => [c.draft.id, c])) })), []);
 
   const refresh = useCallback(async () => {
@@ -280,18 +294,36 @@ export function App() {
     say("user", text);
     setBusy("Thinking…"); setError(null); setNotice(null);
     try {
-      const r = await call<ConverseResult>("C15", "converse", { text, view, selection, revision: info?.revision?.id, pins });
+      const r = await call<ConverseResult>("C15", "converse", { text, view, selection, revision: info?.revision?.id, pins, history: messages.slice(-6).map(({ role, text }) => ({ role, text })) });
       if (!r.ok) { say("assistant", failMsg(r), true); return; }
       const v = r.value;
       for (const w of r.metadata.warnings) say("assistant", `Note: ${w}`);
       switch (v.kind) {
-        case "view": adoptView(v.view, v.claims, !!view && view.id === v.view.id); say("assistant", v.message); log("ASK", text.slice(0, 80)); break;
+        case "analysis": {
+          const shown = v.results.filter((r) => r.view);
+          for (const result of shown) mergeClaims(result.claims);
+          const last = shown.at(-1);
+          if (last?.view) adoptView(last.view, last.claims, false);
+          setMessages((m) => [...m, { role: "assistant", text: v.message, at: now(), results: v.results, ...(v.thinking ? { thinking: v.thinking } : {}) } as Message].slice(-200));
+          log("ASK", text.slice(0, 80));
+          break;
+        }
+        case "view": adoptView(v.view, v.claims, !!view && view.id === v.view.id); setMessages((m) => [...m, { role: "assistant", text: v.message, at: now(), ...(v.thinking ? { thinking: v.thinking } : {}), ...(v.view.formId === "SemanticMap" ? { providerWizard: true } : {}) }].slice(-200)); log("ASK", text.slice(0, 80)); break;
         case "explanation": mergeClaims(v.explanation.claims); setDrawer({ kind: "explain", data: v.explanation }); say("assistant", v.message); log("EXPLAIN", text.slice(0, 80)); break;
         case "zoom": setLevel((l) => v.direction === "overview" ? 1 : Math.max(0, Math.min(MAX_LEVEL, l + (v.direction === "in" ? 1 : -1)))); setFitTick((t) => t + 1); say("assistant", v.message); break;
         case "resume": say("assistant", v.message); await resume(v.workspaceId); break;
         case "message": say("assistant", v.message); break;
       }
     } finally { setBusy(null); }
+  };
+
+  const showChatResult = (result: ChatAnalysisResult) => {
+    if (!result.view) return;
+    adoptView(result.view, result.claims, false);
+    const count = result.view.nodes.length;
+    const message = count ? `Showing ${result.title}: ${count} chart element(s). Click an element to inspect its code and evidence.` : `${result.title} has no chart elements to show; check the gaps listed below the canvas.`;
+    setNotice(message);
+    setAnnouncement(message);
   };
 
   // ------------------------------------------------------------ inspection
@@ -307,9 +339,12 @@ export function App() {
     }
     if (n.kind === "agg") {
       setSelection(n.members);
+      setAnnouncement(`Selected the group ${n.label}; opened its ${n.count} member elements.`);
       setDrawer({ kind: "inspect", title: n.label, sub: `${n.count} element(s) collapsed at level ${level}`, notes: [`Zoom in or press + to see them individually. Selecting this selects all ${n.count}.`], claimIds: [], evidence: [], members: n.members.map((m) => nodeById.get(m)?.label ?? m) });
       return;
     }
+    setSelection(n.members);
+    setAnnouncement(`Selected ${n.label}; opened its code and evidence details.`);
     await openNodeDrawer(n.node!);
   };
   const openNodeDrawer = async (vn: ViewNode) => {
@@ -445,7 +480,6 @@ export function App() {
   const levelsApply = !!view && semanticLevelsApply(view);
   const stepLevel = (d: number) => { setLevel((l) => Math.max(0, Math.min(MAX_LEVEL, l + d))); setFitTick((t) => t + 1); };
   const dm = (m: string) => (m === "FACT" ? "fact" : m === "INFERENCE" ? "inference" : m === "FOG" ? "fog" : "hyp");
-  const providerShort = info?.provider ?? "…";
   const pending = !!busy || jobActive;
   const phase = canvasPhase({ hasView: !!view, pending });
   const indexed = !!info?.revision;
@@ -454,6 +488,7 @@ export function App() {
     <div className="app">
       {picking && <FolderPicker initialPath={repoPath} onClose={() => setPicking(false)} onPick={(p) => { setRepoPath(p); setPicking(false); log("PICK_REPO", p); }} />}
       {galleryOpen && <VisualsGallery revision={info?.revision?.id} onClose={() => setGalleryOpen(false)} onShow={(it: CatalogEntry, q: string) => { setGalleryOpen(false); void askForm(q, it.formId); }} />}
+      {providerWizardOpen && <ProviderWizard revision={info?.revision?.id} onClose={() => setProviderWizardOpen(false)} />}
       {outlineOpen && <Outline rendered={rendered} level={level} onClose={() => setOutlineOpen(false)} onPick={(id) => { const n = rendered.nodes.find((x) => x.id === id); setOutlineOpen(false); if (n) void inspectNode(n); }} />}
       {browsingCards && (
         <ConceptBrowser revision={info?.revision?.id} jobs={jobs} onShowJobs={() => setJobsOpen(true)} onClose={() => { setBrowsingCards(false); void refresh(); }} onVerdict={verdict}
@@ -487,13 +522,31 @@ export function App() {
         {prOpen && repoPath && <PrPanel repoPath={repoPath} onClose={() => setPrOpen(false)} />}
         {profilesOpen && <ProfilePanel revision={revision} onClose={() => setProfilesOpen(false)} />}
         {tasksOpen && <TaskPanel revision={revision} onClose={() => setTasksOpen(false)} />}
+        {buildOpen && (
+          <BuildFeature
+            key={buildContext?.requestId ?? buildContext?.releaseId ?? "default"}
+            onClose={() => { setBuildOpen(false); setBuildContext(null); }}
+            api={info?.revision?.repoRoot ? { repositoryId: info.revision.repoRoot, call: call as never } : undefined}
+            releaseId={buildContext?.releaseId}
+            initialRequestId={buildContext?.requestId}
+          />
+        )}
         {campaignsOpen && <CampaignPanel onClose={() => setCampaignsOpen(false)} />}
+        {releasesOpen && <ReleaseWizardPanel onClose={() => setReleasesOpen(false)} />}
+        {boardOpen && (
+          <ReleaseBoardPanel
+            onClose={() => setBoardOpen(false)}
+            onOpenRequest={(requestId) => { setBoardOpen(false); setBuildContext({ requestId }); setBuildOpen(true); }}
+            onOpenNew={(releaseId) => { setBoardOpen(false); setBuildContext({ releaseId }); setBuildOpen(true); }}
+          />
+        )}
+        {lensOpen && <ReleaseLensPanel onClose={() => setLensOpen(false)} />}
         {searchOpen && repoPath && <SearchPanel repoPath={repoPath} revision={revision} onClose={() => setSearchOpen(false)} />}
         {hotspotsOpen && repoPath && <HotspotPanel repoPath={repoPath} revision={revision} onClose={() => setHotspotsOpen(false)} />}
         {insightsOpen && revision && <InsightsPanel revision={revision} view={view} onClose={() => setInsightsOpen(false)} onAsk={askFromInsights} onReindexed={refresh} />}
         {investigationsOpen && revision && <InvestigationPanel key={`${revision}:${ws.id ?? "repo"}`} revision={revision} workspaceId={ws.id ?? `repo:${info?.revision?.repoRoot ?? repoPath}`} initialQuestion={view?.question ?? ""} entityRefs={[...new Set(selection.flatMap((id) => nodeById.get(id)?.entityRefs ?? []))]} onClose={() => setInvestigationsOpen(false)} />}
         <h1>Code Intelligence</h1>
-        <span className="chip" title="Model provider">{providerShort}{info?.hosted ? " · hosted" : ""}</span>
+        <ModelMenu current={info?.model ?? null} hosted={!!info?.hosted} call={call} onChanged={refresh} />
         {info?.revision && <span className="chip mono" title={info.revision.repoRoot}>rev {info.revision.id} · {info.revision.fileCount} files</span>}
         {info && info.concepts > 0 && <span className="chip">{info.concepts} concept cards</span>}
         {info?.tests && <span className="chip" title={`Loaded from ${info.tests.found.join(", ")}${info.tests.staleness.length ? `. ${info.tests.staleness.join("; ")}` : ""}`}>tests: {info.tests.tests.passed} pass · {info.tests.tests.failed} fail{info.tests.coverageLinePercent !== null ? ` · ${info.tests.coverageLinePercent}% covered` : ""}{info.tests.staleness.length ? " ⚠" : ""}</span>}
@@ -505,7 +558,11 @@ export function App() {
         <button className="secondary small" onClick={() => setHotspotsOpen(true)} title="Historical hotspots and change coupling: ranked from the repository's own git history, rename-aware, with the excluded commits listed and every rank explained down to the commits">Hotspots</button>
         <button className="secondary small" onClick={() => setProfilesOpen(true)} title="Import a profile (V8 .cpuprofile or folded stacks), read hotspots per sample kind, correlate it to a recorded trace window, and compare under the error-population gate">Profiles</button>
         <button className="secondary small" onClick={() => setTasksOpen(true)} title="F07: turn a defect report into a candidate patch, validate it against the original oracle in an isolated run, get a second-person approval, and publish one draft pull request on a CIE-owned branch. Nothing here merges.">Tasks</button>
+        <button className="secondary small" onClick={() => setBuildOpen(true)} title="Build feature: describe a change in plain language, clarify, plan, review the exact candidate, validate and deliver">Build feature</button>
         <button className="secondary small" onClick={() => setCampaignsOpen(true)} title="Coordinated multi-repository changes: freeze a versioned population, plan a dependency-ordered canary rollout, review each child independently, run joint compatibility checks, and publish per-child draft PRs">Campaigns</button>
+        <button className="secondary small" onClick={() => setReleasesOpen(true)} title="Release scope: freeze what's in a release against a GitHub milestone. An issue added to the milestone later needs assessment before it counts, never silently in scope.">Releases</button>
+        <button className="secondary small" onClick={() => setBoardOpen(true)} title="Release Board: every feature request building toward a release, for dev and QA. QA approves a candidate as a genuinely different person, never a self-approval.">Release Board</button>
+        <button className="secondary small" onClick={() => setLensOpen(true)} title="Release Lens: one evidence ledger for a release's go/no-go, viewed through a stakeholder lens. The lens only reorders rows; it never recomputes them.">Release Lens</button>
         <button className="secondary small" disabled={!revision} onClick={() => setInsightsOpen(true)}>Insights</button>
         <button className="secondary small" disabled={!revision} onClick={() => setInvestigationsOpen(true)}>Investigations</button>
         <button className="link" onClick={openAudit}>Audit log</button>
@@ -518,6 +575,19 @@ export function App() {
           <JobBar jobs={jobs} onCancel={(j) => void cancelJob(j)} />
           <label className="sr" htmlFor="repo">Absolute repository path</label>
           <input id="repo" value={repoPath} onChange={(e) => setRepoPath(e.target.value)} placeholder="/absolute/path/to/ts/repo" />
+          <RepositoryGit key={repoPath} repoPath={repoPath} revision={info?.revision ?? null} disabled={!!busy || jobActive} onSwitch={async (git, branch, kind) => {
+            await withBusy("Switching branch", async () => {
+              const r = await call<RepositoryGitInfo>("C01", "switchBranch", { repoPath: git.repoRoot, branch, kind, expectedHead: git.head, expectedBranch: git.branch });
+              if (!r.ok) throw new Error(r.error.message);
+              setView(null); setClaimMap({}); setSelection([]); setCellSel([]); setCards([]); setMessages([]); setDrawer(null); setCode(null); setStale(null); setChanges(null); setCardPins(null); setEditorFocus([]);
+              setWs({ version: 0 }); setWsName("");
+              setInfo((s) => s ? { ...s, revision: null, concepts: 0 } : s);
+              setNotice(`Switched to ${r.value.branch}. Indexing the checkout…`);
+              const indexed = await call<JobView>("C07", "enqueue", { kind: "index", repoPath: git.repoRoot });
+              if (!indexed.ok) throw new Error(`Switched to ${branch}, but indexing could not start: ${indexed.error.message}. Click Index to retry.`);
+              await syncJobs();
+            });
+          }} />
           <div className="row">
             <button className="secondary" onClick={() => setPicking(true)} disabled={!!busy || jobActive}>Browse…</button>
             <button onClick={index} disabled={!repoPath || !!busy || jobActive} className={indexFb.className} aria-busy={indexFb["aria-busy"]} title="Index the selected repository">{indexFb.spinner && <span className="spinner" aria-hidden="true" />}Index</button>
@@ -685,7 +755,7 @@ export function App() {
       </main>
 
       <aside className="right">
-        <ChatPanel messages={messages} referents={referents} busy={!!busy} canAsk={!!info?.revision} examples={EXAMPLES} seed={chatSeed ?? undefined} onSend={(t) => void send(t)} onDropReferent={(id) => (id.startsWith("cell:") ? setCellSel(cellSel.filter((x) => x !== id)) : id === "card:pins" ? setCardPins(null) : id.startsWith("editor:") ? setDismissed(new Set([...dismissed, id.slice(7)])) : setSelection(selection.filter((x) => x !== id)))} />
+        <ChatPanel onShowResult={showChatResult} onCreateProvider={() => setProviderWizardOpen(true)} messages={messages} referents={referents} busy={!!busy} canAsk={!!info?.revision} examples={EXAMPLES} seed={chatSeed ?? undefined} onSend={(t) => void send(t)} onDropReferent={(id) => (id.startsWith("cell:") ? setCellSel(cellSel.filter((x) => x !== id)) : id === "card:pins" ? setCardPins(null) : id.startsWith("editor:") ? setDismissed(new Set([...dismissed, id.slice(7)])) : setSelection(selection.filter((x) => x !== id)))} />
         <section className="drawer" aria-label="Evidence">
           {code && (
             <div className="codecard">

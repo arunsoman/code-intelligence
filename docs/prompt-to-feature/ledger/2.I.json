@@ -1,0 +1,76 @@
+{
+  "C15": {
+    "title": "Requirements, conflicts (task 2.I)",
+    "items": [
+      {
+        "item": "PF-005/006/007 normalisation into an atomic, grounded contract; ungrounded requirements stay PROPOSED with a blocker",
+        "tests": [
+          "PF-005/006 normalisation",
+          "PF-007 a requirement the source",
+          "PF-005 non-atomic statements"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "AT-04/AT-05 vague terms and assumption materiality",
+        "tests": [
+          "AT-04 vague terms",
+          "AT-05 an assumption that could change",
+          "AT-05 end to end"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "normalisation access, staleness and model-failure rules",
+        "tests": [
+          "normalisation refuses wrong state",
+          "normalisation marks candidates built"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "AT-02/AT-03/PF-010/011/013 deterministic conflicts with witnesses and population applicability; model proposals are POTENTIAL only",
+        "tests": [
+          "AT-02/PF-010/013",
+          "AT-03 statements about different",
+          "PF-011 findings are classified",
+          "PF-010 model-assisted findings",
+          "a re-run keeps what a person decided",
+          "PF-010 a configured model proposer"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "AT-06/PF-009 dependency-aware blocking",
+        "tests": [
+          "AT-06/PF-009 a confirmed conflict blocks",
+          "conflict detection input checks"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PF-016 configured access policies and invariants (.cie/constraints.json)",
+        "tests": [
+          ".cie/constraints.json is strict",
+          "PF-010/PF-016 a requirement that breaks",
+          "AT-06 constraint check over the gateway"
+        ],
+        "state": "done"
+      }
+    ]
+  },
+  "C22": {
+    "title": "Clarification (task 2.I)",
+    "items": [
+      {
+        "item": "PF-008/014/019 question batches, authorised answers release exactly the tasks they held, impact lists stale work",
+        "tests": [
+          "PF-008 questions come in batches",
+          "PF-014/AT-06 an authorised answer",
+          "PF-019 impact"
+        ],
+        "state": "done"
+      }
+    ]
+  }
+}

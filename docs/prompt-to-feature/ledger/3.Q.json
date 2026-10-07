@@ -1,0 +1,76 @@
+{
+  "C28": {
+    "title": "Patch export and destination (task 3.Q)",
+    "items": [
+      {
+        "item": "export bound to a decision recomputed now; incomplete candidates export as REVIEW ONLY, blocked/stale/forged exports nothing (PF-077)",
+        "tests": [
+          "PF-077 export is bound to a decision recomputed now",
+          "PF-077 a stale candidate or a decision made before the contract changed exports nothing"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "git-apply-accepted patch with renames and deletions, plain diff and bundle (PF-077)",
+        "tests": [
+          "PF-077 the exported git patch is accepted by git apply",
+          "PF-077 file patches handle missing trailing newlines"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "unsafe paths, VCS metadata, NUL bytes, case collisions and submodule paths block an export (PF-078)",
+        "tests": [
+          "PF-078 unsafe paths, VCS metadata"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "destination dry run lists conflicts and dirty paths; apply only on an exact base, into a new copy, and the destination is untouched (PF-078, AT-78-82)",
+        "tests": [
+          "PF-078/AT-78-82 the destination check is a dry run"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "binary add/replace/delete, executable-bit changes and symlink add/retarget/remove are candidate entries with kind, mode and payload, mixed with text; unsafe ones are refused (#91, AT-80)",
+        "tests": [
+          "#91 the candidate records every kind",
+          "#91 unsafe binary, mode and symlink edits are refused"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Git is the canonical patch engine: git diff --binary --full-index on export, git apply on a copy of the destination, result compared with the candidate hash (#91)",
+        "tests": [
+          "#91 Git is the patch engine",
+          "#91 destination: a binary, mode or link that differs is a conflict"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "validation, integration, security gate, viewer, draft PR and issue trail carry binary, mode and link changes (#91)",
+        "tests": [
+          "#91 validation and integration use the same writer",
+          "#91 the security gate: unscanned binary files",
+          "#91 the file viewer never shows bytes as text",
+          "#91 a draft PR carries the binary",
+          "#91 PatchExported and PatchApplied reach the issue"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "binary files are analysed by the security gate",
+        "tests": [],
+        "state": "blocked",
+        "needs": "a binary or media analyser adapter; binaries are a named gap unless a security-authorised BINARY-UNSCANNED suppression records that a person looked"
+      },
+      {
+        "item": "revert planning for binary, mode and link changes",
+        "tests": [],
+        "state": "blocked",
+        "needs": "planRevert refuses them and says to revert with git; a Git-based revert candidate is not built"
+      }
+    ]
+  }
+}

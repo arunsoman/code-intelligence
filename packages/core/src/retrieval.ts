@@ -39,7 +39,7 @@ export interface Retrieval {
 export interface RetrieveOptions {
   /** Persona lens id (see context.ts): re-weights factors, never hides safety facts. */
   lens?: string;
-  maxNodes?: number; weights?: Weights; frames?: Map<string, number>; pins?: Set<string>; ignored?: Set<string>;
+  overview?: boolean; maxNodes?: number; weights?: Weights; frames?: Map<string, number>; pins?: Set<string>; ignored?: Set<string>;
   cards?: ConceptCard[]; taskBoost?: SalienceContext["taskBoost"]; extraSeeds?: string[];
   /** Entities semantically close to the question (see embeddings.ts); they feed the same factor as exact name matches. */
   semantic?: Map<string, Semantic>;
@@ -73,7 +73,7 @@ function assemble(store: Store, revision: string, entityIds: string[], notes: st
   const bundle: EvidenceBundle = {
     id: `bundle:${createHash("sha256").update(revision + [...idSet].sort().join("|")).digest("hex").slice(0, 16)}`,
     revision, evidence: [...evidence.values()], entities, relationships: [...rels.values()], facts: [...facts.values()],
-    coverage: ["TypeScript, Rust and Nirdosha v2 static analysis (tree-sitter)", ...notes],
+    coverage: ["TypeScript, Java, Go, Python, Rust and Nirdosha v2 static analysis (tree-sitter)", ...notes],
     unresolved: unresolved.length ? [`${unresolved.length} call(s) could not be statically resolved`] : [],
     tokenEstimate: 0,
   };
@@ -141,15 +141,26 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
   const note = (id: string, why: string) => provenance.set(id, [...new Set([...(provenance.get(id) ?? []), why])]);
   const isSeed = (id: string) => overrides.get(id) === "pin" || factor(id, "TASK_MATCH") > 0 || factor(id, "SEMANTIC_JUDGMENT") > 0 || (opts.frames?.has(id) ?? false) || (opts.extraSeeds ?? []).includes(id);
   const candidates = [...scored.values()].filter((s) => isSeed(s.id)).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+  if (opts.overview) {
+    const order = new Map((opts.extraSeeds ?? []).map((id, i) => [id, i]));
+    candidates.sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity) || b.score - a.score || a.id.localeCompare(b.id));
+  }
   const picked: string[] = [];
   let inaccessible = 0;
-  for (const c of candidates) {
+  // A pin ("it will always be shown") or an explicit seed (the subject of this view, or what a chat answer
+  // relied on) must survive being outranked by an unrelated flood of ordinary keyword matches — the cap and the
+  // weak-match floor below are both for THOSE, never for a caller-named entity. Access and "ignore" still apply:
+  // being named does not override either. Guaranteed entities go first, in their own score order, so when there
+  // are more of them than maxNodes the strongest still wins; everything else fills whatever capacity is left.
+  const guaranteed = (id: string) => overrides.get(id) === "pin" || (opts.extraSeeds ?? []).includes(id);
+  const [first, rest] = [candidates.filter((c) => guaranteed(c.id)), candidates.filter((c) => !guaranteed(c.id))];
+  for (const c of [...first, ...rest]) {
     const label = byId.get(c.id)!.name;
     // A denied match is counted and dropped before anything else can mention it: not in the picks, not in "why hidden".
     if (isDenied(c.id)) { inaccessible++; continue; }
     if (opts.ignored?.has(c.id)) { hidden.push({ entityId: c.id, label, reason: "you asked to ignore it" }); continue; }
-    if (picked.length >= maxNodes) { hidden.push({ entityId: c.id, label, reason: `matched, but ranked below the top ${maxNodes}` }); continue; }
-    if (c.tier === "HIDDEN" && !(opts.extraSeeds ?? []).includes(c.id)) { hidden.push({ entityId: c.id, label, reason: "matched weakly; relevance below the display threshold" }); continue; }
+    if (!guaranteed(c.id) && picked.length >= maxNodes) { hidden.push({ entityId: c.id, label, reason: `matched, but ranked below the top ${maxNodes}` }); continue; }
+    if (c.tier === "HIDDEN" && !guaranteed(c.id)) { hidden.push({ entityId: c.id, label, reason: "matched weakly; relevance below the display threshold" }); continue; }
     picked.push(c.id);
     const e = byId.get(c.id)!, nm = e.name.toLowerCase(), pth = e.file.toLowerCase();
     if (terms.some((t) => nm.includes(t) || pth.includes(t))) note(c.id, "lexical");
@@ -176,7 +187,10 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
   let truncation: Retrieval["truncation"];
   if (opts.tokenBudget && bundle.tokenEstimate > opts.tokenBudget) {
     const before = bundle.tokenEstimate;
-    const rank = (id: string) => (overrides.get(id) === "pin" ? 3 : scored.get(id)!.tier === "CRITICAL" ? 2 : scored.get(id)!.tier === "RELEVANT" ? 1 : 0);
+    // A pin or an explicit seed is exempt from the maxNodes cutoff above for the same reason it must not be the
+    // first thing a token squeeze throws away: it is not a weak match to be weighed against stronger ones, it is
+    // the thing the caller named.
+    const rank = (id: string) => (guaranteed(id) ? 3 : scored.get(id)!.tier === "CRITICAL" ? 2 : scored.get(id)!.tier === "RELEVANT" ? 1 : 0);
     const order = [...picked].sort((a, b) => rank(a) - rank(b) || scored.get(a)!.score - scored.get(b)!.score || a.localeCompare(b));
     const dropped: { entityId: string; label: string }[] = [];
     let keep = new Set(picked);
@@ -192,7 +206,7 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
   const tiers = new Map<string, ViewNode["tier"]>();
   for (const id of picked) {
     const t = scored.get(id)!.tier;
-    tiers.set(id, t === "HIDDEN" ? "CONTEXT" : t); // neighbours are shown as context even when their own score is low
+    tiers.set(id, opts.overview && (opts.extraSeeds ?? []).includes(id) && (t === "HIDDEN" || t === "CONTEXT") ? "RELEVANT" : t === "HIDDEN" ? "CONTEXT" : t); // neighbours are shown as context even when their own score is low
   }
   return { bundle, tiers, scored, terms, hidden, inaccessible, truncation, provenance };
 }

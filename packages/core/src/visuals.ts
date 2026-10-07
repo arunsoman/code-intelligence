@@ -9,6 +9,7 @@ import { buildJourney } from "./forms/journey.ts";
 import { buildLineage } from "./forms/lineage.ts";
 import { buildOwnership } from "./forms/ownership.ts";
 import { buildRace } from "./forms/race.ts";
+import { buildRouteMap } from "./forms/routemap.ts";
 import { buildRuntime } from "./forms/runtime.ts";
 import { buildTerrain } from "./forms/terrain.ts";
 import { buildProfile } from "./forms/profile.ts";
@@ -38,6 +39,7 @@ export const VISUALS: VisualDef[] = [
   { code: "V13", formId: "Ownership", name: "Ownership and knowledge map", blurb: "Who owns code formally and in practice, where knowledge is thin, and whose has gone stale.", example: "Who owns what and where is the bus factor 1?", needs: ["git"], build: buildOwnership },
   { code: "V14", formId: "ConceptAtlas", name: "Implicit-concept atlas", blurb: "Hidden concepts (rules, workflows, failure modes) pinned onto the code that implements them, with scatter and missing enforcement.", example: "Show the implicit concepts in this code", needs: ["concepts"], build: buildAtlas },
   { code: "V16", formId: "ChangeRisk", name: "Change-risk terrain", blurb: "A relief map of how hard each part is to change, composed from coupling, churn, incidents, test gaps and thin knowledge, with tunable weights.", example: "Where is it risky to change things?", needs: [], build: buildTerrain },
+  { code: "V18", formId: "RouteMap", name: "Framework route and guard map", blurb: "Framework-aware HTTP routes (method + path) and the guards that protect them, as a routes-by-guards matrix.", example: "What endpoints does this service expose and which are guarded?", needs: [], build: buildRouteMap },
   // Forms built earlier; they are chosen by the router in router.ts / by pasting a trace.
   { code: "V1", formId: "SemanticMap", name: "Intent-relative architecture map", blurb: "Relevant code grouped by responsibility, with semantic zoom from the whole system down to the code.", example: "Show me how authentication works", needs: [] },
   { code: "V2", formId: "HypothesisGraph", name: "Causal hypothesis graph", blurb: "A pasted exception becomes ranked suspects with the evidence that discriminates between them; you can steer it.", example: "Paste a stack trace into the conversation", needs: ["stack trace"] },
@@ -45,6 +47,7 @@ export const VISUALS: VisualDef[] = [
   // Ordered last on purpose: the earlier entries are the fallback forms a scripted/absent router may pick, and a form
   // whose need (an imported profile) is unmet must never shadow the general map it falls back to.
   { code: "V17", formId: "TraceLinkedProfile", name: "Trace-linked profile", blurb: "Where sampled execution time (or allocations) actually fell, per sample kind, joined to the traced window — measured shares with their population hash, unattributed and withheld parts shown as fog, never a causal claim.", example: "Where does the CPU actually go?", needs: ["profiles"], build: buildProfile },
+  { code: "V19", formId: "GeneratedChart", name: "Generated chart", blurb: "An LLM-designed chart layout compiled into CIE's interactive, evidence-linked canvas when no built-in visual fits.", example: "Show this flow as a sequence diagram", needs: [] },
 ];
 
 /** Any inferred or hypothetical edge without its own claim (asynchronous hand-offs, mostly) gets one, so nothing uncertain is shown unexplained. */

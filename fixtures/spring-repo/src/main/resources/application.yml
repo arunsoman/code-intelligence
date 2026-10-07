@@ -1,0 +1,17 @@
+spring:
+  application:
+    name: payments
+  cloud:
+    gateway:
+      routes:
+        - id: payments-route
+          uri: http://payments
+          predicates:
+            - Path=/api/payments/**
+          filters:
+            - StripPrefix=1
+            - name: CircuitBreaker
+              args:
+                name: payments
+server:
+  port: 8080

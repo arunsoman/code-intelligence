@@ -22,7 +22,7 @@
 | Node | v24.21.0 |
 | Rust | cargo/rustc 1.99.0 (installed for this run) |
 | Ollama | v0.12.6 (local tarball install, loopback :11434) |
-| Model | `qwen3:0.6b` (router + synthesis; `CIE_PROVIDER=ollama`) |
+| Model | the selected local model (router + synthesis; `CIE_PROVIDER=ollama`) |
 | Browser | Playwright Chromium 143.0.7499.4, viewport 1440×900 (headless) |
 | OS | Linux x86_64, 4 GB RAM sandbox |
 | Repos indexed | CIE itself (462 files) and `.cie/demo/payments-app` (14 files) |
@@ -33,10 +33,10 @@
 |---|---|
 | Ollama installed | PASS — v0.12.6, local tarball (sudo install refused; tarball was the documented remediation) |
 | Ollama service running | PASS — `GET /api/version` → 200 |
-| Minimal model installed | PASS — `qwen3:0.6b` (522 MB) |
+| Minimal model installed | PASS — the selected local model (522 MB) |
 | Direct model invocation | PASS — `/api/generate` `done_reason: stop` |
-| Code Intelligence configured for Ollama | PASS — server log: `model: ollama/qwen3:0.6b; router: qwen3:0.6b` |
-| Application can reach Ollama | PASS — `/healthz` model check: "ollama/qwen3:0.6b: no recent failure" |
+| Code Intelligence configured for Ollama | PASS — server log: `model: ollama/<selected model>; router: the selected model` |
+| Application can reach Ollama | PASS — `/healthz` model check: "ollama/<selected model>: no recent failure" |
 | Real UI → Backend → Ollama → UI round trip | PASS — UI ask produced `route.source: "model"` views; ~10–20 s synthesis latency observed; one transient `PROVIDER_UNAVAILABLE` degraded honestly to deterministic facts with a visible Note |
 
 ## Numbers
@@ -147,7 +147,7 @@ Summary
 Clicking **Profiles** in the header unmounts the whole React tree. The page becomes empty (`#root` has no children), every other header button disappears, and the only recovery is a full page reload. Two uncaught errors reach the console, both from the same render.
 
 Environment
-- commit 5ec061b5f4e8528b46a1aeca932766dd807e6bb3 (main), local Ollama `ollama/qwen3:0.6b`, DB schema v32
+- commit 5ec061b5f4e8528b46a1aeca932766dd807e6bb3 (main), local Ollama `ollama/<selected model>`, DB schema v32
 - Chromium 143 (Playwright), viewport 1440×900, Linux
 - One repository indexed (462 files); happens with the demo repository too
 
@@ -212,7 +212,7 @@ Summary
 "Give me an overview of the whole project" produced a map with exactly two isolated Fog nodes: the two functions in the repository literally named `project` (`crates/worker/src/regexfind.rs#project`, `packages/core/src/graph.ts#project`). On a 462-file repository the overview shows 0.4 % of the code, no edges, and both nodes are Fog. The same question on the 14-file demo repository — which happens to contain no `project` identifier — shows 16 symbols. Which code an overview shows therefore depends on an accidental identifier collision.
 
 Environment
-- commit 5ec061b5f4e8528b46a1aeca932766dd807e6bb3 (main), `ollama/qwen3:0.6b`
+- commit 5ec061b5f4e8528b46a1aeca932766dd807e6bb3 (main), `ollama/<selected model>`
 - Chromium 143, viewport 1440×900; repository: code-intelligence itself (462 files, rev `wt-c9d0379b94b41b5d`)
 
 Steps to reproduce
@@ -268,7 +268,7 @@ Summary
 When the router model reads a question as the conversational intent `overview`, the server builds the map from the hard-coded question text *"Give me an overview of the whole project"* and returns that as the answer. The view therefore carries a caption quoting a question the user did not ask, and — when the current view is already the overview — the map does not change at all. The user sees their question disappear with no visible effect and no indication of what happened.
 
 Environment
-- commit 5ec061b5f4e8528b46a1aeca932766dd807e6bb3 (main), `ollama/qwen3:0.6b`
+- commit 5ec061b5f4e8528b46a1aeca932766dd807e6bb3 (main), `ollama/<selected model>`
 - Chromium 143, viewport 1440×900; repository: code-intelligence itself (462 files)
 
 Steps to reproduce
@@ -277,7 +277,7 @@ Steps to reproduce
 3. Observe the caption above the map and the map itself.
 
 Expected
-Either the reading is what the user asked (an intent-relative map of authentication), or the visible answer states what was read and shows it — the way view readings do ("I read this as: … qwen3:0.6b read this as …", with alternative readings one click away).
+Either the reading is what the user asked (an intent-relative map of authentication), or the visible answer states what was read and shows it — the way view readings do ("I read this as: … the selected model read this as …", with alternative readings one click away).
 
 Actual
 4/4 identical runs (C15/converse, temperature 0):
@@ -285,7 +285,7 @@ Actual
 ```
 kind: "view"
 caption: 2 symbols relevant to "Give me an overview of the whole project".
-route.because: qwen3:0.6b read this as "SemanticMap" …
+route.because: the selected model read this as "SemanticMap" …
 assistant message: "You asked about the project as a whole. …"
 ```
 
@@ -333,7 +333,7 @@ Summary
 On the L1 overview of a 462-file repository, one of the two drawn nodes is cut by the canvas bottom edge: only 2.7 px of its 47 px box is visible. The "N of M elements off-screen — Bring into view" notice does not appear, because the visibility check counts only elements whose box is *entirely* outside the viewport. A node that is 94 % invisible produces no hint, and the user sees an unexplained sliver behind the evidence footer.
 
 Environment
-- commit 5ec061b5f4e8528b46a1aeca932766dd807e6bb3 (main), `ollama/qwen3:0.6b`
+- commit 5ec061b5f4e8528b46a1aeca932766dd807e6bb3 (main), `ollama/<selected model>`
 - Chromium 143, viewport 1440×900 (canvas 740×529), repository: code-intelligence itself (462 files, rev `wt-c9d0379b94b41b5d`)
 
 Steps to reproduce

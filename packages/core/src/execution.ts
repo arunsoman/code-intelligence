@@ -620,7 +620,8 @@ export class Tasks {
       this.exportBase(repoRoot, view.baseCommit, scratch);
       const baseContentHash = hashTree(scratch);
       if (baseContentHash !== view.baseContentHash) throw new TaskError("STALE_REVISION", "the base tree is not the one the task was created from");
-      applyTextEdits(scratch, ops.map((o) => o.op === "REPLACE_SPAN" ? { file: normalizeRel(o.file), start: o.start, end: o.end, expected: o.expected, newText: o.newText } : { file: normalizeRel(o.file), start: 0, end: 0, expected: "", newText: "" }));
+      // Only span edits go through the byte-exact applier; CREATE_FILE has no file to read yet and DELETE_FILE is handled below.
+      applyTextEdits(scratch, ops.flatMap((o) => o.op === "REPLACE_SPAN" ? [{ file: normalizeRel(o.file), start: o.start, end: o.end, expected: o.expected, newText: o.newText }] : []));
       for (const op of ops) {
         const rel = normalizeRel(op.file);
         if (op.op === "CREATE_FILE") { const p = safeJoin(scratch, rel); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, op.content); }

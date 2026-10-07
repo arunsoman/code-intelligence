@@ -1,0 +1,48 @@
+{
+  "C30": {
+    "title": "Issue trail (task 2.O)",
+    "items": [
+      {
+        "item": "gh forge and PF-054 allowlist projection with a fail-closed leak guard (AT-35/43/44)",
+        "tests": [
+          "the gh-backed forge",
+          "AT-43/PF-054",
+          "AT-35/44 the leak guard",
+          "PF-054/AT-44 end to end"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "binding, adoption, reconcile after timeout and mandatory tracking (PF-054/056, AT-48, S13)",
+        "tests": [
+          "PF-054 binding",
+          "binding input and conflicts",
+          "PF-056 adopting",
+          "AT-48 reconcile",
+          "S13 mandatory tracking"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "milestone sync: coalescing, pacing, recovery, backoff (PF-080, P7/P8, AT-47)",
+        "tests": [
+          "PF-080/P7/P8",
+          "P7 pacing",
+          "AT-47 outbox recovery",
+          "sync before binding"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "AT-46 divergence, managed block, closure only for CIE issues, honest states",
+        "tests": [
+          "AT-46 human edits",
+          "PF-054 the managed block",
+          "closure: CIE closes",
+          "the trail never claims"
+        ],
+        "state": "done"
+      }
+    ]
+  }
+}

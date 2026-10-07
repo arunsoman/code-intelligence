@@ -2,7 +2,7 @@
 
 A developer asks a question about an unfamiliar TypeScript, Rust or Nirdosha v2 repository and gets a **view generated for that question** (one of sixteen forms, below), in which every element says how it is known: **Fact** (statically proven), **Inference** (derived from cited evidence), **Hypothesis** (cannot be proven from the code alone) or **Fog** (static analysis could not resolve it). Nothing is shown without evidence you can click, and the system says "I can't determine this" rather than guess.
 
-Built from `Unified_Code_Intelligence_Product_Specification` (the S5 MVP definition, plus S1/S2 requirements it does not contradict) and `Code_Intelligence_Component_API_Contracts` v1.1. Excluded, as every source excludes them: intent→code generation, general counterfactual simulation (the MVP supports removal-only impact analysis), agent mode, live runtime adapters, PR view, multi-repo, JetBrains.
+Built from `Unified_Code_Intelligence_Product_Specification` (the S5 MVP definition, plus S1/S2 requirements it does not contradict) and `Code_Intelligence_Component_API_Contracts` v1.1. Excluded, as every source excludes them: unreviewed intent→code generation (the one generation feature, prompt-to-feature, only ever produces reviewable candidates; see below), general counterfactual simulation (the MVP supports removal-only impact analysis), agent mode, live runtime adapters, PR view, multi-repo, JetBrains.
 
 ## What it does
 
@@ -15,6 +15,18 @@ Built from `Unified_Code_Intelligence_Product_Specification` (the S5 MVP definit
 | select elements → "why are these connected?" | A cited explanation that went through all five claim checks |
 | "why are you showing this?" / "why isn't X shown?" | The salience factors, or the specific reason X was left out |
 | "continue the payment investigation" | Restores the saved investigation (including the conversation) and reports what changed in the repository since |
+
+Chat can also compose several analyses in one message. For example: **“Explain this project, identify its riskiest module, and show me the tests covering it.”** The local router proposes a validated plan of up to six read-only steps: project overview, change-risk ranking, test lookup, or any visual analysis from the catalogue. Steps can consume an earlier result's subject, so the tests are looked up for the file actually selected by the risk analysis. The combined answer keeps each result, with buttons to reopen its view. Recent conversation text and the selected file provide context for follow-up questions.
+
+The overview includes an attributed README description when available. Risk currently ranks source **files**, excludes test/example/fixture paths from the winner selection, and reports a weighted heuristic rather than a probability. Test lookup distinguishes parsed call paths (up to four calls deep), import-only links, and recorded line coverage; it does not execute tests. Failed steps are reported individually, their dependents are skipped, and completed views remain available. If planning is unavailable or invalid, chat explicitly falls back to the existing single-question route. Existing map controls, stack traces and saved-investigation commands still use their original handlers. Editing, publishing, and arbitrary API calls are not tools in this analysis planner.
+
+To run that query against this checkout through the same HTTP endpoint as the chatbox, with a fresh in-memory index:
+
+```sh
+node scripts/run-chat-analysis.ts
+# Optional arguments: repository, question, output JSON path.
+# Default full response: /tmp/cie-chat-analysis-result.json
+```
 
 The **Investigations** button opens the C22 hypothesis board. Create an investigation with a question and optional stack trace, then use **Run next checks** to run a bounded wave of read-only checks. The board compares observations against hypotheses, highlights discriminating evidence, shows assessment reasons and source citations, and updates every 1.5 seconds. Pause/resume controls and saved investigations are available in the same panel. Investigations belong to the current saved workspace, or to the repository when no workspace is open, and remain pinned to their original code revision. Priority is not probability; missing, stale, rejected and retracted assessments are labeled separately from contradictions. Hypothesis editing, evidence attachment, scope steering and finalization remain API operations.
 
@@ -88,7 +100,7 @@ What it does **not** do: crossings are minimised, not eliminated. Dense graphs h
 
 ## Choosing the view: how a question is read
 A small local language model reads the question; there are no patterns (regular expressions) in the routing. `packages/core/src/llm-router.ts` shows the model a closed list of labels (the 16 kinds of view, plus only the conversational requests that make sense right now: zoom, pin, "why isn't X shown", ignore… need a map or a selection), the eight labelled example questions nearest to the one asked (character n-gram similarity, so a misspelt word still lands near its neighbours), and asks for one label plus the name the user mentioned. The daemon constrains the label to the list, temperature is 0, and the name is matched against the code afterwards, never trusted. The view says which model read it and offers the nearest other readings as buttons. A choice you make (the gallery, or a button) is never second-guessed. A pasted stack trace is recognised by the trace parser, not by the model.
-- **Model**: `qwen3:0.6b` through the local Ollama daemon by default. Name another with `--router-model <name>` (`./scripts_dev.sh --router-model llama3.2:1b`, or `node packages/core/src/server.ts --router-model llama3.2:1b`), or with `CIE_ROUTER_MODEL`; the argument wins. `--router-model off` (or `CIE_ROUTER=off`) disables it. A model that is not installed, or is hosted, is replaced by the default and the server log says so. A hosted (`:cloud`) model is refused, because the question would leave the machine. Install with `ollama pull qwen3:0.6b`.
+- **Model**: one model, through the local Ollama daemon, used both for this routing and for the status chip's own reasoning (concept cards, claims, maps) — there is no name baked into the source. Click the status chip to see every model `ollama list` reports and switch, live, with no restart. With nothing chosen yet, the first installed model is picked automatically and the server log says so; with nothing installed at all, answers fall back to the offline model and the chip says `no model`. A `:cloud` name is used as given, but since the daemon forwards it to ollama.com, the server log — and, for chat, the warnings on the reply — say that the question (and, for chat, the code it reads) will leave this machine. `CIE_ROUTER=off` turns the chat router off while leaving the status chip's own model alone; `CIE_ROUTER_SCRIPT` makes chat deterministic for tests and demos (see `packages/core/src/llm-router.ts`).
 - **No model, or no answer**: the general architecture map, marked *low* confidence, with the reason stated ("No router model is configured…") and the gallery to pick another view. Nothing is guessed in its place.
 
 Which model? Measured on the 164 distinct labelled questions in `packages/core/test/route-sets.ts`, each asked as written and with typing mistakes added by a seeded generator (swapped, dropped, doubled and neighbouring-key letters, lower case, filler), 95% intervals, CPU only (`docs/eval-tiny-models.json`, `scripts/eval-tiny-models.ts`):
@@ -99,8 +111,8 @@ Which model? Measured on the 164 distinct labelled questions in `packages/core/t
 | gemma3 270M | 8% | 7% | 4 s |
 | qwen2.5 0.5B | 46% | 39% | 1 s |
 | llama3.2 1B | 51% | 47% | 1.5 s |
-| qwen3 0.6B, one fixed example per label | 71% | 64% | 1.1 s |
-| **qwen3 0.6B, nearest examples (shipped)** | **81%** [74–86] | **71%** [64–78] | 4 s |
+| a 0.6B model, one fixed example per label | 71% | 64% | 1.1 s |
+| **the same 0.6B model, nearest examples (shipped)** | **81%** [74–86] | **71%** [64–78] | 4 s |
 | *the old regex + similarity router, for comparison* | *89%* | *63%* | *instant* |
 
 So the SmolLM2 and Gemma 270M sizes cannot do this task at all (near chance for 16 labels). The shipped model is **worse than the old rules on clean wording (81% vs 89%, though that 89% includes questions the rules were tuned on) and better when the typing is bad (71% vs 63%)**, at a cost of about four seconds per question on CPU instead of microseconds. About one question in five is still read as the wrong view, which is why the reading is always shown with the other readings one click away. The retrieved examples are kept apart from the evaluation questions (a test fails if one leaks). `route-live.test.ts` runs the real model on a sample when it is installed (14/18 on its last run); everything else is tested with a scripted router, so the suite does not need Ollama.
@@ -178,16 +190,16 @@ npm start                             # http://127.0.0.1:4317 (loopback only)
 In the UI: **Browse…** to pick a repo → **Index** → ask. Try the demo repo with the three example prompts, then paste a stack trace (see `packages/core/test/helpers.ts` → `traceFor`). `./scripts_dev.sh [--fresh]` restarts the server.
 
 ### Models
-Default: the **local Ollama daemon** serving a **remote `:cloud` model** (`gpt-oss:120b-cloud`). Offline fallback: a deterministic stub that reasons only over the graph.
+The **local Ollama daemon**, one model, for everything (the status chip's own reasoning and the chat router): no model name is built into the source. Click the status chip to pick from whatever `ollama list` reports, live, no restart. With nothing picked yet, the first installed model is used and the choice is remembered (`selected_model` in the database); with nothing installed, or the daemon down, the offline stub answers instead and the chip says so.
 
 | Variable | Default | |
 |---|---|---|
-| `CIE_PROVIDER` | `ollama` | `ollama` or `stub` |
-| `CIE_OLLAMA_MODEL` | `gpt-oss:120b-cloud` | any installed model |
+| `CIE_PROVIDER` | `ollama` | `ollama` or `stub` (fully offline; the model menu has nothing to do) |
 | `CIE_OLLAMA_THINK` | `low` | reasoning effort (`low`/`medium`/`high`/`off`); `low` keeps answers at a few seconds |
 | `CIE_OLLAMA_URL` | `http://127.0.0.1:11434` | daemon address |
+| `CIE_ROUTER` | — | `off` disables chat's use of the model (the status chip's own reasoning is unaffected) |
 
-If Ollama is down or the model is missing, the server logs why and uses the stub (the header chip shows which is active).
+If Ollama is down or the selected model is no longer installed, the server logs why and uses the stub (the status chip shows which is active, and clicking it still lists whatever is installed).
 
 ### Nirdosha v2 source semantics
 `.nir` always receives ordinary Rust indexing. For Nirdosha-specific declarations, install the Nirdosha-owned `nirdosha-source-ir` binary on `PATH`, or set `CIE_NIRDOSHA_SOURCE_IR=/absolute/path/to/nirdosha-source-ir`. CIE invokes it once per repository and consumes only schema `nirdosha.source-ir/1`; procedural macros are never expanded or executed during indexing. The resulting guard, role, purpose, route, store, policy, workflow, approval and capability references retain exact source evidence.
@@ -213,7 +225,18 @@ Measured here: every visual passes the provenance audit; all six demo steps pass
 - `apps/web` — React + cytoscape: canvas, conversation, claim cards, concept browser, visuals gallery, terrain view, folder picker. `src/graph.ts` holds the testable view logic (zoom, verdicts, aggregation); `src/layout.ts`, `src/arrange.ts` and `src/layoutmetrics.ts` hold the layout algorithms, the per-view algorithm choice and the quality metrics.
 - `extensions/vscode` — the editor bridge.
 
+## Prompt to feature (reviewable code candidates)
+Describe a feature; CIE reads the repository, turns the request into requirements and acceptance criteria, asks what it cannot decide, builds a **candidate** (an exact set of file edits held in CIE, never written to your working tree), validates it, and hands it over as a patch or a **draft** pull request. It never merges, approves or applies anything to your files. Specification: `Prompt-to-feature.md`; plan, status and decisions: `docs/prompt-to-feature/IMPLEMENTATION_PLAN.md` (§12–13).
+
+- **Run it**: the *Build feature* dialog (stages Describe → Clarify → Plan → Changes → Validate → Deliver), or the API: `C02/featureSetupCheck` says what is ready and what is missing with the fix for each; `C02/runFeaturePipeline` runs every step as one cancellable job and returns a summary (ids, file kinds, decision), never file contents. `packages/core/src/feature/pipeline.ts` is the driver.
+- **What it needs**: an indexed TypeScript/Node repository with `build` and `test` scripts (other build systems are reported unsupported with a reason); Docker with `node:24-alpine` for the container runner (without Docker, validation falls back to a weaker local permission model whose omissions are returned with every result); the `gh` CLI for issue tracking and draft PRs; a local model daemon for requirements and edits (cloud models only by an explicit opt-in in `.cie/feature.json`).
+- **What "verified" means**: `VERIFIED WITHIN THE SCOPE OF THE RECORDED VALIDATION`, computed by one function (`computeEligibility`) from evidence bound to the exact candidate, contract, plan, environment and oracle. It is not a claim that the change is bug-free. Generated expected outcomes count only after a person confirms them (`C15/confirmAcceptance`); a stronger declaration (a representative environment, available dependencies, redacted real data, performance not applicable) needs a principal bound for that scope in `.cie/authority.json`, is recorded with who made it, and is re-checked whenever the result is computed (decision D001); publishing a draft PR needs a separate `publish` binding naming the repository and base branch, and a verified candidate (D005); anything missing makes the result `REVIEW ONLY — VALIDATION INCOMPLETE`, and a failed mandatory check makes it `BLOCKED`.
+- **Try it**: `bash scripts_make_demo_repo.sh /tmp/demo transactions-app` makes a small buildable repository; `packages/core/test/feature-pipeline.test.ts` runs the whole slice on it, including a real container run.
+- **Conformance**: `node scripts/conformance.ts --run` maps the spec's 84 acceptance scenarios to tests and writes `docs/prompt-to-feature/conformance.md`. Last run: 77 PASS, 7 DEFERRED with reasons (AT-08, 09, 38, 58, 61, 66, 83), none failed or untested. PASS means a test written for the scenario passes, not that its whole expected outcome is proven.
+- **Unsupported in this release** (each is tracked in `docs/prompt-to-feature/ledger/*.json` as `blocked` with what it needs): non-Node build systems, multi-repository changes, production migrations and deployment adapters, post-deployment telemetry (schema only), analysis of binary files by the security gate (binary, executable-bit and symlink changes are supported through Git's patch format, but binaries are a named gap), observed test coverage (links are explicit or static), performance measurement on the demo and the browser gate for UI features (both need the decisions in issue #98), a live GitHub run and a publish-authority rule.
+
 ## What is not verified or not done (honestly)
+- **Prompt-to-feature** has been exercised end to end only with a scripted model (a script standing in for the builder) and a real container run on the small demo repository. No real language model has been evaluated with its builder conformance suite, only very small models are installed here, and the Build dialog cannot yet collect the declarations a verified result needs (issue #98).
 - The **VS Code extension** is type-checked and its logic unit-tested, but has **not been run inside a real VS Code**; the server side is tested end to end with simulated events.
 - **Accessibility** was checked with an automated axe-core audit (0 violations on the empty app, maps, explanations with claim cards and code, the outline, concept browser, the visuals gallery, and the journey, counterfactual, ownership, policy and terrain views) and by computing every colour pair (all ≥ 4.5:1 in both themes). There has been **no real screen-reader testing and no trackpad testing** (pinch-zoom is only exercised through the browser's wheel events), and automated audits catch only part of what matters. In the swim-lane forms a transaction bracket is shown as a double border on the node, not a surrounding box, because a node can have only one parent.
 - **Calibrated confidence** needs human verdicts; with none, every claim says "not estimated". The spec's reviewer study (≥8 experts, ≥60% preferring it) is a human study and has not been run.

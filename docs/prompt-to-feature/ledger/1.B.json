@@ -1,0 +1,60 @@
+{
+  "C02": {
+    "title": "Request lifecycle, store and journal (task 1.B)",
+    "items": [
+      {
+        "item": "PF-001/PF-037 requests are created idempotently per requester and key; a reused key with different content is a conflict; replays write no second event",
+        "tests": [
+          "PF-001/037 create is idempotent per (owner,key); a reused key with a different prompt is refused"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PF-003 compare-and-swap on the request pointer; state change and its event commit together (outbox) or not at all",
+        "tests": [
+          "PF-003 compare-and-swap: a stale writer gets VERSION_CONFLICT with the current version and nothing is written",
+          "the state change and its event commit together: a failing event rolls the state back",
+          "events are dense per request, ordered, deduplicated by id, and the outbox tracks sync"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PF-002 request state machine with declared transitions only, terminal states final, one event per move",
+        "tests": [
+          "PF-002 lifecycle: only declared transitions, terminal states are final, every move writes one event"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Decisions, candidates and evidence are immutable and bound to the exact candidate",
+        "tests": [
+          "decisions are immutable; supersession is a new record and only the latest is active",
+          "candidates keep their binding; evidence is bound to the exact candidate and immutable"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PF-039 ready/blocked flags follow blockers; S10 advanceWizard moves the view only, bounded by state, with a workspace version check",
+        "tests": [
+          "blockers flip readiness; clearing them restores READY; the workspace version moves with each change",
+          "S10 advanceWizard moves the view only, is bounded by state, and rejects a stale workspace version"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "AT-27/AT-48 crash reconciliation drops stopped jobs, blocks their tasks and records why; resume is idempotent",
+        "tests": [
+          "AT-27/48 crash reconciliation: jobs that stopped are dropped, their tasks blocked, and the event says why",
+          "reconcileAll skips finished requests and reports the ones it fixed"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "AT-48 outbox delivery to the GitHub issue trail (pending/sent/failed state exists; the sender is task 2.O)",
+        "tests": [],
+        "state": "blocked",
+        "needs": "task 2.O (issue trail) sends events from the outbox"
+      }
+    ]
+  }
+}

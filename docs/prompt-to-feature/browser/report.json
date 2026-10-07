@@ -1,0 +1,185 @@
+{
+  "schema": "pf-browser-gate/1",
+  "ranAt": "2026-10-06T09:58:28.073Z",
+  "decision": "D004",
+  "image": {
+    "reference": "mcr.microsoft.com/playwright@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27",
+    "id": "sha256:2c1f4e0fd6450f43ddb46d60c2a6df30855a8588e165b1f2559fb0eda8d7ff35",
+    "created": "2026-09-04T23:42:21.248887746Z",
+    "playwrightPackage": "@playwright/test 1.63.0",
+    "axePackage": "@axe-core/playwright 4.13.0",
+    "lockfileSha256": "d06e5e3377fa2e9bc4734a51281ee5a6a5335e8d40684665d411d517d29c3db5"
+  },
+  "browser": [
+    "chromium 153.0.8010.12"
+  ],
+  "viewports": [
+    "1366x768",
+    "1920x1080",
+    "1280x720"
+  ],
+  "server": {
+    "url": "http://127.0.0.1:4906",
+    "database": "throwaway, seeded by tools/browser-gate/seed.ts",
+    "provider": "stub (the gate checks the web workflow, not generation)",
+    "principal": "local-user"
+  },
+  "sandbox": "chromium runs with --no-sandbox inside an unprivileged container (--user, no extra capabilities); the container is the boundary",
+  "results": [
+    {
+      "title": "the owner opens the request and walks Changes, Validate and Deliver; nothing is called verified",
+      "project": "1366x768",
+      "status": "passed",
+      "durationMs": 3856,
+      "browser": "chromium 153.0.8010.12",
+      "axe": [
+        {
+          "total": 0,
+          "seriousOrCritical": [],
+          "rules": 26
+        },
+        {
+          "total": 0,
+          "seriousOrCritical": [],
+          "rules": 27
+        },
+        {
+          "total": 0,
+          "seriousOrCritical": [],
+          "rules": 28
+        }
+      ]
+    },
+    {
+      "title": "denial: another principal's request cannot be opened, and nothing of it is shown",
+      "project": "1366x768",
+      "status": "passed",
+      "durationMs": 961
+    },
+    {
+      "title": "keyboard only: the stage list is reachable by Tab and Escape closes the dialog",
+      "project": "1366x768",
+      "status": "passed",
+      "durationMs": 492
+    },
+    {
+      "title": "the owner opens the request and walks Changes, Validate and Deliver; nothing is called verified",
+      "project": "1920x1080",
+      "status": "passed",
+      "durationMs": 4123,
+      "browser": "chromium 153.0.8010.12",
+      "axe": [
+        {
+          "total": 0,
+          "seriousOrCritical": [],
+          "rules": 26
+        },
+        {
+          "total": 0,
+          "seriousOrCritical": [],
+          "rules": 27
+        },
+        {
+          "total": 0,
+          "seriousOrCritical": [],
+          "rules": 28
+        }
+      ]
+    },
+    {
+      "title": "denial: another principal's request cannot be opened, and nothing of it is shown",
+      "project": "1920x1080",
+      "status": "passed",
+      "durationMs": 973
+    },
+    {
+      "title": "keyboard only: the stage list is reachable by Tab and Escape closes the dialog",
+      "project": "1920x1080",
+      "status": "passed",
+      "durationMs": 547
+    },
+    {
+      "title": "the owner opens the request and walks Changes, Validate and Deliver; nothing is called verified",
+      "project": "1280x720",
+      "status": "passed",
+      "durationMs": 3831,
+      "browser": "chromium 153.0.8010.12",
+      "axe": [
+        {
+          "total": 0,
+          "seriousOrCritical": [],
+          "rules": 26
+        },
+        {
+          "total": 0,
+          "seriousOrCritical": [],
+          "rules": 27
+        },
+        {
+          "total": 0,
+          "seriousOrCritical": [],
+          "rules": 28
+        }
+      ]
+    },
+    {
+      "title": "denial: another principal's request cannot be opened, and nothing of it is shown",
+      "project": "1280x720",
+      "status": "passed",
+      "durationMs": 879
+    },
+    {
+      "title": "keyboard only: the stage list is reachable by Tab and Escape closes the dialog",
+      "project": "1280x720",
+      "status": "passed",
+      "durationMs": 478
+    }
+  ],
+  "passed": 9,
+  "failed": 0,
+  "traces": [
+    {
+      "file": "artifacts/feature-workflow-denial-an-54a95--and-nothing-of-it-is-shown-1280x720/trace.zip",
+      "sha256": "5027fc878aa2b7cb0526c51d6a62bb1620d5556f0c23b85cc24bb1e652fdb8de"
+    },
+    {
+      "file": "artifacts/feature-workflow-denial-an-54a95--and-nothing-of-it-is-shown-1366x768/trace.zip",
+      "sha256": "fe586b56e07464999a79310126ceaaa95cb5e0da6456a242c1e319ed589c68b4"
+    },
+    {
+      "file": "artifacts/feature-workflow-denial-an-54a95--and-nothing-of-it-is-shown-1920x1080/trace.zip",
+      "sha256": "78c6444e5c5f59f8526cb83073dc33156b8095cfe443dfe1f8c365489aba4322"
+    },
+    {
+      "file": "artifacts/feature-workflow-keyboard--0e738-nd-Escape-closes-the-dialog-1280x720/trace.zip",
+      "sha256": "12e5d8068cb3d2b7b84c94b2f542e04db8c147f346740e354d1a9b1ccd072c2e"
+    },
+    {
+      "file": "artifacts/feature-workflow-keyboard--0e738-nd-Escape-closes-the-dialog-1366x768/trace.zip",
+      "sha256": "a0bcb6c24ae105adc35de7d69104a42843bcdf01ce76112c16a5d8482235761c"
+    },
+    {
+      "file": "artifacts/feature-workflow-keyboard--0e738-nd-Escape-closes-the-dialog-1920x1080/trace.zip",
+      "sha256": "09aa5be9808d8a5bfd162d44fe458c8d8fdc76cdc0bad3d0d103833365c4f4d4"
+    },
+    {
+      "file": "artifacts/feature-workflow-the-owner-f89ab--nothing-is-called-verified-1280x720/trace.zip",
+      "sha256": "891071a1f4451542984ce41f2b14bf828c123f16fa54deb303b509a082394393"
+    },
+    {
+      "file": "artifacts/feature-workflow-the-owner-f89ab--nothing-is-called-verified-1366x768/trace.zip",
+      "sha256": "6eefd34d63ae82b4dff00b589bbae6c9c1ce3ab1a29d7fd152af63ae4e57edb5"
+    },
+    {
+      "file": "artifacts/feature-workflow-the-owner-f89ab--nothing-is-called-verified-1920x1080/trace.zip",
+      "sha256": "059a9f3eb345a9e5f439c9e22ec29bf85d559516d52bcfdc22f9156fb934b5a4"
+    }
+  ],
+  "notCovered": [
+    "requests created through the UI from a prompt (needs a model run; covered by #94A, not here)",
+    "validation evidence rendered live (the seeded request has none, so Validate and Deliver are checked in their review-only state)",
+    "mobile viewports",
+    "screen-reader behaviour: axe finds machine-detectable issues only"
+  ],
+  "verdict": "PASS"
+}

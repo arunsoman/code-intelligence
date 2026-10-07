@@ -1,6 +1,6 @@
 // Deterministic offline provider. It only reasons over the bundle it is given, so it works as a
 // reference for what a real provider may cite: evidence ids that exist in `bundle.evidence`.
-import type { ChallengeOutput, ConceptsOutput, EvidenceBundle, ExplanationOutput, HypothesesOutput, ModelProvider, ModelRequest, RepresentationOutput, Relationship } from "@cie/schema";
+import type { ChallengeOutput, ChartOutput, ConceptsOutput, EvidenceBundle, ExplanationOutput, HypothesesOutput, ModelProvider, ModelRequest, RepresentationOutput, Relationship } from "@cie/schema";
 
 const dirOf = (file: string) => {
   const parts = file.split("/");
@@ -52,6 +52,25 @@ function represent(req: ModelRequest): RepresentationOutput {
     caption: `${symbols.length} symbols in ${groups.length} groups relevant to "${req.question}". Solid edges are statically resolved; dashed edges are inferred.`,
     groups,
     inferredEdges: inferredEdges.slice(0, 100),
+  };
+}
+
+function chart(req: ModelRequest): ChartOutput {
+  const relations = req.bundle.relationships.filter((r) => r.kind === "calls").slice(0, 80);
+  const entities = new Map(req.bundle.entities.filter((e) => e.kind !== "file").map((e) => [e.entityId, e]));
+  const ids = [...new Set(relations.flatMap((r) => [r.from, r.to]))].filter((id) => entities.has(id)).slice(0, 40);
+  const nodes = ids.map((entityId, i) => ({
+    entityId,
+    evidenceIds: [...new Set(relations.filter((r) => r.from === entityId || r.to === entityId).flatMap(evIds))].slice(0, 20),
+    shape: "process" as const, column: i, row: 0,
+  }));
+  const have = new Set(ids);
+  return {
+    chartType: "call-flow",
+    layout: "flow",
+    caption: `Static call-flow chart with ${nodes.length} code elements.`,
+    nodes,
+    edges: relations.filter((r) => have.has(r.from) && have.has(r.to)).map((r) => ({ from: r.from, to: r.to, relationshipId: r.id, label: r.label, evidenceIds: evIds(r) })),
   };
 }
 
@@ -292,6 +311,7 @@ export class StubProvider implements ModelProvider {
       // The deterministic adversarial checks run in core; the stub has no judgment of its own to add.
       case "CHALLENGE": return { objections: [] } satisfies ChallengeOutput;
       case "HYPOTHESIZE": return hypothesize(req);
+      case "CHART": return chart(req);
       // Routing by judgment needs a language model; offline, the rule and similarity layers have already answered.
       case "ROUTE": return { form: null, confidence: 0, reason: "the offline model does not route" };
     }

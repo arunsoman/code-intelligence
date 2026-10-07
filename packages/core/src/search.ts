@@ -29,6 +29,8 @@ import type {
   RepositorySelector, RepositoryView, SearchFilters, SearchHit, SearchIndexState, SearchModes, SkippedCounts,
   SearchResponse, SemanticIndexTier, SourceSpan, UnresolvedPackageEdge,
 } from "@cie/schema";
+import { OPEN } from "./access.ts";
+import { resolveMentions } from "./mentions.ts";
 import type { Store } from "./store.ts";
 import type { WorkerClient } from "./worker.ts";
 
@@ -38,6 +40,8 @@ export const MAX_HITS_PAGE = 200;
 export const DEFAULT_HITS_PAGE = 50;
 const CANDIDATE_BLOB_CAP = 4_000;            // candidate blobs examined per query before stoppedBy: BUDGET
 const SHORT_QUERY_SCAN_CAP = 400;            // blobs scanned for a 1–2 character query
+/** How many names one mentioned word may be read as (the resolver returns its best few). */
+const MAX_READINGS = 3;
 export const REEXPORT_DEPTH = 4;             // barrel-file expansion bound (§13), in hops
 const IDENTIFIER_ROWS_PER_FILE = 8_000;      // per-file cap of the identifier scan
 const OCCURRENCES_PER_BLOB = 200;            // occurrences of one query within one blob
@@ -1262,6 +1266,14 @@ export class SearchEngine {
       matched += t.matched; atLeast ||= t.atLeast; if (t.stopped !== "NONE") stopped = t.stopped;
       hits.push(...t.hits);
     }
+    // AUTO reads a question or a near-miss spelling as the code names it mentions ("what does MiFliter call" → MiFilter), using
+    // the same resolver as the chat. Only when the query was not already an identifier that found its own definitions.
+    const readAs: NonNullable<SearchResponse["readAs"]> = [];
+    if (mode === "AUTO" && !(isBareIdentifier(q) && hits.some((h) => h.symbol))) {
+      const named = this.namedDefHits(ctx.actor.principalId, built, q, req.filters, limit);
+      matched += named.matched; atLeast ||= named.atLeast;
+      hits.push(...named.hits); readAs.push(...named.readAs);
+    }
     if (mode === "REGEX") {
       const verdict = await this.regexHits(ctx, built, q, { ...req.filters, caseInsensitive: !req.caseSensitive }, limit, diagnostics);
       if ("failure" in verdict) return verdict.failure;
@@ -1307,6 +1319,7 @@ export class SearchEngine {
       ],
       totals: { shown: page.hits.length, matched: atLeast ? null : matched, matchedAtLeast: atLeast ? matched : null },
       queryDiagnostics: diagnostics,
+      ...(readAs.length ? { readAs } : {}),
     };
   }
 
@@ -1549,6 +1562,31 @@ export class SearchEngine {
       }
     }
     return { hits, matched, atLeast };
+  }
+
+  /**
+   * Definitions of the code names a query mentions (mentions.ts), each matched by its exact name. The resolver sees every
+   * name in the revision; what reaches the caller is only what symbolDefHits authorizes, and a reading is reported only
+   * when it produced such a hit.
+   */
+  private namedDefHits(principalId: string, pairs: { repositoryId: string; revision: string }[], q: string, filters: SearchFilters | undefined, limit: number): { hits: SearchHit[]; matched: number; atLeast: boolean; readAs: NonNullable<SearchResponse["readAs"]> } {
+    const hits: SearchHit[] = [], readAs: NonNullable<SearchResponse["readAs"]> = [];
+    let matched = 0, atLeast = false;
+    for (const p of pairs) {
+      for (const m of resolveMentions(this.store, p.revision, q, OPEN).resolved) {
+        const names = [...new Set(m.matches.filter((x) => x.kind !== "file").map((x) => x.name))].filter((n) => n !== q).slice(0, MAX_READINGS);
+        for (const name of names) {
+          const r = this.symbolDefHits(principalId, [p], name, filters, limit);
+          const exact = r.hits.filter((h) => h.symbol?.name === name);
+          if (!exact.length) continue;
+          matched += exact.length; atLeast ||= r.atLeast;
+          const why = m.how === "fuzzy" ? `read “${m.text}” as ${name}, the closest name in the index (one or two letters apart)` : `the query names ${name}`;
+          hits.push(...exact.map((h) => ({ ...h, rationale: [why, ...h.rationale] })));
+          if (!readAs.some((x) => x.text === m.text && x.name === name)) readAs.push({ text: m.text, name, how: m.how });
+        }
+      }
+    }
+    return { hits, matched, atLeast, readAs };
   }
 
   /** 0 exact · 1 terminal component equals the query · 2 boundary match · 3 query occurs inside the name */

@@ -5,10 +5,12 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { createProvider } from "@cie/model";
+import { createProvider, resolveModel } from "@cie/model";
 import type { ApiResult, CallContext } from "@cie/schema";
 import { Interactions } from "./interactions.ts";
-import { chooseRouter } from "./llm-router.ts";
+import { routerFor } from "./llm-router.ts";
+import { featureHandlers } from "./feature/handlers.ts";
+import { featureOps } from "./feature/routes.ts";
 import { Service } from "./service.ts";
 import { TenantHost } from "./tenants.ts";
 import { Store } from "./store.ts";
@@ -38,9 +40,14 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
   const ops: Record<string, { mutating: boolean; run: (ctx: CallContext, body: any) => Promise<ApiResult<unknown>> | ApiResult<unknown> }> = {
     "C01/status": { mutating: false, run: (c, b) => svc.status(c, b) },
     "C01/browseDirectory": { mutating: false, run: (c, b) => svc.browseDirectory(c, b) },
+    "C01/repositoryGit": { mutating: false, run: (c, b) => svc.repositoryGit(c, b) },
+    "C01/switchBranch": { mutating: true, run: (c, b) => svc.switchBranch(c, b) },
+    "C01/fetchBranches": { mutating: true, run: (c, b) => svc.fetchBranches(c, b) },
     "C01/captureEditorEvent": { mutating: false, run: (c, b) => svc.captureEditorEvent(c, b) },
     "C01/editorContext": { mutating: false, run: (c, b) => svc.editorContext(c, b) },
     "C03/setEgress": { mutating: true, run: (c, b) => svc.setEgress(c, b) },
+    "C01/listModels": { mutating: false, run: (c) => svc.listModels(c) },
+    "C01/setModel": { mutating: true, run: (c, b) => svc.setModel(c, b) },
     "C03/auditLog": { mutating: false, run: (c, b) => svc.auditLog(c, b) },
     "C04/ingestRepository": { mutating: true, run: (c, b) => svc.ingestRepository(c, b) },
     "C07/enqueue": { mutating: true, run: (c, b) => svc.enqueueJob(c, b) },
@@ -73,6 +80,7 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
     "C19/setOverride": { mutating: true, run: (c, b) => svc.setOverride(c, b) },
     "C19/listOverrides": { mutating: false, run: (c, b) => svc.listOverrides(c, b) },
     "C19/visuals": { mutating: false, run: (c, b) => svc.visuals(c, b) },
+    "C19/providerGuide": { mutating: false, run: (c, b) => svc.providerGuide(c, b) },
     "C19/ask": { mutating: false, run: (c, b) => svc.ask(c, b) },
     "C19/investigate": { mutating: false, run: (c, b) => svc.investigate(c, b) },
     "C19/steer": { mutating: false, run: (c, b) => svc.steer(c, b) },
@@ -115,6 +123,10 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
   const TASK_MUTATING = new Set(["C02/submitTask", "C02/confirmIntent", "C02/cancelTask", "C15/draftPlan", "C22/resolveObligation", "C28/prepareChange", "C27/validatePatch", "C28/reviewPropertyChange", "C28/approveCandidate", "C30/createPublicationGrant", "C30/publishDraftPR"]);
   for (const [key, run] of Object.entries(svc.taskOps)) ops[key] = { mutating: TASK_MUTATING.has(key), run: run as any };
   for (const [key, run] of Object.entries(svc.campaignOps)) ops[key] = { mutating: !["C28/getCampaign", "C28/listCampaigns", "C28/listChildren", "C28/getCampaignPlan", "C28/clusterChildren", "C28/getDryRun"].includes(key), run: run as any };
+  for (const [key, run] of Object.entries(svc.releaseOps)) ops[key] = { mutating: !["C32/getRelease", "C32/listReleases", "C32/getReleaseReadiness", "C32/previewMilestone"].includes(key), run: run as any };
+  for (const [key, run] of Object.entries(svc.ciOps)) ops[key] = { mutating: false, run: run as any };
+  // Prompt-to-feature (docs/prompt-to-feature): typed stubs until each owning task registers its handler in feature/routes.ts.
+  Object.assign(ops, featureOps(featureHandlers(svc), ops));
   return ops;
   };
   const statusFor = (r: ApiResult<unknown>) => r.ok ? 200 : ({ INVALID_SCHEMA: 400, NOT_FOUND: 404, EVIDENCE_MISSING: 404, VERSION_CONFLICT: 409, UNAUTHORIZED: 401, FORBIDDEN: 403, BUDGET_EXCEEDED: 429, DEADLINE_EXCEEDED: 504, PROVIDER_UNAVAILABLE: 503 } as Record<string, number>)[r.error.code] ?? 500;
@@ -182,9 +194,10 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
       const ctx = mk(idem);
       // In a multi-tenant server a path is only usable if the tenant is allowed to read it: indexing, and even browsing for it.
       const opKey = `${m[1]}/${m[2]}`;
-      if (target instanceof TenantHost && (opKey === "C04/ingestRepository" || opKey === "C01/browseDirectory")) {
+      if (target instanceof TenantHost && ["C01/switchBranch", "C01/fetchBranches"].includes(opKey)) return send(res, 403, { ok: false, error: { code: "FORBIDDEN", message: "Branch switching and fetching are available only in the local app.", retryable: false } });
+      if (target instanceof TenantHost && ["C04/ingestRepository", "C01/browseDirectory", "C01/repositoryGit"].includes(opKey)) {
         const host: TenantHost = target;
-        const wanted = opKey === "C04/ingestRepository" ? body?.repoPath : body?.path;
+        const wanted = opKey === "C01/browseDirectory" ? body?.path : body?.repoPath;
         if (typeof wanted === "string") { const denied = host.authorizeSource(ctx, wanted); if (denied) return send(res, statusFor(denied), denied); }
         else if (opKey === "C01/browseDirectory") {
           const first = host.firstRoot(ctx);
@@ -224,13 +237,19 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const { provider, note } = await createProvider();
+  const store = new Store();
+  const env = process.env;
+  const baseUrl = env.CIE_OLLAMA_URL;
+  const think = (["low", "medium", "high", "off"] as const).find((x) => x === env.CIE_OLLAMA_THINK);
+  // CIE_PROVIDER=stub means fully offline: skip Ollama entirely (used by e2e tests for speed and determinism).
+  const resolved = env.CIE_PROVIDER === "stub" ? { model: null, note: undefined, picked: false } : await resolveModel(store.selectedModel(), baseUrl);
+  if (resolved.picked && resolved.model) store.setSelectedModel(resolved.model);
+  const { provider, note } = await createProvider({ which: env.CIE_PROVIDER, model: resolved.model, baseUrl, think });
+  if (resolved.note) console.warn(resolved.note);
   if (note) console.warn(note);
-  const svc = new Service(new Store(), new WorkerClient(), provider);
-  const { router, note: routerNote } = await chooseRouter();
-  if (routerNote) console.warn(routerNote);
-  svc.router = router;
+  const svc = new Service(store, new WorkerClient(), provider);
+  svc.router = routerFor(resolved.model, env);
   // Durable events become notifications, and due webhooks are sent. A crash between the two loses neither: both are stored first.
   setInterval(() => { try { svc.bus.dispatchPending(); void svc.notifications.dispatch().catch(() => {}); } catch { /* the next tick tries again */ } }, 2000).unref();
-  createServer(buildHandler(svc)).listen(PORT, HOST, () => console.log(`cie listening on http://${HOST}:${PORT} (model: ${provider.name}/${provider.model}; router: ${router?.name ?? "off"})`));
+  createServer(buildHandler(svc)).listen(PORT, HOST, () => console.log(`cie listening on http://${HOST}:${PORT} (model: ${provider.name}/${provider.model}; router: ${svc.router?.name ?? "off"})`));
 }

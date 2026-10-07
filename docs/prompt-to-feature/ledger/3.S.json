@@ -1,0 +1,69 @@
+{
+  "C32": {
+    "title": "Operations and release plan (task 3.S)",
+    "items": [
+      {
+        "item": "T0 NOT_APPLICABLE with rationale; endpoint, metrics, abuse-limit, queue, timeout and release-plan checks as named gaps (PF-048)",
+        "tests": [
+          "PF-048 documentation-only changes are NOT_APPLICABLE",
+          "PF-048 a new endpoint without a signal"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "logging a sensitive field blocks; literals do not (PF-048)",
+        "tests": [
+          "PF-048 logging a sensitive field BLOCKS"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "job and external-call resilience checks (PF-048)",
+        "tests": [
+          "PF-048 job and external-call code needs retry/timeout handling"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "release plan required by tier, never defaulted; suggestion carries only facts (PF-049)",
+        "tests": [
+          "PF-049 release plan fields are required by tier"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "OPERATIONAL gate feeds validation; operation refuses a stale plan or contract (PF-048)",
+        "tests": [
+          "PF-048 the OPERATIONAL gate feeds validation"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "revert planned as new edits against the current tree; refuses when files moved (PF-049, AT-39)",
+        "tests": [
+          "PF-049/AT-39 a revert is planned as NEW edits"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "post-deploy evidence schema and honest anomaly checklist (PF-050, AT-38)",
+        "tests": [
+          "PF-050 post-deploy evidence is schema-only"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "metrics, log and queue checks beyond static patterns (AT-37)",
+        "tests": [],
+        "state": "blocked",
+        "needs": "a runtime telemetry connector; the checks are static patterns on added lines and say so"
+      },
+      {
+        "item": "post-deployment telemetry (PF-050)",
+        "tests": [],
+        "state": "blocked",
+        "needs": "a production telemetry source; schema only in slice 1"
+      }
+    ]
+  }
+}

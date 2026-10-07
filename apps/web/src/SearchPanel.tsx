@@ -117,7 +117,7 @@ export function SearchPanel({ repoPath, revision, onClose, onLocate }: {
             aria-autocomplete="list"
             aria-describedby={liveId}
             value={query}
-            placeholder={mode === "REGEX" ? "regular expression (linear engine: no lookaround, no backrefs)" : mode === "SYMBOL" ? "symbol name" : mode === "AUTO" ? "identifier or text" : "text to find"}
+            placeholder={mode === "REGEX" ? "regular expression (linear engine: no lookaround, no backrefs)" : mode === "SYMBOL" ? "symbol name" : mode === "AUTO" ? "identifier, text, or a question naming code" : "text to find"}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") void run(); }}
           />
@@ -134,8 +134,13 @@ export function SearchPanel({ repoPath, revision, onClose, onLocate }: {
           {response ? `${matchedLabel} match(es), showing ${response.hits.length}` : busy ? "searching…" : "type a query"}
         </p>
         {error && <p className="error" role="alert">{error}{revision === "" ? " — the revision is not indexed yet" : ""}</p>}
-        {!response && !busy && <p className="muted">Identifiers search their symbols first; text finds every occurrence; regex runs in the linear-time engine and names what it cannot support.</p>}
+        {!response && !busy && <p className="muted">Identifiers search their symbols first, and code names inside a question (or spelt nearly right) are read as those symbols; text finds every occurrence; regex runs in the linear-time engine and names what it cannot support.</p>}
 
+        {response?.readAs?.length ? (
+          <p className="muted small" role="note">
+            Read as {response.readAs.map((r, i) => <span key={i}>{i ? ", " : ""}<span className="mono">{r.name}</span>{r.how === "fuzzy" ? <> (you typed “{r.text}”)</> : null}</span>)}
+          </p>
+        ) : null}
         {response && (
           <div className="search-body">
             <div className="search-hits">

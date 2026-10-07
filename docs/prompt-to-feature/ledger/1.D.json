@@ -1,0 +1,68 @@
+{
+  "C02": {
+    "title": "Decisions and authority (task 1.D)",
+    "items": [
+      {
+        "item": "S7 authority: the requester decides business scope; every other scope is blocked until a binding names someone; the authority file is validated strictly; the policy hash is order-independent",
+        "tests": [
+          "S7 the requester decides business scope by default; every other scope is blocked until a binding names someone",
+          "authority file: absent means no bindings; malformed or unknown content is rejected, not ignored",
+          "the policy hash changes when a binding changes and not when its order does"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PF-012/PF-014 a decision is recorded once per idempotency key, clears its blocker and is bound to the contract version; waivers need criteria, risk and expiry",
+        "tests": [
+          "PF-012/014 a decision is recorded once per idempotency key, clears its blocker and stays bound to the contract version",
+          "a waiver needs criteria, residual risk and a future expiry, and policy authority"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "AT-07/PF-036 an unauthorised decision is refused, leaves the blocker in place and is recorded as BLOCKED",
+        "tests": [
+          "AT-07/PF-036 an unauthorised decision is refused, leaves the blocker in place and is recorded as BLOCKED"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "AT-27 answering against an older contract version is a conflict and raises one finding",
+        "tests": [
+          "AT-27 answering against an older contract version is a conflict AND raises a finding (once)"
+        ],
+        "state": "done"
+      }
+    ]
+  },
+  "C15": {
+    "title": "Contract revision (task 1.D)",
+    "items": [
+      {
+        "item": "AT-07 revising the contract creates the next version, applies assumption decisions and marks built candidates stale",
+        "tests": [
+          "AT-07 revising the contract makes the next version, applies assumption decisions and marks built candidates stale"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Requirement rewriting from decisions (normalisation) is task 2.I",
+        "tests": [],
+        "state": "blocked",
+        "needs": "task 2.I normalizeRequirements"
+      }
+    ]
+  },
+  "C25": {
+    "title": "Instruction-injection guard (task 1.D)",
+    "items": [
+      {
+        "item": "AT-26/PF-040 retrieved text is quoted as untrusted data, instruction-shaped passages are flagged, and capabilities fixed at task creation cannot be widened",
+        "tests": [
+          "AT-26/PF-040 retrieved text is quoted as data, instruction-shaped passages are flagged, and capabilities cannot be widened"
+        ],
+        "state": "done"
+      }
+    ]
+  }
+}

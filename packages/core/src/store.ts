@@ -7,7 +7,7 @@ import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { migrate } from "./migrations.ts";
 import { clearHistoryCache } from "./gitinfo.ts";
-import type { AnalysisBatch, Claim, ConceptCard, Entity, EvidenceRef, Fact, JobView, Relationship, Verdict } from "@cie/schema";
+import { ChartOutput, type AnalysisBatch, type ChartOutput as ChartPlan, type Claim, type ConceptCard, type Entity, type EvidenceRef, type Fact, type JobView, type Relationship, type Verdict } from "@cie/schema";
 
 export interface RevisionRow { id: string; repoRoot: string; gitHead: string | null; createdAt: string; analyzerVersion: string; diagnostics: AnalysisBatch["diagnostics"]; fileCount: number }
 
@@ -16,6 +16,20 @@ export class DeltaBaseError extends Error {}
 export class Store {
   readonly db: DatabaseSync;
   readonly path: string;
+
+  /** Reuse a validated generated layout only for the exact evidence bundle and question. */
+  generatedChartPlan(cacheKey: string, bundleId: string, question: string): ChartPlan | null {
+    const row = this.db.prepare("select plan_json from generated_chart_plans where cache_key = ? and bundle_id = ? and question = ?").get(cacheKey, bundleId, question) as { plan_json: string } | undefined;
+    if (!row) return null;
+    try { const parsed = ChartOutput.safeParse(JSON.parse(row.plan_json)); return parsed.success ? parsed.data : null; } catch { return null; }
+  }
+
+  saveGeneratedChartPlan(cacheKey: string, bundleId: string, question: string, plan: ChartPlan): void {
+    const parsed = ChartOutput.safeParse(plan);
+    if (!parsed.success) return;
+    this.db.prepare("insert into generated_chart_plans(cache_key, bundle_id, question, plan_json, created_at) values (?,?,?,?,?) on conflict(cache_key) do update set bundle_id=excluded.bundle_id, question=excluded.question, plan_json=excluded.plan_json, created_at=excluded.created_at")
+      .run(cacheKey, bundleId, question, JSON.stringify(parsed.data), new Date().toISOString());
+  }
 
   constructor(path = process.env.CIE_DB ?? ".cie/cie.db") {
     this.path = path;
@@ -339,6 +353,14 @@ export class Store {
   setAllowHosted(repoRoot: string, allow: boolean) {
     this.db.prepare("insert into repo_policy values (?,?,?) on conflict(repo_root) do update set allow_hosted=excluded.allow_hosted, updated_at=excluded.updated_at")
       .run(repoRoot, allow ? 1 : 0, new Date().toISOString());
+  }
+
+  // ---- the one selected Ollama model (provider and chat router alike) ----
+  selectedModel(): string | null {
+    return ((this.db.prepare("select model from selected_model where id = 1").get() as { model: string } | undefined)?.model) ?? null;
+  }
+  setSelectedModel(model: string) {
+    this.db.prepare("insert into selected_model values (1,?,?) on conflict(id) do update set model=excluded.model, updated_at=excluded.updated_at").run(model, new Date().toISOString());
   }
 
   // ---- editor context (privacy-minimized: paths, line numbers and resolved entity ids only; never file text) ----

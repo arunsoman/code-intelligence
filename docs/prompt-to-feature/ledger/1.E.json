@@ -1,0 +1,77 @@
+{
+  "C28": {
+    "title": "Feature candidate engine (task 1.E)",
+    "items": [
+      {
+        "item": "PF-020/PF-021 a candidate adds, modifies, deletes and renames files in a scratch copy, is bound to base, contract, oracle and provenance, and never touches the working tree",
+        "tests": [
+          "PF-020/021 a feature candidate adds files, modifies one and is bound to base, contract, oracle and provenance \u2014 without touching the working tree",
+          "renames and deletes appear in the inventory as such, with attribution that says what is and is not covered"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Identical edits replay to the same binding; different edits supersede the earlier candidate",
+        "tests": [
+          "the same edits produce the same binding (replay, no new ordinal); different edits supersede the earlier candidate"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PF-055 admission: traversal, absolute paths, secrets, VCS, protected files, stale hashes, overlap and caps are refused with reasons",
+        "tests": [
+          "PF-055 admission: traversal, absolute paths, secrets, VCS, lockfiles, bad bytes, stale hashes, overlap and caps are all refused with reasons"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PF-055/AT-13 existing tests are protected: adding is free, editing needs a policy grant, a granted weakening is recorded as pending review",
+        "tests": [
+          "PF-055/AT-13 existing tests: adding is free; editing or deleting needs a policy grant, and a granted weakening is recorded as pending review"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Dependency and install-script changes need a security grant; grants need authority",
+        "tests": [
+          "dependencies: package.json dependency and install-script changes need a security grant; other package.json edits do not"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PF-021/AT-22 a stale base is refused up front and a candidate goes stale when the repository changes",
+        "tests": [
+          "PF-021/AT-22 a stale base is refused up front, and a candidate goes stale the moment the repository changes"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Build gates: PLAN mode, missing contract, open questions, mandatory tracking, wrong owner and state refuse to build",
+        "tests": [
+          "gates: PLAN mode, missing contract, open questions, mandatory tracking, wrong owner and wrong state all refuse to build"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PF-072 readCandidateFile: candidate, baseline, unified and split diff, ranges, truncation, deleted files, traversal and access",
+        "tests": [
+          "PF-072 reading a candidate: every representation, ranges, truncation, deleted files, traversal and access"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "Honest reporting of no-op candidates and edits that end up unchanged",
+        "tests": [
+          "a candidate that changes nothing, or whose edit leaves a file unchanged, is reported honestly"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "planFeatureChange / planReuseChange consume task 2.I's impact assessment",
+        "tests": [],
+        "state": "blocked",
+        "needs": "task 2.I assessFeatureImpact and verifyOverlap"
+      }
+    ]
+  }
+}

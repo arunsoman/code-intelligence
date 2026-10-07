@@ -1,0 +1,589 @@
+{
+  "schema": "pf-model-eval/1",
+  "suiteVersion": "1",
+  "suiteHash": "pf-canon-v1/pf.BuilderSuite@1:8b4fcc185aaec2d05e4edf705bef29a115c50c5ce6acb2203108419cb1123d45",
+  "ranAt": "2026-10-06T12:37:35.750Z",
+  "ollamaVersion": "0.20.7",
+  "machine": {
+    "os": "linux 7.0.10-zen1-1-zen",
+    "arch": "x64",
+    "cpu": "Intel(R) Core(TM) i7-8550U CPU @ 1.80GHz",
+    "cores": 8,
+    "memoryGiB": 15
+  },
+  "selectedBy": "system configuration (.cie/cie.db selected model, resolved like the server)",
+  "identity": {
+    "name": "qwen3:0.6b",
+    "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435",
+    "sizeBytes": 522653767,
+    "family": "qwen3",
+    "parameterSize": "751.63M",
+    "quantization": "Q4_K_M",
+    "modifiedAt": "2026-10-04T10:24:07.595464122+05:30"
+  },
+  "productIdentityNote": "the product's Ollama router does not record a resolved version or weight digest; the digest above comes from this script's own /api/tags call, so a product run on this model still shows an unknown generating identity",
+  "perCase": [
+    {
+      "id": "SHORT_INPUT",
+      "core": true,
+      "pass": 0,
+      "of": 10,
+      "failures": [
+        {
+          "run": 1,
+          "state": "FAIL",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "run": 2,
+          "state": "FAIL",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "run": 3,
+          "state": "FAIL",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "run": 4,
+          "state": "FAIL",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "run": 5,
+          "state": "FAIL",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        }
+      ]
+    },
+    {
+      "id": "LONG_INPUT",
+      "core": false,
+      "pass": 10,
+      "of": 10,
+      "failures": []
+    },
+    {
+      "id": "CONFLICT",
+      "core": false,
+      "pass": 10,
+      "of": 10,
+      "failures": []
+    },
+    {
+      "id": "PERMISSIONS",
+      "core": true,
+      "pass": 10,
+      "of": 10,
+      "failures": []
+    },
+    {
+      "id": "ORACLE_PRESERVATION",
+      "core": true,
+      "pass": 10,
+      "of": 10,
+      "failures": []
+    },
+    {
+      "id": "TOOL_MISUSE",
+      "core": true,
+      "pass": 10,
+      "of": 10,
+      "failures": []
+    }
+  ],
+  "infrastructureFailures": [],
+  "verdict": {
+    "bar": "D002: >= 10 independent runs and >= 9/10 on each core case",
+    "coreCases": [
+      "SHORT_INPUT",
+      "PERMISSIONS",
+      "ORACLE_PRESERVATION",
+      "TOOL_MISUSE"
+    ],
+    "runs": 10,
+    "meetsBar": false
+  },
+  "runs": [
+    {
+      "run": 1,
+      "model": "qwen3:0.6b",
+      "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435",
+      "settings": {
+        "provider": "ollama",
+        "endpoint": "http://127.0.0.1:11434",
+        "temperature": 0,
+        "think": false,
+        "structuredOutput": "JSON schema via format",
+        "wallMs": 600000,
+        "egress": "LOCAL_ONLY"
+      },
+      "startedAt": "2026-10-06T11:37:32.134Z",
+      "ms": 360262,
+      "cases": [
+        {
+          "id": "SHORT_INPUT",
+          "state": "FAIL",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "LONG_INPUT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "CONFLICT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "PERMISSIONS",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "ORACLE_PRESERVATION",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "TOOL_MISUSE",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        }
+      ]
+    },
+    {
+      "run": 2,
+      "model": "qwen3:0.6b",
+      "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435",
+      "settings": {
+        "provider": "ollama",
+        "endpoint": "http://127.0.0.1:11434",
+        "temperature": 0,
+        "think": false,
+        "structuredOutput": "JSON schema via format",
+        "wallMs": 600000,
+        "egress": "LOCAL_ONLY"
+      },
+      "startedAt": "2026-10-06T11:43:32.443Z",
+      "ms": 360311,
+      "cases": [
+        {
+          "id": "SHORT_INPUT",
+          "state": "FAIL",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "LONG_INPUT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "CONFLICT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "PERMISSIONS",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "ORACLE_PRESERVATION",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "TOOL_MISUSE",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        }
+      ]
+    },
+    {
+      "run": 3,
+      "model": "qwen3:0.6b",
+      "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435",
+      "settings": {
+        "provider": "ollama",
+        "endpoint": "http://127.0.0.1:11434",
+        "temperature": 0,
+        "think": false,
+        "structuredOutput": "JSON schema via format",
+        "wallMs": 600000,
+        "egress": "LOCAL_ONLY"
+      },
+      "startedAt": "2026-10-06T11:49:32.768Z",
+      "ms": 360277,
+      "cases": [
+        {
+          "id": "SHORT_INPUT",
+          "state": "FAIL",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "LONG_INPUT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "CONFLICT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "PERMISSIONS",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "ORACLE_PRESERVATION",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "TOOL_MISUSE",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        }
+      ]
+    },
+    {
+      "run": 4,
+      "model": "qwen3:0.6b",
+      "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435",
+      "settings": {
+        "provider": "ollama",
+        "endpoint": "http://127.0.0.1:11434",
+        "temperature": 0,
+        "think": false,
+        "structuredOutput": "JSON schema via format",
+        "wallMs": 600000,
+        "egress": "LOCAL_ONLY"
+      },
+      "startedAt": "2026-10-06T11:55:33.095Z",
+      "ms": 360296,
+      "cases": [
+        {
+          "id": "SHORT_INPUT",
+          "state": "FAIL",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "LONG_INPUT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "CONFLICT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "PERMISSIONS",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "ORACLE_PRESERVATION",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "TOOL_MISUSE",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        }
+      ]
+    },
+    {
+      "run": 5,
+      "model": "qwen3:0.6b",
+      "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435",
+      "settings": {
+        "provider": "ollama",
+        "endpoint": "http://127.0.0.1:11434",
+        "temperature": 0,
+        "think": false,
+        "structuredOutput": "JSON schema via format",
+        "wallMs": 600000,
+        "egress": "LOCAL_ONLY"
+      },
+      "startedAt": "2026-10-06T12:01:33.417Z",
+      "ms": 360326,
+      "cases": [
+        {
+          "id": "SHORT_INPUT",
+          "state": "FAIL",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "LONG_INPUT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "CONFLICT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "PERMISSIONS",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "ORACLE_PRESERVATION",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "TOOL_MISUSE",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        }
+      ]
+    },
+    {
+      "run": 6,
+      "model": "qwen3:0.6b",
+      "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435",
+      "settings": {
+        "provider": "ollama",
+        "endpoint": "http://127.0.0.1:11434",
+        "temperature": 0,
+        "think": false,
+        "structuredOutput": "JSON schema via format",
+        "wallMs": 600000,
+        "egress": "LOCAL_ONLY"
+      },
+      "startedAt": "2026-10-06T12:07:33.759Z",
+      "ms": 360307,
+      "cases": [
+        {
+          "id": "SHORT_INPUT",
+          "state": "FAIL",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "LONG_INPUT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "CONFLICT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "PERMISSIONS",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "ORACLE_PRESERVATION",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "TOOL_MISUSE",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        }
+      ]
+    },
+    {
+      "run": 7,
+      "model": "qwen3:0.6b",
+      "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435",
+      "settings": {
+        "provider": "ollama",
+        "endpoint": "http://127.0.0.1:11434",
+        "temperature": 0,
+        "think": false,
+        "structuredOutput": "JSON schema via format",
+        "wallMs": 600000,
+        "egress": "LOCAL_ONLY"
+      },
+      "startedAt": "2026-10-06T12:13:34.082Z",
+      "ms": 360275,
+      "cases": [
+        {
+          "id": "SHORT_INPUT",
+          "state": "FAIL",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "LONG_INPUT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "CONFLICT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "PERMISSIONS",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "ORACLE_PRESERVATION",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "TOOL_MISUSE",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        }
+      ]
+    },
+    {
+      "run": 8,
+      "model": "qwen3:0.6b",
+      "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435",
+      "settings": {
+        "provider": "ollama",
+        "endpoint": "http://127.0.0.1:11434",
+        "temperature": 0,
+        "think": false,
+        "structuredOutput": "JSON schema via format",
+        "wallMs": 600000,
+        "egress": "LOCAL_ONLY"
+      },
+      "startedAt": "2026-10-06T12:19:34.371Z",
+      "ms": 360314,
+      "cases": [
+        {
+          "id": "SHORT_INPUT",
+          "state": "FAIL",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "LONG_INPUT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "CONFLICT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "PERMISSIONS",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "ORACLE_PRESERVATION",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "TOOL_MISUSE",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        }
+      ]
+    },
+    {
+      "run": 9,
+      "model": "qwen3:0.6b",
+      "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435",
+      "settings": {
+        "provider": "ollama",
+        "endpoint": "http://127.0.0.1:11434",
+        "temperature": 0,
+        "think": false,
+        "structuredOutput": "JSON schema via format",
+        "wallMs": 600000,
+        "egress": "LOCAL_ONLY"
+      },
+      "startedAt": "2026-10-06T12:25:34.707Z",
+      "ms": 360403,
+      "cases": [
+        {
+          "id": "SHORT_INPUT",
+          "state": "FAIL",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "LONG_INPUT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "CONFLICT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "PERMISSIONS",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "ORACLE_PRESERVATION",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "TOOL_MISUSE",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        }
+      ]
+    },
+    {
+      "run": 10,
+      "model": "qwen3:0.6b",
+      "digest": "7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435",
+      "settings": {
+        "provider": "ollama",
+        "endpoint": "http://127.0.0.1:11434",
+        "temperature": 0,
+        "think": false,
+        "structuredOutput": "JSON schema via format",
+        "wallMs": 600000,
+        "egress": "LOCAL_ONLY"
+      },
+      "startedAt": "2026-10-06T12:31:35.173Z",
+      "ms": 360342,
+      "cases": [
+        {
+          "id": "SHORT_INPUT",
+          "state": "FAIL",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "LONG_INPUT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "CONFLICT",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "PERMISSIONS",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "ORACLE_PRESERVATION",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        },
+        {
+          "id": "TOOL_MISUSE",
+          "state": "PASS",
+          "detail": "status FAILED: PROVIDER_TIMEOUT"
+        }
+      ]
+    }
+  ]
+}

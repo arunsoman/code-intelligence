@@ -1,0 +1,87 @@
+/* Build feature dialog. Own classes only: the global header/footer/.dirs/.modal rules were built for other panels and must not leak in. */
+.bf-dialog { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; width: min(96vw, 1100px); height: min(92vh, 860px); display: flex; flex-direction: column; overflow: hidden; outline: none; }
+.bf-top { flex: none; padding: 12px 16px 8px; display: grid; gap: 8px; border-bottom: 1px solid var(--line); max-height: 52vh; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+.bf-title { display: flex; align-items: center; gap: 8px; }
+.bf-title h2 { margin: 0; font-size: 16px; text-transform: none; letter-spacing: 0; color: var(--ink); flex: 1; }
+.bf-ghost { background: transparent; border: 1px solid transparent; color: var(--muted); padding: 2px 8px; font-size: 16px; line-height: 1.2; border-radius: 6px; }
+.bf-ghost:hover { color: var(--ink); border-color: var(--line); background: transparent; }
+.bf-chiprow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; font-size: 12px; }
+.bf-chiprow .bf-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; margin-right: 2px; }
+.bf-chiprow .chip { max-width: 100%; overflow-wrap: anywhere; margin: 0; }
+.bf-chiprow a.chip { color: var(--accent); }
+.bf-details { position: relative; }
+.bf-details > summary { cursor: pointer; list-style: none; }
+.bf-details > summary::-webkit-details-marker { display: none; }
+.bf-pop { position: absolute; z-index: 5; margin-top: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; width: min(420px, 86vw); box-shadow: 0 6px 24px rgba(0,0,0,.28); display: grid; gap: 6px; font-size: 12px; }
+.bf-pop.up { bottom: 100%; margin-bottom: 4px; margin-top: 0; }
+.bf-pop.right { right: 0; }
+.bf-kv { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+.bf-kv code { overflow-wrap: anywhere; }
+.bf-decision { border: 1px solid var(--warn); background: color-mix(in srgb, var(--warn) 9%, var(--panel)); border-radius: 8px; padding: 10px 12px; display: flex; gap: 12px; align-items: center; }
+.bf-decision .bf-q { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.bf-decision strong { display: block; font-size: 13px; }
+.bf-digest { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.bf-pill { display: inline-flex; gap: 4px; align-items: center; border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; font-size: 12px; color: var(--ink); }
+.bf-pill.blocked { border-color: var(--warn); color: var(--warn); } .bf-pill.caution { border-color: var(--inference); color: var(--inference); } .bf-pill.ok { border-color: var(--ok); color: var(--ok); }
+.bf-notes { display: grid; gap: 4px; font-size: 12.5px; }
+.bf-note { margin: 0; padding: 4px 10px; border-left: 3px solid var(--line); overflow-wrap: anywhere; }
+.bf-note.blocked { border-left-color: var(--warn); } .bf-note.caution { border-left-color: var(--inference); } .bf-note.info { border-left-color: var(--accent); }
+.bf-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; }
+.bf-steps button { width: 100%; display: flex; gap: 5px; align-items: center; justify-content: center; padding: 5px 6px; font-size: 12.5px; background: var(--panel); color: var(--ink); border: 1px solid var(--line); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.bf-steps button .bf-lbl { overflow: hidden; text-overflow: ellipsis; }
+.bf-steps button[aria-current="step"] { border-color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); font-weight: 600; }
+.bf-steps button.attention { border-color: var(--warn); } .bf-steps button.done .bf-g { color: var(--ok); }
+.bf-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 0; }
+.bf-col { min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 12px 16px; }
+.bf-col + .bf-col { border-left: 1px solid var(--line); }
+.bf-col h3 { margin: 0 0 8px; font-size: 14px; }
+.bf-stack { display: grid; gap: 10px; }
+.bf-field { display: grid; gap: 4px; font-size: 13px; }
+.bf-field .bf-help { color: var(--muted); font-size: 12px; margin: 0; }
+.bf-textarea, .bf-select, .bf-input { width: 100%; box-sizing: border-box; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+.bf-textarea { resize: vertical; line-height: 1.45; }
+.bf-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.bf-item { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.bf-item.superseded { opacity: .75; }
+.bf-sect { margin-bottom: 14px; }
+.bf-sect > h4 { position: sticky; top: -12px; z-index: 1; margin: 0 0 6px; padding: 6px 0; background: var(--panel); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.bf-card { border: 1px solid var(--line); border-left-width: 4px; border-radius: 8px; padding: 8px 10px; display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; margin-bottom: 8px; }
+.bf-card.run { border-left-color: var(--accent); } .bf-card.ready { border-left-color: var(--ok); } .bf-card.blocked { border-left-color: var(--warn); } .bf-card.failed { border-left-color: var(--warn); } .bf-card.done { border-left-color: var(--ok); }
+.bf-card .bf-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.bf-card .bf-name { font-weight: 600; }
+.bf-card .bf-detail { color: var(--muted); font-size: 12.5px; margin: 0; }
+.bf-card .bf-next { font-size: 12.5px; margin: 0; }
+.bf-card .bf-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.bf-bar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.bf-bar > i { display: block; height: 100%; width: 35%; background: var(--accent); animation: bf-slide 1.6s ease-in-out infinite; }
+@keyframes bf-slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .bf-bar > i { animation: none; width: 100%; opacity: .5; } }
+.bf-none { color: var(--muted); font-size: 12px; margin: 0 0 4px; }
+.bf-foot { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); }
+.bf-foot .bf-grow { flex: 1; }
+.bf-menu { min-width: 0; }
+.bf-menu .bf-pop { width: min(460px, 90vw); }
+.bf-act { display: grid; gap: 2px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.bf-act:last-child { border-bottom: none; }
+.bf-act button { justify-self: start; }
+.bf-act p { margin: 0; color: var(--muted); font-size: 12px; }
+button[aria-disabled="true"] { opacity: .6; cursor: not-allowed; }
+.bf-term { text-decoration: underline dotted; text-underline-offset: 2px; cursor: help; }
+.bf-banner { margin: 0; padding: 6px 10px; border-radius: 6px; font-size: 13px; overflow-wrap: anywhere; }
+.bf-banner.warn { background: color-mix(in srgb, var(--inference) 16%, var(--panel)); } .bf-banner.error { background: color-mix(in srgb, var(--warn) 14%, var(--panel)); color: var(--warn); }
+.bf-updated { color: var(--muted); font-size: 11.5px; font-weight: 400; margin-left: 6px; }
+.bf-dialog button:focus-visible, .bf-dialog summary:focus-visible, .bf-dialog a:focus-visible, .bf-dialog input:focus-visible, .bf-dialog textarea:focus-visible, .bf-dialog select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 1000px) {
+  .bf-dialog { width: 100vw; height: 100vh; border-radius: 0; overflow-y: auto; overflow-x: hidden; display: block; overscroll-behavior: contain; }
+  .bf-top { max-height: none; overflow: visible; }
+  .bf-body { display: block; }
+  .bf-col { overflow: visible; min-height: auto; }
+  .bf-col + .bf-col { border-left: none; border-top: 1px solid var(--line); }
+  .bf-sect > h4 { top: 0; }
+  .bf-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .bf-decision { flex-direction: column; align-items: stretch; }
+  .bf-foot { position: sticky; bottom: 0; background: var(--panel); z-index: 2; }
+}
+}
+.bf-item > .chip, .bf-card > .chip, .bf-decision .bf-q > .chip { justify-self: start; width: fit-content; }
+.bf-decision .bf-q { display: grid; gap: 2px; justify-items: start; }

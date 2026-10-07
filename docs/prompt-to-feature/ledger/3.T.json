@@ -1,0 +1,70 @@
+{
+  "C07": {
+    "title": "Concurrency and lifecycle (task 3.T)",
+    "items": [
+      {
+        "item": "all-or-nothing mutation leases with per-repository fencing tokens; a replaced holder is refused (PF-063, AT-24/57)",
+        "tests": [
+          "PF-063/AT-24/57 a lease is all-or-nothing"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "request relations are proposals between own requests; cycles refused; unmet dependencies listed (PF-063)",
+        "tests": [
+          "PF-063 relations are proposals"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "concurrent candidates: overlaps conflict, disjoint ones need joint re-verification and name the combined tree, dependencies order them (PF-063, AT-55/56)",
+        "tests": [
+          "PF-063/AT-55/56 concurrent candidates"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "mutation origins from the caller's own requests only (PF-063)",
+        "tests": [
+          "PF-063 mutation origins list only the caller's own requests"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "retirement checklist with static consumers and an always-open unknown-consumer gap (PF-065, AT-59)",
+        "tests": [
+          "PF-065/AT-59 retirement lists static consumers"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "relations reach the bound issue once as allowlisted text (PF-065)",
+        "tests": [
+          "PF-065 relations reach the bound issue once"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "lease id + fencing token required at the candidate commit; another holder's live lease refuses the write, a replaced or resumed worker leaves nothing behind (#93)",
+        "tests": [
+          "#93 a candidate write needs the current lease id and fencing token"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "integrated candidate: the combined tree of verified candidates is built as one immutable candidate whose hash equals the assessed tree, then validated as a candidate of its own (#93)",
+        "tests": [
+          "#93 the integrated candidate is built and hashed as one tree"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "strict mode: every candidate writer must present a fence even before any lease exists (requireFence); pipeline and other writers pass fences only when the caller supplies one",
+        "tests": [
+          "#93 a candidate write needs the current lease id and fencing token"
+        ],
+        "state": "done"
+      }
+    ]
+  }
+}

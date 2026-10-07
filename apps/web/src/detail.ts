@@ -193,6 +193,7 @@ const ALL_FORM_IDS: FormId[] = [
   "SemanticMap", "CausalGraph", "HypothesisGraph", "TransactionJourney", "DataLineage", "SemanticDiff",
   "Archaeology", "TrustBoundary", "RuntimeOverlay", "RaceWindow", "Counterfactual", "TestConfidence",
   "Ownership", "ConceptAtlas", "PolicyMap", "ChangeRisk", "TraceLinkedProfile",
+  "RouteMap", "GeneratedChart",
 ];
 
 /** Returns any forms whose policies fail validation. Empty array = F09-A7 passes. */

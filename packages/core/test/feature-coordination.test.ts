@@ -1,0 +1,203 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { authorityPolicyHash } from "../src/feature/authority.ts";
+import { materializeCandidate } from "../src/feature/candidate.ts";
+import { assertFence, relationsOf, releaseLeases, unmetDependencies } from "../src/feature/coordination.ts";
+import { loadFeatureConfig } from "../src/feature/config.ts";
+import { contractHashOf, contractIdOf } from "../src/feature/decisions.ts";
+import { discoverFeatureContext, snapshotOf, submitFeature } from "../src/feature/intake.ts";
+import type { IssueForge } from "../src/feature/issue-forge.ts";
+import type { FeatureContract } from "../src/feature/types.ts";
+import { boot, createEdit, none } from "./feature-boot.ts";
+
+type B = Awaited<ReturnType<typeof boot>>;
+/** A second request in the same repository, with its own contract and candidate. */
+function second(b: B, key: string, files: Record<string, string>) {
+  const intake = { fs: b.fs, store: b.svc.store, config: loadFeatureConfig };
+  const rid = submitFeature(intake, "arun", { inputRefs: [], text: `Another feature ${key}`, repositoryId: b.repo, mode: "BUILD_PREVIEW", idempotencyKey: key }).requestId;
+  discoverFeatureContext(intake, "arun", { requestId: rid, snapshot: b.fs.getRequest(rid)!.source, retrievalBudget: { tokens: 1000, files: 1000 } });
+  let rec = b.fs.getRequest(rid)!;
+  const draft = { schemaVersion: 1 as const, id: contractIdOf(rid), version: 0, requestId: rid, snapshot: rec.source, requirements: [], acceptance: [], assumptions: [], obligationIds: [], authorityPolicyHash: authorityPolicyHash(none) };
+  const contract: FeatureContract = { ...draft, hash: contractHashOf(draft) }; rec = b.fs.updateRequest(rid, rec.version, { ...rec, contract });
+  const cand = Object.keys(files).length ? materializeCandidate({ fs: b.fs, store: b.svc.store, auth: none }, "arun", { requestId: rid, snapshot: rec.source, edits: Object.entries(files).map(([f, c]) => createEdit(f, c)), idempotencyKey: `m-${key}` }).candidate : null;
+  return { rid, cand: cand! };
+}
+const world = async () => { const b = await boot({ edits: () => [createEdit("src/a/one.ts", "export const one = 1;\n")] }); return { ...b, deps: { fs: b.fs, store: b.svc.store, now: () => clock.t } }; };
+const clock = { t: 1_000_000 };
+
+test("PF-063/AT-24/57 a lease is all-or-nothing, names another holder only to its owner, and a replaced holder is fenced out by its lower token", async () => {
+  const w = await world();
+  try {
+    const other = second(w, "k2", { "src/b/two.ts": "export const two = 2;\n" }); const rev = snapshotOf(w.svc.store, w.repo).contentRootHash;
+    const reserve = (requestId: string, surfaceIds: string[], ttlMs = 60_000, who = "arun") => w.h["C07/reserveMutationSurfaces"](w.as(who), { requestId, surfaceIds, expectedRevision: rev, ttlMs });
+    clock.t = 1_000_000; // the handler uses the real clock; time-dependent steps below use the module directly
+    const a = reserve(w.rid, ["src/shared/x.ts", "src/a/one.ts"]); assert.equal(a.ok, true, JSON.stringify(a.error)); assert.equal(a.value.status, "COMPLETE"); const la = a.value.value; assert.equal(la.fencingToken, 1);
+    const clash = reserve(other.rid, ["src/b/two.ts", "src/shared/x.ts"]); assert.equal(clash.value.status, "FAILED"); assert.match(clash.value.diagnostics[0], new RegExp(`your request ${w.rid}`));
+    // nothing was taken for the free surface: all-or-nothing
+    assert.equal(reserve(other.rid, ["src/b/two.ts"]).value.value.fencingToken, 2);
+    // same request renewing gets a NEW, higher token and the old one stops working
+    const renewed = reserve(w.rid, ["src/shared/x.ts", "src/a/one.ts"]).value.value; assert.equal(renewed.fencingToken, 3);
+    assert.throws(() => assertFence(w.deps, w.rid, ["src/a/one.ts"], la.fencingToken), /not held/);
+    assertFence(w.deps, w.rid, ["src/a/one.ts", "src/shared/x.ts"], renewed.fencingToken);
+    assert.throws(() => assertFence(w.deps, other.rid, ["src/a/one.ts"], renewed.fencingToken), /not held/);
+    // an expired lease can be taken over, and the previous holder is then refused
+    const late = { ...w.deps, now: () => Date.now() + 120_000 };
+    const { reserveMutationSurfaces } = await import("../src/feature/coordination.ts");
+    const taken = reserveMutationSurfaces(late, "arun", { requestId: other.rid, surfaceIds: ["src/shared/x.ts"], expectedRevision: rev, ttlMs: 60_000 }).value!; assert.equal(taken.fencingToken, 4);
+    assert.throws(() => assertFence(late, w.rid, ["src/shared/x.ts"], renewed.fencingToken), /not held/);
+    assert.equal(releaseLeases(w.deps, "arun", other.rid) >= 1, true);
+    // another person sees nothing of any of this; bad input is typed
+    assert.equal(reserve(w.rid, ["src/a/one.ts"], 60_000, "mallory").error.code, "NOT_FOUND");
+    assert.equal(reserve(w.rid, ["../etc/passwd"]).error.code, "INVALID_SCHEMA"); assert.equal(reserve(w.rid, []).error.code, "INVALID_SCHEMA"); assert.equal(reserve(w.rid, ["a.ts"], 5).error.code, "INVALID_SCHEMA");
+    assert.equal(w.h["C07/reserveMutationSurfaces"](w.as("arun"), { requestId: w.rid, surfaceIds: ["a.ts"], expectedRevision: "stale", ttlMs: 60_000 }).value.status, "STALE");
+  } finally { w.close(); }
+});
+
+test("PF-063 relations are proposals between a person's own requests; a DEPENDS_ON cycle is refused and unpublished dependencies are listed", async () => {
+  const w = await world();
+  try {
+    const b2 = second(w, "k2", {}); const b3 = second(w, "k3", {});
+    const rel = (from: string, to: string, relationship: string, who = "arun") => w.h["C07/relateRequests"](w.as(who), { fromRequestId: from, toRequestId: to, relationship });
+    const r1 = rel(w.rid, b2.rid, "DEPENDS_ON"); assert.equal(r1.value.state, "PROPOSED"); assert.equal(rel(w.rid, b2.rid, "DEPENDS_ON").ok, true);
+    assert.equal(relationsOf(w.deps, "arun", w.rid).length, 1); // idempotent
+    assert.equal(rel(b2.rid, w.rid, "DEPENDS_ON").error.code, "VERSION_CONFLICT"); // cycle
+    assert.equal(rel(b2.rid, b3.rid, "DEPENDS_ON").ok, true); assert.equal(rel(b3.rid, w.rid, "DEPENDS_ON").error.code, "VERSION_CONFLICT"); // longer cycle
+    assert.equal(rel(w.rid, w.rid, "DUPLICATES").error.code, "INVALID_SCHEMA"); assert.equal(rel(w.rid, b2.rid, "LIKES").error.code, "INVALID_SCHEMA");
+    assert.equal(rel(w.rid, b2.rid, "DUPLICATES", "mallory").error.code, "NOT_FOUND");
+    assert.deepEqual(unmetDependencies(w.deps, "arun", w.rid), [b2.rid]);
+    assert.deepEqual(unmetDependencies(w.deps, "arun", b3.rid), []);
+  } finally { w.close(); }
+});
+
+test("PF-063/AT-55/56 concurrent candidates: shared files conflict, disjoint ones need joint re-verification and name the combined tree, dependencies order them", async () => {
+  const w = await world();
+  try {
+    const b2 = second(w, "k2", { "src/b/two.ts": "export const two = 2;\n" }); const clash = second(w, "k3", { "src/a/one.ts": "export const one = 'other';\n" });
+    // k3 cannot be built on a file k1 also creates only if the base has it; it creates the same path, so the PATH overlaps
+    const snap = snapshotOf(w.svc.store, w.repo);
+    const assess = (ids: [string, string][]) => w.h["C23/assessConcurrentChanges"](w.as("arun"), { requestIds: ids.map((x) => x[0]), candidateBindings: ids.map((x) => x[1]), snapshot: snap });
+    const ok = assess([[w.rid, w.cand.bindingHash], [b2.rid, b2.cand.bindingHash]]); assert.equal(ok.ok, true, JSON.stringify(ok.error));
+    assert.equal(ok.value.value.compatible, true); assert.equal(ok.value.value.reverify, true); assert.match(ok.value.value.integratedContentHash, /^pf-canon-v1\//); assert.notEqual(ok.value.value.integratedContentHash, snap.contentRootHash);
+    assert.ok(ok.value.diagnostics.some((x: string) => /not verified until/.test(x)));
+    const bad = assess([[w.rid, w.cand.bindingHash], [clash.rid, clash.cand.bindingHash]]); assert.equal(bad.value.value.compatible, false); assert.deepEqual(bad.value.value.overlaps, [{ path: "src/a/one.ts", requestIds: [w.rid, clash.rid] }]); assert.equal(bad.value.value.integratedContentHash, undefined);
+    const single = assess([[w.rid, w.cand.bindingHash]]); assert.equal(single.value.value.reverify, false);
+    w.h["C07/relateRequests"](w.as("arun"), { fromRequestId: w.rid, toRequestId: b2.rid, relationship: "DEPENDS_ON" });
+    assert.deepEqual(assess([[w.rid, w.cand.bindingHash], [b2.rid, b2.cand.bindingHash]]).value.value.order, [b2.rid, w.rid]);
+    w.h["C07/relateRequests"](w.as("arun"), { fromRequestId: w.rid, toRequestId: clash.rid, relationship: "CONFLICTS_WITH" });
+    // a candidate built on a base that has since moved, a stale snapshot, a mismatched pair and a stranger
+    assert.equal(w.h["C23/assessConcurrentChanges"](w.as("arun"), { requestIds: [w.rid], candidateBindings: [b2.cand.bindingHash], snapshot: snap }).error.code, "NOT_FOUND");
+    assert.equal(w.h["C23/assessConcurrentChanges"](w.as("arun"), { requestIds: [w.rid], candidateBindings: [w.cand.bindingHash], snapshot: { ...snap, contentRootHash: "old" } }).value.status, "STALE");
+    assert.equal(w.h["C23/assessConcurrentChanges"](w.as("mallory"), { requestIds: [w.rid], candidateBindings: [w.cand.bindingHash], snapshot: snap }).error.code, "NOT_FOUND");
+    assert.equal(w.h["C23/assessConcurrentChanges"](w.as("arun"), { requestIds: [w.rid, w.rid], candidateBindings: [w.cand.bindingHash, w.cand.bindingHash], snapshot: snap }).error.code, "INVALID_SCHEMA");
+  } finally { w.close(); }
+});
+
+test("PF-063 mutation origins list only the caller's own requests and say what they cannot know", async () => {
+  const w = await world();
+  try {
+    const q = (who: string, path = "src/a/one.ts") => w.h["C23/getMutationOrigins"](w.as(who), { repositoryId: w.repo, path, revision: "r" });
+    const mine = q("arun"); assert.equal(mine.value.value.origins.length, 1); assert.equal(mine.value.value.origins[0].requestId, w.rid); assert.ok(mine.value.value.origins[0].eventId.startsWith("evt:"));
+    assert.deepEqual(q("mallory").value.value.origins, []); assert.match(q("mallory").value.diagnostics.join(), /no request of yours/);
+    assert.equal(q("arun", "../x").error.code, "INVALID_SCHEMA");
+  } finally { w.close(); }
+});
+
+test("PF-065/AT-59 retirement lists static consumers and always keeps the unknown-consumer gap open", async () => {
+  const w = await boot({ edits: (repo) => [{ op: "DELETE_FILE", file: "src/jobs/reconciler.ts", baseHash: require_hash(repo, "src/jobs/reconciler.ts"), why: "retire" }] });
+  try {
+    const r = w.h["C23/assessRetirement"](w.as("arun"), { requestId: w.rid, candidateHash: w.cand.bindingHash }); assert.equal(r.ok, true, JSON.stringify(r.error));
+    assert.equal(r.value.status, "PARTIAL"); assert.match(r.value.value.gaps[0], /unknown-consumer gap/); assert.deepEqual(r.value.value.affectedIds, ["src/jobs/reconciler.ts"]); assert.ok(r.value.value.reasons.length >= 3);
+    assert.equal(w.h["C23/assessRetirement"](w.as("mallory"), { requestId: w.rid, candidateHash: w.cand.bindingHash }).error.code, "NOT_FOUND");
+  } finally { w.close(); }
+  const none2 = await boot({ edits: () => [createEdit("src/n.ts", "export {};\n")] });
+  try { const r = none2.h["C23/assessRetirement"](none2.as("arun"), { requestId: none2.rid, candidateHash: none2.cand.bindingHash }); assert.equal(r.value.status, "COMPLETE"); assert.deepEqual(r.value.value.gaps, []); } finally { none2.close(); }
+});
+
+test("PF-065 relations reach the bound issue once, as allowlisted text, and a retry finds its own comment", async () => {
+  const w = await world();
+  try {
+    const b2 = second(w, "k2", {}); const rel = w.h["C07/relateRequests"](w.as("arun"), { fromRequestId: w.rid, toRequestId: b2.rid, relationship: "EXTENDS" }); assert.equal(rel.ok, true);
+    const id = relationsOf(w.deps, "arun", w.rid)[0]!.id;
+    const comments: { id: number; body: string }[] = []; const forge = { recentComments: async () => comments, createComment: async (_r: string, _n: number, body: string) => { const c = { id: comments.length + 1, body }; comments.push(c); return c; } } as unknown as IssueForge;
+    const h = (await import("../src/feature/handlers.ts")).featureHandlers(w.svc, { issues: { forge } }) as Record<string, (c: any, b: any) => any>;
+    const call = () => h["C30/syncCapabilityRelations"](w.as("arun"), { requestId: w.rid, assessmentId: "a", relationIds: [id] });
+    assert.equal((await call()).error.code, "FORBIDDEN"); // no issue bound yet (BLOCKED maps to FORBIDDEN)
+    const r = w.fs.getRequest(w.rid)!; w.fs.updateRequest(w.rid, r.version, { ...r, issue: { ...r.issue, repository: "acme/payments", number: 7, syncState: "SYNCED", visibility: "PUBLIC_OR_UNKNOWN" } });
+    const first = await call(); assert.equal(first.ok, true, JSON.stringify(first.error)); assert.equal(first.value.sent, 1);
+    const again = await call(); assert.equal(again.value.sent, 0); assert.equal(comments.length, 1);
+    assert.match(comments[0]!.body, /extends/); assert.doesNotMatch(comments[0]!.body, /Another feature|Add export/);
+    assert.equal((await h["C30/syncCapabilityRelations"](w.as("arun"), { requestId: w.rid, assessmentId: "a", relationIds: ["rel:nope"] })).error.code, "NOT_FOUND");
+  } finally { w.close(); }
+});
+
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { rawHash } from "../src/feature/canon.ts";
+function require_hash(repo: string, rel: string) { return rawHash(readFileSync(join(repo, rel))); }
+
+test("#93 a candidate write needs the current lease id and fencing token; a replaced or resumed worker is refused at commit and nothing changes", async () => {
+  const w = await world();
+  try {
+    const rev = snapshotOf(w.svc.store, w.repo).contentRootHash, snap = snapshotOf(w.svc.store, w.repo);
+    const other = second(w, "k2", {});
+    const reserve = (requestId: string, surfaceIds: string[]) => w.h["C07/reserveMutationSurfaces"](w.as("arun"), { requestId, surfaceIds, expectedRevision: rev, ttlMs: 60_000 }).value.value;
+    const build = (requestId: string, file: string, fence?: { leaseId: string; token: number }, now?: () => number, tag = "") =>
+      materializeCandidate({ fs: w.fs, store: w.svc.store, auth: none, now }, "arun", { requestId, snapshot: snap, edits: [createEdit(file, `export const v = '${file}${tag}';\n`)], idempotencyKey: `m-${requestId}-${file}${tag}`, fence });
+    // 1. nothing leased: the write proceeds exactly as before
+    assert.ok(build(other.rid, "src/free/free.ts").candidate);
+    // 2. the holder must present its lease: no fence, a wrong token and a wrong lease id are all refused
+    const mine = reserve(other.rid, ["src/held/a.ts"]);
+    assert.throws(() => build(other.rid, "src/held/a.ts"), /lease id and fencing token are required/);
+    assert.throws(() => build(other.rid, "src/held/a.ts", { leaseId: mine.id, token: mine.fencingToken + 1 }), /not current/);
+    assert.throws(() => build(other.rid, "src/held/a.ts", { leaseId: "lease:other", token: mine.fencingToken }), /not current/);
+    // a path outside the leased surfaces is refused even with a valid fence
+    assert.throws(() => build(other.rid, "src/held/other.ts", { leaseId: mine.id, token: mine.fencingToken }), /not covered by a lease/);
+    const before = w.fs.listCandidates(other.rid).length;
+    const ok = build(other.rid, "src/held/a.ts", { leaseId: mine.id, token: mine.fencingToken }); assert.equal(ok.candidate.status, "MATERIALIZED");
+    assert.equal(w.fs.listCandidates(other.rid).length, before + 1);
+    // 3. another request cannot write onto a path a live lease holds, token or not
+    const clash = reserve(w.rid, ["src/shared/x.ts"]);
+    assert.throws(() => build(other.rid, "src/shared/x.ts", { leaseId: mine.id, token: mine.fencingToken }), /leased by another request/);
+    assert.ok(clash.fencingToken > mine.fencingToken);
+    // 4. a resumed worker: its lease expired and another request took it over; the old token is refused, the new holder may write
+    const late = () => Date.now() + 120_000, { reserveMutationSurfaces } = await import("../src/feature/coordination.ts");
+    const takeover = reserveMutationSurfaces({ ...w.deps, now: late }, "arun", { requestId: w.rid, surfaceIds: ["src/held/a.ts"], expectedRevision: rev, ttlMs: 60_000 }).value!;
+    const count = w.fs.listCandidates(other.rid).length, liveIds = () => w.fs.listCandidates(other.rid).filter((c) => c.status === "MATERIALIZED").map((c) => c.id);
+    const liveBefore = liveIds();
+    assert.throws(() => build(other.rid, "src/held/a.ts", { leaseId: mine.id, token: mine.fencingToken }, late, "-resumed"), /leased by another request/);
+    assert.equal(w.fs.listCandidates(other.rid).length, count, "a refused writer leaves nothing behind");
+    assert.deepEqual(liveIds(), liveBefore, "and supersedes nothing");
+    // a resumed worker presenting its old token is refused even on a path nobody holds: the token is older than the repository's current one
+    assert.throws(() => build(other.rid, "src/held/c.ts", { leaseId: mine.id, token: mine.fencingToken }, late, "-c"), /older than the repository/);
+    // the check is about paths: a path nobody holds is writable by anyone unless requireFence is on (below)
+    assert.ok(build(other.rid, "src/held/b.ts", undefined, late, "-b").candidate);
+    assert.ok(takeover.fencingToken > mine.fencingToken);
+    // 5. the store enforces it at commit: a direct write with a stale token is refused too, and a record update only checks takeover
+    const cand = w.fs.listCandidates(other.rid).at(-1)!;
+    assert.throws(() => w.fs.putCandidate({ ...cand, id: "cand:forged", bindingHash: "pf-canon-v1/forged", contents: { "src/held/a.ts": "x" }, entries: {} }, undefined, { leaseId: mine.id, token: mine.fencingToken, nowMs: Date.now() + 120_000 }), /leased by another request/);
+    assert.doesNotThrow(() => w.fs.putCandidate({ ...w.fs.getCandidate(clash.id) ?? cand, status: cand.status }));
+    // 6. requireFence makes the fence mandatory even before any lease exists
+    assert.throws(() => materializeCandidate({ fs: w.fs, store: w.svc.store, auth: none, requireFence: true }, "arun", { requestId: other.rid, snapshot: snap, edits: [createEdit("src/new/n.ts", "export const n = 1;\n")], idempotencyKey: "m-req" }), /required/);
+  } finally { w.close(); }
+});
+
+test("#93 the integrated candidate is built and hashed as one tree that equals the assessed combined tree (publication already refuses any other head)", async () => {
+  const w = await world();
+  try {
+    const b2 = second(w, "k2", { "src/b/two.ts": "export const two = 2;\n" }); const snap = snapshotOf(w.svc.store, w.repo);
+    const ids = { requestIds: [w.rid, b2.rid], candidateBindings: [w.cand.bindingHash, b2.cand.bindingHash], snapshot: snap, targetRequestId: w.rid };
+    const assessed = w.h["C23/assessConcurrentChanges"](w.as("arun"), ids).value.value.integratedContentHash;
+    const r = w.h["C23/integrateCandidates"](w.as("arun", "int-1"), ids); assert.equal(r.ok, true, JSON.stringify(r.error)); assert.equal(r.value.status, "COMPLETE");
+    const integrated = w.fs.getCandidateByBinding(r.value.value.binding)!;
+    assert.equal(integrated.binding.candidateContentHash, assessed, "the built tree is the assessed tree");
+    assert.deepEqual(Object.keys(integrated.contents ?? {}).sort(), ["src/a/one.ts", "src/b/two.ts"]);
+    assert.equal(integrated.requestId, w.rid); assert.equal(integrated.status, "MATERIALIZED");
+    assert.match(r.value.diagnostics.join(), /validate it/);
+    // conflicting candidates are never integrated
+    const clash = second(w, "k3", { "src/a/one.ts": "export const one = 'other';\n" });
+    const bad = w.h["C23/integrateCandidates"](w.as("arun", "int-2"), { ...ids, requestIds: [w.rid, clash.rid], candidateBindings: [w.cand.bindingHash, clash.cand.bindingHash] }); assert.equal(bad.value.status, "PARTIAL");
+    // the target must be part of the set; a stranger sees nothing
+    assert.equal(w.h["C23/integrateCandidates"](w.as("arun", "int-3"), { ...ids, targetRequestId: clash.rid }).error.code, "INVALID_SCHEMA");
+    assert.equal(w.h["C23/integrateCandidates"](w.as("mallory", "int-4"), ids).error.code, "NOT_FOUND");
+  } finally { w.close(); }
+});

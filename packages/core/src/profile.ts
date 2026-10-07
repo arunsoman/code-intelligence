@@ -2,6 +2,27 @@
 // languages, how the top-level folders are used, which frameworks the imports name, and which way calls run between layers.
 // Every statement says it is inferred from names and imports; nothing here is a claim the code proves.
 import type { Store } from "./store.ts";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+import { policyFor } from "./access.ts";
+
+/** A bounded, attributed repository description supplements the structural
+ * profile. Documentation is an author's description, not a verified code claim. */
+export function projectDescription(store: Store, repoRoot: string): string | null {
+  const access = policyFor(store, repoRoot);
+  for (const file of ["README.md", "readme.md", "README"]) {
+    if (access.denied(file)) continue;
+    try {
+      const root = realpathSync(repoRoot), path = realpathSync(join(root, file));
+      const rel = relative(root, path);
+      if (rel.startsWith("..") || access.denied(rel) || statSync(path).size > 128_000) continue;
+      const paragraphs = readFileSync(path, "utf8").split(/\r?\n\s*\r?\n/);
+      const intro = paragraphs.find((p) => /^[A-Za-z]/.test(p.trim()) && !p.includes("```") && !p.includes("<script") && p.trim().length > 40);
+      if (intro) return `Repository description (${file}; author-provided): ${intro.trim().replace(/\s+/g, " ").slice(0, 1200)}`;
+    } catch { /* a source-only repository still has the structural profile */ }
+  }
+  return null;
+}
 
 const LAYERS: [string, RegExp][] = [
   ["presentation / API", /(^|\/)(controllers?|api|web|routes?|handlers?|rest|resources?|views?|endpoints?|cmd|ui)(\/|$)/i],

@@ -1,0 +1,61 @@
+{
+  "C25": {
+    "title": "Security, dependency, provenance gate (task 2.K)",
+    "items": [
+      {
+        "item": "PF-045 secret and pattern rules; introduced-vs-preexisting lines; suppressions need authority and expiry; policy file",
+        "tests": [
+          "PF-045 secret rules",
+          "PF-045 pattern rules",
+          "only lines the candidate introduces",
+          "suppressions need an owner",
+          "security policy file: strict"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PF-046/AT-36/AT-62 dependency review and gaps",
+        "tests": [
+          "PF-046 dependency review",
+          "AT-36 dependency findings",
+          "AT-62 dependency gaps"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PF-047 provenance with honest coverage limits",
+        "tests": [
+          "PF-047 provenance"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "AT-35/AT-62 gate status and 2.J integration, handlers, repository policy",
+        "tests": [
+          "AT-35/AT-62 gate status",
+          "2.K inside 2.J",
+          "2.K reports",
+          "C27/runSecurityValidation",
+          "a repository's own security policy"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "External SAST adapter and advisory database are not configured in this repository; absence is reported as INCOMPLETE, never as a pass",
+        "tests": [
+          "AT-35/AT-62 gate status"
+        ],
+        "state": "blocked",
+        "needs": "a configured SAST analyser and an advisory source (hooks are in place)"
+      },
+      {
+        "item": "Similarity-database check for provenance",
+        "tests": [
+          "PF-047 provenance"
+        ],
+        "state": "blocked",
+        "needs": "a licensed-code similarity database"
+      }
+    ]
+  }
+}

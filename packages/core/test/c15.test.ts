@@ -13,6 +13,24 @@ class Counting implements ModelProvider {
   async generate(r: ModelRequest) { this.seen.push(r); return this.inner.generate(r); }
 }
 
+test("a cloud quota failure explains the limit and local-model option while preserving facts", async () => {
+  const model: ModelProvider = { name: "ollama", model: "example:cloud", hosted: true, generate: async () => { throw new Error("ollama 429: you (private-account) have reached your session usage limit, upgrade https://example.test/private"); } };
+  const { svc, worker, revision } = await setup(model);
+  try {
+    svc.setEgress(ctx(), { repoRoot: svc.store.revision(revision)!.repoRoot, allow: true });
+    const r = await svc.ask(ctx(), { question: "show me how authentication works", revision });
+    assert.ok(r.ok); assert.ok(r.value.view.nodes.length > 0);
+    const warning = r.metadata.warnings.join(" ");
+    assert.match(warning, /Ollama cloud usage limit reached for example:cloud/);
+    assert.match(warning, /installed local model/);
+    assert.match(warning, /deterministic facts only/);
+    assert.doesNotMatch(warning, /private-account|example\.test|budget for this repository/);
+    const status = svc.status(ctx(), { revision });
+    assert.ok(status.ok);
+    assert.equal(status.value.provider, "ollama/example:cloud", "the user's selected model must not be changed silently");
+  } finally { worker.close(); }
+});
+
 test("authentication question: the map holds the login path with static evidence, groups are inferences, and nothing inferred is shown as fact", async () => {
   const { svc, worker, revision } = await setup();
   const r = await svc.ask(ctx(), { question: "show me how authentication works", revision });

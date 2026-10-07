@@ -842,6 +842,122 @@ export const MIGRATIONS: Migration[] = [
       drop index if exists task_events_idem; drop table if exists task_events;
       drop index if exists tasks_repo; drop table if exists tasks;`),
   },
+  {
+    // Prompt-to-feature: the five record families (plan §3). Immutable payloads are JSON with their pf-canon-v1 identity;
+    // mutable pointers move by compare-and-swap on `version`. No other feature tables exist without a demonstrated need.
+    version: 33, name: "prompt-to-feature-records",
+    up: (db) => db.exec(`
+      create table if not exists feature_records(
+        request_id text primary key, repository_id text not null, state text not null, version integer not null,
+        contract_version integer not null default 0, schema_version integer not null, json text not null,
+        idempotency_key text, created_by text not null, created_at text not null, updated_at text not null);
+      create unique index if not exists feature_records_idem on feature_records(created_by, idempotency_key) where idempotency_key is not null;
+      create index if not exists feature_records_repo on feature_records(repository_id, state, updated_at);
+      create table if not exists feature_decisions(
+        id text primary key, request_id text not null references feature_records(request_id) on delete cascade, kind text not null,
+        contract_version integer not null, supersedes_id text, schema_version integer not null, identity text not null, json text not null, created_at text not null);
+      create index if not exists feature_decisions_request on feature_decisions(request_id, created_at);
+      create table if not exists feature_candidates(
+        id text primary key, request_id text not null references feature_records(request_id) on delete cascade, ordinal integer not null,
+        binding_hash text not null, status text not null, schema_version integer not null, json text not null, created_at text not null,
+        unique(request_id, ordinal));
+      create index if not exists feature_candidates_binding on feature_candidates(binding_hash);
+      create table if not exists feature_evidence(
+        id text primary key, request_id text not null references feature_records(request_id) on delete cascade, candidate_id text not null,
+        binding_hash text not null, kind text not null, run_manifest_id text not null, schema_version integer not null, identity text not null, json text not null, created_at text not null);
+      create index if not exists feature_evidence_candidate on feature_evidence(candidate_id, kind);
+      create table if not exists feature_events(
+        request_id text not null references feature_records(request_id) on delete cascade, sequence integer not null, event_id text not null unique,
+        type text not null, actor text not null, schema_version integer not null, json text not null, at text not null,
+        sync_state text not null default 'PENDING', sync_remote_id text, sync_attempts integer not null default 0,
+        primary key(request_id, sequence));
+      create index if not exists feature_events_pending on feature_events(sync_state, at);
+    `),
+    down: (db) => db.exec("drop table feature_events; drop table feature_evidence; drop table feature_candidates; drop table feature_decisions; drop table feature_records;"),
+  },
+  {
+    version: 34, name: "prompt-to-feature-coordination",
+    up: (db) => db.exec(`
+      create table if not exists feature_leases(
+        repository_id text not null, surface text not null, lease_id text not null, request_id text not null, fencing_token integer not null,
+        expected_revision text not null, expires_at integer not null, primary key(repository_id, surface));
+      create index if not exists feature_leases_request on feature_leases(request_id);
+      create table if not exists feature_fence(repository_id text primary key, token integer not null);
+      create table if not exists feature_relations(
+        id text primary key, from_request text not null, to_request text not null, relationship text not null, state text not null,
+        created_by text not null, json text not null, created_at text not null, unique(from_request, to_request, relationship));
+      create index if not exists feature_relations_to on feature_relations(to_request);
+      create table if not exists feature_evaluations(
+        identity_hash text not null, suite_hash text not null, passed integer not null, json text not null, created_at text not null, primary key(identity_hash, suite_hash));
+    `),
+    down: (db) => db.exec("drop table feature_evaluations; drop table feature_relations; drop table feature_fence; drop table feature_leases;"),
+  },
+  {
+    // The one Ollama model this installation uses (provider and chat router alike): a single persisted choice,
+    // set from the model menu, never a name baked into the source.
+    version: 35, name: "selected-model",
+    up: (db) => db.exec("create table if not exists selected_model(id integer primary key check (id = 1), model text not null, updated_at text not null);"),
+    down: (db) => db.exec("drop table selected_model;"),
+  },
+  {
+    // Release scope: what's actually in a release, frozen against a GitHub milestone. Mirrors the F08 campaign
+    // population tables (migration 29) scaled down to one repository's milestone issues.
+    version: 36, name: "release-scope",
+    up: (db) => db.exec(`
+      create table if not exists releases(
+        release_id text primary key, tenant_id text not null, name text not null, tag text not null,
+        milestone_json text not null,
+        state text not null, version integer not null,
+        created_by text not null, created_at text not null, updated_at text not null);
+      create table if not exists release_scope_versions(
+        release_id text not null, version integer not null,
+        scope_hash text not null, issue_numbers_json text not null,
+        frozen_at text not null, created_by text not null,
+        primary key(release_id, version));
+      create table if not exists release_items(
+        release_id text not null, issue_number integer not null, scope_version integer not null,
+        title text not null default '', issue_state text not null default 'open',
+        state text not null, assessment_state text not null default 'ASSESSED',
+        reason text, updated_at text not null,
+        primary key(release_id, issue_number));
+      create table if not exists release_events(
+        release_id text not null, seq integer not null, at text not null, actor text not null,
+        type text not null, issue_number integer, payload_json text not null, idempotency_key text,
+        primary key(release_id, seq));`),
+    down: (db) => db.exec(`
+      drop table if exists release_events; drop table if exists release_items;
+      drop table if exists release_scope_versions; drop table if exists releases;`),
+  },
+  {
+    // Validated model-created chart plans are revision/question bound and recompiled by the native renderer.
+    version: 37, name: "generated-chart-plans",
+    up: (db) => db.exec(`create table if not exists generated_chart_plans(
+      cache_key text primary key, bundle_id text not null, question text not null, plan_json text not null, created_at text not null);
+      create index if not exists generated_chart_plans_bundle on generated_chart_plans(bundle_id);`),
+    down: (db) => db.exec("drop table if exists generated_chart_plans;"),
+  },
+  {
+    // A feature request can be scoped to a release (the release-scope engine's Release, migration 36), so a
+    // release board can list every request building toward it without loading and filtering every request.
+    version: 38, name: "feature-release-scope",
+    up: (db) => db.exec(`
+      alter table feature_records add column release_id text;
+      create index if not exists feature_records_release on feature_records(release_id, updated_at);`),
+    down: (db) => db.exec(`
+      drop index if exists feature_records_release;
+      alter table feature_records drop column release_id;`),
+  },
+  {
+    // The second-approver gate (pipeline.ts) needs an actual record of who approved which exact candidate: an
+    // additive sign-off bound to the candidate's bindingHash, mirroring F08's campaign_approvals rather than
+    // relaxing the single-owner `owned()` invariant everywhere else in the prompt-to-feature pipeline.
+    version: 39, name: "feature-decision-approvals",
+    up: (db) => db.exec(`create table if not exists feature_decision_approvals(
+      request_id text not null, principal text not null, binding_hash text not null,
+      explanation text not null, created_at text not null,
+      primary key(request_id, principal));`),
+    down: (db) => db.exec("drop table if exists feature_decision_approvals;"),
+  },
 ];
 export function currentVersion(db: DatabaseSync): number {
   db.exec("create table if not exists schema_version(version integer not null, name text not null, applied_at text not null)");

@@ -1,0 +1,45 @@
+{
+  "C14": {
+    "title": "Model generation and invocation provenance (task 1.G)",
+    "items": [
+      {
+        "item": "PF-052 / AT-41 invocation provenance: persist intent before calls, hash input/output/template, disclose UNKNOWN revisions, and emit identity-change events for dependent builder evaluation; running that evaluation belongs to 3.U",
+        "tests": [
+          "PF-005/006 structured stages produce a versioned, attributed draft and exact edit plan without approval or mutation",
+          "AT-41 hidden revision remains UNKNOWN and queues model identity evaluation",
+          "AT-41 resolved provider revision change emits an identity event without rewriting deterministic state",
+          "frozen C14 invocation API persists identity, input refs, parameters and UNKNOWN revision"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PF-053 / AT-42 bounded provider recovery and local-only egress, including fallback and hosted models behind loopback endpoints",
+        "tests": [
+          "AT-42 local failure persists interruption and never calls cloud fallback; deterministic work stays ready",
+          "egress checks actual destination and hosted model alias before every attempt",
+          "explicit cloud permission allows bounded fallback and records the actual provider",
+          "local fallback stays local and token reservations are shared across stage attempts",
+          "input, output, attempt and wall-clock budgets stop generation",
+          "Ollama generation transport sends schema/token limits and refuses redirects"
+        ],
+        "state": "done"
+      }
+    ]
+  },
+  "C15": {
+    "title": "Requirements and contract generation adapter (task 1.G portion; review and semantic checks belong to 2.I)",
+    "items": [
+      {
+        "item": "PF-005 / PF-006 structured atomic requirement proposals, versioned contract draft and edit plan with source/requirement attribution; generated requirements and oracles remain unreviewed",
+        "tests": [
+          "PF-005/006 structured stages produce a versioned, attributed draft and exact edit plan without approval or mutation",
+          "untrusted output cannot smuggle tools or authority, duplicate JSON keys, or forged references",
+          "edit plan validates paths, attribution and quoted base bytes",
+          "cancelled and stale requests return no usable generation result",
+          "input hashes and request ownership are checked before any provider call"
+        ],
+        "state": "done"
+      }
+    ]
+  }
+}

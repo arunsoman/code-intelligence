@@ -1,13 +1,20 @@
 // Orchestration. Public operations return ApiResult (contracts §1). Every model call goes through callModel,
 // which enforces the per-repository egress opt-in, scrubs secrets, and writes the audit trail.
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { BudgetController, runModel, StubProvider, type GatewayFailure, type GatewayResult } from "@cie/model";
+import { BudgetController, OllamaProvider, hasModel, listInstalledModels, runModel, StubProvider, type GatewayFailure, type GatewayResult } from "@cie/model";
+import { routerFor } from "./llm-router.ts";
+import { fetchRepositoryBranches, repositoryGit, switchRepositoryBranch } from "./repository-git.ts";
+import { modelFailureNotice } from "./model-failure.ts";
+import { validateChatPlan } from "./chat-plan.ts";
+import { executeChatPlan } from "./chat-execution.ts";
+import { runChatAgent } from "./chat-agent.ts";
 import type {
   AnalysisBatch, ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptStore, ConceptsOutput, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceRef, ExplainResult, ExplanationOutput,
-  HypothesesOutput, ModelProvider, ModelRequest, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec, SourceSpan,
+  ChartOutput, HypothesesOutput, ModelProvider, ModelRequest, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec, SourceSpan,
   DefectDetectionInput, DetectorFinding, BenchmarkPolicy, BenchmarkResult, Fact,
 } from "@cie/schema";
 import { SCHEMA_CHALLENGE, SCHEMA_CONCEPTS, SCHEMA_EXPLANATION, SCHEMA_HYPOTHESES, SCHEMA_REPRESENTATION } from "@cie/schema";
@@ -22,6 +29,7 @@ import { Collab } from "./collab.ts";
 import { Evaluator, PLANTED_SECURITY, SEEDED_CONCEPTS } from "./evaluation.ts";
 import { Indexer } from "./indexer.ts";
 import { History } from "./history.ts";
+import { runRuntimeSandbox } from "./runtime-sandbox.ts";
 import { Runtime } from "./runtime.ts";
 import { mapOverlays } from "./overlays.ts";
 import { Security } from "./security.ts";
@@ -29,21 +37,24 @@ import { PrAnalysis, PrCheckError, resolvePr, type PrRef } from "./pr-analysis.t
 import { Profiles, ProfileCheckError } from "./profiles-analysis.ts";
 import { Tasks, TaskError } from "./execution.ts";
 import { GitHubCheckPublisher, newGrant } from "./pr-publish.ts";
-import { githubRemote } from "./gh.ts";
+import { githubRemote, isGhInstalled } from "./gh.ts";
 import type { PrAnalysisView } from "@cie/schema";
-import { projectProfile } from "./profile.ts";
+import { overviewSeeds } from "./overview.ts";
+import { projectDescription, projectProfile } from "./profile.ts";
 import { Registry } from "./registry.ts";
 import { WorkspaceLog } from "./workspaces.ts";
 import { Journal, type CommitReceipt } from "./journal.ts";
 import { Cancelled, JobRunner, type JobControl } from "./jobs.ts";
 import { EGRESS_FIELDS, payloadHash, scrubBundle } from "./policy.ts";
 import { bundleFor, retrieveAround, retrieveForQuestion } from "./retrieval.ts";
-import { matchName, readText, type RouterModel } from "./llm-router.ts";
+import { matchName, readText, validateProviderGuide, type ProviderGuideResponse, type RouterModel } from "./llm-router.ts";
 import { revisionIndex, scoreEntity, WEIGHTS } from "./salience.ts";
 import { DeltaBaseError, type RevisionRow, type Store } from "./store.ts";
 import { entityAt, fingerprint, locateFrames, looksLikeTrace, parseTrace } from "./trace.ts";
 import { compileView } from "./viewspec.ts";
+import { viewMessage, withAnswer } from "./answer.ts";
 import { catalog, ensureEdgeClaims, visualByForm, type CatalogEntry } from "./visuals.ts";
+import { cachedChartPlan, chartCreatorRequest, chartPlanCacheKey, compileChartPlan, rememberChartPlan } from "./chart-creator.ts";
 import { fileHistory, headOf, isGitRepo } from "./gitinfo.ts";
 import { ensureGhForgeConnector } from "./gh.ts";
 import { backup as backupStore, deleteRepository as deleteRepo, gc as gcStore, type DeleteReport, type GcReport } from "./storage.ts";
@@ -74,6 +85,9 @@ import { artifactHash } from "./defect-schedule.ts";
 import { Profiling } from "./profiling.ts";
 import { Campaigns, CampaignError, type CampaignAdapters } from "./campaigns.ts";
 import { GitHubPublisher, JointRunner, RecipeRunner, repositoryInventory, validateCandidate } from "./campaign-runner.ts";
+import { ReleaseScope, ReleaseError, type ReleaseAdapters } from "./release-scope.ts";
+import { GhCiForge, GhError as CiGhError } from "./feature/ci-forge.ts";
+import { buildReleaseReadiness } from "./release-readiness.ts";
 
 const chunkTokenBudget = () => Number(process.env.CIE_CHUNK_TOKEN_BUDGET) || 60_000; // per concept-extraction request; the gateway hard limit is 200k
 
@@ -169,6 +183,8 @@ export class Service {
   readonly profiling: Profiling;
   /** F08: coordinated multi-repository campaigns. */
   readonly campaigns: Campaigns;
+  /** Release scope: what's actually in a release, frozen against a GitHub milestone. */
+  readonly releases: ReleaseScope;
   /** F05: the profiling engine — persists artifacts, attributes builds, correlates traces, and verifies presentation (F05-A5). */
   readonly profiles: Profiles;
   readonly tasks: Tasks;
@@ -329,6 +345,63 @@ export class Service {
   };
   private campaignResult<T>(ctx: CallContext, fn: () => T): ApiResult<T> { try { return ok(ctx, fn()); } catch (e) { const api = e instanceof CampaignError ? e.api : storageFailure(e); return fail(ctx, api); } }
 
+  /** Release-scope gateway operations: what's actually in a release, frozen against a GitHub milestone. */
+  readonly releaseOps: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>> | ApiResult<unknown>> = {
+    "C32/createRelease": (c, b) => this.releaseResult(c, () => this.releases.createRelease(c.actor.principalId, c.actor.tenantId, b.spec)),
+    "C32/listReleases": (c, b) => this.releaseResult(c, () => this.releases.listReleases(c.actor.tenantId, b.limit)),
+    "C32/getRelease": (c, b) => this.releaseResult(c, () => this.releases.getRelease(b.releaseId)),
+    "C32/previewMilestone": (c, b) => this.releaseResult(c, () => this.releases.previewMilestone(b.releaseId)),
+    "C32/freezeScope": (c, b) => this.releaseResult(c, () => this.releases.freezeScope(b.releaseId, c.actor.principalId, b.expectedVersion)),
+    "C32/assessScopeChange": (c, b) => this.releaseResult(c, () => this.releases.assessScopeChange(b.releaseId, c.actor.principalId, b.fromVersion, b.toVersion)),
+    "C32/assessReleaseItem": (c, b) => this.releaseResult(c, () => this.releases.assessItem(b.releaseId, c.actor.principalId, b.issueNumber)),
+    "C32/getReleaseReadiness": async (c, b) => {
+      try { return ok(c, await buildReleaseReadiness({ releases: this.releases, ci: this.ciForge(), security: this.security, store: this.store }, { releaseId: b.releaseId, revisionId: b.revisionId, prNumbers: b.prNumbers, headSha: b.headSha })); }
+      catch (e) { const api = e instanceof ReleaseError ? e.api : storageFailure(e); return fail(c, api); }
+    },
+  };
+  private releaseResult<T>(ctx: CallContext, fn: () => T): ApiResult<T> { try { return ok(ctx, fn()); } catch (e) { const api = e instanceof ReleaseError ? e.api : storageFailure(e); return fail(ctx, api); } }
+
+  /** C04 read-only GitHub CI/security signal operations, backing the release-readiness ledger. */
+  private ciForgeInstance?: GhCiForge;
+  private ciForge(): GhCiForge { return (this.ciForgeInstance ??= new GhCiForge()); }
+  private async ciResult<T>(ctx: CallContext, fn: () => Promise<T>): Promise<ApiResult<T>> {
+    try { return ok(ctx, await fn()); }
+    catch (e) {
+      if (e instanceof CiGhError) return fail(ctx, { code: e.state === "NOT_FOUND" ? "NOT_FOUND" : e.state === "REFUSED" ? "FORBIDDEN" : "PROVIDER_UNAVAILABLE", message: `GitHub: ${e.message}`, retryable: e.state === "RATE_LIMITED" });
+      return fail(ctx, storageFailure(e));
+    }
+  }
+  readonly ciOps: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>>> = {
+    "C04/pullReviews": (c, b) => this.ciResult(c, () => this.ciForge().pullReviews(b.repo, b.pr)),
+    "C04/checkRuns": (c, b) => this.ciResult(c, () => this.ciForge().checkRuns(b.repo, b.sha)),
+    "C04/dependabotAlerts": (c, b) => this.ciResult(c, () => this.ciForge().dependabotAlerts(b.repo)),
+    "C04/codeScanningAlerts": (c, b) => this.ciResult(c, () => this.ciForge().codeScanningAlerts(b.repo)),
+    "C04/actionsRuns": (c, b) => this.ciResult(c, () => this.ciForge().actionsRuns(b.repo, b.workflow)),
+    "C04/releaseByTag": (c, b) => this.ciResult(c, () => this.ciForge().releaseByTag(b.repo, b.tag)),
+  };
+
+  /** Real release adapters: milestone issues read live via the `gh` CLI (no token stored or passed; `gh auth`
+   * handles authentication). When `gh` is unavailable this answers with no issues rather than guessing — the
+   * same "say I can't determine this" rule the rest of the system follows. */
+  private releaseAdapters(): ReleaseAdapters {
+    return {
+      milestoneIssues: (milestone) => {
+        if (!isGhInstalled()) return [];
+        try {
+          const out = execFileSync(
+            "gh",
+            ["api", `repos/${milestone.owner}/${milestone.repo}/issues`, "-f", `milestone=${milestone.number}`, "-f", "state=all", "-f", "per_page=100"],
+            { encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "ignore"] },
+          );
+          const parsed = JSON.parse(out || "[]");
+          return (Array.isArray(parsed) ? parsed : [])
+            .filter((i: any) => !i.pull_request)
+            .map((i: any) => ({ number: Number(i.number), title: String(i.title ?? ""), state: i.state === "closed" ? "closed" as const : "open" as const }));
+        } catch { return []; }
+      },
+    };
+  }
+
   /** Real campaign adapters: the F01/F04 repository inventory (packages, cross-repository edges, owners), an isolated
    * recipe runner, an isolated per-child validator, an npm local-link joint runner and a `gh`-based draft publisher.
    * Each is synchronous, matching the change engine; nothing here writes inside a repository's own root. */
@@ -440,6 +513,7 @@ export class Service {
     });
     this.collab = new Collab(store, this.workspaceLog);
     this.campaigns = new Campaigns(store, this.campaignAdapters());
+    this.releases = new ReleaseScope(store, this.releaseAdapters());
     this.journal = new Journal(store);
     this.jobs = new JobRunner(store);
     // F01: the cross-repository search engine shares the store (its own schema slice) and the worker (regex runs there).
@@ -673,6 +747,7 @@ export class Service {
         if (ghConn) this.store.audit(actor(ctx), "source.gh.auto", row.repoRoot, { sourceId: ghConn.health().sourceId });
       } catch (e) { this.store.audit(actor(ctx), "source.gh.auto_failed", row.repoRoot, { error: String((e as Error).message).slice(0, 200) }); }
       this.scheduleSearchIndex(row.repoRoot, row.id, ctx);
+      this.scheduleRuntimeIntrospection(row.repoRoot, row.id, ctx);
       return ok(ctx, { ...row, reuse, delta: { ...delta, phasesMs: phases } }, { revision: row.id, warnings, completeness: batch.diagnostics.some((d) => d.code !== "REUSED_CACHED_PARSES") ? "PARTIAL" : "COMPLETE" });
     } catch (e) {
       if (e instanceof Cancelled || (control && e instanceof WorkerError && e.api.code === "CANCELLED")) throw new Cancelled();
@@ -863,6 +938,30 @@ export class Service {
       },
     });
   }
+  /** Idempotent per revision: schedule runtime introspection for frameworks we can safely bootstrap (NestJS for now). */
+  private scheduleRuntimeIntrospection(repoRoot: string, revision: string, caller?: CallContext) {
+    // Only run when framework metadata suggests a supported runtime framework.
+    const hasNest = this.store.factsByPredicate(revision, "framework_role").some((f) => (f.object as { value?: { framework?: string } }).value?.framework === "nestjs");
+    if (!hasNest) return null;
+    const jctx: CallContext = {
+      requestId: `req-runtime:${randomUUID()}`,
+      idempotencyKey: `runtime-introspect:${repoRoot}:${revision}`,
+      actor: caller?.actor ?? { principalId: "system", tenantId: "local", sessionId: "system" },
+      deadlineMs: Date.now() + 600_000, traceId: `trace-runtime:${randomUUID()}`,
+    };
+    return this.jobs.enqueue(jctx, {
+      kind: "runtime-introspect", priority: 5, lane: "runner", params: { repoPath: repoRoot, revision },
+      run: async (jctx2, control) => {
+        const rev = this.store.revision(revision);
+        if (!rev) return fail(jctx2, { code: "NOT_FOUND", message: "revision not found", retryable: false });
+        control?.progress({ phase: "runtime", message: "Running framework runtime introspection…" });
+        const r = await runRuntimeSandbox({ store: this.store, registry: this.registry, revision: rev, wallMs: 120_000 });
+        if (!r.ok) return fail(jctx2, r.error);
+        return ok(jctx2, { facts: r.value.facts.length, evidence: r.value.evidence.length, diagnostics: r.value.diagnostics }, { warnings: r.value.diagnostics });
+      },
+    });
+  }
+
   private async searchCall<T>(ctx: CallContext, fn: () => Promise<T | ApiFail> | T | ApiFail): Promise<ApiResult<T>> {
     try {
       const v = await fn();
@@ -1273,6 +1372,25 @@ export class Service {
     return ok(ctx, r);
   }
 
+  repositoryGit(ctx: CallContext, req: { repoPath: string }) {
+    try { return ok(ctx, repositoryGit(req?.repoPath)); }
+    catch (e) { return fail(ctx, { code: "INVALID_SCHEMA", message: (e as Error).message, retryable: false }); }
+  }
+
+  async fetchBranches(ctx: CallContext, req: { repoPath: string }) {
+    try { return ok(ctx, await fetchRepositoryBranches(req?.repoPath)); }
+    catch (e) { return fail(ctx, { code: "PROVIDER_UNAVAILABLE", message: (e as Error).message, retryable: true }); }
+  }
+
+  switchBranch(ctx: CallContext, req: { repoPath: string; branch: string; expectedHead: string | null; expectedBranch: string | null; kind?: "local" | "remote" }) {
+    if (this.store.activeJobs().length) return fail(ctx, { code: "VERSION_CONFLICT", message: "Wait for running jobs to finish before switching branches.", retryable: true });
+    try {
+      const info = switchRepositoryBranch(req?.repoPath, req?.branch, req?.expectedHead, req?.expectedBranch, req?.kind);
+      this.store.audit(actor(ctx), "repository.switchBranch", info.repoRoot, { branch: info.branch, head: info.head });
+      return ok(ctx, info);
+    } catch (e) { return fail(ctx, { code: "INVALID_SCHEMA", message: (e as Error).message, retryable: false }); }
+  }
+
   /** Directory names only (never file contents) so the UI can offer a folder picker. Loopback-only gateway. */
   browseDirectory(ctx: CallContext, req: { path?: string }): ApiResult<DirListing> {
     const want = req.path?.trim() || homedir();
@@ -1350,10 +1468,10 @@ export class Service {
     return done ? ok(ctx, { dismissed: true }) : fail(ctx, { code: "NOT_FOUND", message: "no such exception", retryable: false });
   }
 
-  status(ctx: CallContext, req: { revision?: string }): ApiResult<{ revision: RevisionRow | null; provider: string; hosted: boolean; allowHosted: boolean; concepts: number; tests: TestSummary | null }> {
+  status(ctx: CallContext, req: { revision?: string }): ApiResult<{ revision: RevisionRow | null; provider: string; model: string | null; hosted: boolean; allowHosted: boolean; concepts: number; tests: TestSummary | null }> {
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     return ok(ctx, {
-      revision: rev, provider: `${this.model.name}/${this.model.model}`, hosted: this.model.hosted,
+      revision: rev, provider: `${this.model.name}/${this.model.model}`, model: this.model.name === "stub" ? null : this.model.model, hosted: this.model.hosted,
       allowHosted: rev ? this.store.allowHosted(rev.repoRoot) : false, concepts: rev ? this.store.concepts(rev.id).length : 0,
       tests: rev ? loadTestSummary(this.store, rev.repoRoot) : null,
     }, rev ? { revision: rev.id } : {});
@@ -1364,6 +1482,30 @@ export class Service {
     this.store.setAllowHosted(req.repoRoot, !!req.allow);
     this.store.audit(actor(ctx), req.allow ? "egress.policy.allow" : "egress.policy.deny", req.repoRoot, { destination: `${this.model.name}/${this.model.model}`, fields: EGRESS_FIELDS });
     return ok(ctx, { repoRoot: req.repoRoot, allowHosted: !!req.allow });
+  }
+
+  /** Every model `ollama list` reports, and which one (if any) is currently in use — the status chip's own menu. */
+  async listModels(ctx: CallContext): Promise<ApiResult<{ installed: string[]; current: string | null; hosted: boolean; reachable: boolean }>> {
+    const installed = await listInstalledModels(process.env.CIE_OLLAMA_URL);
+    return ok(ctx, { installed: installed ?? [], current: this.model.name === "stub" ? null : this.model.model, hosted: this.model.hosted, reachable: installed !== null });
+  }
+
+  /** Switch the one model this installation uses, for both the status chip's provider and the chat router, with
+   * no restart: it must already be installed (`ollama list`), and the choice is persisted so it survives one. */
+  async setModel(ctx: CallContext, req: { model: string }): Promise<ApiResult<{ model: string; hosted: boolean }>> {
+    if (!req || typeof req.model !== "string" || !req.model.trim() || req.model.length > 200) return fail(ctx, { code: "INVALID_SCHEMA", message: "model is required", retryable: false });
+    const model = req.model.trim();
+    const baseUrl = process.env.CIE_OLLAMA_URL;
+    const installed = await listInstalledModels(baseUrl);
+    if (installed === null) return fail(ctx, { code: "PROVIDER_UNAVAILABLE", message: "Ollama is not reachable; cannot confirm which models are installed", retryable: true });
+    if (!hasModel(installed, model)) return fail(ctx, { code: "NOT_FOUND", message: `"${model}" is not installed. Installed: ${installed.length ? installed.join(", ") : "none"}`, retryable: false });
+    const think = (["low", "medium", "high", "off"] as const).find((x) => x === process.env.CIE_OLLAMA_THINK);
+    const provider = new OllamaProvider({ model, baseUrl, think });
+    this.model = provider;
+    this.router = routerFor(model, process.env);
+    this.store.setSelectedModel(model);
+    this.store.audit(actor(ctx), "model.selected", "server", { model, hosted: provider.hosted });
+    return ok(ctx, { model, hosted: provider.hosted });
   }
 
   auditLog(ctx: CallContext, req: { limit?: number }): ApiResult<{ events: unknown[]; chain: { ok: boolean; brokenAt?: number } }> {
@@ -1523,13 +1665,20 @@ export class Service {
     return (intent as { type: "ask"; route: ViewRoute }).route; // with forms only, the reading is always a view
   }
 
-  async ask(ctx: CallContext, req: { question: string; route?: ViewRoute; revision?: string; pins?: string[]; seeds?: string[]; level?: number; form?: string; kind?: "failure" | "invariant"; subject?: string; lens?: string }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
+  /** Every question gets both: the picture, and the written answer composed from the same view (after access redaction, so it never says more). */
+  async ask(ctx: CallContext, req: Parameters<Service["askView"]>[1]): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
+    const r = await this.askView(ctx, req);
+    if (r.ok) withAnswer(r.value);
+    return r;
+  }
+
+  private async askView(ctx: CallContext, req: { question: string; route?: ViewRoute; revision?: string; pins?: string[]; seeds?: string[]; overview?: boolean; level?: number; form?: string; kind?: "failure" | "invariant"; subject?: string; lens?: string }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
     const question = (req.question ?? "").trim();
     if (!question || question.length > 1000) return fail(ctx, { code: "INVALID_SCHEMA", message: "question must be 1–1000 characters", retryable: false });
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; ingest a repository first", retryable: false });
     // The form is named explicitly (gallery, or a chip for another reading) or read from the question.
-    const route = req.form ? this.chosenRoute(req.form, req.kind) : req.route ?? await this.readQuestion(question);
+    let route = req.form ? this.chosenRoute(req.form, req.kind) : req.route ?? await this.readQuestion(question);
     const visual = route.source === "chosen" && route.form === "SemanticMap" ? null : visualByForm(route.form);
     if (visual?.build) {
       this.store.audit(actor(ctx), "ask", rev.id, { form: visual.formId, chars: question.length, route: route.source });
@@ -1547,6 +1696,39 @@ export class Service {
       const built = choice.kind === "invariant" ? buildInvariantGraph(this.store, rev, question) : buildFailureGraph(this.store, rev, question);
       built.view.formReason = choice.reason;
       built.view.route = route;
+      // The native causal analysis can be empty when static indexing found no matching
+      // throw/write path. In that case, use the bounded chart planner to arrange only
+      // entities and relationships already present in this revision. The compiled
+      // ViewSpec remains interactive, and the validated plan is persisted by evidence
+      // bundle + question so a repeat does not call the model again.
+      if (built.view.nodes.length === 0) {
+        const fallbackOptions = { overview: req.overview, lens: req.lens, pins: new Set(req.pins ?? []), extraSeeds: [...(req.pins ?? []), ...(req.overview ? overviewSeeds(this.store, rev.id) : req.seeds ?? [])], access: policyFor(this.store, rev.repoRoot) };
+        const modelBundle = retrieveForQuestion(this.store, rev.id, question, { ...fallbackOptions, tokenBudget: req.overview ? undefined : chunkTokenBudget() }).bundle;
+        if (modelBundle.entities.length > 0) {
+          const cacheKey = chartPlanCacheKey(modelBundle, question);
+          let plan = this.store.generatedChartPlan(cacheKey, modelBundle.id, question) ?? cachedChartPlan(modelBundle, question);
+          const warnings: string[] = [];
+          if (!plan) {
+            const generated = await this.callModel<ChartOutput>(ctx, rev, chartCreatorRequest(question, modelBundle));
+            if (generated.note) warnings.push(generated.note);
+            if (generated.result.ok) {
+              plan = generated.result.value;
+              rememberChartPlan(modelBundle, question, plan);
+              this.store.saveGeneratedChartPlan(cacheKey, modelBundle.id, question, plan);
+            } else warnings.push(modelFailureNotice(generated.result.error, generated.provider));
+          }
+          if (plan?.nodes.length) {
+            const chartRoute = { ...route, form: "GeneratedChart" as const, name: "Evidence-grounded chart" };
+            const chart = compileChartPlan({ plan, bundle: modelBundle, rev, question, route: chartRoute });
+            chart.view.formReason = `The native causal analysis found no statically supported path. This chart arranges indexed code elements and relationships; it does not establish runtime payment or top-up outcomes. ${choice.reason}`;
+            chart.view.gaps.unshift(...built.view.gaps);
+            this.persist(chart.claims);
+            redactBuilt(this.store, rev, chart);
+            return ok(ctx, chart, { revision: rev.id, warnings, completeness: chart.view.gaps.length ? "PARTIAL" : "COMPLETE" });
+          }
+          built.view.gaps.push("No evidence-grounded chart could be assembled from the indexed code relationships.");
+        }
+      }
       this.persist(built.claims);
       redactBuilt(this.store, rev, built);
       return ok(ctx, built, { revision: rev.id, completeness: built.view.gaps.length ? "PARTIAL" : "COMPLETE" });
@@ -1554,21 +1736,45 @@ export class Service {
 
     // Hybrid retrieval: exact names, semantic closeness, concept cards and the graph, over only what this caller may see, cut to the model's budget.
     const semantic = await semanticScores(this.store, rev.id, question, this.embedder).catch(() => undefined);
-    const { bundle, tiers, scored, hidden, inaccessible, truncation } = retrieveForQuestion(this.store, rev.id, question, { lens: req.lens, pins: new Set(req.pins ?? []), extraSeeds: [...(req.pins ?? []), ...(req.seeds ?? [])], semantic, access: policyFor(this.store, rev.repoRoot), tokenBudget: chunkTokenBudget() });
+    const retrievalOptions = { overview: req.overview, lens: req.lens, pins: new Set(req.pins ?? []), extraSeeds: [...(req.pins ?? []), ...(req.overview ? overviewSeeds(this.store, rev.id) : req.seeds ?? [])], semantic, access: policyFor(this.store, rev.repoRoot) };
+    const { bundle, tiers, scored, hidden, inaccessible, truncation } = retrieveForQuestion(this.store, rev.id, question, { ...retrievalOptions, tokenBudget: req.overview ? undefined : chunkTokenBudget() });
+    // The model receives bounded evidence; its budget must not erase overview coverage.
+    const modelBundle = req.overview ? retrieveForQuestion(this.store, rev.id, question, { ...retrievalOptions, tokenBudget: chunkTokenBudget() }).bundle : bundle;
     const diagnostics = rev.diagnostics.filter((d) => d.code === "PARSE_ERRORS").map((d) => d.message);
     let representation: RepresentationOutput | undefined, run;
     const warnings: string[] = [];
+    if (route.form === "GeneratedChart") {
+      const cacheKey = chartPlanCacheKey(modelBundle, question);
+      let plan = this.store.generatedChartPlan(cacheKey, modelBundle.id, question) ?? cachedChartPlan(modelBundle, question);
+      if (!plan && bundle.entities.length > 0) {
+        const generated = await this.callModel<ChartOutput>(ctx, rev, chartCreatorRequest(question, modelBundle));
+        if (generated.note) warnings.push(generated.note);
+        if (generated.result.ok) {
+          plan = generated.result.value;
+          rememberChartPlan(modelBundle, question, plan);
+          this.store.saveGeneratedChartPlan(cacheKey, modelBundle.id, question, plan);
+        } else warnings.push(modelFailureNotice(generated.result.error, generated.provider));
+      }
+      if (plan) {
+        const built = compileChartPlan({ plan, bundle: modelBundle, rev, question, route });
+        this.persist(built.claims);
+        redactBuilt(this.store, rev, built);
+        return ok(ctx, built, { revision: rev.id, warnings, completeness: built.view.gaps.length ? "PARTIAL" : "COMPLETE" });
+      }
+      route = { ...route, source: "default", confidence: "low", form: "SemanticMap", name: "Architecture map", because: "The generated chart was unavailable, so I fell back to the standard architecture map.", alternatives: [] };
+    }
     if (bundle.entities.length > 0) {
-      const { result, note } = await this.callModel<RepresentationOutput>(ctx, rev, { purpose: "REPRESENT", schemaId: SCHEMA_REPRESENTATION, question, bundle });
+      const { result, note, provider } = await this.callModel<RepresentationOutput>(ctx, rev, { purpose: "REPRESENT", schemaId: SCHEMA_REPRESENTATION, question, bundle: modelBundle });
       if (note) warnings.push(note);
       if (result.ok) { representation = result.value; run = result.run; }
-      else { warnings.push(`model unavailable (${result.error.code}); showing deterministic facts only`); diagnostics.push(`model output unavailable: ${result.error.code}`); }
+      else { warnings.push(modelFailureNotice(result.error, provider)); diagnostics.push(`model output unavailable: ${result.error.code}`); }
     }
     const { view, claims } = compileView({ question, bundle, tiers, scored, representation, run, diagnostics, store: this.store, systemName: rev.repoRoot.split("/").filter(Boolean).pop() });
     // "The question is about how something works" is only true when the wording said so. A default or a guess is described
     // by the reading itself (route.because), so the two never disagree.
     view.formReason = route.source !== "default" ? choice.reason : undefined;
     view.route = route;
+    if (req.overview) { view.params = { ...view.params, overview: true }; view.gaps.push("Overview samples code across languages and source modules; it is not a complete file listing."); }
     if (req.level !== undefined) view.level = req.level;
     view.hidden = hidden;
     if (inaccessible) view.gaps.push(`${inaccessible} match(es) are in code you do not have access to and were left out.`);
@@ -1587,13 +1793,38 @@ export class Service {
     this.persist(built.claims);
     this.store.audit(actor(ctx), "investigate", rev.id, { suspects: built.view.nodes.filter((n) => n.role === "suspect").length });
     redactBuilt(this.store, rev, built);
-    return ok(ctx, built, { revision: rev.id, completeness: built.view.gaps.length ? "PARTIAL" : "COMPLETE" });
+    return ok(ctx, withAnswer(built), { revision: rev.id, completeness: built.view.gaps.length ? "PARTIAL" : "COMPLETE" });
   }
 
   /** The catalogue of visuals, with whether each can be shown for the current repository and why not. */
   visuals(ctx: CallContext, req: { revision?: string }): ApiResult<CatalogEntry[]> {
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     return ok(ctx, catalog(this.store, rev, !!rev && isGitRepo(rev.repoRoot)), rev ? { revision: rev.id } : {});
+  }
+
+  /** Generate a provider wizard from the configured chat model; invalid or unavailable model output is explicit. */
+  async providerGuide(ctx: CallContext, req: { providerName: string; revision?: string }): Promise<ApiResult<{ guide: ProviderGuideResponse | null; source: string; model: string | null; message: string }>> {
+    const name = typeof req?.providerName === "string" ? req.providerName.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 40) : "";
+    if (!name) return fail(ctx, { code: "INVALID_SCHEMA", message: "enter a provider name using letters or numbers", retryable: false });
+    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+    const context = rev ? (() => {
+      const entities = this.store.entities(rev.id);
+      const files = [...new Set(entities.map((e) => e.file).filter(Boolean))].slice(0, 500);
+      const symbols = entities.filter((e) => e.kind !== "file" && e.kind !== "test").slice(0, 1000).map((e) => `${e.kind} ${e.name} — ${e.file}`);
+      const concepts = this.store.concepts(rev.id).slice(0, 60).map((c) => `${c.title}: ${c.summary}`);
+      return JSON.stringify({ repoRoot: rev.repoRoot, fileCount: rev.fileCount, files, symbols, concepts });
+    })() : "No indexed repository is available. Treat all paths and project details as proposals.";
+    if (this.router?.providerGuide) {
+      try {
+        const guide = validateProviderGuide(await this.router.providerGuide({ providerName: name, context }), name);
+        if (guide) {
+          this.store.audit(actor(ctx), "provider-guide.generated", "chat", { provider: name, source: "llm", model: this.router.name });
+          return ok(ctx, { guide, source: "llm", model: this.router.name, message: `Recommendations generated by ${this.router.name}. Confirm project-specific paths and database schema before applying them.` });
+        }
+      } catch { /* report that the model path failed below */ }
+      return ok(ctx, { guide: null, source: "unavailable", model: this.router.name, message: `The configured model (${this.router.name}) did not return a valid provider guide. Try again or use the built-in MTN-pattern guide.` });
+    }
+    return ok(ctx, { guide: null, source: "unavailable", model: null, message: "No LLM is configured for the provider wizard. Try again after selecting a model, or use the built-in MTN-pattern guide." });
   }
 
   /** Manual salience override, persistent per repository: pin = always shown, boost = ranked higher, demote = ranked lower. */
@@ -1619,7 +1850,7 @@ export class Service {
     if (!v) return fail(ctx, { code: "INVALID_SCHEMA", message: "no view", retryable: false });
     const r = v.investigation
       ? await this.investigate(ctx, { trace: v.investigation.trace, revision: v.revision, ignored: v.investigation.ignored })
-      : await this.ask(ctx, { question: v.question, revision: v.revision, form: v.formId, subject: typeof v.params?.subject === "string" ? v.params.subject : undefined });
+      : await this.ask(ctx, { question: v.question, revision: v.revision, form: v.formId, overview: v.params?.overview === true, subject: typeof v.params?.subject === "string" ? v.params.subject : undefined });
     if (r.ok) r.value.view.version = v.version + 1;
     return r;
   }
@@ -1638,7 +1869,7 @@ export class Service {
     this.persist(built.claims);
     this.store.audit(actor(ctx), `steer.${req.action.toLowerCase()}`, req.entityId, { version: built.view.version });
     redactBuilt(this.store, rev, built);
-    return ok(ctx, built, { revision: rev.id });
+    return ok(ctx, withAnswer(built), { revision: rev.id });
   }
 
   // ---------------------------------------------------------------- explanations
@@ -1960,20 +2191,45 @@ export class Service {
 
   // ---------------------------------------------------------------- conversation
   /** One text box: new question, trace → investigation, steering, "why …", or resume. Selection chips are referents. */
-  async converse(ctx: CallContext, req: { text: string; view?: ViewSpec | null; selection?: string[]; revision?: string; pins?: string[] }): Promise<ApiResult<ConverseResult>> {
+  async converse(ctx: CallContext, req: { text: string; view?: ViewSpec | null; selection?: string[]; revision?: string; pins?: string[]; history?: { role: "user" | "assistant"; text: string }[] }): Promise<ApiResult<ConverseResult>> {
     const text = (req.text ?? "").trim();
     if (!text) return fail(ctx, { code: "INVALID_SCHEMA", message: "say something", retryable: false });
+    if (text.length > 100_000) return fail(ctx, { code: "INVALID_SCHEMA", message: "message is too long", retryable: false });
     const view = req.view ?? null;
     const nodeById = new Map((view?.nodes ?? []).map((n) => [n.id, n]));
     const selected = (req.selection ?? []).map((id) => nodeById.get(id)).filter((n): n is NonNullable<typeof n> => !!n);
     const referentCount = selected.length || (req.pins?.length ?? 0);
+    // The same chat entry point can now compose several analyses. Legacy map
+    // controls and stack traces retain their existing handlers.
+    let plannerWarning: string | undefined;
+    if ((this.router?.converse || this.router?.plan) && !looksLikeTrace(text)) {
+      const revision = view?.revision ?? req.revision;
+      const rev = revision ? this.store.revision(revision) : this.store.latestRevision();
+      if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index a repository first", retryable: false });
+      const history = Array.isArray(req.history) ? req.history.slice(-6).filter((m) => m && ["user", "assistant"].includes(m.role) && typeof m.text === "string").map((m) => ({ role: m.role, text: m.text.slice(0, 1500) })) : [];
+      const files = [...new Set(selected.map((n) => n.file).filter(Boolean))];
+      const subject = files.length === 1 ? files[0] : typeof view?.params?.chatSubject === "string" ? view.params.chatSubject : view?.formId === "TestConfidence" && typeof view.params?.subject === "string" ? view.params.subject : undefined;
+      // A model that can call tools works the question out itself; one that cannot gets a fixed plan (the scripted router, tests).
+      if (this.router.converse) {
+        const answered = await runChatAgent(this, ctx, rev, this.router, { text: text.slice(0, 6000), history, subject, pins: req.pins });
+        if (answered) return answered;
+      } else if (this.router.plan) {
+        let plan = null;
+        try { plan = validateChatPlan(await this.router.plan({ text: text.slice(0, 6000), history, subject })); } catch { /* legacy route remains available */ }
+        if (plan?.steps.length) return executeChatPlan(this, ctx, rev, plan, subject, req.pins);
+        if (!plan) plannerWarning = "The multi-step planner did not return a valid plan; only the single-question route was attempted.";
+      }
+    }
     const reading = await readText(this.router, text, { hasView: !!view || referentCount >= 1, viewForm: view?.formId, selectionCount: referentCount, looksLikeTrace: looksLikeTrace(text) });
     const intent = reading.intent;
     const entityIds = selected.flatMap((n) => n.entityRefs);
     const revision = view?.revision ?? req.revision;
     // A steering turn adjusts the current view, so it does not repeat why that kind of view was chosen.
-    const asView = (r: ApiResult<{ view: ViewSpec; claims: Claim[] }>, lead: string, steering = false): ApiResult<ConverseResult> =>
-      r.ok ? ok(ctx, { kind: "view", view: r.value.view, claims: r.value.claims, message: `${lead} ${steering ? "" : r.value.view.formReason ?? ""} ${r.value.view.caption}`.replace(/\s+/g, " ").trim() }, r.metadata) : (r as ApiResult<never>);
+    const asView = (r: ApiResult<{ view: ViewSpec; claims: Claim[] }>, lead: string, steering = false): ApiResult<ConverseResult> => {
+      if (!r.ok) return r as ApiResult<never>;
+      const { message, thinking } = viewMessage(r.value.view, lead, steering);
+      return ok(ctx, { kind: "view", view: r.value.view, claims: r.value.claims, message, ...(thinking ? { thinking } : {}) }, { ...r.metadata, warnings: [...r.metadata.warnings, ...(plannerWarning ? [plannerWarning] : [])] });
+    };
     const asExplain = (r: ApiResult<ExplainResult>, lead = ""): ApiResult<ConverseResult> =>
       r.ok ? ok(ctx, { kind: "explanation", explanation: r.value, message: `${lead}${r.value.summary}`.trim() }, r.metadata) : (r as ApiResult<never>);
     const needsView = () => fail<ConverseResult>(ctx, { code: "INVALID_SCHEMA", message: "Ask a question first, then I can talk about what's on the map.", retryable: false });
@@ -1981,13 +2237,11 @@ export class Service {
     const overview = async (lead: string, question = text): Promise<ApiResult<ConverseResult>> => {
         const rev = revision ? this.store.revision(revision) : this.store.latestRevision();
         if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index a repository first", retryable: false });
-        // The most connected code is what a newcomer should see first; the map starts zoomed out to the domains.
-        const idx = revisionIndex(this.store, rev.id);
-        const kinds = new Set(["function", "method", "class"]);
-        const seeds = this.store.entities(rev.id).filter((e) => kinds.has(e.kind)).sort((a, b) => (idx.degree.get(b.entityId) ?? 0) - (idx.degree.get(a.entityId) ?? 0) || a.entityId.localeCompare(b.entityId)).slice(0, 30).map((e) => e.entityId);
-        const r = await this.ask(ctx, { question: question || "Give me an overview of the whole project", revision: rev.id, seeds, level: 1 });
+        const r = await this.ask(ctx, { question: question || "Give me an overview of the whole project", revision: rev.id, overview: true, form: "SemanticMap", level: 1 });
         const profile = projectProfile(this.store, rev.id);
-        if (r.ok) { r.value.view.formReason = "The most connected code in the repository, grouped by responsibility. Zoom in for detail."; r.value.view.gaps.unshift(profile.text); }
+        if (r.ok) { r.value.view.formReason = "Representative code across languages and source modules, grouped by responsibility. Zoom in for detail."; r.value.view.gaps.unshift(profile.text); }
+        // The answer to "what is this project" is its profile, then what the map shows.
+        if (r.ok) { r.value.view.answer = undefined; withAnswer(r.value); const lead = [projectDescription(this.store, rev.repoRoot), profile.text].filter(Boolean).join(" "); r.value.view.answer = redactBuilt(this.store, rev, { view: { ...r.value.view, answer: [lead, r.value.view.answer].filter(Boolean).join(" ") }, claims: [] }).view.answer; }
         return asView(r, `${lead} ${profile.text}`);
     };
     switch (intent.type) {

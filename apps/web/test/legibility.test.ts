@@ -2,7 +2,7 @@
 // camera ends up where the person was looking.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { MIN_READABLE_PX, POLICY, fontPx, levelMove, panFor, pullInside, readableFitZoom, resolveAnchor, visibility, zoomAfterSwitch, zoomForPx } from "../src/legibility.ts";
+import { MIN_READABLE_PX, POLICY, fontPx, levelMove, panFor, pullInside, readableFitZoom, resolveAnchor, visibility, zoomAfterSwitch, zoomForFontPx, zoomForPx } from "../src/legibility.ts";
 
 function rng(seed: number) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32); }
 
@@ -176,6 +176,6 @@ test("readableFitZoom raises an unreadable fit to the floor and still caps an ov
   assert.equal(readableFitZoom(0.9), zoomForPx(MIN_READABLE_PX));
   assert.equal(readableFitZoom(1.2), 1.2, "a fit between the floor and the cap is left alone");
   assert.equal(readableFitZoom(3), 1.4, "a tiny drawing is not blown up past the cap");
-  assert.equal(readableFitZoom(0.2, 2, 16), zoomForPx(16, 11), "the floor and cap are parameters");
+  assert.equal(readableFitZoom(0.2, 2, 16), zoomForFontPx(16, 11), "the floor and cap are parameters");
 });
 

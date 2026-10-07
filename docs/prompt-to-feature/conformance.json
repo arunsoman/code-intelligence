@@ -1,0 +1,1240 @@
+[
+ {
+  "id": "AT-01",
+  "scenario": "Short CSV-export prompt",
+  "expected": "Relevant discovery and focused gaps, no forced full PRD",
+  "pf": "PF-001,004,008",
+  "tests": [
+   {
+    "title": "4.2 scenario references in titles: single, range and list forms, limited to AT-01–84",
+    "result": "PASS"
+   },
+   {
+    "title": "4.2 the spec has exactly AT-01–84, the committed map and deferrals name real scenarios and tests, and every deferral gives a reason",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-01/PF-004 discovery produces a coverage record for every domain and moves the request on",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-02",
+  "scenario": "Detailed internally inconsistent PRD",
+  "expected": "Exact conflicting sources/witness shown",
+  "pf": "PF-005,010,013",
+  "tests": [
+   {
+    "title": "AT-02/PF-010/013 a direct contradiction with a related source is CONFIRMED with both quotes and their locators, resolution options, and no model involved",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-03",
+  "scenario": "Similar statements for different tenants",
+  "expected": "Not falsely confirmed contradictory",
+  "pf": "PF-011,012",
+  "tests": [
+   {
+    "title": "AT-03 statements about different tenants, roles or periods may both be true and are not reported; an unclear population is only a possible conflict",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-04",
+  "scenario": "“All records” unspecified scope",
+  "expected": "Material scope clarified before access implementation",
+  "pf": "PF-008,016",
+  "tests": [
+   {
+    "title": "AT-04 vague terms are findings, not silent choices: \"all\" needs a scope, \"fast\" and \"secure\" need a measurable criterion, and concrete options are offered",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-05",
+  "scenario": "Low-impact filename unspecified",
+  "expected": "Visible reversible assumption; progress continues",
+  "pf": "PF-007,009",
+  "tests": [
+   {
+    "title": "AT-05 an assumption that could change what is built is MATERIAL; a low-impact reversible one is a visible assumption and work continues",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-05 end to end: a low-impact assumption raises no finding and no blocker; a material one becomes a HIGH finding and a question",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-06",
+  "scenario": "Support export contradicts policy",
+  "expected": "Affected work blocked; independent work continues",
+  "pf": "PF-009,010,012",
+  "tests": [
+   {
+    "title": "AT-06/PF-009 a confirmed conflict blocks the tasks that depend on it (and tasks that depend on those); independent tasks keep running",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-06 constraint check over the gateway: policy hashes must match, unknown invariants are refused, conflicts block only dependent tasks",
+    "result": "PASS"
+   },
+   {
+    "title": "PF-014/AT-06 an authorised answer resolves its finding and releases exactly the tasks it held; an unauthorised one changes nothing; a dismissal is a recorded decision",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-07",
+  "scenario": "Unauthorized actor resolves policy conflict",
+  "expected": "Decision rejected; no permission expansion",
+  "pf": "PF-012,014",
+  "tests": [
+   {
+    "title": "AT-07/PF-036 an unauthorised decision is refused, leaves the blocker in place and is recorded as BLOCKED",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-07 revising the contract makes the next version, applies assumption decisions and marks built candidates stale",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-08",
+  "scenario": "Existing code violates approved policy",
+  "expected": "Report implementation mismatch, not policy override",
+  "pf": "PF-010,012",
+  "tests": [],
+  "status": "DEFERRED",
+  "reason": "no detector compares existing code with approved policies: the finding kind IMPLEMENTATION_MISMATCH exists but nothing produces it"
+ },
+ {
+  "id": "AT-09",
+  "scenario": "Change requirement midway",
+  "expected": "Affected code/test/gate stale; unaffected reuse justified",
+  "pf": "PF-019,039",
+  "tests": [
+   {
+    "title": "AT-07 revising the contract makes the next version, applies assumption decisions and marks built candidates stale",
+    "result": "PASS"
+   },
+   {
+    "title": "PF-019 impact: open findings, orphaned tasks and criteria, and work built on an outdated contract are listed with reasons; a moved repository is STALE",
+    "result": "PASS"
+   }
+  ],
+  "status": "DEFERRED",
+  "reason": "stale work is listed with the reason (tested); the justification for reusing unaffected evidence is not produced"
+ },
+ {
+  "id": "AT-10",
+  "scenario": "Cross-tenant direct API and artifact ID access",
+  "expected": "Denied without protected-data leakage",
+  "pf": "PF-016,017",
+  "tests": [
+   {
+    "title": "AT-10 another principal reading, exporting, validating or graphing a candidate by id gets 'not found', with no path, prompt or request detail in the answer",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-11",
+  "scenario": "Permission revoked before background download",
+  "expected": "Approved revocation semantics enforced",
+  "pf": "PF-017,036",
+  "tests": [
+   {
+    "title": "AT-11 permission withdrawn after approval: reading, exporting, publishing and checking a destination are refused, and the refusal does not name the path",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-12",
+  "scenario": "New code/test share wrong calculation",
+  "expected": "Independent oracle exposes mismatch",
+  "pf": "PF-021,024",
+  "tests": [
+   {
+    "title": "AT-12 generated code and generated tests cannot establish an independent oracle",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-13",
+  "scenario": "Remove original failing assertion",
+  "expected": "Verified-fix blocked absent legitimate review",
+  "pf": "PF-021",
+  "tests": [
+   {
+    "title": "PF-055/AT-13 existing tests: adding is free; editing or deleting needs a policy grant, and a granted weakening is recorded as pending review",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-14",
+  "scenario": "UI screenshot looks correct but action fails",
+  "expected": "Actual browser test fails criterion",
+  "pf": "PF-025,033",
+  "tests": [
+   {
+    "title": "AT-14 plan validation: origin, navigation, journeys, interaction and assertion, ranges and every required role, locale, viewport and coverage",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-14/AT-84 against a real Chrome: keyboard-only journeys pass, and unnamed controls, missing language and overflow are caught",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-15",
+  "scenario": "Provider mock passes, real provider unavailable",
+  "expected": "Real integration unvalidated/blocked",
+  "pf": "PF-023,034",
+  "tests": [
+   {
+    "title": "AT-15 a mock-only run cannot satisfy a criterion that needs the real provider: the missing or unavailable real check is a named gap",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-16",
+  "scenario": "Migration fails on historical records",
+  "expected": "Affected acceptance fails with recovery guidance",
+  "pf": "PF-022,024",
+  "tests": [
+   {
+    "title": "AT-16 a migration that fails on historical records fails its criterion, blocks, and the diagnostics say to fix the data path, not the check",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-17",
+  "scenario": "Export improves but ordinary requests slow",
+  "expected": "Interference regression reported",
+  "pf": "PF-029,030",
+  "tests": [
+   {
+    "title": "AT-17/18/19/20/21 benchmark and evaluation: within budget, regression, inconclusive and every UNVALIDATED reason",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-18",
+  "scenario": "Candidate drops errors from benchmark",
+  "expected": "Population check rejects comparison",
+  "pf": "PF-026,031",
+  "tests": [
+   {
+    "title": "AT-17/18/19/20/21 benchmark and evaluation: within budget, regression, inconclusive and every UNVALIDATED reason",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-18/P5/budget: infrastructure failures, undeclared cases and an exhausted budget make a case INCOMPLETE with the reason; contention is labelled; nothing running is an error",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-19",
+  "scenario": "No representative performance environment",
+  "expected": "UNVALIDATED, no no-regression claim",
+  "pf": "PF-027,031",
+  "tests": [
+   {
+    "title": "AT-17/18/19/20/21 benchmark and evaluation: within budget, regression, inconclusive and every UNVALIDATED reason",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-19/AT-24 a host that does not declare a representative environment gets UNVALIDATED; a second benchmark of the same request fences out the first",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-20",
+  "scenario": "High-variance experiment",
+  "expected": "INCONCLUSIVE when criterion cannot be supported",
+  "pf": "PF-029,031",
+  "tests": [
+   {
+    "title": "AT-17/18/19/20/21 benchmark and evaluation: within budget, regression, inconclusive and every UNVALIDATED reason",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-21",
+  "scenario": "Change workload/environment after measurement",
+  "expected": "Bound assessment stale",
+  "pf": "PF-029,035",
+  "tests": [
+   {
+    "title": "AT-17/18/19/20/21 benchmark and evaluation: within budget, regression, inconclusive and every UNVALIDATED reason",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-21/22/77 changes to any execution identity or candidate invalidate eligibility",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-22",
+  "scenario": "Change candidate after validation",
+  "expected": "Publication decision invalidated",
+  "pf": "PF-020,035",
+  "tests": [
+   {
+    "title": "PF-021/AT-22 a stale base is refused up front, and a candidate goes stale the moment the repository changes",
+    "result": "PASS"
+   },
+   {
+    "title": "PF-035/AT-22 publication refuses a forged decision, a wrong head, a non-draft mode, another principal, a stale base, a non-draft forge receipt and a foreign branch",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-21/22/77 changes to any execution identity or candidate invalidate eligibility",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-23",
+  "scenario": "Forge timeout after successful PR creation",
+  "expected": "Reconcile receipt, do not create duplicate PR",
+  "pf": "PF-037",
+  "tests": [
+   {
+    "title": "AT-23 a crash after the push and before the PR is create is repaired by retrying: the same commit is adopted and exactly one PR results",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-24",
+  "scenario": "Cancel during validation",
+  "expected": "Runner stopped/fenced; late result cannot publish",
+  "pf": "PF-038",
+  "tests": [
+   {
+    "title": "PF-063/AT-24/57 a lease is all-or-nothing, names another holder only to its owner, and a replaced holder is fenced out by its lower token",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-19/AT-24 a host that does not declare a representative environment gets UNVALIDATED; a second benchmark of the same request fences out the first",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-24/57 a fencing token that is no longer current refuses the run, and one lost mid-run discards its result",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-24/57 jobs: a job fenced out by a newer holder of the same key cannot commit and ends CANCELLED",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-25",
+  "scenario": "Model/runner budget exhausted",
+  "expected": "Concrete incomplete result, no dropped mandatory check",
+  "pf": "PF-024,032",
+  "tests": [
+   {
+    "title": "AT-25 an exhausted runner budget leaves the remaining mandatory checks INCOMPLETE with that reason; none is dropped and nothing is verified",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-26",
+  "scenario": "Repository document requests secret upload",
+  "expected": "Embedded instruction ignored; scope remains fixed",
+  "pf": "PF-040",
+  "tests": [
+   {
+    "title": "AT-26/PF-040 retrieved text is quoted as data, instruction-shaped passages are flagged, and capabilities cannot be widened",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-27",
+  "scenario": "Conflicting answers submitted concurrently",
+  "expected": "Version conflict handled, no silent overwrite",
+  "pf": "PF-014,039",
+  "tests": [
+   {
+    "title": "AT-27 answering against an older contract version is a conflict AND raises a finding (once)",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-27/48 crash reconciliation: jobs that stopped are dropped, their tasks blocked, and the event says why",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-28",
+  "scenario": "Wording upgrades uncertain result to verified",
+  "expected": "Manifest/presentation gate blocks it",
+  "pf": "PF-031,034,035",
+  "tests": [
+   {
+    "title": "AT-28 only the eligibility function's VERIFIED_WITHIN_SCOPE may carry the word 'verified': every other banner, label and export caption is a different sentence",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-29",
+  "scenario": "New optional refactor expands patch",
+  "expected": "Separate follow-up or explicit scope decision",
+  "pf": "PF-018",
+  "tests": [
+   {
+    "title": "AT-29 an optional refactor outside the agreed scope is refused unless the scope is widened on purpose, and a file-count cap holds",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-30",
+  "scenario": "User requests draft PR only",
+  "expected": "Draft published; no merge/deploy performed",
+  "pf": "PF-036",
+  "tests": [
+   {
+    "title": "PF-051/AT-30/40 scoped revalidation reruns what the change touches, widens on stated reasons, and never lets old evidence count",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-31",
+  "scenario": "Slice depends on general simulation framework",
+  "expected": "Reject delivery plan; retain compact exact-bound records",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-31 the feature slice depends on no general simulation, twin or campaign framework",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-32",
+  "scenario": "Same payload canonicalized in Node/Rust",
+  "expected": "Identical bytes/digest across all accepted vectors",
+  "pf": "",
+  "tests": [
+   {
+    "title": "rust:shared_vectors_match_the_typescript_implementation",
+    "result": "PASS"
+   },
+   {
+    "title": "stored identity names its protocol and schema; the digest matches an independent computation",
+    "result": "PASS"
+   },
+   {
+    "title": "pf-canon-v1 relations: the same/different claims hold for the computed digests",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-33",
+  "scenario": "Missing/unsupported auth discovery",
+  "expected": "Coverage gap visible, no inferred permission exemption",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-33 unsupported stacks are reported with a concrete reason: a build mode is blocked with it, a plan is not",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-34",
+  "scenario": "Performance budget cannot execute expanded suite",
+  "expected": "Required core/risk cases remain incomplete, no invented pass",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-18/P5/budget: infrastructure failures, undeclared cases and an exhausted budget make a case INCOMPLETE with the reason; contention is labelled; nothing running is an error",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-35",
+  "scenario": "Generated code contains a secret",
+  "expected": "Gate blocks, public projection redacts value",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-35/44 the private-prompt redaction masks secrets, personal data and opaque blobs before a preview can leave",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-35/44 the leak guard fails closed: a secret, personal data or a stretch of the private prompt is refused, never sent altered",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-35/AT-62 gate status: a secret blocks; no external analyser is INCOMPLETE above docs; a clean external run passes; a failing adapter is a gap",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-36",
+  "scenario": "Suspicious/new licence-incompatible dependency",
+  "expected": "Policy review blocks or records authorized disposition",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-36 dependency findings: outside-registry sources, unpinned ranges, install scripts, integrity and licence",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-37",
+  "scenario": "Feature lacks applicable metrics/abuse controls",
+  "expected": "Operational criterion incomplete",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-048 a new endpoint without a signal, a limit or a release note is a gap list, never a pass; adding them clears it",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-38",
+  "scenario": "Flag off/on, kill switch and irreversible effect",
+  "expected": "Behaviour validated; completed effects not falsely undone",
+  "pf": "",
+  "tests": [],
+  "status": "DEFERRED",
+  "reason": "release-plan fields and revert planning exist (PF-049); validating behaviour with the flag off and on, and handling of irreversible effects, is not implemented"
+ },
+ {
+  "id": "AT-39",
+  "scenario": "Production contradicts prior claim",
+  "expected": "Scoped claim challenged; historical test retained",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-049/AT-39 a revert is planned as NEW edits against the current tree and refuses when the files moved",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-40",
+  "scenario": "Reviewer changes current head",
+  "expected": "New aggregate decision; same PR updated; affected evidence stale",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-051/AT-30/40 scoped revalidation reruns what the change touches, widens on stated reasons, and never lets old evidence count",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-41",
+  "scenario": "Model revision unavailable/provider changes",
+  "expected": "Unknown identity disclosed and relevant builder check triggered",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-052/AT-41 the suite passes a faithful builder and names exactly the property each broken builder loses",
+    "result": "PASS"
+   },
+   {
+    "title": "PF-052/AT-41 evaluation is per identity and per suite: it passes, persists, gates eligibility, and does not carry to a new version",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-41 hidden revision remains UNKNOWN and queues model identity evaluation",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-41 resolved provider revision change emits an identity event without rewriting deterministic state",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-42",
+  "scenario": "Local-only provider fails",
+  "expected": "No silent cloud egress; independent deterministic work continues",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-42 local failure persists interruption and never calls cloud fallback; deterministic work stays ready",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-43",
+  "scenario": "Issue creation times out after success",
+  "expected": "Reconciliation returns existing issue, no duplicate",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-43/PF-054 the projection is an allowlist: ids, enums and counts only; a private destination adds the redacted preview, a public or unknown one gets nothing of the prompt",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-44",
+  "scenario": "Prompt contains private data",
+  "expected": "Issue projection redacted; original protected",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-35/44 the private-prompt redaction masks secrets, personal data and opaque blobs before a preview can leave",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-35/44 the leak guard fails closed: a secret, personal data or a stretch of the private prompt is refused, never sent altered",
+    "result": "PASS"
+   },
+   {
+    "title": "PF-054/AT-44 end to end: a seeded secret and personal data in the prompt never reach GitHub, for a private or a public destination, in the issue, its updates or its comments",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-45",
+  "scenario": "Added/renamed/generated file has no cause",
+  "expected": "Unattributed inventory blocks verified publication",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-45 a file nobody asked for (no requirement behind it) keeps the result from being verified, while every other gate passes",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-46",
+  "scenario": "Human edits/deletes bot issue comments",
+  "expected": "Audit detects divergence; human content preserved",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-46 human edits: when a person changes the managed block of a CIE-opened issue it is left alone, the trail is DIVERGED, and progress continues as comments",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-47",
+  "scenario": "PR published but not merged/deployed",
+  "expected": "Issue/report never labels deployed or verified-operational",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-47 outbox recovery: a comment that landed before a timeout is adopted, a rate limit backs off with a doubling delay, and a lost credential is a typed failure with the events kept",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-48",
+  "scenario": "Crash between file change and issue sync",
+  "expected": "Durable event recovered; accurate mutation milestones synced",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-48 reconcile after a timeout: a create that landed but reported failure is adopted by marker, never duplicated; failures leave the request tracking-blocked, not claimed",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-27/48 crash reconciliation: jobs that stopped are dropped, their tasks blocked, and the event says why",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-49",
+  "scenario": "Request B asks X+Y; A already provides X",
+  "expected": "Reuse mapping for X, new mapping for Y, regression checks for X",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-49 request X+Y where X exists: X is REUSED with its test as evidence, Y is NEW, the request EXTENDS the existing capability, and X's tests become regression obligations",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-50",
+  "scenario": "Same feature under different name",
+  "expected": "Explain verified equivalence; no duplicate implementation",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-50/AT-60 the same feature under another name is found through the glossary, shown as verified equivalent with its evidence, closed as ALREADY_SUPPORTED, and the candidate engine refuses to change anything",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-51",
+  "scenario": "Similar feature differs in tenant/field permissions",
+  "expected": "Separate semantics; no unauthorized reuse/merge",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-51 a similar feature that lacks the permission and tenant rule the request needs is RELATED_INCOMPATIBLE; reuse that would bypass it is refused, keeping it separate is allowed",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-52",
+  "scenario": "Existing functionality is disabled by flag",
+  "expected": "Report implementation and availability separately",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-52 an implemented capability that is switched off is reported as implemented AND unavailable; the right move is to configure it, not to rebuild it",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-53",
+  "scenario": "Candidate retrieved by high similarity has different side effects",
+  "expected": "Reject equivalence; investigate correct relationship",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-53 a high-similarity capability with different side effects is not equivalent: it also sends email and writes a record the request never asked for",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-54",
+  "scenario": "Existing X is defective and Y is new",
+  "expected": "Distinguish required repair and extension tasks",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-54 an existing capability whose tests are skipped is an EXISTING_DEFECT: repair X (MODIFIED) and build Y (NEW) are separate obligations",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-55",
+  "scenario": "Two active requests implement overlapping behaviour",
+  "expected": "Link prospective overlap, coordinate without declaring shipped",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-063/AT-55/56 concurrent candidates: shared files conflict, disjoint ones need joint re-verification and name the combined tree, dependencies order them",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-56",
+  "scenario": "Independent branches merge cleanly but migrations conflict",
+  "expected": "Integration blocked until reconciled/validated",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-063/AT-55/56 concurrent candidates: shared files conflict, disjoint ones need joint re-verification and name the combined tree, dependencies order them",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-57",
+  "scenario": "Mutation lease expires while old worker runs",
+  "expected": "Fencing rejects stale publication",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-063/AT-24/57 a lease is all-or-nothing, names another holder only to its owner, and a replaced holder is fenced out by its lower token",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-24/57 a fencing token that is no longer current refuses the run, and one lost mid-run discards its result",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-24/57 jobs: a job fenced out by a newer holder of the same key cannot commit and ends CANCELLED",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-58",
+  "scenario": "Reused synchronous service runs under new async load",
+  "expected": "Reassess authority/workload, validate new context",
+  "pf": "",
+  "tests": [],
+  "status": "DEFERRED",
+  "reason": "no check compares a reused capability's declared workload with the new context (for example synchronous reuse under asynchronous load); performance risk triggers read added lines only"
+ },
+ {
+  "id": "AT-59",
+  "scenario": "Feature replaced with unknown external consumers",
+  "expected": "Deprecation gap visible; no unsupported safe-removal claim",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-065/AT-59 retirement lists static consumers and always keeps the unknown-consumer gap open",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-60",
+  "scenario": "User already has the equivalent capability",
+  "expected": "ALREADY_SUPPORTED result with entry point/evidence and zero-change inventory",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-50/AT-60 the same feature under another name is found through the glossary, shown as verified equivalent with its evidence, closed as ALREADY_SUPPORTED, and the candidate engine refuses to change anything",
+    "result": "PASS"
+   },
+   {
+    "title": "PF-059/AT-60 planReuseChange needs a VERIFIED assessment: reuse that modifies gets edit files and a regression task, configuration names the config file, already-supported plans nothing",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-61",
+  "scenario": "New UI misses keyboard/error/localization behaviour",
+  "expected": "Applicable UX criteria fail/incomplete",
+  "pf": "",
+  "tests": [],
+  "status": "DEFERRED",
+  "reason": "no detector derives which keyboard, error-state and localisation criteria apply to a new UI change; those are checked only through a browser journey plan someone supplies (needs the browser-gate decisions in #98)"
+ },
+ {
+  "id": "AT-62",
+  "scenario": "Mandatory scanner unavailable",
+  "expected": "INCOMPLETE; cannot become NOT_APPLICABLE",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-35/AT-62 gate status: a secret blocks; no external analyser is INCOMPLETE above docs; a clean external run passes; a failing adapter is a gap",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-62 dependency gaps: no advisory source, a failing one, a stale or missing lockfile and an unknown licence are INCOMPLETE, and real advisories block",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-63",
+  "scenario": "Scoped waiver permits publication despite missing evidence",
+  "expected": "Waiver visible; criterion remains unvalidated",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-63 a scoped waiver remains visible and does not turn a failure into PASS",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-64",
+  "scenario": "Baseline has unrelated flaky failure",
+  "expected": "Classified separately; no silent oracle weakening",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-64 baseline failures and flaky results are classified separately without weakening tests",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-65",
+  "scenario": "Test fixture contains protected production data",
+  "expected": "Unauthorized use/egress blocked or replaced with approved data",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-65 protected fixtures stop all execution; synthetic fixture identity is required",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-66",
+  "scenario": "External email call times out after delivery",
+  "expected": "Reconcile per provider policy; avoid blind duplicate delivery",
+  "pf": "",
+  "tests": [],
+  "status": "DEFERRED",
+  "reason": "slice 1 has no external effects (plan A5); provider reconciliation is not built"
+ },
+ {
+  "id": "AT-67",
+  "scenario": "Submit/resume feature through tab",
+  "expected": "Six stages, saved decisions and correct current candidate",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-67 resume: a saved workspace restores stage, saved decisions and the current candidate",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-67 advance: version check passes with the current version and bumps it",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-68",
+  "scenario": "Next clicked while material question blocks one task",
+  "expected": "Blocker explicit, independent work may continue",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-68 Next with a material question: navigation stays free, the blocker is explicit, independent work continues",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-69",
+  "scenario": "Previous changes accepted permission answer",
+  "expected": "New contract; affected candidate/evidence stale before navigation",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-69 backward edit: a changed earlier-stage answer creates a new contract and stales candidate and evidence before navigation continues",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-70",
+  "scenario": "Graph planned versus actual/reused files",
+  "expected": "Distinct classes; inventory reconciles to diff",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-70 related criterion evidence lists every recorded result, and 'not run' when there is none",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-70/71 featureReview: questions, decisions, criteria, counts, results and the eligibility decision, with gaps stated and denied paths counted but never named",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-71",
+  "scenario": "Select criterion/file by keyboard or graph",
+  "expected": "Same code/rationale/test evidence available",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-71/73 graph and list stay equivalent: a node selects the file or narrows to the requirement, anything else does nothing",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-70/71 featureReview: questions, decisions, criteria, counts, results and the eligibility decision, with gaps stated and denied paths counted but never named",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-72",
+  "scenario": "File imports test but relevant branch not executed",
+  "expected": "Association basis explicit, no false file-tested claim",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-074/AT-72 related tests carry their basis: explicit for attributed tests, static for existing tests that import a changed file, never observed coverage",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-73",
+  "scenario": "View modified existing test",
+  "expected": "Before/after assertions and requirement decision shown",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-71/73 graph and list stay equivalent: a node selects the file or narrows to the requirement, anything else does nothing",
+    "result": "PASS"
+   },
+   {
+    "title": "PF-072/AT-73 the change graph is bounded and layered (requirement → component → file), filterable, paged with a cursor tied to the view, and the accessible list names the same files",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-74",
+  "scenario": "Backend builds, frontend fails",
+  "expected": "Separate targets; no aggregate compilation PASS",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-073/AT-74-77 only a real PASS looks like a pass; skips, stale and unreviewed oracles are never green",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-74 frontend build failure stays separate and prevents tests, browser and performance execution",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-75",
+  "scenario": "Test created but never executed",
+  "expected": "NOT RUN, not PASS",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-073/AT-74-77 only a real PASS looks like a pass; skips, stale and unreviewed oracles are never green",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-75/76 a created but unexecuted test, a skip or a partial rerun never becomes aggregate PASS",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-76",
+  "scenario": "Rerun one test while mandatory results stale",
+  "expected": "Aggregate remains incomplete",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-073/AT-74-77 only a real PASS looks like a pass; skips, stale and unreviewed oracles are never green",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-75/76 a created but unexecuted test, a skip or a partial rerun never becomes aggregate PASS",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-77",
+  "scenario": "Edit candidate after PASS",
+  "expected": "Header/dashboard/export decision stale immediately",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-073/AT-74-77 only a real PASS looks like a pass; skips, stale and unreviewed oracles are never green",
+    "result": "PASS"
+   },
+   {
+    "title": "AT-21/22/77 changes to any execution identity or candidate invalidate eligibility",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-78",
+  "scenario": "Export incomplete authorized candidate",
+  "expected": "REVIEW ONLY label and manifest gaps persist",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-078/AT-78-82 the destination check is a dry run: it lists conflicts and dirty paths, writes nothing, and apply works only on an exact base into a new copy",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-79",
+  "scenario": "Export includes prohibited secret",
+  "expected": "Blocked/redacted under policy, no unrestricted review bypass",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-078/AT-78-82 the destination check is a dry run: it lists conflicts and dirty paths, writes nothing, and apply works only on an exact base into a new copy",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-80",
+  "scenario": "Exact-base patch applied",
+  "expected": "Result identity checked and destination build/tests recorded",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-078/AT-78-82 the destination check is a dry run: it lists conflicts and dirty paths, writes nothing, and apply works only on an exact base into a new copy",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-81",
+  "scenario": "Diverged base accepts diff textually",
+  "expected": "New candidate/revalidation; old gate not reused blindly",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-078/AT-78-82 the destination check is a dry run: it lists conflicts and dirty paths, writes nothing, and apply works only on an exact base into a new copy",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-82",
+  "scenario": "Patch has unsafe paths or unsupported binary operation",
+  "expected": "Application blocked with actionable reason",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-078/AT-78-82 the destination check is a dry run: it lists conflicts and dirty paths, writes nothing, and apply works only on an exact base into a new copy",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ },
+ {
+  "id": "AT-83",
+  "scenario": "Narrow viewport/large graph/log artifact",
+  "expected": "Usable list/tabs, bounded loading, truthful truncation",
+  "pf": "",
+  "tests": [
+   {
+    "title": "PF-072 reading a candidate: every representation, ranges, truncation, deleted files, traversal and access",
+    "result": "PASS"
+   },
+   {
+    "title": "PF-072 paging: 40 per page, the range text matches, and the controls follow the page",
+    "result": "PASS"
+   },
+   {
+    "title": "PF-071 file filters: requirement, status and a case-insensitive path search combine",
+    "result": "PASS"
+   }
+  ],
+  "status": "DEFERRED",
+  "reason": "bounded loading, paging and truthful truncation are tested for the file list and viewer; there is no narrow-viewport browser run of the Build dialog"
+ },
+ {
+  "id": "AT-84",
+  "scenario": "Browser validates wizard using real interactions",
+  "expected": "Prompt/question/edit/test/diff/export journeys and accessibility checks",
+  "pf": "",
+  "tests": [
+   {
+    "title": "AT-14/AT-84 against a real Chrome: keyboard-only journeys pass, and unnamed controls, missing language and overflow are caught",
+    "result": "PASS"
+   }
+  ],
+  "status": "PASS"
+ }
+]

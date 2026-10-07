@@ -1,0 +1,734 @@
+{
+ "protocol": "pf-canon-v1",
+ "note": "digests computed by gen_vectors.py with hashlib; sets are written {\"$set\":[...]}; 'project' lists the identity fields kept from the top-level object",
+ "vectors": [
+  {
+   "id": "keys-order-a",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"b\":1,\"a\":2}",
+   "expectedCanonical": "{\"a\":2,\"b\":1}",
+   "expectedDigest": "ba69d601d95d38803850ee9ce1c7823aebb59733109b52279fccfffc5113ef1b"
+  },
+  {
+   "id": "keys-order-b",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"a\":2,\"b\":1}",
+   "expectedCanonical": "{\"a\":2,\"b\":1}",
+   "expectedDigest": "ba69d601d95d38803850ee9ce1c7823aebb59733109b52279fccfffc5113ef1b"
+  },
+  {
+   "id": "array-order-1",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"x\":[1,2,3]}",
+   "expectedCanonical": "{\"x\":[1,2,3]}",
+   "expectedDigest": "df613f4d4ee3cadfa55b8683ac4de831d4b37469643b33d61121dabdaad855b6"
+  },
+  {
+   "id": "array-order-2",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"x\":[3,2,1]}",
+   "expectedCanonical": "{\"x\":[3,2,1]}",
+   "expectedDigest": "d1d2dbe5d66138482bec087b363d4f12f9b31768c7ac3fe74ccfd5e978cd396e"
+  },
+  {
+   "id": "set-order-1",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"x\":{\"$set\":[\"b\",\"a\",\"c\"]}}",
+   "expectedCanonical": "{\"x\":[\"a\",\"b\",\"c\"]}",
+   "expectedDigest": "e6652b5af554f50fe845537c35d8a6423ac0057e2de14af0a6ac607a545e8a04"
+  },
+  {
+   "id": "set-order-2",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"x\":{\"$set\":[\"c\",\"b\",\"a\"]}}",
+   "expectedCanonical": "{\"x\":[\"a\",\"b\",\"c\"]}",
+   "expectedDigest": "e6652b5af554f50fe845537c35d8a6423ac0057e2de14af0a6ac607a545e8a04"
+  },
+  {
+   "id": "set-of-objects",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"x\":{\"$set\":[{\"k\":2},{\"k\":1}]}}",
+   "expectedCanonical": "{\"x\":[{\"k\":1},{\"k\":2}]}",
+   "expectedDigest": "b4f3c921ffa4ead40906b97d0de9a4e06c06ffb3e1d7294f96b5e0b9d6cef306"
+  },
+  {
+   "id": "null-present",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"a\":null}",
+   "expectedCanonical": "{\"a\":null}",
+   "expectedDigest": "673214e0266c16c10f8c5b85b7b9956b7a864017447d5b98ac5345da09a93854"
+  },
+  {
+   "id": "null-omitted",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{}",
+   "expectedCanonical": "{}",
+   "expectedDigest": "2a7a78e290afb205b2a2d7379e8e0f4d7fb0e1b1c67e6779fdf87591edbe310b"
+  },
+  {
+   "id": "nested-empty",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"a\":{},\"b\":[],\"c\":[{}]}",
+   "expectedCanonical": "{\"a\":{},\"b\":[],\"c\":[{}]}",
+   "expectedDigest": "e8fb1e4cd7e07fb213a16c3d403b0615ca07de5174361e0fe1b143382e315668"
+  },
+  {
+   "id": "scalars",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"t\":true,\"f\":false,\"n\":-5,\"max\":9007199254740991,\"min\":-9007199254740991,\"z\":0}",
+   "expectedCanonical": "{\"f\":false,\"max\":9007199254740991,\"min\":-9007199254740991,\"n\":-5,\"t\":true,\"z\":0}",
+   "expectedDigest": "2f2e5042e41f77187bfe5eaecf1d9bd9329bd0840ded5eb5b5d2b7eea7406d50"
+  },
+  {
+   "id": "set-duplicate",
+   "op": "reject",
+   "expectError": "DUPLICATE_SET_ELEMENT",
+   "inputText": "{\"x\":{\"$set\":[\"a\",\"a\"]}}"
+  },
+  {
+   "id": "escape-controls",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"s\":\"a\\u0000b\\u001fc\\nd\\te\\\"f\\\\g/h\"}",
+   "expectedCanonical": "{\"s\":\"a\\u0000b\\u001fc\\u000ad\\u0009e\\\"f\\\\g/h\"}",
+   "expectedDigest": "71cb2b393f348ecb79bb30446005db0c55f935057309e42d4ca5a45ea332e581"
+  },
+  {
+   "id": "no-escape-nonascii",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"s\":\"é€😀 \"}",
+   "expectedCanonical": "{\"s\":\"é€😀 \"}",
+   "expectedDigest": "281b572453caea417fd3f8ba17f67edbc666a5cff5efd6924ac8600c5a4ae6ca"
+  },
+  {
+   "id": "composed",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"s\":\"é\"}",
+   "expectedCanonical": "{\"s\":\"é\"}",
+   "expectedDigest": "a317636626ee3a8f048c0e7fa13564b420d42d0d80fc08e446bfe450f7d245f1"
+  },
+  {
+   "id": "decomposed",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"s\":\"é\"}",
+   "expectedCanonical": "{\"s\":\"é\"}",
+   "expectedDigest": "0a7d73a14deecd68c756b6ed389508504e64c1ebb12f7376b076d18418a254c7"
+  },
+  {
+   "id": "surrogate-pair-escape",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"s\":\"\\ud83d\\ude00\"}",
+   "expectedCanonical": "{\"s\":\"😀\"}",
+   "expectedDigest": "4d59d94de5a1d86e5dd4deea1ff991bc941eac151c7f1e0b7be90d572613eb1a"
+  },
+  {
+   "id": "no-trim-no-newline-fold",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"s\":\" a\\r\\n \"}",
+   "expectedCanonical": "{\"s\":\" a\\u000d\\u000a \"}",
+   "expectedDigest": "5a4c3d501f49439ee976ff7414f583fb0f87466fe1b8d13176fb8252a25046dc"
+  },
+  {
+   "id": "schema-a",
+   "op": "hash",
+   "schema": "t.one",
+   "version": "1",
+   "inputText": "{\"a\":1}",
+   "expectedCanonical": "{\"a\":1}",
+   "expectedDigest": "4486b6c3006d2cd5bd4c9e1757c39852c40c106a074939fdbe1c4252929f4e9b"
+  },
+  {
+   "id": "schema-b",
+   "op": "hash",
+   "schema": "t.two",
+   "version": "1",
+   "inputText": "{\"a\":1}",
+   "expectedCanonical": "{\"a\":1}",
+   "expectedDigest": "1686e6ae5516dbe7965e2f1aaffdd28a216415061fbe9bc45b7e556fc9b8cfd0"
+  },
+  {
+   "id": "version-1",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"a\":1}",
+   "expectedCanonical": "{\"a\":1}",
+   "expectedDigest": "66ae6fd351443890ae8f8676ca86049f0ab44be6e07d1c147692af3aff9c6c89"
+  },
+  {
+   "id": "version-2",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "2",
+   "inputText": "{\"a\":1}",
+   "expectedCanonical": "{\"a\":1}",
+   "expectedDigest": "f768805787bb559d5917e985817f9446b090aa998e64e1cb03c10f2e2c87beb0"
+  },
+  {
+   "id": "proj-label-x",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"id\":\"r1\",\"expiresAt\":\"2027-01-01T00:00:00Z\",\"label\":\"X\"}",
+   "expectedCanonical": "{\"expiresAt\":\"2027-01-01T00:00:00Z\",\"id\":\"r1\"}",
+   "expectedDigest": "5ed080800f19708329000c3c136dc6466e6865cf3d3e98fd8c7d299c9f427509",
+   "project": [
+    "id",
+    "expiresAt"
+   ]
+  },
+  {
+   "id": "proj-label-y",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"id\":\"r1\",\"expiresAt\":\"2027-01-01T00:00:00Z\",\"label\":\"Y\"}",
+   "expectedCanonical": "{\"expiresAt\":\"2027-01-01T00:00:00Z\",\"id\":\"r1\"}",
+   "expectedDigest": "5ed080800f19708329000c3c136dc6466e6865cf3d3e98fd8c7d299c9f427509",
+   "project": [
+    "id",
+    "expiresAt"
+   ]
+  },
+  {
+   "id": "proj-expiry-changed",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"id\":\"r1\",\"expiresAt\":\"2027-02-01T00:00:00Z\",\"label\":\"X\"}",
+   "expectedCanonical": "{\"expiresAt\":\"2027-02-01T00:00:00Z\",\"id\":\"r1\"}",
+   "expectedDigest": "99b79b4671eaa1c410107c3a7c1420c2435629dc5ae06bcc33555e9d59dc2410",
+   "project": [
+    "id",
+    "expiresAt"
+   ]
+  },
+  {
+   "id": "proj-model-ref-1",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"id\":\"r1\",\"model\":\"m@1\"}",
+   "expectedCanonical": "{\"id\":\"r1\",\"model\":\"m@1\"}",
+   "expectedDigest": "1369e933b31be0cf33f4a7d1b85016696b715fd831caf7465b990fd7cfbb8678",
+   "project": [
+    "id",
+    "model"
+   ]
+  },
+  {
+   "id": "proj-model-ref-2",
+   "op": "hash",
+   "schema": "t.record",
+   "version": "1",
+   "inputText": "{\"id\":\"r1\",\"model\":\"m@2\"}",
+   "expectedCanonical": "{\"id\":\"r1\",\"model\":\"m@2\"}",
+   "expectedDigest": "4c18ac86e602154fef76bf2b4cd8ec4ecf02c70fa7e6aa6c779903102202e9cd",
+   "project": [
+    "id",
+    "model"
+   ]
+  },
+  {
+   "id": "dup-key",
+   "op": "reject",
+   "expectError": "DUPLICATE_KEY",
+   "inputText": "{\"a\":1,\"a\":2}"
+  },
+  {
+   "id": "dup-key-nested",
+   "op": "reject",
+   "expectError": "DUPLICATE_KEY",
+   "inputText": "{\"o\":{\"k\":1,\"k\":1}}"
+  },
+  {
+   "id": "unsafe-int",
+   "op": "reject",
+   "expectError": "UNSAFE_NUMBER",
+   "inputText": "{\"n\":9007199254740992}"
+  },
+  {
+   "id": "unsafe-int-neg",
+   "op": "reject",
+   "expectError": "UNSAFE_NUMBER",
+   "inputText": "{\"n\":-9007199254740992}"
+  },
+  {
+   "id": "float",
+   "op": "reject",
+   "expectError": "UNSAFE_NUMBER",
+   "inputText": "{\"n\":1.5}"
+  },
+  {
+   "id": "exponent",
+   "op": "reject",
+   "expectError": "UNSAFE_NUMBER",
+   "inputText": "{\"n\":1e3}"
+  },
+  {
+   "id": "float-zero",
+   "op": "reject",
+   "expectError": "UNSAFE_NUMBER",
+   "inputText": "{\"n\":0.0}"
+  },
+  {
+   "id": "negative-zero",
+   "op": "reject",
+   "expectError": "NEGATIVE_ZERO",
+   "inputText": "{\"n\":-0}"
+  },
+  {
+   "id": "lone-high-surrogate",
+   "op": "reject",
+   "expectError": "BAD_STRING",
+   "inputText": "{\"s\":\"\\ud800\"}"
+  },
+  {
+   "id": "lone-low-surrogate",
+   "op": "reject",
+   "expectError": "BAD_STRING",
+   "inputText": "{\"s\":\"\\udc00x\"}"
+  },
+  {
+   "id": "invalid-utf8",
+   "op": "reject",
+   "expectError": "BAD_UTF8",
+   "inputHex": "7b2261223a22ff227d"
+  },
+  {
+   "id": "non-ascii-key",
+   "op": "reject",
+   "expectError": "BAD_KEY",
+   "inputText": "{\"é\":1}"
+  },
+  {
+   "id": "empty-key",
+   "op": "reject",
+   "expectError": "BAD_KEY",
+   "inputText": "{\"\":1}"
+  },
+  {
+   "id": "trailing-garbage",
+   "op": "reject",
+   "expectError": "BAD_JSON",
+   "inputText": "{\"a\":1} x"
+  },
+  {
+   "id": "raw-control-in-string",
+   "op": "reject",
+   "expectError": "BAD_JSON",
+   "inputText": "{\"a\":\"\u0001\"}"
+  },
+  {
+   "id": "decimal-0",
+   "op": "decimal",
+   "input": "1.5",
+   "expected": "1.5"
+  },
+  {
+   "id": "decimal-1",
+   "op": "decimal",
+   "input": "1.50",
+   "expected": "1.5"
+  },
+  {
+   "id": "decimal-2",
+   "op": "decimal",
+   "input": "001.5",
+   "expected": "1.5"
+  },
+  {
+   "id": "decimal-3",
+   "op": "decimal",
+   "input": "+1.5",
+   "expected": "1.5"
+  },
+  {
+   "id": "decimal-4",
+   "op": "decimal",
+   "input": "0",
+   "expected": "0"
+  },
+  {
+   "id": "decimal-5",
+   "op": "decimal",
+   "input": "-0",
+   "expected": "0"
+  },
+  {
+   "id": "decimal-6",
+   "op": "decimal",
+   "input": "0.0",
+   "expected": "0"
+  },
+  {
+   "id": "decimal-7",
+   "op": "decimal",
+   "input": "-0.00",
+   "expected": "0"
+  },
+  {
+   "id": "decimal-8",
+   "op": "decimal",
+   "input": "10",
+   "expected": "10"
+  },
+  {
+   "id": "decimal-9",
+   "op": "decimal",
+   "input": "-12.340",
+   "expected": "-12.34"
+  },
+  {
+   "id": "decimal-10",
+   "op": "decimal",
+   "input": "100.000",
+   "expected": "100"
+  },
+  {
+   "id": "decimal-bad-0",
+   "op": "decimal",
+   "input": "1e3",
+   "expectError": "BAD_DECIMAL"
+  },
+  {
+   "id": "decimal-bad-1",
+   "op": "decimal",
+   "input": "1.",
+   "expectError": "BAD_DECIMAL"
+  },
+  {
+   "id": "decimal-bad-2",
+   "op": "decimal",
+   "input": ".5",
+   "expectError": "BAD_DECIMAL"
+  },
+  {
+   "id": "decimal-bad-3",
+   "op": "decimal",
+   "input": "",
+   "expectError": "BAD_DECIMAL"
+  },
+  {
+   "id": "decimal-bad-4",
+   "op": "decimal",
+   "input": "--1",
+   "expectError": "BAD_DECIMAL"
+  },
+  {
+   "id": "decimal-bad-5",
+   "op": "decimal",
+   "input": "1,5",
+   "expectError": "BAD_DECIMAL"
+  },
+  {
+   "id": "decimal-bad-6",
+   "op": "decimal",
+   "input": "0x10",
+   "expectError": "BAD_DECIMAL"
+  },
+  {
+   "id": "decimal-bad-7",
+   "op": "decimal",
+   "input": " 1",
+   "expectError": "BAD_DECIMAL"
+  },
+  {
+   "id": "raw-lf",
+   "op": "raw",
+   "inputHex": "6c696e650a",
+   "expectedDigest": "c73b73af8851e9e91bc6b4dc12e7dace0a2bfb931c1d0b8b36ef367319f58cd1"
+  },
+  {
+   "id": "raw-crlf",
+   "op": "raw",
+   "inputHex": "6c696e650d0a",
+   "expectedDigest": "893e89e669b5a4f9e5136d565f51e341a0c5e5531816c9c1a806d90df66a45f4"
+  },
+  {
+   "id": "raw-bom",
+   "op": "raw",
+   "inputHex": "efbbbf6c696e650a",
+   "expectedDigest": "5156b0f2803f15bcbb3a59828072ad375944ac38dcaf37a8fac7c0b22c5f3fc2"
+  },
+  {
+   "id": "raw-empty",
+   "op": "raw",
+   "inputHex": "",
+   "expectedDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "id": "root-order-1",
+   "op": "root",
+   "entries": [
+    {
+     "path": "src/a.ts",
+     "kind": "file",
+     "mode": "100644",
+     "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+     "path": "README.md",
+     "kind": "file",
+     "mode": "100644",
+     "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+   ],
+   "expectedCanonical": "[{\"hash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"kind\":\"file\",\"mode\":\"100644\",\"path\":\"README.md\"},{\"hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"kind\":\"file\",\"mode\":\"100644\",\"path\":\"src/a.ts\"}]",
+   "expectedDigest": "e83927e382d817dc937b8598ad9192f3b6b39033aadb565a6cb5650ac5e92716"
+  },
+  {
+   "id": "root-order-2",
+   "op": "root",
+   "entries": [
+    {
+     "path": "README.md",
+     "kind": "file",
+     "mode": "100644",
+     "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+     "path": "src/a.ts",
+     "kind": "file",
+     "mode": "100644",
+     "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+   ],
+   "expectedCanonical": "[{\"hash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"kind\":\"file\",\"mode\":\"100644\",\"path\":\"README.md\"},{\"hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"kind\":\"file\",\"mode\":\"100644\",\"path\":\"src/a.ts\"}]",
+   "expectedDigest": "e83927e382d817dc937b8598ad9192f3b6b39033aadb565a6cb5650ac5e92716"
+  },
+  {
+   "id": "root-exec-bit",
+   "op": "root",
+   "entries": [
+    {
+     "path": "run.sh",
+     "kind": "file",
+     "mode": "100755",
+     "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+   ],
+   "expectedCanonical": "[{\"hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"kind\":\"file\",\"mode\":\"100755\",\"path\":\"run.sh\"}]",
+   "expectedDigest": "a03550dc3bbb63988285f03b97b25b5b0ee96f0f17322c281148f48ffc696fee"
+  },
+  {
+   "id": "root-symlink",
+   "op": "root",
+   "entries": [
+    {
+     "path": "l",
+     "kind": "symlink",
+     "mode": "120000",
+     "target": "src/a.ts"
+    }
+   ],
+   "expectedCanonical": "[{\"kind\":\"symlink\",\"mode\":\"120000\",\"path\":\"l\",\"target\":\"src/a.ts\"}]",
+   "expectedDigest": "5bcb5c4d26dffe4a9424e6b0bff716a56f0508212d274aae61548f0611a322ee"
+  },
+  {
+   "id": "root-submodule",
+   "op": "root",
+   "entries": [
+    {
+     "path": "vendor/x",
+     "kind": "submodule",
+     "mode": "160000",
+     "commit": "cccccccccccccccccccccccccccccccccccccccc"
+    }
+   ],
+   "expectedCanonical": "[{\"commit\":\"cccccccccccccccccccccccccccccccccccccccc\",\"kind\":\"submodule\",\"mode\":\"160000\",\"path\":\"vendor/x\"}]",
+   "expectedDigest": "2b77c779d1ef287760a3fb6ca2f0d3b5459970ca2da40979335b3e88a92cc7ee"
+  },
+  {
+   "id": "root-utf8-byte-order",
+   "op": "root",
+   "entries": [
+    {
+     "path": "😀.txt",
+     "kind": "file",
+     "mode": "100644",
+     "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+     "path": "￮.txt",
+     "kind": "file",
+     "mode": "100644",
+     "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+   ],
+   "expectedCanonical": "[{\"hash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"kind\":\"file\",\"mode\":\"100644\",\"path\":\"￮.txt\"},{\"hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"kind\":\"file\",\"mode\":\"100644\",\"path\":\"😀.txt\"}]",
+   "expectedDigest": "6970671388a992c52a93a39448e75e93f92e9d6098b83c3a2a821e5fe2807b05"
+  },
+  {
+   "id": "root-collision-case",
+   "op": "root",
+   "entries": [
+    {
+     "path": "A.ts",
+     "kind": "file",
+     "mode": "100644",
+     "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+     "path": "a.ts",
+     "kind": "file",
+     "mode": "100644",
+     "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+   ],
+   "expectError": "BAD_PATH"
+  },
+  {
+   "id": "root-traversal",
+   "op": "root",
+   "entries": [
+    {
+     "path": "../x",
+     "kind": "file",
+     "mode": "100644",
+     "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+   ],
+   "expectError": "BAD_PATH"
+  },
+  {
+   "id": "root-absolute",
+   "op": "root",
+   "entries": [
+    {
+     "path": "/etc/x",
+     "kind": "file",
+     "mode": "100644",
+     "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+   ],
+   "expectError": "BAD_PATH"
+  },
+  {
+   "id": "root-bad-mode",
+   "op": "root",
+   "entries": [
+    {
+     "path": "x",
+     "kind": "file",
+     "mode": "120000",
+     "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+   ],
+   "expectError": "BAD_SCHEMA"
+  }
+ ],
+ "relations": [
+  {
+   "same": [
+    "keys-order-a",
+    "keys-order-b"
+   ]
+  },
+  {
+   "different": [
+    "array-order-1",
+    "array-order-2"
+   ]
+  },
+  {
+   "same": [
+    "set-order-1",
+    "set-order-2"
+   ]
+  },
+  {
+   "different": [
+    "null-present",
+    "null-omitted"
+   ]
+  },
+  {
+   "different": [
+    "composed",
+    "decomposed"
+   ]
+  },
+  {
+   "different": [
+    "schema-a",
+    "schema-b"
+   ]
+  },
+  {
+   "different": [
+    "version-1",
+    "version-2"
+   ]
+  },
+  {
+   "same": [
+    "proj-label-x",
+    "proj-label-y"
+   ]
+  },
+  {
+   "different": [
+    "proj-label-x",
+    "proj-expiry-changed"
+   ]
+  },
+  {
+   "different": [
+    "proj-model-ref-1",
+    "proj-model-ref-2"
+   ]
+  },
+  {
+   "different": [
+    "raw-lf",
+    "raw-crlf"
+   ]
+  },
+  {
+   "same": [
+    "root-order-1",
+    "root-order-2"
+   ]
+  },
+  {
+   "different": [
+    "root-symlink",
+    "root-submodule"
+   ]
+  }
+ ]
+}

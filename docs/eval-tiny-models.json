@@ -4,7 +4,7 @@
  "prompt": "production (llm-router.ts)",
  "results": [
   {
-   "system": "qwen3:0.6b",
+   "system": "0.6B-selected-model",
    "variant": "clean",
    "n": 164,
    "accuracy": 0.8109756097560976,
@@ -23,7 +23,7 @@
    ]
   },
   {
-   "system": "qwen3:0.6b",
+   "system": "0.6B-selected-model",
    "variant": "typos",
    "n": 164,
    "accuracy": 0.7134146341463414,
@@ -136,7 +136,7 @@
     "medianMs": 1006
    },
    {
-    "system": "qwen3:0.6b +examples",
+    "system": "0.6B-selected-model +examples",
     "variant": "clean",
     "n": 164,
     "accuracy": 0.7073170731707317,
@@ -145,7 +145,7 @@
     "medianMs": 1141
    },
    {
-    "system": "qwen3:0.6b +examples",
+    "system": "0.6B-selected-model +examples",
     "variant": "typos",
     "n": 164,
     "accuracy": 0.6402439024390244,
