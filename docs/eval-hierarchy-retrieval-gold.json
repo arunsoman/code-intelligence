@@ -1,0 +1,22 @@
+{
+  "description": "Questions about this repository and the files a good answer needs in context. File level, so a question is satisfied by any symbol in the file. AUTHORED BY THE ASSISTANT that wrote the retrieval prototype, not by an independent labeller: treat results as indicative. 'named' questions use words that also appear in the files' names; 'paraphrase' questions avoid them. Replace this file with your own questions to measure your own repository.",
+  "questions": [
+    { "id": "q01", "kind": "named", "question": "How is the quality gate policy evaluated for a pull request?", "gold": ["packages/core/src/pr-gate.ts", "packages/core/src/pr-analysis.ts"] },
+    { "id": "q02", "kind": "named", "question": "Where do we publish a status or comment to GitHub for a pull request?", "gold": ["packages/core/src/pr-publish.ts"] },
+    { "id": "q03", "kind": "named", "question": "How are hotspots ranked from git history?", "gold": ["packages/core/src/hotspots.ts"] },
+    { "id": "q04", "kind": "named", "question": "How is a program dependence graph built for a function?", "gold": ["packages/core/src/concept-hierarchy/pdg.ts"] },
+    { "id": "q05", "kind": "named", "question": "How are invariants inferred from guards?", "gold": ["packages/core/src/concept-hierarchy/invariants.ts"] },
+    { "id": "q06", "kind": "named", "question": "How are test results and coverage artifacts parsed?", "gold": ["packages/core/src/testartifacts.ts"] },
+    { "id": "q07", "kind": "named", "question": "How does the chat agent call read-only tools?", "gold": ["packages/core/src/chat-agent.ts", "packages/core/src/chat-tools.ts"] },
+    { "id": "q08", "kind": "named", "question": "How is a forge webhook verified and applied?", "gold": ["packages/core/src/connectors.ts", "packages/core/src/service.ts"] },
+    { "id": "q09", "kind": "paraphrase", "question": "How do we stop a hosted model from receiving code the user has not approved?", "gold": ["packages/core/src/service.ts", "packages/core/src/policy.ts"] },
+    { "id": "q10", "kind": "paraphrase", "question": "Where do we decide whether a displayed statement is grounded in evidence?", "gold": ["packages/core/src/claims.ts", "packages/core/src/claim-ledger.ts"] },
+    { "id": "q11", "kind": "paraphrase", "question": "How do we run untrusted tests without letting them touch the rest of the disk?", "gold": ["packages/core/src/isolated-exec.ts", "packages/core/src/runtime-sandbox.ts"] },
+    { "id": "q12", "kind": "paraphrase", "question": "What turns a defect report into a reviewed patch and a draft request on the forge?", "gold": ["packages/core/src/defect-workflow.ts", "packages/core/src/gh-forge.ts", "packages/core/src/feature/publish.ts"] },
+    { "id": "q13", "kind": "paraphrase", "question": "How does the system remember what a model called each group of similar functions?", "gold": ["packages/core/src/concept-hierarchy/naming.ts", "packages/core/src/store.ts"] },
+    { "id": "q14", "kind": "paraphrase", "question": "How do we find every place a symbol is used across several repositories?", "gold": ["packages/core/src/search.ts"] },
+    { "id": "q15", "kind": "paraphrase", "question": "Where do we turn a plain-language feature request into checkable requirements?", "gold": ["packages/core/src/feature/requirements.ts"] },
+    { "id": "q16", "kind": "paraphrase", "question": "How is it decided what is in scope for a release and whether it is ready?", "gold": ["packages/core/src/release-scope.ts", "packages/core/src/release-readiness.ts"] },
+    { "id": "q17", "kind": "paraphrase", "question": "What is reused and what is rebuilt when a small edit is made and the build runs again?", "gold": ["packages/core/src/concept-hierarchy/incremental.ts"] }
+  ]
+}

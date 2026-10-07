@@ -1,0 +1,4306 @@
+{
+  "generatedAt": "2026-10-07T13:30:48.433Z",
+  "repo": "/home/arun/cie-retrieval",
+  "head": "10f82b2f1c567d6a809be224bf7c9cd67699096e",
+  "dirty": true,
+  "node": "v26.8.2",
+  "corpus": {
+    "files": 730,
+    "concepts": 4348,
+    "functions": 6380,
+    "conceptNames": "offline stub (mechanical)"
+  },
+  "method": {
+    "grid": [
+      500,
+      1000,
+      2000,
+      4000,
+      8000,
+      16000
+    ],
+    "bundle": "bundleFor; tokens = JSON length / 4 of what the model provider sends (entities, relationships, behavioural facts)",
+    "recall": "gold files with at least one non-file entity in the bundle",
+    "maxRankedConsidered": 400
+  },
+  "caveats": [
+    "Gold questions were written by the assistant that wrote the prototype, not an independent labeller.",
+    "Only 17 questions; every interval is wide.",
+    "File-level recall; file-level nodes are not counted unless a symbol from the file is in the bundle.",
+    "Sent-token projection mirrors packages/model/src/ollama.ts compact(); it is copied, not imported.",
+    "Concept names are mechanical stub names; model-written names could change the hierarchy methods' results.",
+    "Baseline ordering is retrieveForQuestion's own picks without the semantic (hash embedding) option or concept cards the chat path may add; it is then cut by the same fit procedure as the other two, not by its own truncation.",
+    "Does not measure answer quality with a smaller context, only whether the needed files are inside it."
+  ],
+  "natural": {
+    "tokensMean": 8468,
+    "rawTokensMean": 778510,
+    "recall": 0.7777777777777778,
+    "fullSatisfied": 12
+  },
+  "production": {
+    "budgetAskedRaw": 60000,
+    "gatewayLimitRaw": 200000,
+    "questionsOverGatewayLimit": 3,
+    "of": 17,
+    "medianRawTokens": 55679,
+    "medianSentTokens": 560,
+    "recall": 0.3333333333333333,
+    "questionsFullySatisfied": 5
+  },
+  "toFullRecall": {
+    "baseline": {
+      "median": 1000,
+      "reached": 12,
+      "of": 17,
+      "perQuestion": {
+        "q01": null,
+        "q02": 1000,
+        "q03": 500,
+        "q04": 500,
+        "q05": 500,
+        "q06": 1000,
+        "q07": 1000,
+        "q08": 2000,
+        "q09": null,
+        "q10": null,
+        "q11": 8000,
+        "q12": null,
+        "q13": null,
+        "q14": 500,
+        "q15": 1000,
+        "q16": 8000,
+        "q17": 2000
+      }
+    },
+    "flat": {
+      "median": 6000,
+      "reached": 10,
+      "of": 17,
+      "perQuestion": {
+        "q01": 4000,
+        "q02": 8000,
+        "q03": 500,
+        "q04": 4000,
+        "q05": 2000,
+        "q06": 8000,
+        "q07": 16000,
+        "q08": 16000,
+        "q09": null,
+        "q10": null,
+        "q11": null,
+        "q12": null,
+        "q13": null,
+        "q14": 16000,
+        "q15": 4000,
+        "q16": null,
+        "q17": null
+      }
+    },
+    "two-stage": {
+      "median": 6000,
+      "reached": 10,
+      "of": 17,
+      "perQuestion": {
+        "q01": 4000,
+        "q02": 8000,
+        "q03": 500,
+        "q04": 4000,
+        "q05": 2000,
+        "q06": 8000,
+        "q07": 8000,
+        "q08": 8000,
+        "q09": null,
+        "q10": null,
+        "q11": null,
+        "q12": null,
+        "q13": null,
+        "q14": 16000,
+        "q15": 2000,
+        "q16": null,
+        "q17": null
+      }
+    }
+  },
+  "aggregates": {
+    "all": {
+      "500": {
+        "baseline": {
+          "goldFilesCovered": 8,
+          "goldFiles": 27,
+          "recall": 0.2962962962962963,
+          "recallCI": [
+            0.15852853317647564,
+            0.48481033380837596
+          ],
+          "questionsFullySatisfied": 4,
+          "questions": 17,
+          "fullRate": 0.23529411764705882,
+          "fullRateCI": [
+            0.09554889071675943,
+            0.47262245889171606
+          ],
+          "meanTokens": 374,
+          "meanFilesInContext": 1.8
+        },
+        "flat": {
+          "goldFilesCovered": 1,
+          "goldFiles": 27,
+          "recall": 0.037037037037037035,
+          "recallCI": [
+            0.006567976533097596,
+            0.1828385393415652
+          ],
+          "questionsFullySatisfied": 1,
+          "questions": 17,
+          "fullRate": 0.058823529411764705,
+          "fullRateCI": [
+            0.010460130645164236,
+            0.26982545203562797
+          ],
+          "meanTokens": 392,
+          "meanFilesInContext": 1.7
+        },
+        "two-stage": {
+          "goldFilesCovered": 1,
+          "goldFiles": 27,
+          "recall": 0.037037037037037035,
+          "recallCI": [
+            0.006567976533097596,
+            0.1828385393415652
+          ],
+          "questionsFullySatisfied": 1,
+          "questions": 17,
+          "fullRate": 0.058823529411764705,
+          "fullRateCI": [
+            0.010460130645164236,
+            0.26982545203562797
+          ],
+          "meanTokens": 410,
+          "meanFilesInContext": 1.6
+        }
+      },
+      "1000": {
+        "baseline": {
+          "goldFilesCovered": 13,
+          "goldFiles": 27,
+          "recall": 0.48148148148148145,
+          "recallCI": [
+            0.3074295064970908,
+            0.6601467541378958
+          ],
+          "questionsFullySatisfied": 8,
+          "questions": 17,
+          "fullRate": 0.47058823529411764,
+          "fullRateCI": [
+            0.26164801196088106,
+            0.6903710268845051
+          ],
+          "meanTokens": 842,
+          "meanFilesInContext": 3.3
+        },
+        "flat": {
+          "goldFilesCovered": 2,
+          "goldFiles": 27,
+          "recall": 0.07407407407407407,
+          "recallCI": [
+            0.020554221697383537,
+            0.2336997729073062
+          ],
+          "questionsFullySatisfied": 1,
+          "questions": 17,
+          "fullRate": 0.058823529411764705,
+          "fullRateCI": [
+            0.010460130645164236,
+            0.26982545203562797
+          ],
+          "meanTokens": 888,
+          "meanFilesInContext": 3.6
+        },
+        "two-stage": {
+          "goldFilesCovered": 3,
+          "goldFiles": 27,
+          "recall": 0.1111111111111111,
+          "recallCI": [
+            0.03851964789498724,
+            0.2805818254397295
+          ],
+          "questionsFullySatisfied": 1,
+          "questions": 17,
+          "fullRate": 0.058823529411764705,
+          "fullRateCI": [
+            0.010460130645164236,
+            0.26982545203562797
+          ],
+          "meanTokens": 869,
+          "meanFilesInContext": 3.6
+        }
+      },
+      "2000": {
+        "baseline": {
+          "goldFilesCovered": 15,
+          "goldFiles": 27,
+          "recall": 0.5555555555555556,
+          "recallCI": [
+            0.3731271947957688,
+            0.7241440232992717
+          ],
+          "questionsFullySatisfied": 10,
+          "questions": 17,
+          "fullRate": 0.5882352941176471,
+          "fullRateCI": [
+            0.3600507438551554,
+            0.7838921396086861
+          ],
+          "meanTokens": 1806,
+          "meanFilesInContext": 5.2
+        },
+        "flat": {
+          "goldFilesCovered": 4,
+          "goldFiles": 27,
+          "recall": 0.14814814814814814,
+          "recallCI": [
+            0.0591583185964489,
+            0.3247906334682948
+          ],
+          "questionsFullySatisfied": 2,
+          "questions": 17,
+          "fullRate": 0.11764705882352941,
+          "fullRateCI": [
+            0.03287908001292091,
+            0.3433684249770991
+          ],
+          "meanTokens": 1924,
+          "meanFilesInContext": 7.8
+        },
+        "two-stage": {
+          "goldFilesCovered": 6,
+          "goldFiles": 27,
+          "recall": 0.2222222222222222,
+          "recallCI": [
+            0.10607095489408955,
+            0.4075729546307081
+          ],
+          "questionsFullySatisfied": 3,
+          "questions": 17,
+          "fullRate": 0.17647058823529413,
+          "fullRateCI": [
+            0.06191013712548989,
+            0.41029929017375777
+          ],
+          "meanTokens": 1886,
+          "meanFilesInContext": 7.2
+        }
+      },
+      "4000": {
+        "baseline": {
+          "goldFilesCovered": 19,
+          "goldFiles": 27,
+          "recall": 0.7037037037037037,
+          "recallCI": [
+            0.515189666191624,
+            0.8414714668235244
+          ],
+          "questionsFullySatisfied": 10,
+          "questions": 17,
+          "fullRate": 0.5882352941176471,
+          "fullRateCI": [
+            0.3600507438551554,
+            0.7838921396086861
+          ],
+          "meanTokens": 3863,
+          "meanFilesInContext": 10.2
+        },
+        "flat": {
+          "goldFilesCovered": 8,
+          "goldFiles": 27,
+          "recall": 0.2962962962962963,
+          "recallCI": [
+            0.15852853317647564,
+            0.48481033380837596
+          ],
+          "questionsFullySatisfied": 5,
+          "questions": 17,
+          "fullRate": 0.29411764705882354,
+          "fullRateCI": [
+            0.13279793865556405,
+            0.5313353332621391
+          ],
+          "meanTokens": 3906,
+          "meanFilesInContext": 14.5
+        },
+        "two-stage": {
+          "goldFilesCovered": 8,
+          "goldFiles": 27,
+          "recall": 0.2962962962962963,
+          "recallCI": [
+            0.15852853317647564,
+            0.48481033380837596
+          ],
+          "questionsFullySatisfied": 5,
+          "questions": 17,
+          "fullRate": 0.29411764705882354,
+          "fullRateCI": [
+            0.13279793865556405,
+            0.5313353332621391
+          ],
+          "meanTokens": 3795,
+          "meanFilesInContext": 13.4
+        }
+      },
+      "8000": {
+        "baseline": {
+          "goldFilesCovered": 21,
+          "goldFiles": 27,
+          "recall": 0.7777777777777778,
+          "recallCI": [
+            0.5924270453692919,
+            0.8939290451059105
+          ],
+          "questionsFullySatisfied": 12,
+          "questions": 17,
+          "fullRate": 0.7058823529411765,
+          "fullRateCI": [
+            0.468664666737861,
+            0.8672020613444361
+          ],
+          "meanTokens": 7454,
+          "meanFilesInContext": 17.8
+        },
+        "flat": {
+          "goldFilesCovered": 12,
+          "goldFiles": 27,
+          "recall": 0.4444444444444444,
+          "recallCI": [
+            0.27585597670072826,
+            0.6268728052042312
+          ],
+          "questionsFullySatisfied": 7,
+          "questions": 17,
+          "fullRate": 0.4117647058823529,
+          "fullRateCI": [
+            0.21610786039131383,
+            0.6399492561448445
+          ],
+          "meanTokens": 7916,
+          "meanFilesInContext": 26.9
+        },
+        "two-stage": {
+          "goldFilesCovered": 14,
+          "goldFiles": 27,
+          "recall": 0.5185185185185185,
+          "recallCI": [
+            0.33985324586210425,
+            0.6925704935029092
+          ],
+          "questionsFullySatisfied": 9,
+          "questions": 17,
+          "fullRate": 0.5294117647058824,
+          "fullRateCI": [
+            0.3096289731154949,
+            0.738351988039119
+          ],
+          "meanTokens": 7904,
+          "meanFilesInContext": 25.6
+        }
+      },
+      "16000": {
+        "baseline": {
+          "goldFilesCovered": 21,
+          "goldFiles": 27,
+          "recall": 0.7777777777777778,
+          "recallCI": [
+            0.5924270453692919,
+            0.8939290451059105
+          ],
+          "questionsFullySatisfied": 12,
+          "questions": 17,
+          "fullRate": 0.7058823529411765,
+          "fullRateCI": [
+            0.468664666737861,
+            0.8672020613444361
+          ],
+          "meanTokens": 8446,
+          "meanFilesInContext": 19.9
+        },
+        "flat": {
+          "goldFilesCovered": 16,
+          "goldFiles": 27,
+          "recall": 0.5925925925925926,
+          "recallCI": [
+            0.4072638305536409,
+            0.7548548662714264
+          ],
+          "questionsFullySatisfied": 10,
+          "questions": 17,
+          "fullRate": 0.5882352941176471,
+          "fullRateCI": [
+            0.3600507438551554,
+            0.7838921396086861
+          ],
+          "meanTokens": 15860,
+          "meanFilesInContext": 47.7
+        },
+        "two-stage": {
+          "goldFilesCovered": 16,
+          "goldFiles": 27,
+          "recall": 0.5925925925925926,
+          "recallCI": [
+            0.4072638305536409,
+            0.7548548662714264
+          ],
+          "questionsFullySatisfied": 10,
+          "questions": 17,
+          "fullRate": 0.5882352941176471,
+          "fullRateCI": [
+            0.3600507438551554,
+            0.7838921396086861
+          ],
+          "meanTokens": 15898,
+          "meanFilesInContext": 44.8
+        }
+      }
+    },
+    "named": {
+      "500": {
+        "baseline": {
+          "goldFilesCovered": 5,
+          "goldFiles": 11,
+          "recall": 0.45454545454545453,
+          "recallCI": [
+            0.21270957543988048,
+            0.7199122443100118
+          ],
+          "questionsFullySatisfied": 3,
+          "questions": 8,
+          "fullRate": 0.375,
+          "fullRateCI": [
+            0.13684175946152105,
+            0.6942621454161982
+          ],
+          "meanTokens": 419,
+          "meanFilesInContext": 1.9
+        },
+        "flat": {
+          "goldFilesCovered": 1,
+          "goldFiles": 11,
+          "recall": 0.09090909090909091,
+          "recallCI": [
+            0.016231752262825964,
+            0.3773646254862038
+          ],
+          "questionsFullySatisfied": 1,
+          "questions": 8,
+          "fullRate": 0.125,
+          "fullRateCI": [
+            0.02241690886329618,
+            0.4708948057698615
+          ],
+          "meanTokens": 374,
+          "meanFilesInContext": 1.6
+        },
+        "two-stage": {
+          "goldFilesCovered": 1,
+          "goldFiles": 11,
+          "recall": 0.09090909090909091,
+          "recallCI": [
+            0.016231752262825964,
+            0.3773646254862038
+          ],
+          "questionsFullySatisfied": 1,
+          "questions": 8,
+          "fullRate": 0.125,
+          "fullRateCI": [
+            0.02241690886329618,
+            0.4708948057698615
+          ],
+          "meanTokens": 411,
+          "meanFilesInContext": 1.5
+        }
+      },
+      "1000": {
+        "baseline": {
+          "goldFilesCovered": 9,
+          "goldFiles": 11,
+          "recall": 0.8181818181818182,
+          "recallCI": [
+            0.5230138624217553,
+            0.9486333993289994
+          ],
+          "questionsFullySatisfied": 6,
+          "questions": 8,
+          "fullRate": 0.75,
+          "fullRateCI": [
+            0.40926987910258916,
+            0.9285223111419724
+          ],
+          "meanTokens": 862,
+          "meanFilesInContext": 3.3
+        },
+        "flat": {
+          "goldFilesCovered": 2,
+          "goldFiles": 11,
+          "recall": 0.18181818181818182,
+          "recallCI": [
+            0.05136660067100062,
+            0.4769861375782449
+          ],
+          "questionsFullySatisfied": 1,
+          "questions": 8,
+          "fullRate": 0.125,
+          "fullRateCI": [
+            0.02241690886329618,
+            0.4708948057698615
+          ],
+          "meanTokens": 922,
+          "meanFilesInContext": 3.5
+        },
+        "two-stage": {
+          "goldFilesCovered": 3,
+          "goldFiles": 11,
+          "recall": 0.2727272727272727,
+          "recallCI": [
+            0.09745880573921469,
+            0.5656502930102462
+          ],
+          "questionsFullySatisfied": 1,
+          "questions": 8,
+          "fullRate": 0.125,
+          "fullRateCI": [
+            0.02241690886329618,
+            0.4708948057698615
+          ],
+          "meanTokens": 915,
+          "meanFilesInContext": 3.6
+        }
+      },
+      "2000": {
+        "baseline": {
+          "goldFilesCovered": 10,
+          "goldFiles": 11,
+          "recall": 0.9090909090909091,
+          "recallCI": [
+            0.6226353745137962,
+            0.9837682477371741
+          ],
+          "questionsFullySatisfied": 7,
+          "questions": 8,
+          "fullRate": 0.875,
+          "fullRateCI": [
+            0.5291051942301385,
+            0.9775830911367039
+          ],
+          "meanTokens": 1771,
+          "meanFilesInContext": 4.5
+        },
+        "flat": {
+          "goldFilesCovered": 4,
+          "goldFiles": 11,
+          "recall": 0.36363636363636365,
+          "recallCI": [
+            0.15166223614131386,
+            0.6462032231083628
+          ],
+          "questionsFullySatisfied": 2,
+          "questions": 8,
+          "fullRate": 0.25,
+          "fullRateCI": [
+            0.07147768885802765,
+            0.5907301208974108
+          ],
+          "meanTokens": 1902,
+          "meanFilesInContext": 7.4
+        },
+        "two-stage": {
+          "goldFilesCovered": 4,
+          "goldFiles": 11,
+          "recall": 0.36363636363636365,
+          "recallCI": [
+            0.15166223614131386,
+            0.6462032231083628
+          ],
+          "questionsFullySatisfied": 2,
+          "questions": 8,
+          "fullRate": 0.25,
+          "fullRateCI": [
+            0.07147768885802765,
+            0.5907301208974108
+          ],
+          "meanTokens": 1853,
+          "meanFilesInContext": 6.6
+        }
+      },
+      "4000": {
+        "baseline": {
+          "goldFilesCovered": 10,
+          "goldFiles": 11,
+          "recall": 0.9090909090909091,
+          "recallCI": [
+            0.6226353745137962,
+            0.9837682477371741
+          ],
+          "questionsFullySatisfied": 7,
+          "questions": 8,
+          "fullRate": 0.875,
+          "fullRateCI": [
+            0.5291051942301385,
+            0.9775830911367039
+          ],
+          "meanTokens": 3918,
+          "meanFilesInContext": 8.6
+        },
+        "flat": {
+          "goldFilesCovered": 6,
+          "goldFiles": 11,
+          "recall": 0.5454545454545454,
+          "recallCI": [
+            0.2800877556899882,
+            0.7872904245601196
+          ],
+          "questionsFullySatisfied": 4,
+          "questions": 8,
+          "fullRate": 0.5,
+          "fullRateCI": [
+            0.2152125268244419,
+            0.7847874731755581
+          ],
+          "meanTokens": 3930,
+          "meanFilesInContext": 12.8
+        },
+        "two-stage": {
+          "goldFilesCovered": 6,
+          "goldFiles": 11,
+          "recall": 0.5454545454545454,
+          "recallCI": [
+            0.2800877556899882,
+            0.7872904245601196
+          ],
+          "questionsFullySatisfied": 4,
+          "questions": 8,
+          "fullRate": 0.5,
+          "fullRateCI": [
+            0.2152125268244419,
+            0.7847874731755581
+          ],
+          "meanTokens": 3758,
+          "meanFilesInContext": 12.4
+        }
+      },
+      "8000": {
+        "baseline": {
+          "goldFilesCovered": 10,
+          "goldFiles": 11,
+          "recall": 0.9090909090909091,
+          "recallCI": [
+            0.6226353745137962,
+            0.9837682477371741
+          ],
+          "questionsFullySatisfied": 7,
+          "questions": 8,
+          "fullRate": 0.875,
+          "fullRateCI": [
+            0.5291051942301385,
+            0.9775830911367039
+          ],
+          "meanTokens": 7777,
+          "meanFilesInContext": 16.4
+        },
+        "flat": {
+          "goldFilesCovered": 9,
+          "goldFiles": 11,
+          "recall": 0.8181818181818182,
+          "recallCI": [
+            0.5230138624217553,
+            0.9486333993289994
+          ],
+          "questionsFullySatisfied": 6,
+          "questions": 8,
+          "fullRate": 0.75,
+          "fullRateCI": [
+            0.40926987910258916,
+            0.9285223111419724
+          ],
+          "meanTokens": 7930,
+          "meanFilesInContext": 24
+        },
+        "two-stage": {
+          "goldFilesCovered": 11,
+          "goldFiles": 11,
+          "recall": 1,
+          "recallCI": [
+            0.7411599827511859,
+            1
+          ],
+          "questionsFullySatisfied": 8,
+          "questions": 8,
+          "fullRate": 1,
+          "fullRateCI": [
+            0.6755843804891231,
+            1
+          ],
+          "meanTokens": 7907,
+          "meanFilesInContext": 24
+        }
+      },
+      "16000": {
+        "baseline": {
+          "goldFilesCovered": 10,
+          "goldFiles": 11,
+          "recall": 0.9090909090909091,
+          "recallCI": [
+            0.6226353745137962,
+            0.9837682477371741
+          ],
+          "questionsFullySatisfied": 7,
+          "questions": 8,
+          "fullRate": 0.875,
+          "fullRateCI": [
+            0.5291051942301385,
+            0.9775830911367039
+          ],
+          "meanTokens": 8448,
+          "meanFilesInContext": 18.1
+        },
+        "flat": {
+          "goldFilesCovered": 11,
+          "goldFiles": 11,
+          "recall": 1,
+          "recallCI": [
+            0.7411599827511859,
+            1
+          ],
+          "questionsFullySatisfied": 8,
+          "questions": 8,
+          "fullRate": 1,
+          "fullRateCI": [
+            0.6755843804891231,
+            1
+          ],
+          "meanTokens": 15877,
+          "meanFilesInContext": 44.1
+        },
+        "two-stage": {
+          "goldFilesCovered": 11,
+          "goldFiles": 11,
+          "recall": 1,
+          "recallCI": [
+            0.7411599827511859,
+            1
+          ],
+          "questionsFullySatisfied": 8,
+          "questions": 8,
+          "fullRate": 1,
+          "fullRateCI": [
+            0.6755843804891231,
+            1
+          ],
+          "meanTokens": 15882,
+          "meanFilesInContext": 41
+        }
+      }
+    },
+    "paraphrase": {
+      "500": {
+        "baseline": {
+          "goldFilesCovered": 3,
+          "goldFiles": 16,
+          "recall": 0.1875,
+          "recallCI": [
+            0.06591478773586763,
+            0.4300935986845823
+          ],
+          "questionsFullySatisfied": 1,
+          "questions": 9,
+          "fullRate": 0.1111111111111111,
+          "fullRateCI": [
+            0.019890371327130518,
+            0.4350062147680602
+          ],
+          "meanTokens": 333,
+          "meanFilesInContext": 1.8
+        },
+        "flat": {
+          "goldFilesCovered": 0,
+          "goldFiles": 16,
+          "recall": 0,
+          "recallCI": [
+            0,
+            0.19361341827271994
+          ],
+          "questionsFullySatisfied": 0,
+          "questions": 9,
+          "fullRate": 0,
+          "fullRateCI": [
+            0,
+            0.2991527535509594
+          ],
+          "meanTokens": 407,
+          "meanFilesInContext": 1.8
+        },
+        "two-stage": {
+          "goldFilesCovered": 0,
+          "goldFiles": 16,
+          "recall": 0,
+          "recallCI": [
+            0,
+            0.19361341827271994
+          ],
+          "questionsFullySatisfied": 0,
+          "questions": 9,
+          "fullRate": 0,
+          "fullRateCI": [
+            0,
+            0.2991527535509594
+          ],
+          "meanTokens": 409,
+          "meanFilesInContext": 1.8
+        }
+      },
+      "1000": {
+        "baseline": {
+          "goldFilesCovered": 4,
+          "goldFiles": 16,
+          "recall": 0.25,
+          "recallCI": [
+            0.10181901984237347,
+            0.4949876892939865
+          ],
+          "questionsFullySatisfied": 2,
+          "questions": 9,
+          "fullRate": 0.2222222222222222,
+          "fullRateCI": [
+            0.0632237623122272,
+            0.5474166563271946
+          ],
+          "meanTokens": 823,
+          "meanFilesInContext": 3.3
+        },
+        "flat": {
+          "goldFilesCovered": 0,
+          "goldFiles": 16,
+          "recall": 0,
+          "recallCI": [
+            0,
+            0.19361341827271994
+          ],
+          "questionsFullySatisfied": 0,
+          "questions": 9,
+          "fullRate": 0,
+          "fullRateCI": [
+            0,
+            0.2991527535509594
+          ],
+          "meanTokens": 858,
+          "meanFilesInContext": 3.8
+        },
+        "two-stage": {
+          "goldFilesCovered": 0,
+          "goldFiles": 16,
+          "recall": 0,
+          "recallCI": [
+            0,
+            0.19361341827271994
+          ],
+          "questionsFullySatisfied": 0,
+          "questions": 9,
+          "fullRate": 0,
+          "fullRateCI": [
+            0,
+            0.2991527535509594
+          ],
+          "meanTokens": 829,
+          "meanFilesInContext": 3.7
+        }
+      },
+      "2000": {
+        "baseline": {
+          "goldFilesCovered": 5,
+          "goldFiles": 16,
+          "recall": 0.3125,
+          "recallCI": [
+            0.14164435051961052,
+            0.5559606813326594
+          ],
+          "questionsFullySatisfied": 3,
+          "questions": 9,
+          "fullRate": 0.3333333333333333,
+          "fullRateCI": [
+            0.12058159868274292,
+            0.6458026525009103
+          ],
+          "meanTokens": 1838,
+          "meanFilesInContext": 5.8
+        },
+        "flat": {
+          "goldFilesCovered": 0,
+          "goldFiles": 16,
+          "recall": 0,
+          "recallCI": [
+            0,
+            0.19361341827271994
+          ],
+          "questionsFullySatisfied": 0,
+          "questions": 9,
+          "fullRate": 0,
+          "fullRateCI": [
+            0,
+            0.2991527535509594
+          ],
+          "meanTokens": 1945,
+          "meanFilesInContext": 8.1
+        },
+        "two-stage": {
+          "goldFilesCovered": 2,
+          "goldFiles": 16,
+          "recall": 0.125,
+          "recallCI": [
+            0.034976749337057134,
+            0.3602333143674828
+          ],
+          "questionsFullySatisfied": 1,
+          "questions": 9,
+          "fullRate": 0.1111111111111111,
+          "fullRateCI": [
+            0.019890371327130518,
+            0.4350062147680602
+          ],
+          "meanTokens": 1915,
+          "meanFilesInContext": 7.8
+        }
+      },
+      "4000": {
+        "baseline": {
+          "goldFilesCovered": 9,
+          "goldFiles": 16,
+          "recall": 0.5625,
+          "recallCI": [
+            0.3317819560677652,
+            0.7690163666481449
+          ],
+          "questionsFullySatisfied": 3,
+          "questions": 9,
+          "fullRate": 0.3333333333333333,
+          "fullRateCI": [
+            0.12058159868274292,
+            0.6458026525009103
+          ],
+          "meanTokens": 3815,
+          "meanFilesInContext": 11.7
+        },
+        "flat": {
+          "goldFilesCovered": 2,
+          "goldFiles": 16,
+          "recall": 0.125,
+          "recallCI": [
+            0.034976749337057134,
+            0.3602333143674828
+          ],
+          "questionsFullySatisfied": 1,
+          "questions": 9,
+          "fullRate": 0.1111111111111111,
+          "fullRateCI": [
+            0.019890371327130518,
+            0.4350062147680602
+          ],
+          "meanTokens": 3884,
+          "meanFilesInContext": 16
+        },
+        "two-stage": {
+          "goldFilesCovered": 2,
+          "goldFiles": 16,
+          "recall": 0.125,
+          "recallCI": [
+            0.034976749337057134,
+            0.3602333143674828
+          ],
+          "questionsFullySatisfied": 1,
+          "questions": 9,
+          "fullRate": 0.1111111111111111,
+          "fullRateCI": [
+            0.019890371327130518,
+            0.4350062147680602
+          ],
+          "meanTokens": 3827,
+          "meanFilesInContext": 14.2
+        }
+      },
+      "8000": {
+        "baseline": {
+          "goldFilesCovered": 11,
+          "goldFiles": 16,
+          "recall": 0.6875,
+          "recallCI": [
+            0.4440393186673406,
+            0.8583556494803894
+          ],
+          "questionsFullySatisfied": 5,
+          "questions": 9,
+          "fullRate": 0.5555555555555556,
+          "fullRateCI": [
+            0.26664734574402965,
+            0.8112245705280859
+          ],
+          "meanTokens": 7167,
+          "meanFilesInContext": 19
+        },
+        "flat": {
+          "goldFilesCovered": 3,
+          "goldFiles": 16,
+          "recall": 0.1875,
+          "recallCI": [
+            0.06591478773586763,
+            0.4300935986845823
+          ],
+          "questionsFullySatisfied": 1,
+          "questions": 9,
+          "fullRate": 0.1111111111111111,
+          "fullRateCI": [
+            0.019890371327130518,
+            0.4350062147680602
+          ],
+          "meanTokens": 7903,
+          "meanFilesInContext": 29.6
+        },
+        "two-stage": {
+          "goldFilesCovered": 3,
+          "goldFiles": 16,
+          "recall": 0.1875,
+          "recallCI": [
+            0.06591478773586763,
+            0.4300935986845823
+          ],
+          "questionsFullySatisfied": 1,
+          "questions": 9,
+          "fullRate": 0.1111111111111111,
+          "fullRateCI": [
+            0.019890371327130518,
+            0.4350062147680602
+          ],
+          "meanTokens": 7901,
+          "meanFilesInContext": 27
+        }
+      },
+      "16000": {
+        "baseline": {
+          "goldFilesCovered": 11,
+          "goldFiles": 16,
+          "recall": 0.6875,
+          "recallCI": [
+            0.4440393186673406,
+            0.8583556494803894
+          ],
+          "questionsFullySatisfied": 5,
+          "questions": 9,
+          "fullRate": 0.5555555555555556,
+          "fullRateCI": [
+            0.26664734574402965,
+            0.8112245705280859
+          ],
+          "meanTokens": 8444,
+          "meanFilesInContext": 21.4
+        },
+        "flat": {
+          "goldFilesCovered": 5,
+          "goldFiles": 16,
+          "recall": 0.3125,
+          "recallCI": [
+            0.14164435051961052,
+            0.5559606813326594
+          ],
+          "questionsFullySatisfied": 2,
+          "questions": 9,
+          "fullRate": 0.2222222222222222,
+          "fullRateCI": [
+            0.0632237623122272,
+            0.5474166563271946
+          ],
+          "meanTokens": 15846,
+          "meanFilesInContext": 50.9
+        },
+        "two-stage": {
+          "goldFilesCovered": 5,
+          "goldFiles": 16,
+          "recall": 0.3125,
+          "recallCI": [
+            0.14164435051961052,
+            0.5559606813326594
+          ],
+          "questionsFullySatisfied": 2,
+          "questions": 9,
+          "fullRate": 0.2222222222222222,
+          "fullRateCI": [
+            0.0632237623122272,
+            0.5474166563271946
+          ],
+          "meanTokens": 15911,
+          "meanFilesInContext": 48.1
+        }
+      }
+    }
+  },
+  "questions": [
+    {
+      "id": "q01",
+      "kind": "named",
+      "question": "How is the quality gate policy evaluated for a pull request?",
+      "gold": [
+        "packages/core/src/pr-gate.ts",
+        "packages/core/src/pr-analysis.ts"
+      ],
+      "groups": [
+        "Evaluation",
+        "Policy",
+        "Policy"
+      ],
+      "production": {
+        "raw": 339298,
+        "sent": 430,
+        "overGateway": true,
+        "hit": 0,
+        "of": 2
+      },
+      "natural": {
+        "tokens": 8792,
+        "rawTokens": 810075,
+        "hit": 1,
+        "of": 2,
+        "filesInContext": 23,
+        "symbols": 40
+      },
+      "byBudget": {
+        "500": {
+          "baseline": {
+            "tokens": 402,
+            "rawTokens": 339269,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 1,
+            "symbols": 1
+          },
+          "flat": {
+            "tokens": 305,
+            "rawTokens": 16997,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 1,
+            "symbols": 1
+          },
+          "two-stage": {
+            "tokens": 305,
+            "rawTokens": 16997,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 1,
+            "symbols": 1
+          }
+        },
+        "1000": {
+          "baseline": {
+            "tokens": 919,
+            "rawTokens": 390673,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 3,
+            "symbols": 5
+          },
+          "flat": {
+            "tokens": 838,
+            "rawTokens": 62947,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 3,
+            "symbols": 3
+          },
+          "two-stage": {
+            "tokens": 838,
+            "rawTokens": 62947,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 3,
+            "symbols": 3
+          }
+        },
+        "2000": {
+          "baseline": {
+            "tokens": 1125,
+            "rawTokens": 396850,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 4,
+            "symbols": 6
+          },
+          "flat": {
+            "tokens": 1813,
+            "rawTokens": 102428,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 6,
+            "symbols": 8
+          },
+          "two-stage": {
+            "tokens": 1813,
+            "rawTokens": 102428,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 6,
+            "symbols": 8
+          }
+        },
+        "4000": {
+          "baseline": {
+            "tokens": 3861,
+            "rawTokens": 504944,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 9,
+            "symbols": 15
+          },
+          "flat": {
+            "tokens": 3967,
+            "rawTokens": 267087,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 13,
+            "symbols": 17
+          },
+          "two-stage": {
+            "tokens": 3967,
+            "rawTokens": 267087,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 13,
+            "symbols": 17
+          }
+        },
+        "8000": {
+          "baseline": {
+            "tokens": 7834,
+            "rawTokens": 771722,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 21,
+            "symbols": 34
+          },
+          "flat": {
+            "tokens": 7992,
+            "rawTokens": 796418,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 18,
+            "symbols": 28
+          },
+          "two-stage": {
+            "tokens": 7816,
+            "rawTokens": 741707,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 16,
+            "symbols": 28
+          }
+        },
+        "16000": {
+          "baseline": {
+            "tokens": 8772,
+            "rawTokens": 810055,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 23,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 15902,
+            "rawTokens": 1575134,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 39,
+            "symbols": 63
+          },
+          "two-stage": {
+            "tokens": 15978,
+            "rawTokens": 1478827,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 32,
+            "symbols": 71
+          }
+        }
+      }
+    },
+    {
+      "id": "q02",
+      "kind": "named",
+      "question": "Where do we publish a status or comment to GitHub for a pull request?",
+      "gold": [
+        "packages/core/src/pr-publish.ts"
+      ],
+      "groups": [
+        "Publisher",
+        "Publish",
+        "Publish"
+      ],
+      "production": {
+        "raw": 339299,
+        "sent": 431,
+        "overGateway": true,
+        "hit": 0,
+        "of": 1
+      },
+      "natural": {
+        "tokens": 11399,
+        "rawTokens": 934573,
+        "hit": 1,
+        "of": 1,
+        "filesInContext": 22,
+        "symbols": 40
+      },
+      "byBudget": {
+        "500": {
+          "baseline": {
+            "tokens": 402,
+            "rawTokens": 339269,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 1,
+            "symbols": 1
+          },
+          "flat": {
+            "tokens": 40,
+            "rawTokens": 64,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 0,
+            "symbols": 0
+          },
+          "two-stage": {
+            "tokens": 383,
+            "rawTokens": 25307,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 1,
+            "symbols": 1
+          }
+        },
+        "1000": {
+          "baseline": {
+            "tokens": 826,
+            "rawTokens": 401694,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "flat": {
+            "tokens": 912,
+            "rawTokens": 73420,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "two-stage": {
+            "tokens": 933,
+            "rawTokens": 81781,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 2
+          }
+        },
+        "2000": {
+          "baseline": {
+            "tokens": 1646,
+            "rawTokens": 442812,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 3,
+            "symbols": 6
+          },
+          "flat": {
+            "tokens": 1860,
+            "rawTokens": 147948,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 4,
+            "symbols": 5
+          },
+          "two-stage": {
+            "tokens": 1790,
+            "rawTokens": 155168,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 3,
+            "symbols": 5
+          }
+        },
+        "4000": {
+          "baseline": {
+            "tokens": 3952,
+            "rawTokens": 499997,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 4,
+            "symbols": 12
+          },
+          "flat": {
+            "tokens": 3936,
+            "rawTokens": 253636,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 7,
+            "symbols": 9
+          },
+          "two-stage": {
+            "tokens": 2762,
+            "rawTokens": 242930,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 8,
+            "symbols": 10
+          }
+        },
+        "8000": {
+          "baseline": {
+            "tokens": 7616,
+            "rawTokens": 760363,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 10,
+            "symbols": 24
+          },
+          "flat": {
+            "tokens": 7866,
+            "rawTokens": 805324,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 23,
+            "symbols": 30
+          },
+          "two-stage": {
+            "tokens": 7862,
+            "rawTokens": 797590,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 22,
+            "symbols": 30
+          }
+        },
+        "16000": {
+          "baseline": {
+            "tokens": 11379,
+            "rawTokens": 934553,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 22,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 15936,
+            "rawTokens": 1495652,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 50,
+            "symbols": 66
+          },
+          "two-stage": {
+            "tokens": 15850,
+            "rawTokens": 1363636,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 47,
+            "symbols": 67
+          }
+        }
+      }
+    },
+    {
+      "id": "q03",
+      "kind": "named",
+      "question": "How are hotspots ranked from git history?",
+      "gold": [
+        "packages/core/src/hotspots.ts"
+      ],
+      "groups": [
+        "Rank",
+        "Git",
+        "Git"
+      ],
+      "production": {
+        "raw": 56980,
+        "sent": 275,
+        "overGateway": false,
+        "hit": 1,
+        "of": 1
+      },
+      "natural": {
+        "tokens": 8359,
+        "rawTokens": 549034,
+        "hit": 1,
+        "of": 1,
+        "filesInContext": 4,
+        "symbols": 40
+      },
+      "byBudget": {
+        "500": {
+          "baseline": {
+            "tokens": 420,
+            "rawTokens": 104799,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 1,
+            "symbols": 2
+          },
+          "flat": {
+            "tokens": 453,
+            "rawTokens": 66193,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 3
+          },
+          "two-stage": {
+            "tokens": 425,
+            "rawTokens": 54512,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 1,
+            "symbols": 3
+          }
+        },
+        "1000": {
+          "baseline": {
+            "tokens": 913,
+            "rawTokens": 162826,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 4
+          },
+          "flat": {
+            "tokens": 912,
+            "rawTokens": 106812,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 3,
+            "symbols": 5
+          },
+          "two-stage": {
+            "tokens": 933,
+            "rawTokens": 104725,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 3,
+            "symbols": 5
+          }
+        },
+        "2000": {
+          "baseline": {
+            "tokens": 1965,
+            "rawTokens": 252235,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 10
+          },
+          "flat": {
+            "tokens": 1875,
+            "rawTokens": 192618,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 6,
+            "symbols": 10
+          },
+          "two-stage": {
+            "tokens": 1875,
+            "rawTokens": 192618,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 6,
+            "symbols": 10
+          }
+        },
+        "4000": {
+          "baseline": {
+            "tokens": 3849,
+            "rawTokens": 353466,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 4,
+            "symbols": 18
+          },
+          "flat": {
+            "tokens": 3929,
+            "rawTokens": 399603,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 12,
+            "symbols": 20
+          },
+          "two-stage": {
+            "tokens": 3825,
+            "rawTokens": 263627,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 14,
+            "symbols": 22
+          }
+        },
+        "8000": {
+          "baseline": {
+            "tokens": 7830,
+            "rawTokens": 539113,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 4,
+            "symbols": 37
+          },
+          "flat": {
+            "tokens": 7940,
+            "rawTokens": 688121,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 19,
+            "symbols": 46
+          },
+          "two-stage": {
+            "tokens": 7975,
+            "rawTokens": 643353,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 24,
+            "symbols": 41
+          }
+        },
+        "16000": {
+          "baseline": {
+            "tokens": 8342,
+            "rawTokens": 549017,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 4,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 15828,
+            "rawTokens": 1117496,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 22,
+            "symbols": 81
+          },
+          "two-stage": {
+            "tokens": 15943,
+            "rawTokens": 1058437,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 31,
+            "symbols": 84
+          }
+        }
+      }
+    },
+    {
+      "id": "q04",
+      "kind": "named",
+      "question": "How is a program dependence graph built for a function?",
+      "gold": [
+        "packages/core/src/concept-hierarchy/pdg.ts"
+      ],
+      "groups": [
+        "Graph",
+        "Graph"
+      ],
+      "production": {
+        "raw": 59102,
+        "sent": 781,
+        "overGateway": false,
+        "hit": 1,
+        "of": 1
+      },
+      "natural": {
+        "tokens": 8139,
+        "rawTokens": 678115,
+        "hit": 1,
+        "of": 1,
+        "filesInContext": 23,
+        "symbols": 40
+      },
+      "byBudget": {
+        "500": {
+          "baseline": {
+            "tokens": 379,
+            "rawTokens": 24365,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "flat": {
+            "tokens": 464,
+            "rawTokens": 68895,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "two-stage": {
+            "tokens": 446,
+            "rawTokens": 43083,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 2
+          }
+        },
+        "1000": {
+          "baseline": {
+            "tokens": 889,
+            "rawTokens": 73063,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 4,
+            "symbols": 5
+          },
+          "flat": {
+            "tokens": 859,
+            "rawTokens": 103802,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 4,
+            "symbols": 4
+          },
+          "two-stage": {
+            "tokens": 886,
+            "rawTokens": 108099,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 4,
+            "symbols": 4
+          }
+        },
+        "2000": {
+          "baseline": {
+            "tokens": 1893,
+            "rawTokens": 158896,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 6,
+            "symbols": 8
+          },
+          "flat": {
+            "tokens": 1930,
+            "rawTokens": 164017,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 9,
+            "symbols": 12
+          },
+          "two-stage": {
+            "tokens": 1930,
+            "rawTokens": 164017,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 9,
+            "symbols": 12
+          }
+        },
+        "4000": {
+          "baseline": {
+            "tokens": 3882,
+            "rawTokens": 324024,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 13,
+            "symbols": 17
+          },
+          "flat": {
+            "tokens": 3976,
+            "rawTokens": 357524,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 13,
+            "symbols": 20
+          },
+          "two-stage": {
+            "tokens": 3976,
+            "rawTokens": 357524,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 13,
+            "symbols": 20
+          }
+        },
+        "8000": {
+          "baseline": {
+            "tokens": 7971,
+            "rawTokens": 672683,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 23,
+            "symbols": 38
+          },
+          "flat": {
+            "tokens": 7871,
+            "rawTokens": 618161,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 25,
+            "symbols": 39
+          },
+          "two-stage": {
+            "tokens": 7871,
+            "rawTokens": 618161,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 25,
+            "symbols": 39
+          }
+        },
+        "16000": {
+          "baseline": {
+            "tokens": 8122,
+            "rawTokens": 678097,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 23,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 15776,
+            "rawTokens": 1275186,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 48,
+            "symbols": 75
+          },
+          "two-stage": {
+            "tokens": 15986,
+            "rawTokens": 1484356,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 46,
+            "symbols": 83
+          }
+        }
+      }
+    },
+    {
+      "id": "q05",
+      "kind": "named",
+      "question": "How are invariants inferred from guards?",
+      "gold": [
+        "packages/core/src/concept-hierarchy/invariants.ts"
+      ],
+      "groups": [
+        "Invariant",
+        "Invariant",
+        "Guarded"
+      ],
+      "production": {
+        "raw": 54384,
+        "sent": 1657,
+        "overGateway": false,
+        "hit": 1,
+        "of": 1
+      },
+      "natural": {
+        "tokens": 7575,
+        "rawTokens": 920017,
+        "hit": 1,
+        "of": 1,
+        "filesInContext": 23,
+        "symbols": 40
+      },
+      "byBudget": {
+        "500": {
+          "baseline": {
+            "tokens": 406,
+            "rawTokens": 9576,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "flat": {
+            "tokens": 413,
+            "rawTokens": 35651,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "two-stage": {
+            "tokens": 413,
+            "rawTokens": 35651,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 2
+          }
+        },
+        "1000": {
+          "baseline": {
+            "tokens": 951,
+            "rawTokens": 27439,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 4,
+            "symbols": 5
+          },
+          "flat": {
+            "tokens": 998,
+            "rawTokens": 57080,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 4,
+            "symbols": 7
+          },
+          "two-stage": {
+            "tokens": 998,
+            "rawTokens": 57080,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 4,
+            "symbols": 7
+          }
+        },
+        "2000": {
+          "baseline": {
+            "tokens": 1919,
+            "rawTokens": 65881,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 8,
+            "symbols": 10
+          },
+          "flat": {
+            "tokens": 1906,
+            "rawTokens": 146640,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 8,
+            "symbols": 12
+          },
+          "two-stage": {
+            "tokens": 1837,
+            "rawTokens": 88739,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 7,
+            "symbols": 12
+          }
+        },
+        "4000": {
+          "baseline": {
+            "tokens": 3947,
+            "rawTokens": 364098,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 16,
+            "symbols": 25
+          },
+          "flat": {
+            "tokens": 3924,
+            "rawTokens": 279572,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 15,
+            "symbols": 22
+          },
+          "two-stage": {
+            "tokens": 3824,
+            "rawTokens": 208032,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 11,
+            "symbols": 21
+          }
+        },
+        "8000": {
+          "baseline": {
+            "tokens": 7556,
+            "rawTokens": 919998,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 23,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 7981,
+            "rawTokens": 515535,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 28,
+            "symbols": 45
+          },
+          "two-stage": {
+            "tokens": 7981,
+            "rawTokens": 515535,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 28,
+            "symbols": 45
+          }
+        },
+        "16000": {
+          "baseline": {
+            "tokens": 7556,
+            "rawTokens": 919998,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 23,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 15870,
+            "rawTokens": 953541,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 55,
+            "symbols": 86
+          },
+          "two-stage": {
+            "tokens": 15870,
+            "rawTokens": 953541,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 55,
+            "symbols": 86
+          }
+        }
+      }
+    },
+    {
+      "id": "q06",
+      "kind": "named",
+      "question": "How are test results and coverage artifacts parsed?",
+      "gold": [
+        "packages/core/src/testartifacts.ts"
+      ],
+      "groups": [
+        "Coverage",
+        "Artifact",
+        "Artifact"
+      ],
+      "production": {
+        "raw": 38285,
+        "sent": 653,
+        "overGateway": false,
+        "hit": 0,
+        "of": 1
+      },
+      "natural": {
+        "tokens": 7724,
+        "rawTokens": 669512,
+        "hit": 1,
+        "of": 1,
+        "filesInContext": 18,
+        "symbols": 40
+      },
+      "byBudget": {
+        "500": {
+          "baseline": {
+            "tokens": 468,
+            "rawTokens": 37117,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 3,
+            "symbols": 3
+          },
+          "flat": {
+            "tokens": 429,
+            "rawTokens": 65164,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "two-stage": {
+            "tokens": 429,
+            "rawTokens": 65164,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 2
+          }
+        },
+        "1000": {
+          "baseline": {
+            "tokens": 965,
+            "rawTokens": 115283,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 5,
+            "symbols": 6
+          },
+          "flat": {
+            "tokens": 979,
+            "rawTokens": 137865,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 5,
+            "symbols": 5
+          },
+          "two-stage": {
+            "tokens": 931,
+            "rawTokens": 96894,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 5,
+            "symbols": 5
+          }
+        },
+        "2000": {
+          "baseline": {
+            "tokens": 1814,
+            "rawTokens": 149180,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 6,
+            "symbols": 10
+          },
+          "flat": {
+            "tokens": 1992,
+            "rawTokens": 218465,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 11,
+            "symbols": 11
+          },
+          "two-stage": {
+            "tokens": 1904,
+            "rawTokens": 150074,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 8,
+            "symbols": 10
+          }
+        },
+        "4000": {
+          "baseline": {
+            "tokens": 3981,
+            "rawTokens": 234395,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 8,
+            "symbols": 23
+          },
+          "flat": {
+            "tokens": 3813,
+            "rawTokens": 401281,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 17,
+            "symbols": 19
+          },
+          "two-stage": {
+            "tokens": 3928,
+            "rawTokens": 294962,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 16,
+            "symbols": 25
+          }
+        },
+        "8000": {
+          "baseline": {
+            "tokens": 7702,
+            "rawTokens": 669490,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 18,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 7904,
+            "rawTokens": 796467,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 30,
+            "symbols": 41
+          },
+          "two-stage": {
+            "tokens": 7920,
+            "rawTokens": 668517,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 29,
+            "symbols": 43
+          }
+        },
+        "16000": {
+          "baseline": {
+            "tokens": 7702,
+            "rawTokens": 669490,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 18,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 15876,
+            "rawTokens": 1504960,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 56,
+            "symbols": 80
+          },
+          "two-stage": {
+            "tokens": 15799,
+            "rawTokens": 1435679,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 52,
+            "symbols": 82
+          }
+        }
+      }
+    },
+    {
+      "id": "q07",
+      "kind": "named",
+      "question": "How does the chat agent call read-only tools?",
+      "gold": [
+        "packages/core/src/chat-agent.ts",
+        "packages/core/src/chat-tools.ts"
+      ],
+      "groups": [
+        "Tool",
+        "Chat",
+        "Chat"
+      ],
+      "production": {
+        "raw": 50277,
+        "sent": 384,
+        "overGateway": false,
+        "hit": 1,
+        "of": 2
+      },
+      "natural": {
+        "tokens": 8000,
+        "rawTokens": 784797,
+        "hit": 2,
+        "of": 2,
+        "filesInContext": 12,
+        "symbols": 40
+      },
+      "byBudget": {
+        "500": {
+          "baseline": {
+            "tokens": 499,
+            "rawTokens": 63499,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 3,
+            "symbols": 3
+          },
+          "flat": {
+            "tokens": 487,
+            "rawTokens": 47950,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "two-stage": {
+            "tokens": 479,
+            "rawTokens": 31341,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 1,
+            "symbols": 2
+          }
+        },
+        "1000": {
+          "baseline": {
+            "tokens": 929,
+            "rawTokens": 89120,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 4,
+            "symbols": 6
+          },
+          "flat": {
+            "tokens": 928,
+            "rawTokens": 63932,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 4
+          },
+          "two-stage": {
+            "tokens": 856,
+            "rawTokens": 99063,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 3,
+            "symbols": 4
+          }
+        },
+        "2000": {
+          "baseline": {
+            "tokens": 1916,
+            "rawTokens": 143239,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 4,
+            "symbols": 12
+          },
+          "flat": {
+            "tokens": 1938,
+            "rawTokens": 163325,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 5,
+            "symbols": 10
+          },
+          "two-stage": {
+            "tokens": 1773,
+            "rawTokens": 148743,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 4,
+            "symbols": 9
+          }
+        },
+        "4000": {
+          "baseline": {
+            "tokens": 3881,
+            "rawTokens": 219713,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 4,
+            "symbols": 23
+          },
+          "flat": {
+            "tokens": 3971,
+            "rawTokens": 303696,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 10,
+            "symbols": 18
+          },
+          "two-stage": {
+            "tokens": 3857,
+            "rawTokens": 278588,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 9,
+            "symbols": 18
+          }
+        },
+        "8000": {
+          "baseline": {
+            "tokens": 7984,
+            "rawTokens": 784781,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 12,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 7923,
+            "rawTokens": 588207,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 20,
+            "symbols": 37
+          },
+          "two-stage": {
+            "tokens": 7975,
+            "rawTokens": 583026,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 18,
+            "symbols": 37
+          }
+        },
+        "16000": {
+          "baseline": {
+            "tokens": 7984,
+            "rawTokens": 784781,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 12,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 15961,
+            "rawTokens": 1041215,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 35,
+            "symbols": 73
+          },
+          "two-stage": {
+            "tokens": 15664,
+            "rawTokens": 1007987,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 31,
+            "symbols": 71
+          }
+        }
+      }
+    },
+    {
+      "id": "q08",
+      "kind": "named",
+      "question": "How is a forge webhook verified and applied?",
+      "gold": [
+        "packages/core/src/connectors.ts",
+        "packages/core/src/service.ts"
+      ],
+      "groups": [
+        "Forge",
+        "Forge"
+      ],
+      "production": {
+        "raw": 23364,
+        "sent": 533,
+        "overGateway": false,
+        "hit": 1,
+        "of": 2
+      },
+      "natural": {
+        "tokens": 7742,
+        "rawTokens": 588797,
+        "hit": 2,
+        "of": 2,
+        "filesInContext": 20,
+        "symbols": 40
+      },
+      "byBudget": {
+        "500": {
+          "baseline": {
+            "tokens": 379,
+            "rawTokens": 21319,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "flat": {
+            "tokens": 404,
+            "rawTokens": 43792,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "two-stage": {
+            "tokens": 404,
+            "rawTokens": 43792,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 2
+          }
+        },
+        "1000": {
+          "baseline": {
+            "tokens": 507,
+            "rawTokens": 23337,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 3
+          },
+          "flat": {
+            "tokens": 948,
+            "rawTokens": 87890,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 5,
+            "symbols": 5
+          },
+          "two-stage": {
+            "tokens": 948,
+            "rawTokens": 87890,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 5,
+            "symbols": 5
+          }
+        },
+        "2000": {
+          "baseline": {
+            "tokens": 1889,
+            "rawTokens": 397674,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 3,
+            "symbols": 8
+          },
+          "flat": {
+            "tokens": 1901,
+            "rawTokens": 149335,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 10,
+            "symbols": 10
+          },
+          "two-stage": {
+            "tokens": 1901,
+            "rawTokens": 149335,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 10,
+            "symbols": 10
+          }
+        },
+        "4000": {
+          "baseline": {
+            "tokens": 3988,
+            "rawTokens": 492128,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 11,
+            "symbols": 22
+          },
+          "flat": {
+            "tokens": 3926,
+            "rawTokens": 365983,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 15,
+            "symbols": 19
+          },
+          "two-stage": {
+            "tokens": 3926,
+            "rawTokens": 365983,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 15,
+            "symbols": 19
+          }
+        },
+        "8000": {
+          "baseline": {
+            "tokens": 7725,
+            "rawTokens": 588780,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 20,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 7963,
+            "rawTokens": 659077,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 29,
+            "symbols": 38
+          },
+          "two-stage": {
+            "tokens": 7859,
+            "rawTokens": 885538,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 30,
+            "symbols": 39
+          }
+        },
+        "16000": {
+          "baseline": {
+            "tokens": 7725,
+            "rawTokens": 588780,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 20,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 15868,
+            "rawTokens": 1543266,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 48,
+            "symbols": 71
+          },
+          "two-stage": {
+            "tokens": 15967,
+            "rawTokens": 1050921,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 34,
+            "symbols": 85
+          }
+        }
+      }
+    },
+    {
+      "id": "q09",
+      "kind": "paraphrase",
+      "question": "How do we stop a hosted model from receiving code the user has not approved?",
+      "gold": [
+        "packages/core/src/service.ts",
+        "packages/core/src/policy.ts"
+      ],
+      "groups": [
+        "Approval",
+        "Hosted",
+        "User"
+      ],
+      "production": {
+        "raw": 55679,
+        "sent": 1653,
+        "overGateway": false,
+        "hit": 0,
+        "of": 2
+      },
+      "natural": {
+        "tokens": 7612,
+        "rawTokens": 644252,
+        "hit": 1,
+        "of": 2,
+        "filesInContext": 25,
+        "symbols": 40
+      },
+      "byBudget": {
+        "500": {
+          "baseline": {
+            "tokens": 424,
+            "rawTokens": 24442,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 3,
+            "symbols": 3
+          },
+          "flat": {
+            "tokens": 497,
+            "rawTokens": 51930,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "two-stage": {
+            "tokens": 497,
+            "rawTokens": 51930,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 2
+          }
+        },
+        "1000": {
+          "baseline": {
+            "tokens": 998,
+            "rawTokens": 42197,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 6,
+            "symbols": 8
+          },
+          "flat": {
+            "tokens": 692,
+            "rawTokens": 88721,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 3
+          },
+          "two-stage": {
+            "tokens": 692,
+            "rawTokens": 88721,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 3
+          }
+        },
+        "2000": {
+          "baseline": {
+            "tokens": 1617,
+            "rawTokens": 55644,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 9,
+            "symbols": 12
+          },
+          "flat": {
+            "tokens": 1951,
+            "rawTokens": 213166,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 6,
+            "symbols": 8
+          },
+          "two-stage": {
+            "tokens": 1927,
+            "rawTokens": 209685,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 6,
+            "symbols": 8
+          }
+        },
+        "4000": {
+          "baseline": {
+            "tokens": 3899,
+            "rawTokens": 477423,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 15,
+            "symbols": 22
+          },
+          "flat": {
+            "tokens": 3873,
+            "rawTokens": 299049,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 12,
+            "symbols": 16
+          },
+          "two-stage": {
+            "tokens": 3921,
+            "rawTokens": 299120,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 13,
+            "symbols": 16
+          }
+        },
+        "8000": {
+          "baseline": {
+            "tokens": 7586,
+            "rawTokens": 644226,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 25,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 7992,
+            "rawTokens": 691670,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 27,
+            "symbols": 35
+          },
+          "two-stage": {
+            "tokens": 7892,
+            "rawTokens": 526216,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 23,
+            "symbols": 34
+          }
+        },
+        "16000": {
+          "baseline": {
+            "tokens": 7586,
+            "rawTokens": 644226,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 25,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 15970,
+            "rawTokens": 1426503,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 50,
+            "symbols": 71
+          },
+          "two-stage": {
+            "tokens": 15843,
+            "rawTokens": 1184433,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 52,
+            "symbols": 77
+          }
+        }
+      }
+    },
+    {
+      "id": "q10",
+      "kind": "paraphrase",
+      "question": "Where do we decide whether a displayed statement is grounded in evidence?",
+      "gold": [
+        "packages/core/src/claims.ts",
+        "packages/core/src/claim-ledger.ts"
+      ],
+      "groups": [
+        "Evidence",
+        "Evidence"
+      ],
+      "production": {
+        "raw": 56610,
+        "sent": 731,
+        "overGateway": false,
+        "hit": 0,
+        "of": 2
+      },
+      "natural": {
+        "tokens": 7194,
+        "rawTokens": 621828,
+        "hit": 0,
+        "of": 2,
+        "filesInContext": 27,
+        "symbols": 40
+      },
+      "byBudget": {
+        "500": {
+          "baseline": {
+            "tokens": 197,
+            "rawTokens": 20930,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 1,
+            "symbols": 1
+          },
+          "flat": {
+            "tokens": 432,
+            "rawTokens": 24265,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "two-stage": {
+            "tokens": 432,
+            "rawTokens": 24265,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 2
+          }
+        },
+        "1000": {
+          "baseline": {
+            "tokens": 693,
+            "rawTokens": 56572,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 1,
+            "symbols": 2
+          },
+          "flat": {
+            "tokens": 998,
+            "rawTokens": 65841,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 5,
+            "symbols": 5
+          },
+          "two-stage": {
+            "tokens": 892,
+            "rawTokens": 232021,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 5,
+            "symbols": 5
+          }
+        },
+        "2000": {
+          "baseline": {
+            "tokens": 1857,
+            "rawTokens": 418593,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 5,
+            "symbols": 9
+          },
+          "flat": {
+            "tokens": 1997,
+            "rawTokens": 145381,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 10,
+            "symbols": 11
+          },
+          "two-stage": {
+            "tokens": 1915,
+            "rawTokens": 298564,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 10,
+            "symbols": 11
+          }
+        },
+        "4000": {
+          "baseline": {
+            "tokens": 3974,
+            "rawTokens": 535717,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 13,
+            "symbols": 22
+          },
+          "flat": {
+            "tokens": 3841,
+            "rawTokens": 480834,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 15,
+            "symbols": 20
+          },
+          "two-stage": {
+            "tokens": 3960,
+            "rawTokens": 494435,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 16,
+            "symbols": 21
+          }
+        },
+        "8000": {
+          "baseline": {
+            "tokens": 7165,
+            "rawTokens": 621799,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 27,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 7978,
+            "rawTokens": 826188,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 28,
+            "symbols": 42
+          },
+          "two-stage": {
+            "tokens": 7947,
+            "rawTokens": 836120,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 27,
+            "symbols": 42
+          }
+        },
+        "16000": {
+          "baseline": {
+            "tokens": 7165,
+            "rawTokens": 621799,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 27,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 15470,
+            "rawTokens": 1367016,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 58,
+            "symbols": 84
+          },
+          "two-stage": {
+            "tokens": 15967,
+            "rawTokens": 1682281,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 53,
+            "symbols": 82
+          }
+        }
+      }
+    },
+    {
+      "id": "q11",
+      "kind": "paraphrase",
+      "question": "How do we run untrusted tests without letting them touch the rest of the disk?",
+      "gold": [
+        "packages/core/src/isolated-exec.ts",
+        "packages/core/src/runtime-sandbox.ts"
+      ],
+      "groups": [],
+      "production": {
+        "raw": 55511,
+        "sent": 1321,
+        "overGateway": false,
+        "hit": 0,
+        "of": 2
+      },
+      "natural": {
+        "tokens": 9366,
+        "rawTokens": 980076,
+        "hit": 2,
+        "of": 2,
+        "filesInContext": 31,
+        "symbols": 40
+      },
+      "byBudget": {
+        "500": {
+          "baseline": {
+            "tokens": 452,
+            "rawTokens": 16985,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 3,
+            "symbols": 3
+          },
+          "flat": {
+            "tokens": 494,
+            "rawTokens": 57083,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "two-stage": {
+            "tokens": 494,
+            "rawTokens": 57083,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 2
+          }
+        },
+        "1000": {
+          "baseline": {
+            "tokens": 886,
+            "rawTokens": 39769,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 6,
+            "symbols": 6
+          },
+          "flat": {
+            "tokens": 906,
+            "rawTokens": 94391,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 3,
+            "symbols": 4
+          },
+          "two-stage": {
+            "tokens": 906,
+            "rawTokens": 94391,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 3,
+            "symbols": 4
+          }
+        },
+        "2000": {
+          "baseline": {
+            "tokens": 1935,
+            "rawTokens": 117697,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 12,
+            "symbols": 13
+          },
+          "flat": {
+            "tokens": 1986,
+            "rawTokens": 231972,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 7,
+            "symbols": 9
+          },
+          "two-stage": {
+            "tokens": 1986,
+            "rawTokens": 231972,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 7,
+            "symbols": 9
+          }
+        },
+        "4000": {
+          "baseline": {
+            "tokens": 3567,
+            "rawTokens": 211611,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 20,
+            "symbols": 25
+          },
+          "flat": {
+            "tokens": 3942,
+            "rawTokens": 428668,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 16,
+            "symbols": 19
+          },
+          "two-stage": {
+            "tokens": 3942,
+            "rawTokens": 428668,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 16,
+            "symbols": 19
+          }
+        },
+        "8000": {
+          "baseline": {
+            "tokens": 7558,
+            "rawTokens": 869733,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 26,
+            "symbols": 35
+          },
+          "flat": {
+            "tokens": 7974,
+            "rawTokens": 727109,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 32,
+            "symbols": 38
+          },
+          "two-stage": {
+            "tokens": 7974,
+            "rawTokens": 727109,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 32,
+            "symbols": 38
+          }
+        },
+        "16000": {
+          "baseline": {
+            "tokens": 9340,
+            "rawTokens": 980050,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 31,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 15848,
+            "rawTokens": 1465317,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 57,
+            "symbols": 76
+          },
+          "two-stage": {
+            "tokens": 15848,
+            "rawTokens": 1465317,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 57,
+            "symbols": 76
+          }
+        }
+      }
+    },
+    {
+      "id": "q12",
+      "kind": "paraphrase",
+      "question": "What turns a defect report into a reviewed patch and a draft request on the forge?",
+      "gold": [
+        "packages/core/src/defect-workflow.ts",
+        "packages/core/src/gh-forge.ts",
+        "packages/core/src/feature/publish.ts"
+      ],
+      "groups": [
+        "Review",
+        "Draft",
+        "Draft"
+      ],
+      "production": {
+        "raw": 57241,
+        "sent": 2237,
+        "overGateway": false,
+        "hit": 1,
+        "of": 3
+      },
+      "natural": {
+        "tokens": 10119,
+        "rawTokens": 1071035,
+        "hit": 2,
+        "of": 3,
+        "filesInContext": 19,
+        "symbols": 40
+      },
+      "byBudget": {
+        "500": {
+          "baseline": {
+            "tokens": 413,
+            "rawTokens": 9305,
+            "hit": 1,
+            "of": 3,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "flat": {
+            "tokens": 283,
+            "rawTokens": 22569,
+            "hit": 0,
+            "of": 3,
+            "filesInContext": 1,
+            "symbols": 1
+          },
+          "two-stage": {
+            "tokens": 304,
+            "rawTokens": 37754,
+            "hit": 0,
+            "of": 3,
+            "filesInContext": 1,
+            "symbols": 1
+          }
+        },
+        "1000": {
+          "baseline": {
+            "tokens": 413,
+            "rawTokens": 9305,
+            "hit": 1,
+            "of": 3,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "flat": {
+            "tokens": 775,
+            "rawTokens": 64547,
+            "hit": 0,
+            "of": 3,
+            "filesInContext": 3,
+            "symbols": 3
+          },
+          "two-stage": {
+            "tokens": 769,
+            "rawTokens": 76119,
+            "hit": 0,
+            "of": 3,
+            "filesInContext": 3,
+            "symbols": 3
+          }
+        },
+        "2000": {
+          "baseline": {
+            "tokens": 1900,
+            "rawTokens": 51754,
+            "hit": 1,
+            "of": 3,
+            "filesInContext": 3,
+            "symbols": 3
+          },
+          "flat": {
+            "tokens": 1927,
+            "rawTokens": 209488,
+            "hit": 0,
+            "of": 3,
+            "filesInContext": 7,
+            "symbols": 8
+          },
+          "two-stage": {
+            "tokens": 1901,
+            "rawTokens": 172291,
+            "hit": 0,
+            "of": 3,
+            "filesInContext": 5,
+            "symbols": 7
+          }
+        },
+        "4000": {
+          "baseline": {
+            "tokens": 3719,
+            "rawTokens": 129201,
+            "hit": 2,
+            "of": 3,
+            "filesInContext": 7,
+            "symbols": 13
+          },
+          "flat": {
+            "tokens": 3914,
+            "rawTokens": 404108,
+            "hit": 0,
+            "of": 3,
+            "filesInContext": 15,
+            "symbols": 18
+          },
+          "two-stage": {
+            "tokens": 3686,
+            "rawTokens": 371755,
+            "hit": 0,
+            "of": 3,
+            "filesInContext": 13,
+            "symbols": 16
+          }
+        },
+        "8000": {
+          "baseline": {
+            "tokens": 7787,
+            "rawTokens": 942783,
+            "hit": 2,
+            "of": 3,
+            "filesInContext": 12,
+            "symbols": 27
+          },
+          "flat": {
+            "tokens": 7910,
+            "rawTokens": 654878,
+            "hit": 1,
+            "of": 3,
+            "filesInContext": 27,
+            "symbols": 36
+          },
+          "two-stage": {
+            "tokens": 7974,
+            "rawTokens": 572623,
+            "hit": 1,
+            "of": 3,
+            "filesInContext": 26,
+            "symbols": 36
+          }
+        },
+        "16000": {
+          "baseline": {
+            "tokens": 10093,
+            "rawTokens": 1071009,
+            "hit": 2,
+            "of": 3,
+            "filesInContext": 19,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 15640,
+            "rawTokens": 1159217,
+            "hit": 2,
+            "of": 3,
+            "filesInContext": 49,
+            "symbols": 73
+          },
+          "two-stage": {
+            "tokens": 15884,
+            "rawTokens": 1099205,
+            "hit": 2,
+            "of": 3,
+            "filesInContext": 44,
+            "symbols": 77
+          }
+        }
+      }
+    },
+    {
+      "id": "q13",
+      "kind": "paraphrase",
+      "question": "How does the system remember what a model called each group of similar functions?",
+      "gold": [
+        "packages/core/src/concept-hierarchy/naming.ts",
+        "packages/core/src/store.ts"
+      ],
+      "groups": [
+        "Group"
+      ],
+      "production": {
+        "raw": 337796,
+        "sent": 462,
+        "overGateway": true,
+        "hit": 0,
+        "of": 2
+      },
+      "natural": {
+        "tokens": 5330,
+        "rawTokens": 614974,
+        "hit": 1,
+        "of": 2,
+        "filesInContext": 15,
+        "symbols": 40
+      },
+      "byBudget": {
+        "500": {
+          "baseline": {
+            "tokens": 425,
+            "rawTokens": 337760,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 1,
+            "symbols": 1
+          },
+          "flat": {
+            "tokens": 380,
+            "rawTokens": 19918,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "two-stage": {
+            "tokens": 380,
+            "rawTokens": 19918,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 2
+          }
+        },
+        "1000": {
+          "baseline": {
+            "tokens": 935,
+            "rawTokens": 402518,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 4,
+            "symbols": 5
+          },
+          "flat": {
+            "tokens": 839,
+            "rawTokens": 38951,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 5,
+            "symbols": 5
+          },
+          "two-stage": {
+            "tokens": 839,
+            "rawTokens": 38951,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 5,
+            "symbols": 5
+          }
+        },
+        "2000": {
+          "baseline": {
+            "tokens": 1918,
+            "rawTokens": 445971,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 5,
+            "symbols": 16
+          },
+          "flat": {
+            "tokens": 1826,
+            "rawTokens": 110123,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 7,
+            "symbols": 9
+          },
+          "two-stage": {
+            "tokens": 1914,
+            "rawTokens": 140869,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 9,
+            "symbols": 11
+          }
+        },
+        "4000": {
+          "baseline": {
+            "tokens": 3842,
+            "rawTokens": 560494,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 11,
+            "symbols": 31
+          },
+          "flat": {
+            "tokens": 3885,
+            "rawTokens": 308857,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 16,
+            "symbols": 19
+          },
+          "two-stage": {
+            "tokens": 3784,
+            "rawTokens": 316141,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 16,
+            "symbols": 19
+          }
+        },
+        "8000": {
+          "baseline": {
+            "tokens": 5302,
+            "rawTokens": 614947,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 15,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 7964,
+            "rawTokens": 911598,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 29,
+            "symbols": 36
+          },
+          "two-stage": {
+            "tokens": 7881,
+            "rawTokens": 895804,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 30,
+            "symbols": 36
+          }
+        },
+        "16000": {
+          "baseline": {
+            "tokens": 5302,
+            "rawTokens": 614947,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 15,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 15976,
+            "rawTokens": 1594940,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 50,
+            "symbols": 73
+          },
+          "two-stage": {
+            "tokens": 15976,
+            "rawTokens": 1594940,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 50,
+            "symbols": 73
+          }
+        }
+      }
+    },
+    {
+      "id": "q14",
+      "kind": "paraphrase",
+      "question": "How do we find every place a symbol is used across several repositories?",
+      "gold": [
+        "packages/core/src/search.ts"
+      ],
+      "groups": [
+        "Symbol",
+        "Symbol",
+        "Every"
+      ],
+      "production": {
+        "raw": 52959,
+        "sent": 535,
+        "overGateway": false,
+        "hit": 1,
+        "of": 1
+      },
+      "natural": {
+        "tokens": 5610,
+        "rawTokens": 509094,
+        "hit": 1,
+        "of": 1,
+        "filesInContext": 25,
+        "symbols": 40
+      },
+      "byBudget": {
+        "500": {
+          "baseline": {
+            "tokens": 411,
+            "rawTokens": 39707,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 3
+          },
+          "flat": {
+            "tokens": 389,
+            "rawTokens": 20602,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "two-stage": {
+            "tokens": 389,
+            "rawTokens": 20602,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 2
+          }
+        },
+        "1000": {
+          "baseline": {
+            "tokens": 745,
+            "rawTokens": 66891,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 3,
+            "symbols": 6
+          },
+          "flat": {
+            "tokens": 851,
+            "rawTokens": 54962,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 4,
+            "symbols": 4
+          },
+          "two-stage": {
+            "tokens": 938,
+            "rawTokens": 52219,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 4,
+            "symbols": 5
+          }
+        },
+        "2000": {
+          "baseline": {
+            "tokens": 1948,
+            "rawTokens": 139967,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 6,
+            "symbols": 15
+          },
+          "flat": {
+            "tokens": 1873,
+            "rawTokens": 190611,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 8,
+            "symbols": 9
+          },
+          "two-stage": {
+            "tokens": 1944,
+            "rawTokens": 111891,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 9,
+            "symbols": 11
+          }
+        },
+        "4000": {
+          "baseline": {
+            "tokens": 3919,
+            "rawTokens": 232393,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 18,
+            "symbols": 29
+          },
+          "flat": {
+            "tokens": 3857,
+            "rawTokens": 326199,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 20,
+            "symbols": 21
+          },
+          "two-stage": {
+            "tokens": 3784,
+            "rawTokens": 327851,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 18,
+            "symbols": 20
+          }
+        },
+        "8000": {
+          "baseline": {
+            "tokens": 5586,
+            "rawTokens": 509070,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 25,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 7896,
+            "rawTokens": 689858,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 38,
+            "symbols": 42
+          },
+          "two-stage": {
+            "tokens": 7980,
+            "rawTokens": 697356,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 38,
+            "symbols": 42
+          }
+        },
+        "16000": {
+          "baseline": {
+            "tokens": 5586,
+            "rawTokens": 509070,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 25,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 15940,
+            "rawTokens": 1198081,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 73,
+            "symbols": 93
+          },
+          "two-stage": {
+            "tokens": 15993,
+            "rawTokens": 1253970,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 72,
+            "symbols": 92
+          }
+        }
+      }
+    },
+    {
+      "id": "q15",
+      "kind": "paraphrase",
+      "question": "Where do we turn a plain-language feature request into checkable requirements?",
+      "gold": [
+        "packages/core/src/feature/requirements.ts"
+      ],
+      "groups": [
+        "Requirement",
+        "Requirement",
+        "Language"
+      ],
+      "production": {
+        "raw": 42777,
+        "sent": 560,
+        "overGateway": false,
+        "hit": 1,
+        "of": 1
+      },
+      "natural": {
+        "tokens": 13183,
+        "rawTokens": 1102665,
+        "hit": 1,
+        "of": 1,
+        "filesInContext": 19,
+        "symbols": 40
+      },
+      "byBudget": {
+        "500": {
+          "baseline": {
+            "tokens": 40,
+            "rawTokens": 64,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 0,
+            "symbols": 0
+          },
+          "flat": {
+            "tokens": 283,
+            "rawTokens": 15944,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 1,
+            "symbols": 1
+          },
+          "two-stage": {
+            "tokens": 283,
+            "rawTokens": 15944,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 1,
+            "symbols": 1
+          }
+        },
+        "1000": {
+          "baseline": {
+            "tokens": 829,
+            "rawTokens": 87720,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "flat": {
+            "tokens": 917,
+            "rawTokens": 76603,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 4,
+            "symbols": 4
+          },
+          "two-stage": {
+            "tokens": 681,
+            "rawTokens": 66644,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 3,
+            "symbols": 3
+          }
+        },
+        "2000": {
+          "baseline": {
+            "tokens": 1635,
+            "rawTokens": 191141,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 3,
+            "symbols": 4
+          },
+          "flat": {
+            "tokens": 1987,
+            "rawTokens": 142358,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 9,
+            "symbols": 9
+          },
+          "two-stage": {
+            "tokens": 1997,
+            "rawTokens": 168166,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 6,
+            "symbols": 7
+          }
+        },
+        "4000": {
+          "baseline": {
+            "tokens": 3858,
+            "rawTokens": 286505,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 8,
+            "symbols": 11
+          },
+          "flat": {
+            "tokens": 3846,
+            "rawTokens": 249014,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 17,
+            "symbols": 19
+          },
+          "two-stage": {
+            "tokens": 3780,
+            "rawTokens": 367980,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 8,
+            "symbols": 15
+          }
+        },
+        "8000": {
+          "baseline": {
+            "tokens": 7912,
+            "rawTokens": 408901,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 13,
+            "symbols": 32
+          },
+          "flat": {
+            "tokens": 7709,
+            "rawTokens": 628773,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 27,
+            "symbols": 38
+          },
+          "two-stage": {
+            "tokens": 7905,
+            "rawTokens": 592200,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 26,
+            "symbols": 38
+          }
+        },
+        "16000": {
+          "baseline": {
+            "tokens": 13156,
+            "rawTokens": 1102638,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 19,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 15877,
+            "rawTokens": 1042244,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 36,
+            "symbols": 72
+          },
+          "two-stage": {
+            "tokens": 15954,
+            "rawTokens": 984742,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 29,
+            "symbols": 68
+          }
+        }
+      }
+    },
+    {
+      "id": "q16",
+      "kind": "paraphrase",
+      "question": "How is it decided what is in scope for a release and whether it is ready?",
+      "gold": [
+        "packages/core/src/release-scope.ts",
+        "packages/core/src/release-readiness.ts"
+      ],
+      "groups": [
+        "Scope",
+        "Scope",
+        "Release"
+      ],
+      "production": {
+        "raw": 58061,
+        "sent": 1871,
+        "overGateway": false,
+        "hit": 1,
+        "of": 2
+      },
+      "natural": {
+        "tokens": 8570,
+        "rawTokens": 666349,
+        "hit": 2,
+        "of": 2,
+        "filesInContext": 12,
+        "symbols": 40
+      },
+      "byBudget": {
+        "500": {
+          "baseline": {
+            "tokens": 162,
+            "rawTokens": 1944,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 1,
+            "symbols": 1
+          },
+          "flat": {
+            "tokens": 454,
+            "rawTokens": 27431,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "two-stage": {
+            "tokens": 454,
+            "rawTokens": 27431,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 2
+          }
+        },
+        "1000": {
+          "baseline": {
+            "tokens": 918,
+            "rawTokens": 41601,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 1,
+            "symbols": 4
+          },
+          "flat": {
+            "tokens": 868,
+            "rawTokens": 58067,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 4,
+            "symbols": 4
+          },
+          "two-stage": {
+            "tokens": 868,
+            "rawTokens": 58067,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 4,
+            "symbols": 4
+          }
+        },
+        "2000": {
+          "baseline": {
+            "tokens": 1843,
+            "rawTokens": 58034,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 1,
+            "symbols": 8
+          },
+          "flat": {
+            "tokens": 1969,
+            "rawTokens": 195745,
+            "hit": 0,
+            "of": 2,
+            "filesInContext": 10,
+            "symbols": 11
+          },
+          "two-stage": {
+            "tokens": 1733,
+            "rawTokens": 171555,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 9,
+            "symbols": 10
+          }
+        },
+        "4000": {
+          "baseline": {
+            "tokens": 3895,
+            "rawTokens": 92941,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 2,
+            "symbols": 17
+          },
+          "flat": {
+            "tokens": 3908,
+            "rawTokens": 319426,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 17,
+            "symbols": 20
+          },
+          "two-stage": {
+            "tokens": 3994,
+            "rawTokens": 250793,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 12,
+            "symbols": 24
+          }
+        },
+        "8000": {
+          "baseline": {
+            "tokens": 7778,
+            "rawTokens": 619300,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 9,
+            "symbols": 37
+          },
+          "flat": {
+            "tokens": 7802,
+            "rawTokens": 500065,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 28,
+            "symbols": 41
+          },
+          "two-stage": {
+            "tokens": 7591,
+            "rawTokens": 342604,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 13,
+            "symbols": 41
+          }
+        },
+        "16000": {
+          "baseline": {
+            "tokens": 8552,
+            "rawTokens": 666330,
+            "hit": 2,
+            "of": 2,
+            "filesInContext": 12,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 15934,
+            "rawTokens": 641323,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 28,
+            "symbols": 77
+          },
+          "two-stage": {
+            "tokens": 15855,
+            "rawTokens": 728902,
+            "hit": 1,
+            "of": 2,
+            "filesInContext": 21,
+            "symbols": 80
+          }
+        }
+      }
+    },
+    {
+      "id": "q17",
+      "kind": "paraphrase",
+      "question": "What is reused and what is rebuilt when a small edit is made and the build runs again?",
+      "gold": [
+        "packages/core/src/concept-hierarchy/incremental.ts"
+      ],
+      "groups": [
+        "Reused",
+        "Runs",
+        "Edit"
+      ],
+      "production": {
+        "raw": 51036,
+        "sent": 376,
+        "overGateway": false,
+        "hit": 0,
+        "of": 1
+      },
+      "natural": {
+        "tokens": 9237,
+        "rawTokens": 1089480,
+        "hit": 1,
+        "of": 1,
+        "filesInContext": 20,
+        "symbols": 40
+      },
+      "byBudget": {
+        "500": {
+          "baseline": {
+            "tokens": 477,
+            "rawTokens": 63612,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 3,
+            "symbols": 3
+          },
+          "flat": {
+            "tokens": 451,
+            "rawTokens": 37567,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 2
+          },
+          "two-stage": {
+            "tokens": 451,
+            "rawTokens": 37567,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 2,
+            "symbols": 2
+          }
+        },
+        "1000": {
+          "baseline": {
+            "tokens": 994,
+            "rawTokens": 266017,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 5,
+            "symbols": 6
+          },
+          "flat": {
+            "tokens": 873,
+            "rawTokens": 89450,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 4,
+            "symbols": 4
+          },
+          "two-stage": {
+            "tokens": 873,
+            "rawTokens": 89450,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 4,
+            "symbols": 4
+          }
+        },
+        "2000": {
+          "baseline": {
+            "tokens": 1886,
+            "rawTokens": 377742,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 8,
+            "symbols": 10
+          },
+          "flat": {
+            "tokens": 1985,
+            "rawTokens": 197601,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 9,
+            "symbols": 9
+          },
+          "two-stage": {
+            "tokens": 1915,
+            "rawTokens": 158637,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 9,
+            "symbols": 9
+          }
+        },
+        "4000": {
+          "baseline": {
+            "tokens": 3660,
+            "rawTokens": 807869,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 11,
+            "symbols": 16
+          },
+          "flat": {
+            "tokens": 3886,
+            "rawTokens": 344692,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 16,
+            "symbols": 16
+          },
+          "two-stage": {
+            "tokens": 3592,
+            "rawTokens": 304785,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 16,
+            "symbols": 18
+          }
+        },
+        "8000": {
+          "baseline": {
+            "tokens": 7825,
+            "rawTokens": 1062782,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 19,
+            "symbols": 32
+          },
+          "flat": {
+            "tokens": 7902,
+            "rawTokens": 726106,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 30,
+            "symbols": 36
+          },
+          "two-stage": {
+            "tokens": 7963,
+            "rawTokens": 650515,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 28,
+            "symbols": 37
+          }
+        },
+        "16000": {
+          "baseline": {
+            "tokens": 9215,
+            "rawTokens": 1089458,
+            "hit": 1,
+            "of": 1,
+            "filesInContext": 20,
+            "symbols": 40
+          },
+          "flat": {
+            "tokens": 15955,
+            "rawTokens": 1405344,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 57,
+            "symbols": 74
+          },
+          "two-stage": {
+            "tokens": 15882,
+            "rawTokens": 1345725,
+            "hit": 0,
+            "of": 1,
+            "filesInContext": 55,
+            "symbols": 73
+          }
+        }
+      }
+    }
+  ]
+}

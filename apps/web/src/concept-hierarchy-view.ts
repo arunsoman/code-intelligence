@@ -1,6 +1,7 @@
 // What the concept-hierarchy dialog and the method toggle must say, kept pure so it can be tested without rendering React.
 // The dialog only lays these strings and rows out.
 import type { ArchConcept, ConceptHierarchyView, HierarchyStats, Invariant, JobView, LanguageSoundnessTier, SemanticConcept } from "@cie/schema";
+import { conceptTitle } from "@cie/schema/concept-tree";
 import { providerInfo } from "./concept-status.ts";
 
 /** Two ways to discover concepts. They write to different stores and never overwrite each other. */
@@ -50,7 +51,7 @@ export function hierarchyBuilds(jobs: JobView[], revision?: string): BuildStatus
 
 const shortId = (id: string) => id.replace(/^[a-z]+:/, "");
 /** What to call a concept: the name it was given, or an honest placeholder. A name is a suggestion, never a claim. */
-export function conceptTitle(c: Pick<SemanticConcept, "label" | "kind">): string { return c.label?.trim() || `unnamed ${c.kind}`; }
+export { conceptTitle } from "@cie/schema/concept-tree";
 /** Who produced a version's names, said plainly. A version saved without a provider says so rather than claiming a model. */
 export interface NamingInfo { provider: string; known: boolean; deterministic: boolean; badge: string }
 export function namingProvenance(provider: string | null | undefined): NamingInfo {
