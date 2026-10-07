@@ -176,6 +176,7 @@ export function buildImpactReport(input: ImpactBuildInput): ImpactReport {
       id, kind, claimClass, text, subjectEntityIds: subjects, evidenceIds, citations,
       rank: rankItem(severityKind ?? kind, claimClass, subjects, cs, noTestAtHead), calibration: "uncalibrated",
     };
+    if (severityKind) item.kindDetail = severityKind; // F15: mutes and kind weights address this namespace
     seen.set(id, item);
     items.push(item);
     return item;

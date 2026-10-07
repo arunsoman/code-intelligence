@@ -21,6 +21,10 @@ import { detectIndexedDefects } from "./defect-indexed.ts";
 import { parseIstanbul, parseJUnit, parseJestJson, parseLcov, type CoverageFile } from "./testartifacts.ts";
 import { evaluate, findingFingerprint, hashId, matchBaselines, normalizeAnchor, policyHashOf, validatePolicy, validateWaiver } from "./pr-gate.ts";
 import { buildImpactReport, impactReportHash } from "./impact-report.ts";
+import { buildPrSummary, finalizeSummaryBudget } from "./pr-summary.ts";
+import { applyFeedback, FeedbackStore } from "./feedback.ts";
+import { resolveMentions } from "./mentions.ts";
+import { policyFor } from "./access.ts";
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
@@ -63,6 +67,23 @@ export interface ResolvedPr {
   changedFiles: ChangedFile[];
   /** The added lines of each changed path, from unified=0 hunks (coverage on changed lines maps onto these). */
   changedLineRanges: Map<string, number[]>;
+}
+
+/**
+ * F13 §7.5: best-effort fetch of the PR title and body for the description-versus-change check. Attacker-controlled
+ * and untrusted; it is only ever shown escaped inside a quoted block labelled unverified, never interpolated into a
+ * sentence template, and never executed or passed to a model (§10.3–10.5). Absent `gh`, a detached head or any
+ * failure yields null — the section then says "no description to compare", which is a true statement.
+ */
+export function fetchPrDescription(root: string, prNumber: number): string | null {
+  try {
+    const out = execFileSync("gh", ["pr", "view", String(prNumber), "--json", "title,body"], { cwd: root, encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "ignore"] });
+    const v = JSON.parse(out) as { title?: string; body?: string | null };
+    if (!v.title && !v.body) return null;
+    return `${v.title ?? ""}\n\n${v.body ?? ""}`.trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 /** Resolve a PR into base, head and merge base plus changed files. Network fetch is only ever `refs/pull/N/head` (§10.1). */
@@ -611,7 +632,7 @@ export class PrAnalysis {
       control?.commit();
       this.setState(analysisId, "DECIDED");
       // F11 (slice S2): assemble, rank and store the cited impact report behind the blast-radius comment.
-      this.buildAndStoreImpactReport(analysisId, resolved, cs, coverageEvidence, analyzers, headRev.id, headCo.dir);
+      this.buildAndStoreImpactReport(analysisId, resolved, cs, coverageEvidence, analyzers, headRev.id, headCo.dir, req.repoRoot, req.prNumber);
     } finally { baseCo.dispose(); headCo.dispose(); }
   }
   // ------------------------------------------------------------------ F11: the retained ChangeSet and impact report
@@ -634,7 +655,7 @@ export class PrAnalysis {
    * converts stored byte spans to line numbers against the head checkout. Stored with its hash: the publisher's
    * idempotency key binds a saying to exactly this report (F11-A13).
    */
-  private buildAndStoreImpactReport(analysisId: string, resolved: { headHash: string; baseHash: string }, cs: ChangeSet, coverage: CoverageEvidence | null, analyzers: AnalyzerRecord[], headRevId: string, headDir: string): void {
+  private buildAndStoreImpactReport(analysisId: string, resolved: { headHash: string; baseHash: string }, cs: ChangeSet, coverage: CoverageEvidence | null, analyzers: AnalyzerRecord[], headRevId: string, headDir: string, repoRoot: string, prNumber: number): void {
     const unresolvedRow = this.store.db.prepare("select count(*) n from relationships where revision = ? and json like ?").get(headRevId, '%"resolution":"UNRESOLVED"%') as { n: number };
     const incompleteReasons = analyzers.filter((a) => a.state !== "COMPLETE").map((a) => `analyzer ${a.id}@${a.version} states ${a.state}: ${(a.reason ?? "findings in files it did not analyse are not claimed").slice(0, 120)}`);
     const lineTableOf = (path: string): number[] | null => {
@@ -667,10 +688,52 @@ export class PrAnalysis {
       incomplete: analyzers.some((a) => a.state !== "COMPLETE"), incompleteReasons,
       evidenceLocation,
     });
+    // F13: the deterministic summary/walkthrough rides in the same stored report (§5). It is built from exactly
+    // the bytes the gate already computed; the description check resolves names against the head index with the
+    // denied-path policy applied (§7.5). A description that cannot be fetched yields "no description to compare".
+    report.summary = this.buildPrSummary(cs, headRevId, repoRoot, prNumber, Number(unresolvedRow?.n ?? 0), analyzers);
+    // F15: reviewer feedback (mutes + kind weights) applies inside the ranking step as inputs, recorded in the
+    // report's rank.factors and footer (§5) — a muted kind appears as factor MUTE, so why-not can explain a
+    // suppression. The stored report pins the feedback state it was ranked under (§11).
+    const feedback = new FeedbackStore(this.store);
+    const mutes = feedback.mutes(repoRoot).active;
+    const weights = feedback.weights(repoRoot);
+    const fbState = feedback.state(repoRoot);
+    // No feedback yet still records the default footer, so every comment states its ranking status (§7.6).
+    const withFeedback = applyFeedback(report, {
+      mutes, weights,
+      labelSummary: { total: fbState.labels.total, principals: fbState.labels.principals },
+      logHash: feedback.logHash(repoRoot),
+    });
+    report.surfaced = withFeedback.surfaced;
+    report.muted = withFeedback.muted;
+    report.feedback = withFeedback.feedback;
     const now = new Date().toISOString();
     this.store.db.prepare(`insert into impact_reports values (?,?,?,?,?,?)
       on conflict(analysis_id) do update set json = excluded.json, report_hash = excluded.report_hash, state = 'CURRENT', updated_at = excluded.updated_at`)
       .run(analysisId, JSON.stringify(report), impactReportHash(report), "CURRENT", now, now);
+  }
+
+  /**
+   * F13 (§7): build the PrSummary from the retained ChangeSet. Every lookup is store-backed and deterministic;
+   * the reading order is omitted when the call graph did not finish (unresolved dynamic calls or an incomplete
+   * analyzer — §9), because a wrong order is worse than none.
+   */
+  private buildPrSummary(cs: ChangeSet, headRevId: string, repoRoot: string, prNumber: number, unresolvedDynamicCalls: number, analyzers: AnalyzerRecord[]) {
+    const access = policyFor(this.store, repoRoot);
+    const headEntities = new Map(this.store.entities(headRevId).map((e) => [e.entityId, e]));
+    const routeSubjects = new Set(this.store.factsByPredicate(headRevId, "route").map((f) => f.subject));
+    return finalizeSummaryBudget(buildPrSummary({
+      cs,
+      access,
+      graphComplete: unresolvedDynamicCalls === 0 && analyzers.every((a) => a.state === "COMPLETE"),
+      descriptionText: fetchPrDescription(repoRoot, prNumber),
+      resolveDescription: (text) => resolveMentions(this.store, headRevId, text, access),
+      entityFile: (id) => headEntities.get(id)?.file ?? null,
+      dependentsOf: (id) => { try { return dependents(this.store, headRevId, id, { maxDepth: 2 }).nodes.map((n) => n.id); } catch { return []; } },
+      isEntryPoint: (id) => routeSubjects.has(id),
+      changeSize: (id) => (headEntities.get(id)?.spans ?? []).reduce((a, s) => a + Math.max(0, s.endByteExclusive - s.startByte), 0),
+    }));
   }
 
   // ------------------------------------------------------------------ findings (WP-04)

@@ -798,6 +798,9 @@ export type ImpactClaimClass = "FACT" | "INFERENCE" | "HYPOTHESIS" | "FOG";
 export interface ImpactItem {
   id: string;
   kind: ImpactItemKind;
+  /** F15: the specific consequence kind behind a CONSEQUENCE item (TRANSACTION_BYPASS, MODULE_COUPLING, …) — the
+   *  namespace mutes and kind weights address. Absent on items that carry no finer kind. */
+  kindDetail?: string;
   claimClass: ImpactClaimClass;
   /** One sentence, no causal or certainty wording (§7.6.3); attacker-controlled text is escaped at render time. */
   text: string;
@@ -809,6 +812,37 @@ export interface ImpactItem {
   calibration: "uncalibrated" | "calibrated";
   suppressed?: { reason: "BELOW_THRESHOLD" | "DUPLICATE" | "PATH_WITHHELD" | "LENGTH_BUDGET" };
 }
+/** F13: why a file sits where it does in the suggested reading order. All factors are uncalibrated (§7.4). */
+export interface ReadingFactor { name: "DEPENDED_ON" | "ENTRY_POINT" | "CHANGE_SIZE" | "HIGH_IMPACT"; value: number }
+
+/**
+ * F13: the deterministic PR summary/walkthrough, stored as part of the ImpactReport canonical JSON (§5, §6).
+ * Counts and change kinds are Fact; the reading order and the description check are Inference (a stated rule, not
+ * a proof) and are labelled as such at render time.
+ */
+export interface PrSummary {
+  schemaVersion: 1;
+  counts: { files: number; modules: number; added: number; modified: number; deleted: number; renamed: number; testFiles: number };
+  /** Each hit of classifyTier's pattern list over the changed paths (§7.3). */
+  highImpact: { area: string; files: number; reason: string; patternId: number }[];
+  readingOrder: { rank: number; path: string; entityIds: string[]; note: string; why: ReadingFactor[] }[];
+  tests: { added: number; removed: number; lostReach: string[] };
+  /** Name matching only (§7.5); null when there is no usable description. `unresolved` lists phrases with no code match. */
+  description: {
+    authorText: string;
+    changedNotMentioned: { path: string; entityId?: string }[];
+    mentionedNotChanged: { phrase: string }[];
+    unresolved: string[];
+    matchedBy: "NAME_MATCH";
+  } | null;
+  budget: { renderedBytes: number; truncated: boolean; omitted: number };
+  /** True when the call graph for the changed set finished; false → the reading order was omitted (§9). */
+  graphComplete?: boolean;
+  /** True when every changed path is documentation or licence (T0, §14) — the section renders a single line. */
+  docsOnly?: boolean;
+  /** Changed paths that hit a high-impact pattern, pinned to the "also read" line instead of reordered (§7.4.5). */
+  alsoReadPaths?: string[];
+}
 export interface ImpactReport {
   analysisId: string; headHash: string; baseHash: string; generatedAt: string; schemaVersion: 1;
   surfaced: ImpactItem[];
@@ -816,6 +850,12 @@ export interface ImpactReport {
   reach: { changedSymbols: number; dependents: number; files: number; hotspotFiles: number; thinOwnershipFiles: number };
   coverage: { languages: { id: string; analysedFiles: number; skippedFiles: number }[]; evidenceComplete: boolean };
   fog: ImpactItem[];
+  /** F13: the summary/walkthrough section; absent only for reports stored before F13. */
+  summary?: PrSummary;
+  /** F15: items a reviewer mute moved out of `surfaced` — counted, never deleted (§7.4). */
+  muted?: ImpactItem[];
+  /** F15: the feedback footer state the report was ranked and rendered under (§7.6, §11). */
+  feedback?: { line: string; logHash: string; computedAt: string };
 }
 
 export type CheckKind = "STATUS" | "CHECK_RUN" | "COMMENT";

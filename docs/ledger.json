@@ -2206,5 +2206,413 @@
         "state": "pending-tests"
       }
     ]
+  },
+  "F12": {
+    "title": "MCP agent context server",
+    "items": [
+      {
+        "item": "allowlist asserted against the operation table at start-up; mutating-backed tools fail registration (F12-A1)",
+        "tests": [
+          "F12-A1: the allowlist matches the real operation table; tool ops are non-mutating",
+          "F12-A1: a tool built on a mutating operation fails at start-up, not at call time",
+          "F12-A1: an allowlisted operation missing from the table fails at start-up",
+          "F12-A1: DirectGateway refuses an operation outside the allowlist even when the table has it"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "every result carries claim class, citations, gaps, completeness and revision (F12-A2)",
+        "tests": [
+          "F12-A2: all six tools return gate-passing results bound to the indexed revision",
+          "F12-A2: who_calls answers with cited callers; unknown symbols are Fog with nearest names, never a guess",
+          "F12-A2: explain_connection gives a cited hop-by-hop path",
+          "F12-A2: tests_reaching separates parsed call paths from imports and never claims tests pass",
+          "F12-A2: index_status leads with a one-line summary and the schema version is reported"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "staleness is stated in the result, or a bounded refresh runs first (F12-A3)",
+        "tests": [
+          "F12-A3: unchanged index → workingTreeChanged false; changed + autoRefresh off → stated with count and gap",
+          "F12-A3: changed + autoRefresh on → refresh runs and the answer reports the new revision",
+          "F12-A3: a refresh that does not finish in time answers on the indexed revision with the staleness gap"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "claims about changed files are downgraded one class when no refresh succeeded (F12-A4)",
+        "tests": [
+          "F12-A4: a stale claim touching a changed file is downgraded FACT → INFERENCE; unrelated claims keep their class",
+          "F12-A4: downgradeClass walks one step and never below FOG"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "denied paths counted, never named, in tools and resources (F12-A5)",
+        "tests": [
+          "F12-A5: withheld counts omit the denied path; resources refuse denied evidence without naming it"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "non-loopback --url refused (F12-A6)",
+        "tests": [
+          "F12-A6: isLoopbackUrl and the CLI refuse non-loopback gateways",
+          "F12-A6: the CLI defaults to the loopback gateway and honours --no-auto-refresh"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "session call budget: typed error with retry hint; recovers (F12-A7)",
+        "tests": [
+          "F12-A7: the sliding-hour budget exhausts with a retry hint and recovers"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "repository text returned verbatim under untrustedText: true (F12-A8)",
+        "tests": [
+          "F12-A8: agent-directed text in an identifier comes back verbatim under untrustedText: true"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "tools/list under the 6 KB host budget; schema version reported (F12-A9)",
+        "tests": [
+          "F12-A9: tools/list stays under the 6 KB host budget and carries the schema version"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "checkMcpResult rejects presentation mutation: hypothesis-as-fact, missing evidence, certainty wording (F12-A10)",
+        "tests": [
+          "F12-A10: checkMcpResult rejects hypothesis-as-fact, missing evidence, missing revision and certainty wording"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "per-call bounds: claim count and text budget, overflow counted in gaps (§7.5)",
+        "tests": [
+          "§7.5: claim overflow is counted in gaps and completeness drops to PARTIAL"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "MCP stdio protocol: initialize, tools/list, tools/call, resources/read, typed errors",
+        "tests": [
+          "protocol: initialize, tools/list, a tool call, a resource read and an unknown method",
+          "protocol: bad arguments are a typed INVALID_SCHEMA error with the reason"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "pending: real-agent-host slice-0 transcript (S0) and refresh-cost measurement on a large repository (§3.3)",
+        "tests": [],
+        "state": "pending-tests"
+      }
+    ]
+  },
+  "F13": {
+    "title": "PR summary and reading-order walkthrough",
+    "items": [
+      {
+        "item": "PrSummary builder: counts from compare().entities, module derivation as overview.ts (§7.1)",
+        "tests": [
+          "F13-A1: counts equal compare() entity counts; a mutated counts line is rejected"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "closed behaviour templates keyed by consequence kind; 'modified' without a consequence record (§7.2)",
+        "tests": [
+          "F13-A2: a changed function with no consequence record is described only as 'modified'"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "high-impact areas from classifyTier patterns with one label table (§7.3)",
+        "tests": [
+          "F13-A3: the reading order is identical for shuffled input and across two builds"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "reading order: depended-on first, entry points by dependents, then change size, tests last; fixed tie-break (§7.4)",
+        "tests": [
+          "F13-A3: the reading order is identical for shuffled input and across two builds"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "denied paths counted in budget.omitted, never named, in counts/order/description (§10.2)",
+        "tests": [
+          "F13-A4: a changed file in a denied prefix is counted in the budget, never named"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "attacker-controlled title/body escaped, quoted and labelled unverified; no ping/link/marker forgery (§10.3)",
+        "tests": [
+          "F13-A5: a hostile description is escaped — no ping, no link, no marker forgery"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "description-versus-change: name matching both directions, unresolved listed separately (§7.5)",
+        "tests": [
+          "F13-A6: mentioned-not-changed and unresolved phrases are listed separately"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "description suppression below the threshold: 'no description to compare' (§7.5)",
+        "tests": [
+          "F13-A7: an empty or short description yields 'no description to compare' and no lists"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "checkSummaryLine honest-label gate: fact kind, intent verbs, counts agreement, line budget (§7.6)",
+        "tests": [
+          "F13-A8: intent wording attributed to CIE never renders; the gate rejects it",
+          "checkSummaryLine rejects a line with no fact kind and an over-budget line",
+          "F13-A1: counts equal compare() entity counts; a mutated counts line is rejected"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "INCOMPLETE stated first; reading order omitted when the call graph did not finish (§9)",
+        "tests": [
+          "F13-A9: an incomplete analysis states it first and omits the reading order"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "section budget <3KB, ≤12 order lines, ≤5 list lines, named cuts (§13)",
+        "tests": [
+          "F13-A10: a large PR renders under the budget and names what was cut"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "docs-only PR: single documentation-only line from the T0 rule (§14)",
+        "tests": [
+          "F13-A11: a docs-only PR renders the single documentation-only line"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "PrSummary stored in the ImpactReport; renderImpactComment includes the section under <!-- cie-summary --> (§5, §8)",
+        "tests": [
+          "C23/getPrSummary returns the stored summary; a report without one is NOT_FOUND",
+          "C30/previewImpactComment includes the summary section under its own sub-marker",
+          "stripDescription removes code fences and quoted replies; finalizeSummaryBudget is stable"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "S0 spike: 20 real PRs measured by hand — pending (needs a live forge)",
+        "tests": [],
+        "state": "pending-tests"
+      }
+    ]
+  },
+  "F14": {
+    "title": "PR thread chat: deterministic answers to reviewer commands",
+    "items": [
+      {
+        "item": "command grammar: first non-empty line /cie <verb> or @cie <question>; case-insensitive verb; '>' quoting and forged markers are never commands; unknown verb answers with help (§7.1)",
+        "tests": [
+          "F14-A3: a comment quoting a command is not a command; anything else is ignored silently"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "five read-only commands: impact, tests, callers, why, why-not, plus help; argument resolution names up to three nearest on no match, lists candidates on ambiguity, never guesses (§7.2)",
+        "tests": [
+          "F14-A4: an ambiguous symbol yields the candidates and asks for a more specific name",
+          "an unknown symbol names up to three nearest indexed names, never a guess",
+          "/cie why renders the report item with its stored class and citations"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "every operation a command can reach is registered read-only; C15/runPrCommand writes nothing (§10.2)",
+        "tests": [
+          "F14-A2: every operation a command can reach is registered read-only; the command op writes nothing"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "one reply per (comment, content hash of the parsed command): replayed delivery and prose-only edits are skipped, an edited command gets a new answer; the ledger row records body and idempotency key before posting (§11)",
+        "tests": [
+          "F14-A1: the same comment delivered twice yields exactly one reply",
+          "F14-A11: an edited comment gets a new reply only when the command changed"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "checkReplyLine egress gate: hypothesis wording on a FACT line refused, certainty wording refused everywhere, no source text in public (spans capped), denied paths counted never named, citations must resolve (§7.5, §10.4, A14)",
+        "tests": [
+          "F14-A14: checkReplyLine rejects hypothesis wording on a FACT line and certainty wording everywhere",
+          "F14-A6: a reply naming a denied path is impossible — denied paths are counted, never named",
+          "F14-A7: public refuses source text; private allows one-line spans within the limit"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "attacker-controlled fragments escaped at render: no ping, no issue reference, no link, no forged marker (§10.3)",
+        "tests": [
+          "F14-A12: attacker-controlled fragments cannot ping, link or forge a marker in a reply",
+          "F14-A5: injected instructions in a command comment produce no action and no leaked text"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "authorisation by authorAssociation (OWNER/MEMBER/COLLABORATOR) or forge permission lookup; one refusal per user per PR (§10.1)",
+        "tests": [
+          "F14-A8: an unauthorised commenter gets one refusal; a second attempt is silent"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "limits: 20 replies per PR, 10 commands per user per hour; one notice per PR (per user for the user cap), then silence (§7.7)",
+        "tests": [
+          "F14-A9: per-PR and per-user limits yield one notice, then silence until the window resets"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "head-aware answers: the reply states the head it answered on and notes when the PR moved (§14)",
+        "tests": [
+          "F14-A10: when the head moved, the reply states the head it answered on"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "free-form @cie questions: structured but shipped as a one-time explanation without a local model; never interpolated raw (§7.3, S3)",
+        "tests": [
+          "F14-A13: without a model, free-form gets exactly one explanation"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "C30/postPrReply: grant-checked idempotent posting; key mismatch is FORBIDDEN; a replay returns the same receipt (§8, §11)",
+        "tests": [
+          "C30/postPrReply posts the recorded reply once; a replay returns the same receipt"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "transport behind the F19 forge interface (listComments/postReply/visibility); gh CLI as the first-slice transport, token read at call time never stored (§8, §10)",
+        "tests": [],
+        "state": "done"
+      },
+      {
+        "item": "cli: cie pr-chat --repo . --pr <n> [--once] [--dry-run] watch loop (§8)",
+        "tests": [],
+        "state": "done"
+      }
+    ]
+  },
+  "F15": {
+    "title": "Reviewer feedback loop: per-repository mutes and ranking weights",
+    "items": [
+      {
+        "item": "separation (§7.1): noise/useful write usefulness_labels; wrong/right write a REFUTE/CONFIRM verdict through the C18 claim ledger (claim materialised once per item); neither store moves the other",
+        "tests": [
+          "F15-A2: usefulness labels do not move verdictCounts; a verdict does not move ranking",
+          "/cie wrong writes a REFUTE verdict through the claim ledger — ranking stays out of it"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "label log (§6, §7.2): append-only; one live label per (principal, kind, repository, analysis); bots excluded; PR-author labels recorded separately and excluded from the distinct-principal minimum; synthetic labels never counted",
+        "tests": [
+          "F15-A3: one principal's labels cannot move a weight; PR-author labels do not count toward P",
+          "F15-A4: bot-account labels are excluded"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "weight function (§7.3): clamp(0.5 + Wilson lower bound, 0.5, 1.5); minimums MIN_FEEDBACK=10 and P=2 (D4, uncalibrated); one step of at most 0.25 per recompute; pure and replayable with computedFromLogHash",
+        "tests": [
+          "F15-A1: replaying the label log on a fresh store gives identical weights and computedFromLogHash",
+          "F15-A7: a recompute moves a weight by at most 0.25, clamped to [0.5, 1.5]"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "mutes (§7.4): editor role; repository scope needs owner; default 90-day expiry; revoke; expired mutes reported; applied inside the F11 ranking step — items move surfaced → muted with a MUTE factor, suppressed untouched, why-not still explains",
+        "tests": [
+          "F15-A5: a muted item is counted in muted, suppressed is untouched, why-not still explains it",
+          "F15-A8: mute expiry and revoke work; expired mutes are reported"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "safety floor (§7.5, D5): TRANSACTION_BYPASS and TESTS_LOST cannot be muted at path/symbol scope by an editor; a muted safety item renders as a one-line count with its kind",
+        "tests": [
+          "F15-A6: an editor cannot mute a safety-class kind at path/symbol scope; an owner can; repo scope needs owner"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "footer disclosure (§7.6, §12): every comment states ranking status, muted counts and the log under <!-- cie-feedback -->; never 'learned' or 'trained'; a mutated footer is rejected",
+        "tests": [
+          "F15-A9: the footer states ranking status and muted counts exactly as stored; a mutated footer is rejected"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "comment-level reactions (§7.2.3, S2): 👍/👎 recorded as source REACTION on itemKind COMMENT; they feed the noise-rate display and never move per-kind weights",
+        "tests": [
+          "F15-A10: comment-level reactions never change per-kind weights"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "poisoning rules (§10.3): only the command and an integer or kind token are parsed; free text is stored only as a redacted, length-limited mute reason; principal names in public repositories are counts only (D3)",
+        "tests": [
+          "F15-A11: free text in a command is stored only as a redacted, length-limited mute reason",
+          "/cie mutes lists names only in a private repository (D3)"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "reset (§7.7): owner-only; weights return to default, the label log stays, a reset marker is appended; deterministic rebuild",
+        "tests": [
+          "F15-A12: reset returns weights to default and leaves the log intact",
+          "/cie reset-ranking: an editor is refused, an owner resets — and the log stays"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "commands in the F14 grammar (§1.3, §8): /cie noise|useful|wrong|right <n>, /cie mute|unmute <KIND>, /cie mutes, /cie reset-ranking; labels need viewer, mutes editor; write-gate on read commands unchanged",
+        "tests": [
+          "a viewer's /cie noise records a label; the confirmation names the log, not the author",
+          "/cie mute needs the owner role at repository scope; an owner mute expires in 90 days",
+          "/cie impact is still write-gated for a viewer, but /cie useful is not",
+          "feedback commands with no hooks get exactly one explanation, then silence",
+          "parseChat accepts the F15 verbs and still rejects quoting"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "operations (§8): C17/recordUsefulness, C29/setMute, C29/clearMute, C17/getFeedbackState (read-only), C17/recomputeWeights (derived only); FeedbackStore over migration 42 (usefulness_labels, mute_rules, kind_weights, feedback_resets, feedback_roles)",
+        "tests": [
+          "the F15 operations: recordUsefulness, setMute, getFeedbackState, recomputeWeights"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "report pinning (§11): the stored ImpactReport records the feedback state (line + logHash) it was ranked under; kind weights scale scores with a WEIGHT factor; kindDetail carries the consequence kind",
+        "tests": [
+          "F15-A1: replaying the label log on a fresh store gives identical weights and computedFromLogHash"
+        ],
+        "state": "done"
+      }
+    ]
   }
 }

@@ -7,6 +7,8 @@
 // closing line; copy rules (§12.2) live here as code.
 import type { ImpactItem, ImpactReport } from "@cie/schema";
 import { checkImpactLine, type ImpactPolicy, DEFAULT_IMPACT_POLICY } from "./impact-report.ts";
+import { renderSummarySection, SUMMARY_MARKER } from "./pr-summary.ts";
+import { mutedCountLines, FEEDBACK_MARKER } from "./feedback.ts";
 
 /** The impact comment updates independently of the F02 gate comment (decision D2). */
 export const IMPACT_MARKER = "<!-- cie-gate:impact-comment -->";
@@ -119,6 +121,13 @@ export function renderImpactComment(input: RenderInput): RenderedComment {
       out.push("", `**INCOMPLETE** — ${incompleteReasons.map(escapeForgeText).join("; ") || "part of the analysis did not finish"}. What follows is partial and says so on every line that needs it.`);
     }
 
+    // F13: the deterministic summary/walkthrough is the first section of the comment (§12), inside the same
+    // marker and budget; the same report hash renders byte-identical Markdown including this section.
+    if (report.summary) {
+      const section = renderSummarySection(report.summary, { incomplete, incompleteReasons, reviewUrl: input.reviewUrl });
+      if (section.markdown.trim().length > SUMMARY_MARKER.length) out.push("", section.markdown);
+    }
+
     if (surfaced.length) {
       out.push("", `${shown.length} thing${shown.length === 1 ? "" : "s"} worth a reviewer's attention (of ${found} found; ${notShown} below the noise threshold — why?${input.reviewUrl ? ` → ${input.reviewUrl}` : ""})`, "");
       shown.forEach((r, i) => out.push(`${i + 1}. ${r.line}`));
@@ -145,6 +154,14 @@ export function renderImpactComment(input: RenderInput): RenderedComment {
     // The hypothesis caveat (§12.2) is fixed text and always present, like the closing line.
     out.push("", HYPOTHESIS_CAVEAT);
     if (withheldPaths) out.push(`${withheldPaths} citation(s) withheld: they name code the commenting principal may not read; they are counted, never named (why?${input.reviewUrl ? ` → ${input.reviewUrl}` : ""}).`);
+
+    // F15: the feedback footer states the ranking status and the muted counts as stored (§7.6); muted items are
+    // counted — silence is never confused with absence. Old reports (pre-F15) carry no feedback block.
+    if (report.feedback) {
+      const fb: string[] = [FEEDBACK_MARKER, report.feedback.line];
+      for (const line of mutedCountLines(report.muted ?? [])) fb.push(line);
+      out.push("", fb.join("\n"));
+    }
 
     // Suppressed count is always shown (§12.2) — silence is never mistaken for thoroughness.
     out.push("", `Not shown: ${notShown} item(s) — why? each with its reason on the review page (why not?${input.reviewUrl ? ` → ${input.reviewUrl}` : ""}).`);

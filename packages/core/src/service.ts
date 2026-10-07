@@ -15,7 +15,7 @@ import { runChatAgent } from "./chat-agent.ts";
 import type {
   AnalysisBatch, ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptStore, ConceptsOutput, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceRef, ExplainResult, ExplanationOutput,
   ChartOutput, HypothesesOutput, ModelProvider, ModelRequest, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec, SourceSpan,
-  DefectDetectionInput, DetectorFinding, BenchmarkPolicy, BenchmarkResult, Fact,
+  DefectDetectionInput, DetectorFinding, BenchmarkPolicy, BenchmarkResult, Fact, Entity, Relationship,
 } from "@cie/schema";
 import { SCHEMA_CHALLENGE, SCHEMA_CONCEPTS, SCHEMA_EXPLANATION, SCHEMA_HYPOTHESES, SCHEMA_REPRESENTATION } from "@cie/schema";
 import { applyVerdict, gateClaim, modelText, wilson, withChallenge } from "./claims.ts";
@@ -68,6 +68,9 @@ import { HistoryEngine, PolicyError, inspectHead, normalizePolicy, policyHash } 
 import { ChangeEngine, ChangeError, type ChangeProposal, type DragResult, type Intent } from "./changes.ts";
 import { compareScenarios, evaluateScenario, ScenarioError, type AssumptionInput, type CapacityData, type Scenario, type ScenarioResult } from "./scenarios.ts";
 import { policyFor } from "./access.ts";
+import { parseChat, runChatCommand, gateResult, renderReply, ReplyLedger, isFeedbackVerb, type ChatFeedback, type ChatShapedResult, type PrChatEvent, type PrScope, type ReplyVisibility } from "./pr-chat.ts";
+import { FeedbackStore } from "./feedback.ts";
+import { claimId as impactClaimId } from "./claims.ts";
 import { redactBuilt } from "./redact.ts";
 import { HashEmbedder, semanticScores, type Embedder } from "./embeddings.ts";
 import { InvestigationEngine, type EngineOptions } from "./c22/engine.ts";
@@ -75,7 +78,8 @@ import { C22Error, type HypothesisDraft } from "./c22/types.ts";
 import { seedContext, toDrafts } from "./c22/proposer.ts";
 import { toPlan } from "./c22/compat.ts";
 import { CausalityEngine, type CausalityScopeInput, type MechanismEvidenceRecord, type CauseClaimRecord, type Snapshot as C24Snapshot } from "./c24/causality.ts";
-import { ingestTestArtifacts, loadTestSummary, type TestSummary } from "./testartifacts.ts";
+import { ingestTestArtifacts, loadTestSummary, testFactsFor, type TestSummary } from "./testartifacts.ts";
+import { dependents as graphDependents, findPath as graphFindPath } from "./graph.ts";
 import { ingestTraceExports } from "./traceexport.ts";
 import type { WorkerClient } from "./worker.ts";
 import { WorkerError } from "./worker.ts";
@@ -495,7 +499,151 @@ export class Service {
     "C23/reanchorThreads": (c, b) => ok(c, this.history.reanchorThreads(b.mergedRevision)),
     "C23/explainHotspot": (c, b) => this.hotspotCallSync(c, () => this.hotspots.explainHotspot(c, b ?? {})),
     "C23/explainCoupling": (c, b) => this.hotspotCallSync(c, () => this.hotspots.explainCoupling(c, b ?? {})),
+    // F12 MCP backing reads: single-symbol blast radius, cited connection paths, static test reach. All read-only,
+    // access-filtered (denied entities are counted by the graph layer, never named), revision-bound.
+    "C23/dependents": (c, b) => this.dependentsCall(c, b ?? {}),
+    "C23/findConnection": (c, b) => this.findConnectionCall(c, b ?? {}),
+    "C23/testsReaching": (c, b) => this.testsReachingCall(c, b ?? {}),
   };
+
+  /** F12: the revision an entity-name operation works on: the requested one, else the latest of the repo, else overall. */
+  private mcpRevision(ctx: CallContext, b: { repoPath?: string; revision?: string }): ApiResult<NonNullable<ReturnType<Store["latestRevision"]>>> {
+    const rev = (typeof b.revision === "string" && this.store.revision(b.revision))
+      ? this.store.revision(b.revision)
+      : typeof b.repoPath === "string" ? this.store.latestRevision(b.repoPath) : this.store.latestRevision();
+    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index the repository first", retryable: true });
+    return ok(ctx, rev);
+  }
+
+  /** F12: resolve a name or entity id to an entity of the revision; on a miss, offer nearest names, never a guess. */
+  private mcpEntity(rev: RevisionRow, name: string): { entity: Entity } | { failure: { code: "NOT_FOUND"; message: string; retryable: false }; nearest: string[] } {
+    const q = name.trim();
+    const ents = this.store.entities(rev.id);
+    const byId = ents.find((e) => e.entityId === q);
+    if (byId) return { entity: byId };
+    const lower = q.toLowerCase();
+    const named = ents.filter((e) => e.kind !== "file" && e.name.toLowerCase() === lower);
+    if (named.length === 1) return { entity: named[0] };
+    if (named.length > 1) return { failure: { code: "NOT_FOUND" as const, message: `“${q}” is ambiguous: it names ${named.length} elements; give the file or an id`, retryable: false as const }, nearest: named.slice(0, 5).map((e) => `${e.name} — ${e.file}`) };
+    const near = ents.filter((e) => e.kind !== "file" && (e.name.toLowerCase().includes(lower) || lower.includes(e.name.toLowerCase())) && e.name.toLowerCase() !== lower)
+      .sort((a, b) => a.name.length - b.name.length).slice(0, 5).map((e) => `${e.name} — ${e.file}`);
+    return { failure: { code: "NOT_FOUND" as const, message: near.length ? `no element is exactly named “${q}”; nearest: ${near.join("; ")}` : `no element is named “${q}” in the indexed revision`, retryable: false as const }, nearest: near };
+  }
+
+  /** F12: line location of an entity's primary span, for citations. Null when the file is gone or has no span. */
+  private mcpLocation(rev: RevisionRow, e: Entity): { path: string; startLine: number; endLine: number } | null {
+    const span = e.spans[0];
+    if (!span) return null;
+    let buf: Buffer;
+    try { buf = readFileSync(resolve(rev.repoRoot, span.sourceId)); } catch { return null; }
+    const startLine = buf.subarray(0, span.startByte).toString("utf8").split("\n").length;
+    const text = buf.subarray(span.startByte, span.endByteExclusive).toString("utf8");
+    return { path: e.file, startLine, endLine: startLine + text.split("\n").length - 1 };
+  }
+
+  /** F12 `C23/dependents`: everything that reaches one entity within a bounded hop count, with per-edge evidence ids. */
+  private dependentsCall(ctx: CallContext, b: { repoPath?: string; revision?: string; name?: string; entityId?: string; maxDepth?: number; maxNodes?: number }): ApiResult<unknown> {
+    const revR = this.mcpRevision(ctx, b);
+    if (!revR.ok) return revR;
+    const rev = revR.value;
+    const wanted = typeof b.entityId === "string" ? b.entityId : b.name;
+    if (typeof wanted !== "string" || !wanted.trim()) return fail(ctx, { code: "INVALID_SCHEMA", message: "give a name or entityId", retryable: false });
+    const hit = this.mcpEntity(rev, wanted);
+    if ("failure" in hit) return fail(ctx, { ...hit.failure, message: hit.failure.message } as never);
+    const access = policyFor(this.store, rev.repoRoot);
+    const projection = graphDependents(this.store, rev.id, hit.entity.entityId, { access, ...(b.maxDepth ? { maxDepth: b.maxDepth } : {}), ...(b.maxNodes ? { maxNodes: b.maxNodes } : {}) });
+    const locations = new Map<string, { path: string; startLine: number; endLine: number } | null>();
+    for (const n of projection.nodes) { const e = this.store.entitiesById(rev.id, [n.id])[0]; locations.set(n.id, e ? this.mcpLocation(rev, e) : null); }
+    return ok(ctx, {
+      entity: { entityId: hit.entity.entityId, name: hit.entity.name, kind: hit.entity.kind, file: hit.entity.file, location: this.mcpLocation(rev, hit.entity) },
+      projection: { ...projection, locations: Object.fromEntries(locations) },
+    }, { revision: rev.id });
+  }
+
+  /** F12 `C23/findConnection`: the shortest cited call path between two entities, or an honest "cannot determine". */
+  private findConnectionCall(ctx: CallContext, b: { repoPath?: string; revision?: string; from: string; to: string }): ApiResult<unknown> {
+    const revR = this.mcpRevision(ctx, b);
+    if (!revR.ok) return revR;
+    const rev = revR.value;
+    for (const key of ["from", "to"] as const) {
+      if (typeof b[key] !== "string" || !b[key].trim()) return fail(ctx, { code: "INVALID_SCHEMA", message: `give ${key} as a name or entity id`, retryable: false });
+    }
+    const from = this.mcpEntity(rev, b.from), to = this.mcpEntity(rev, b.to);
+    for (const [key, hit] of [["from", from], ["to", to]] as const) {
+      if ("failure" in hit) return fail(ctx, { ...hit.failure, message: `${key}: ${hit.failure.message}` } as never);
+    }
+    const access = policyFor(this.store, rev.repoRoot);
+    const r = graphFindPath(this.store, rev.id, (from as { entity: Entity }).entity.entityId, (to as { entity: Entity }).entity.entityId, { access });
+    const ents = new Map(this.store.entities(rev.id).map((e) => [e.entityId, e]));
+    const describe = (id: string) => { const e = ents.get(id); return { entityId: id, name: e?.name ?? id, kind: e?.kind ?? "unknown", file: e?.file ?? "", location: e ? this.mcpLocation(rev, e) : null }; };
+    const spanLoc = (span: SourceSpan) => {
+      let buf: Buffer;
+      try { buf = readFileSync(resolve(rev.repoRoot, span.sourceId)); } catch { return null; }
+      const startLine = buf.subarray(0, span.startByte).toString("utf8").split("\n").length;
+      const text = buf.subarray(span.startByte, span.endByteExclusive).toString("utf8");
+      return { path: relative(rev.repoRoot, resolve(rev.repoRoot, span.sourceId)), startLine, endLine: startLine + text.split("\n").length - 1 };
+    };
+    return ok(ctx, {
+      from: describe((from as { entity: Entity }).entity.entityId), to: describe((to as { entity: Entity }).entity.entityId),
+      found: r.found, path: r.path.map(describe),
+      edges: r.edges.map((e) => ({
+        from: e.from, to: e.to, kind: e.kind, label: e.label ?? null, evidenceIds: e.evidence.map((x) => x.id),
+        evidenceLocations: e.evidence.map((x) => ({ evidenceId: x.id, location: x.location.kind === "CodeLocation" ? spanLoc(x.location.span) : null })),
+      })),
+      hops: r.hops, hiddenRouteExists: r.hiddenRouteExists, truncated: r.truncated, visited: r.visited,
+    }, { revision: rev.id });
+  }
+
+  /** F12 `C23/testsReaching`: static test links to one entity's file — call paths and imports, never "tests pass". */
+  private testsReachingCall(ctx: CallContext, b: { repoPath?: string; revision?: string; name?: string; entityId?: string }): ApiResult<unknown> {
+    const revR = this.mcpRevision(ctx, b);
+    if (!revR.ok) return revR;
+    const rev = revR.value;
+    const wanted = typeof b.entityId === "string" ? b.entityId : b.name;
+    if (typeof wanted !== "string" || !wanted.trim()) return fail(ctx, { code: "INVALID_SCHEMA", message: "give a name or entityId", retryable: false });
+    const hit = this.mcpEntity(rev, wanted);
+    if ("failure" in hit) return fail(ctx, { ...hit.failure, message: hit.failure.message } as never);
+    const entity = (hit as { entity: Entity }).entity;
+    const access = policyFor(this.store, rev.repoRoot);
+    const ents = this.store.entities(rev.id).filter((e) => !access.denied(e.file));
+    const byId = new Map(ents.map((e) => [e.entityId, e]));
+    const incoming = new Map<string, Relationship[]>();
+    for (const r of this.store.allRelationships(rev.id)) {
+      if (r.kind !== "calls" || r.resolution === "UNRESOLVED" || !byId.has(r.from) || !byId.has(r.to)) continue;
+      incoming.set(r.to, [...(incoming.get(r.to) ?? []), r]);
+    }
+    // Reverse BFS from the entity, at most four hops, collecting test entities (the same bound module-tests uses).
+    const paths = new Map<string, Relationship[]>([[entity.entityId, []]]);
+    let frontier = [entity.entityId];
+    for (let depth = 0; depth < 4 && frontier.length; depth++) {
+      const next: string[] = [];
+      for (const id of frontier) for (const r of incoming.get(id) ?? []) {
+        if (paths.has(r.from)) continue;
+        paths.set(r.from, [r, ...paths.get(id)!]);
+        next.push(r.from);
+      }
+      frontier = next;
+    }
+    const isTest = (e: Entity) => e.kind === "test" || /(^|\/)(__tests__|tests?)(\/|$)|[._-](test|spec)\.[^/]+$/i.test(e.file);
+    const reached = ents.filter((e) => isTest(e) && paths.has(e.entityId));
+    const reachedFiles = new Set(reached.map((e) => e.file));
+    const fileEntity = ents.find((e) => e.kind === "file" && e.file === entity.file);
+    const imports = fileEntity
+      ? this.store.allRelationships(rev.id).filter((r) => r.kind === "imports" && r.to === fileEntity.entityId && byId.has(r.from) && isTest(byId.get(r.from)!) && !reachedFiles.has(byId.get(r.from)!.file))
+      : [];
+    const tests = [
+      ...reached.map((e) => ({ entityId: e.entityId, name: e.name, file: e.file, mode: "calls" as const, evidenceIds: [...new Set(paths.get(e.entityId)!.flatMap((r) => r.evidence.map((x) => x.id)))] })),
+      ...imports.map((r) => ({ entityId: r.from, name: byId.get(r.from)!.name, file: byId.get(r.from)!.file, mode: "imports" as const, evidenceIds: r.evidence.map((x) => x.id) })),
+    ];
+    const coverage = fileEntity ? testFactsFor(this.store, rev.id, fileEntity.entityId).coverage ?? null : null;
+    const truncated = frontier.length > 0;
+    const testEntities = new Map(ents.filter((e) => tests.some((t) => t.entityId === e.entityId)).map((e) => [e.entityId, e]));
+    return ok(ctx, {
+      entity: { entityId: entity.entityId, name: entity.name, kind: entity.kind, file: entity.file, location: this.mcpLocation(rev, entity) },
+      tests: tests.slice(0, 60).map((t) => ({ ...t, location: testEntities.has(t.entityId) ? this.mcpLocation(rev, testEntities.get(t.entityId)!) : null })),
+      truncated, coverage: coverage ? { percent: coverage.percent, covered: coverage.covered, lines: coverage.lines, evidenceIds: coverage.evidenceIds } : null,
+    }, { revision: rev.id });
+  }
   /** C08 gateway operations. */
   readonly registryOps: Record<string, (ctx: CallContext, b: any) => ApiResult<unknown>> = {
     "C08/proposals": (c, b) => ok(c, this.registry.proposals(b ?? {})),
@@ -1204,6 +1352,124 @@ export class Service {
   /** Newest analysis row for a PR within the queue window (best effort, for the op's response). */
   private prAnalysisCreatedSoon(repoRoot: string, prNumber: number) { return this.pr.latestForPr(repoRoot, prNumber)?.id as string | undefined; }
 
+  /** F14: the PR scope for chat — what "this" means (§7.3). Null when the analysis row or its head index is gone. */
+  prChatScopeFor(analysisId: string): PrScope | null {
+    const row = this.pr.row(analysisId);
+    if (!row || !row.head_revision) return null;
+    const cs = this.pr.changeSetOf(analysisId);
+    const report = this.pr.impactReportOf(analysisId);
+    return {
+      analysisId, headHash: row.head_hash, baseHash: row.base_hash,
+      headRevision: row.head_revision, repoRoot: row.repo_root,
+      changedEntityIds: cs ? cs.entities.map((e) => e.head).filter((h): h is string => !!h) : [],
+      reportItems: (report?.surfaced ?? []).map((item, i) => ({ n: i + 1, id: item.id })),
+    };
+  }
+
+  /** F14 §14/§9: the scope for a comment's head. CIE answers only from the index at the head the comment carried. */
+  prChatScopeForHead(repoRoot: string, prNumber: number, headHash: string): PrScope | null {
+    const rows = this.pr.allForPr(repoRoot, prNumber) as { id: string; head_hash: string; state: string }[];
+    const row = rows.find((r) => r.head_hash === headHash && ["DECIDED", "PUBLISHED"].includes(r.state));
+    return row ? this.prChatScopeFor(row.id) : null;
+  }
+
+  /** F14: the command environment — same read operations the MCP tools reach (§5), nothing mutating (§10.2). */
+  prChatEnvFor(scope: PrScope) {
+    return {
+      store: this.store, scope,
+      access: policyFor(this.store, scope.repoRoot),
+      cs: this.pr.changeSetOf(scope.analysisId),
+      report: this.pr.impactReportOf(scope.analysisId),
+      modelAvailable: !!this.model.model,
+    };
+  }
+
+  prChatReportHash(analysisId: string): string | null {
+    const row = this.store.db.prepare("select report_hash from impact_reports where analysis_id = ? and state = 'CURRENT'").get(analysisId) as { report_hash: string } | undefined;
+    return row?.report_hash ?? null;
+  }
+
+  /** The PR's current head (§9): when it differs from the answered head, the reply says so. */
+  prChatNowHead(analysisId: string): string | null {
+    const row = this.pr.row(analysisId);
+    if (!row) return null;
+    return (this.pr.latestForPr(row.repo_root, row.pr_number) as { head_hash?: string } | null)?.head_hash ?? null;
+  }
+
+  /**
+   * F15: the feedback hooks behind the watcher's mutating verbs (§8). Labels land in the usefulness log keyed by
+   * this repository; wrong/right become C18 verdicts on the (lazily materialised) claim behind the item (§7.1),
+   * so claim calibration is fed exactly as today. The PR-author flag is set when the forge told us who opened the PR.
+   */
+  chatFeedbackFor(ev: PrChatEvent, scope: PrScope): ChatFeedback | null {
+    const row = this.pr.row(scope.analysisId);
+    if (!row) return null;
+    const repositoryId = row.repository_id;
+    const analysisId = scope.analysisId;
+    const fb = new FeedbackStore(this.store);
+    const report = () => this.pr.impactReportOf(analysisId);
+    const totals = () => { const s = fb.state(repositoryId).labels; return { total: s.total, principals: s.principals }; };
+    const roleOf = (principal: string) => fb.roleFor(repositoryId, principal) ?? "owner"; // local-first: no explicit row ⇒ the operator
+    return {
+      itemAt: (n) => {
+        const item = report()?.surfaced[n - 1];
+        return item ? { itemKind: item.kindDetail ?? item.kind, itemId: item.id, kindDetail: item.kindDetail, text: item.text } : null;
+      },
+      recordUsefulness: async (n, label, actor) => {
+        const item = this.pr.impactReportOf(analysisId)?.surfaced[n - 1];
+        if (!item) return { ok: false, error: `there is no item ${n} in the current report` };
+        const r = fb.recordLabel({
+          repositoryId, itemKind: item.kindDetail ?? item.kind, itemId: item.id, analysisId,
+          label, principalId: actor, role: roleOf(actor),
+          // The PR-author flag comes from the forge when known; the analysis row does not carry it (v1: false).
+          isPrAuthor: false,
+        });
+        if (!r.ok) return { ok: false, error: r.error };
+        const t = totals();
+        return { ok: true, summary: `recorded ${label} on item ${n} (${r.label.itemKind}) — ${t.total} labels by ${t.principals} reviewer(s) in the log now.` };
+      },
+      recordVerdict: async (n, verdict, actor) => {
+        const item = this.pr.impactReportOf(analysisId)?.surfaced[n - 1];
+        if (!item) return { ok: false, error: `there is no item ${n} in the current report` };
+        const id = impactClaimId(scope.headRevision, item.text, item.evidenceIds);
+        let claim = this.store.getClaim(id);
+        if (!claim) {
+          // Materialise the claim behind the item once; afterwards the C18 ledger treats it like any claim.
+          claim = gateClaim(
+            { assertion: item.text, claimClass: item.claimClass, evidenceIds: item.evidenceIds, rationaleSummary: `impact item ${n} of ${repositoryId} PR ${row.pr_number}` },
+            { revision: scope.headRevision, evidence: [] }, { store: this.store, trusted: true });
+          this.store.putClaim(claim, actor, "feedback.materialise");
+        }
+        const r = applyVerdict(this.store, {
+          claimId: id, verdict, actorId: actor, expectedVersion: claim.version,
+          explanation: `PR feedback: item ${n} labelled ${verdict === "REFUTE" ? "wrong" : "right"} by ${actor} (F15 §7.1)`,
+        });
+        if (!r.ok) return { ok: false, error: r.error.message };
+        return { ok: true, summary: `recorded a ${verdict.toLowerCase()} verdict on the claim behind item ${n} — the claim ledger (C18), not the ranking (§7.1).` };
+      },
+      setMute: async (kind, actor, reason, role) => {
+        const r = fb.setMute({ repositoryId, kind, createdBy: actor, role, reason });
+        return r.ok
+          ? { ok: true, summary: `${kind} muted ${r.mute.scope.type === "REPOSITORY" ? "repository-wide" : "at " + r.mute.scope.type} by ${actor} until ${(r.mute.expiresAt ?? "").slice(0, 10)}${r.mute.reason ? ` (reason: ${r.mute.reason})` : ""} — the next comment counts it, never hides it (§7.4).` }
+          : { ok: false, error: r.error };
+      },
+      listMutes: async () => fb.mutes(repositoryId).active,
+      clearMute: async (kind, actor, role) => {
+        const r = fb.clearMute(repositoryId, kind, actor, role);
+        return r.ok
+          ? { ok: true, summary: `${kind} unmuted by ${actor} — the kind may surface again on the next report.` }
+          : { ok: false, error: r.error };
+      },
+      resetRanking: async (actor, role) => {
+        if (role !== "owner") return { ok: false, error: "reset-ranking needs the owner role (§7.7)" };
+        const t = totals();
+        fb.resetRanking(repositoryId, actor);
+        return { ok: true, summary: `ranking reset to default by ${actor} — ${t.total} labels stay in the log (§7.7).` };
+      },
+      labelTotals: totals,
+    };
+  }
+
   readonly prOps: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>> | ApiResult<unknown>> = {
     // ---- C23: analyse a pull request (one analysis per identity; the heavy work runs in a background job) ----
     "C23/analyzePullRequest": (c, b) => this.analyzePullRequestValidated(c, b ?? {}),
@@ -1263,6 +1529,13 @@ export class Service {
       if (!report) return fail(c, { code: "NOT_FOUND", message: "no impact report for this analysis; run C23/analyzePullRequest first", retryable: false });
       return ok(c, report, { revision: this.pr.row(b.analysisId)?.head_revision ?? undefined });
     },
+    "C23/getPrSummary": (c, b) => {
+      if (typeof b?.analysisId !== "string") return fail(c, { code: "INVALID_SCHEMA", message: "give an analysisId", retryable: false });
+      const report = this.pr.impactReportOf(b.analysisId);
+      if (!report) return fail(c, { code: "NOT_FOUND", message: "no impact report for this analysis; run C23/analyzePullRequest first", retryable: false });
+      if (!report.summary) return fail(c, { code: "NOT_FOUND", message: "this report has no summary; it predates F13 or the analysis needs a re-run", retryable: false });
+      return ok(c, report.summary, { revision: this.pr.row(b.analysisId)?.head_revision ?? undefined });
+    },
     "C23/explainImpactItem": (c, b) => {
       if (typeof b?.analysisId !== "string" || typeof b?.itemId !== "string") return fail(c, { code: "INVALID_SCHEMA", message: "give an analysisId and an itemId", retryable: false });
       const report = this.pr.impactReportOf(b.analysisId);
@@ -1282,6 +1555,83 @@ export class Service {
       const rendered = renderImpactComment({ report, analysisState: row.state, policy: policyCheck.policy, deniedPrefixes: denied, resolveEvidence, reviewUrl });
       const hashRow = this.store.db.prepare("select report_hash from impact_reports where analysis_id = ?").get(b.analysisId) as { report_hash: string } | undefined;
       return ok(c, { markdown: rendered.markdown, reportHash: hashRow?.report_hash ?? "", silent: rendered.silent, cuts: rendered.cuts }, { completeness: rendered.cuts.length ? "PARTIAL" : "COMPLETE", warnings: rendered.cuts });
+    },
+    // ---- F14: chat inside the PR thread (§8) ----
+    "C15/runPrCommand": (c, b) => {
+      if (typeof b?.analysisId !== "string" || typeof b?.text !== "string") return fail(c, { code: "INVALID_SCHEMA", message: "give an analysisId and the comment text", retryable: false });
+      const scope = this.prChatScopeFor(b.analysisId);
+      if (!scope) return fail(c, { code: "NOT_FOUND", message: "no analysis at a head for this PR; run C23/analyzePullRequest first", retryable: false });
+      const parsed = parseChat(b.text);
+      if (parsed.type === "ignore") return ok(c, { kind: "IGNORED" }, { revision: scope.headRevision });
+      let result: ChatShapedResult;
+      if (parsed.type === "freeform") {
+        result = this.prChatEnvFor(scope).modelAvailable
+          ? { schemaVersion: 1, kind: "FREE_FORM", headHash: scope.headHash, claims: [], gaps: [], refusedReason: "Free-form answering is not enabled in this build." }
+          : { schemaVersion: 1, kind: "FREE_FORM", headHash: scope.headHash, claims: [{ class: "FOG", text: "Free-form questions need a locally installed model; deterministic commands work without one. /cie help lists them.", evidence: [] }], gaps: [] };
+      } else {
+        // Feedback verbs are mutating; they run through the watcher, not this read-only shaping op (§7.1).
+        if (isFeedbackVerb(parsed.verb)) return fail(c, { code: "FORBIDDEN", message: "feedback commands are mutating; run them through the PR chat watcher", retryable: false });
+        result = runChatCommand(this.prChatEnvFor(scope), { verb: parsed.verb, args: parsed.args });
+      }
+      const visibility: ReplyVisibility = b.visibility === "private" ? "private" : "public";
+      const gated = gateResult(result, { visibility, deniedPrefixes: this.store.deniedPrefixes(scope.repoRoot), resolveEvidence: (id) => !!this.store.evidence(scope.headRevision, id) });
+      return ok(c, { ...result, claims: gated.claims, refusedReason: gated.refusedReason }, { revision: scope.headRevision });
+    },
+    "C30/postPrReply": async (c, b) => {
+      if (typeof b?.commentId !== "string" || typeof b?.resultHash !== "string" || typeof b?.idempotencyKey !== "string") return fail(c, { code: "INVALID_SCHEMA", message: "give commentId, resultHash and idempotencyKey", retryable: false });
+      const ledger = new ReplyLedger(this.store);
+      const row = ledger.anyRow(b.commentId);
+      if (!row || row.result_hash !== b.resultHash) return fail(c, { code: "NOT_FOUND", message: "no shaped reply for this comment; run the watcher or C15/runPrCommand first", retryable: false });
+      if (row.idempotency_key !== b.idempotencyKey) return fail(c, { code: "FORBIDDEN", message: "idempotency key mismatch", retryable: false });
+      if (row.reply_id) return ok(c, { replyId: row.reply_id, idempotent: true }, { completeness: "COMPLETE" }); // §11: a replay returns the same receipt
+      const analysisRow = row.analysis_id ? this.pr.row(row.analysis_id) : null;
+      newGrant(this.store, { repositoryId: row.repository, headHash: row.head_hash, principalId: actor(c), operation: "POST_PR_REPLY", ttlMs: 60_000 });
+      const t = this.prPublisher.transportFor(analysisRow?.repo_root ?? row.repository) as unknown as { postReply?: (pr: number, inReplyTo: string, body: string) => Promise<{ id: string }> };
+      if (!t.postReply || !row.reply_body) return fail(c, { code: "PROVIDER_UNAVAILABLE", message: "this transport cannot post PR replies (the F19 forge interface)", retryable: false });
+      try {
+        const receipt = await t.postReply(row.pr_number, row.comment_id, row.reply_body);
+        ledger.markPosted(row.comment_id, row.content_hash, receipt.id);
+        return ok(c, { replyId: receipt.id, idempotent: false }, { completeness: "COMPLETE" });
+      } catch (e) {
+        ledger.markPosted(row.comment_id, row.content_hash, "", "FAILED", String((e as Error).message ?? e).slice(0, 200));
+        return fail(c, { code: "PROVIDER_UNAVAILABLE", message: String((e as Error).message ?? e).slice(0, 300), retryable: true });
+      }
+    },
+    // ---- F15: the reviewer feedback loop (§8) — usefulness labels, mutes, derived weights, reset ----
+    "C17/recordUsefulness": (c, b) => {
+      if (typeof b?.repositoryId !== "string" || typeof b?.itemId !== "string" || typeof b?.itemKind !== "string" || typeof b?.analysisId !== "string" || !["USEFUL", "NOISE"].includes(b?.label)) return fail(c, { code: "INVALID_SCHEMA", message: "give repositoryId, itemKind, itemId, analysisId and label USEFUL|NOISE", retryable: false });
+      const fb = new FeedbackStore(this.store);
+      const r = fb.recordLabel({
+        repositoryId: b.repositoryId, itemKind: b.itemKind, itemId: b.itemId, analysisId: b.analysisId,
+        label: b.label, principalId: actor(c), role: fb.roleFor(b.repositoryId, actor(c)) ?? "owner",
+        source: b.source === "REACTION" ? "REACTION" : "COMMAND", isPrAuthor: b.isPrAuthor === true, provenance: b.provenance === "SYNTHETIC" ? "SYNTHETIC" : "HUMAN",
+      });
+      return r.ok ? ok(c, r.label, { completeness: "COMPLETE" }) : fail(c, { code: "FORBIDDEN", message: r.error, retryable: false });
+    },
+    "C29/setMute": (c, b) => {
+      if (typeof b?.repositoryId !== "string" || typeof b?.kind !== "string") return fail(c, { code: "INVALID_SCHEMA", message: "give repositoryId and kind", retryable: false });
+      const fb = new FeedbackStore(this.store);
+      const scope = b?.scope && typeof b.scope === "object" && b.scope.type === "REPOSITORY" ? { type: "REPOSITORY" as const }
+        : b?.scope && typeof b.scope === "object" && typeof b.scope.value === "string" && ["PATH_PREFIX", "SYMBOL"].includes(b.scope.type) ? { type: b.scope.type as "PATH_PREFIX" | "SYMBOL", value: b.scope.value }
+        : undefined;
+      const r = fb.setMute({ repositoryId: b.repositoryId, kind: String(b.kind).toUpperCase(), scope, createdBy: actor(c), role: fb.roleFor(b.repositoryId, actor(c)) ?? "owner", expiresAt: typeof b?.expiresAt === "string" ? b.expiresAt : undefined, reason: typeof b?.reason === "string" ? b.reason : undefined });
+      return r.ok ? ok(c, r.mute, { completeness: "COMPLETE" }) : fail(c, { code: "FORBIDDEN", message: r.error, retryable: false });
+    },
+    "C29/clearMute": (c, b) => {
+      if (typeof b?.repositoryId !== "string" || typeof b?.id !== "string") return fail(c, { code: "INVALID_SCHEMA", message: "give repositoryId and the mute id or kind", retryable: false });
+      const fb = new FeedbackStore(this.store);
+      const r = fb.clearMute(b.repositoryId, b.id, actor(c), fb.roleFor(b.repositoryId, actor(c)) ?? "owner");
+      return r.ok ? ok(c, r.mute, { completeness: "COMPLETE" }) : fail(c, { code: "NOT_FOUND", message: r.error, retryable: false });
+    },
+    "C17/getFeedbackState": (c, b) => {
+      if (typeof b?.repositoryId !== "string") return fail(c, { code: "INVALID_SCHEMA", message: "give repositoryId", retryable: false });
+      return ok(c, new FeedbackStore(this.store).state(b.repositoryId), { completeness: "COMPLETE" });
+    },
+    "C17/recomputeWeights": (c, b) => {
+      if (typeof b?.repositoryId !== "string") return fail(c, { code: "INVALID_SCHEMA", message: "give repositoryId", retryable: false });
+      const fb = new FeedbackStore(this.store);
+      const r = fb.recomputeWeights(b.repositoryId, { minFeedback: Number.isInteger(b?.minFeedback) ? b.minFeedback : undefined, distinctPrincipals: Number.isInteger(b?.distinctPrincipals) ? b.distinctPrincipals : undefined });
+      return ok(c, { weights: r.weights, truncated: r.truncated, logHash: r.logHash }, { completeness: r.truncated ? "PARTIAL" : "COMPLETE", warnings: r.truncated ? [`the label log is capped at ${r.truncated ? "the" : ""} the recompute bound; counts may be incomplete`] : undefined });
     },
     "C30/publishImpactComment": async (c, b) => {
       if (typeof b?.analysisId !== "string") return fail(c, { code: "INVALID_SCHEMA", message: "give an analysisId", retryable: false });

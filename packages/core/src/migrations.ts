@@ -969,6 +969,51 @@ export const MIGRATIONS: Migration[] = [
         state text not null default 'CURRENT', created_at text not null, updated_at text not null);`),
     down: (db) => db.exec("drop table if exists impact_reports; drop table if exists pr_change_sets;"),
   },
+  {
+    // F14: one reply per (comment, content hash) — the ledger that makes replies idempotent (§11), plus the
+    // limits windows (§7.7). The shaped body and idempotency key are recorded before posting so a crash between
+    // answering and posting re-posts with the same key instead of duplicating the reply.
+    version: 41, name: "pr-chat-replies",
+    up: (db) => db.exec(`
+      create table if not exists pr_chat_replies(
+        comment_id text not null, content_hash text not null,
+        analysis_id text not null, pr_number integer not null, repository text not null,
+        author text not null, head_hash text not null,
+        kind text not null, outcome text not null, reason text,
+        reply_id text, report_hash text, reply_body text, idempotency_key text, result_hash text,
+        created_at text not null,
+        primary key(comment_id, content_hash));`),
+    down: (db) => db.exec("drop table if exists pr_chat_replies;"),
+  },
+  {
+    // F15: the reviewer feedback loop — usefulness labels (append-only log), per-repository mute rules, derived
+    // kind weights (rebuildable from the log), reset markers and explicit role grants (§6, §7).
+    version: 42, name: "reviewer-feedback",
+    up: (db) => db.exec(`
+      create table if not exists usefulness_labels(
+        id text not null, repository_id text not null, item_kind text not null, item_id text not null,
+        analysis_id text not null, label text not null check(label in ('USEFUL','NOISE')),
+        principal_id text not null, role text not null,
+        source text not null check(source in ('COMMAND','REACTION')),
+        is_pr_author integer not null, provenance text not null check(provenance in ('HUMAN','SYNTHETIC')),
+        at text not null, primary key(id));
+      create table if not exists mute_rules(
+        id text not null, repository_id text not null, kind text not null,
+        scope_type text not null check(scope_type in ('REPOSITORY','PATH_PREFIX','SYMBOL')), scope_value text,
+        created_by text not null, created_at text not null, expires_at text, reason text,
+        revoked_by text, revoked_at text, primary key(id));
+      create table if not exists kind_weights(
+        repository_id text not null, kind text not null, weight real not null,
+        useful integer not null, noise integer not null, principals integer not null,
+        status text not null check(status in ('default','uncalibrated-adjusted')),
+        log_hash text not null, computed_at text not null, primary key(repository_id, kind));
+      create table if not exists feedback_resets(
+        repository_id text not null, principal_id text not null, at text not null);
+      create table if not exists feedback_roles(
+        repository_id text not null, principal_id text not null, role text not null check(role in ('viewer','editor','owner')),
+        set_by text not null, at text not null, primary key(repository_id, principal_id));`),
+    down: (db) => db.exec("drop table if exists usefulness_labels; drop table if exists mute_rules; drop table if exists kind_weights; drop table if exists feedback_resets; drop table if exists feedback_roles;"),
+  },
 ];
 export function currentVersion(db: DatabaseSync): number {
   db.exec("create table if not exists schema_version(version integer not null, name text not null, applied_at text not null)");
