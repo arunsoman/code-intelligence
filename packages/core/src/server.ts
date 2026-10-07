@@ -115,7 +115,7 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
   for (const [key, run] of Object.entries(svc.changeOps)) ops[key] = { mutating: !["C28/interpretDrag", "C28/get", "C28/list"].includes(key), run };
   for (const [key, run] of Object.entries(svc.searchOps)) ops[key] = { mutating: key === "C07/enqueueIndex", run: run as any };
   for (const [key, run] of Object.entries(svc.hotspotOps)) ops[key] = { mutating: ["C26/analyzeHistory", "C26/grantContributorNames", "C26/setHistoryTerrain"].includes(key), run: run as any };
-  for (const [key, run] of Object.entries(svc.prOps)) ops[key] = { mutating: !["C23/getPrAnalysis", "C16/listPolicies", "C16/getPolicy", "C16/verifyBinding"].includes(key), run: run as any };
+  for (const [key, run] of Object.entries(svc.prOps)) ops[key] = { mutating: !["C23/getPrAnalysis", "C16/listPolicies", "C16/getPolicy", "C16/verifyBinding", "C23/getImpactReport", "C23/explainImpactItem", "C30/previewImpactComment"].includes(key), run: run as any };
   for (const [key, run] of Object.entries(svc.defectOps)) ops[key] = { mutating: !["C26/listFindings", "C26/explainFinding", "C27/listCapabilities", "C27/getRunManifest"].includes(key), run };
   for (const [key, run] of Object.entries(svc.profilingOps)) ops[key] = { mutating: key === "C04/ingestProfile" || key === "C24/correlateProfile", run: run as any };
   // F07 task execution: every command that records a decision, spends a run or writes to a forge is mutating. The

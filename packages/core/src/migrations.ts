@@ -958,6 +958,17 @@ export const MIGRATIONS: Migration[] = [
       primary key(request_id, principal));`),
     down: (db) => db.exec("drop table if exists feature_decision_approvals;"),
   },
+  {
+    // F11: the ChangeSet the PR job computed (used to be discarded) and the cited impact report built from it.
+    // Both are keyed by analysis; the report row carries its hash and a lifecycle state (CURRENT/SUPERSEDED).
+    version: 40, name: "pr-impact-reports",
+    up: (db) => db.exec(`
+      create table if not exists pr_change_sets(analysis_id text primary key, json text not null, created_at text not null);
+      create table if not exists impact_reports(
+        analysis_id text primary key, json text not null, report_hash text not null,
+        state text not null default 'CURRENT', created_at text not null, updated_at text not null);`),
+    down: (db) => db.exec("drop table if exists impact_reports; drop table if exists pr_change_sets;"),
+  },
 ];
 export function currentVersion(db: DatabaseSync): number {
   db.exec("create table if not exists schema_version(version integer not null, name text not null, applied_at text not null)");

@@ -6,12 +6,19 @@
 // STALE_REVISION and the stale decision is superseded, not merged into the newer commit's review. Nothing but rule ids,
 // counts, paths and line numbers ever leaves for GitHub (no code text) (§10.4), and a finding under a path the caller
 // may not see is counted, never named (D9 at the publishing boundary).
+//
+// F11 egress amendment (decision D4): the impact comment may carry symbol names, paths, line numbers, counts and
+// claim classes; never source text, string literals, secrets or non-template model output. Denied paths are counted,
+// never named. The impact comment updates independently of the gate comment (decision D2): its own marker, its own
+// find-before-create, its own publication rows (decision_id = '' distinguishes the family for supersession).
 import { createHash } from "node:crypto";
 import type { CheckKind, GateConditionResult, PublicationReceipt } from "@cie/schema";
 import type { Store } from "./store.ts";
 import type { PrAnalysis } from "./pr-analysis.ts";
 import { gateCommentText, gateStatusDescription, hashId } from "./pr-gate.ts";
 import { githubApiBase, ghAuthToken, githubRemote, type GhSlug } from "./gh.ts";
+import { DEFAULT_IMPACT_POLICY, type ImpactPolicy } from "./impact-report.ts";
+import { IMPACT_MARKER, renderImpactComment, renderImpactRetiredComment } from "./impact-render.ts";
 
 const nowIso = () => new Date().toISOString();
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -137,23 +144,26 @@ export class GitHubCheckPublisher {
   readonly engine: PrAnalysis;
   readonly transportFor: (repoRoot: string) => GitHubTransport;
   readonly context: string;
+  /** F11: the check-run context the impact comment is not — it is a comment, but the publication family is separate. */
+  readonly impactContext: string;
   /** Base URL of this CIE deployment: the status links back to the PR's review page here (§7.12). */
   readonly selfUrl: string | null;
 
-  constructor(store: Store, engine: PrAnalysis, opts: { transportFor?: (repoRoot: string) => GitHubTransport; context?: string; selfUrl?: string | null } = {}) {
+  constructor(store: Store, engine: PrAnalysis, opts: { transportFor?: (repoRoot: string) => GitHubTransport; context?: string; impactContext?: string; selfUrl?: string | null } = {}) {
     this.store = store; this.engine = engine;
     this.transportFor = opts.transportFor ?? githubTransportFor;
     this.context = opts.context ?? "cie/gate";
+    this.impactContext = opts.impactContext ?? "cie/impact";
     this.selfUrl = opts.selfUrl ?? process.env.CIE_SELF_URL ?? null;
   }
 
   /** The grant check the publisher runs itself, twice: on arrival, and immediately again before the external call. */
-  assertGrant(grantId: string): GrantRow {
+  assertGrant(grantId: string, operation = "PUBLISH_CHECK"): GrantRow {
     const g = this.store.db.prepare("select * from pr_grants where id = ?").get(grantId) as GrantRow | undefined;
     if (!g) throw new GitHubPublishError("FORBIDDEN", "no publication grant exists for this check");
     if (g.revoked) throw new GitHubPublishError("FORBIDDEN", "the publication grant was revoked");
     if (Number(g.expires_at) < Date.now()) throw new GitHubPublishError("FORBIDDEN", "the publication grant expired");
-    if (g.operation !== "PUBLISH_CHECK") throw new GitHubPublishError("FORBIDDEN", "the grant's operation is not PUBLISH_CHECK");
+    if (g.operation !== operation) throw new GitHubPublishError("FORBIDDEN", `the grant's operation is not ${operation}`);
     return g;
   }
 
@@ -300,6 +310,93 @@ export class GitHubCheckPublisher {
   private markPublished(pubId: string, s: { id: string; url?: string }) {
     this.store.db.prepare("update check_publications set state = 'PUBLISHED', external_id = ?, url = ?, updated_at = ? where id = ?").run(s.id, s.url ?? null, nowIso(), pubId);
   }
+  /**
+   * F11: publish (or update) the blast-radius impact comment for a PR analysis (§7.4, §10, §11). Receipt-first with
+   * an idempotency key that binds the saying to the exact report hash: a repeated delivery for one head returns the
+   * same receipt and finds-before-creates the one comment; a new head is a new saying that supersedes the old one
+   * (F11-A1, F11-A4). Nothing is posted when nothing met the threshold and no earlier comment exists — silence is a
+   * designed outcome, recorded as a PREPARED receipt (§7.4). Requires a grant whose operation is PUBLISH_IMPACT.
+   */
+  async publishImpact(grantId: string, req: { repositoryId: string; prNumber: number; analysisId: string; headHash?: string; policy?: ImpactPolicy }): Promise<PublicationReceipt> {
+    const analysisRow = this.engine.row(req.analysisId);
+    if (!analysisRow) return { publicationId: "pub:none", forge: "github", repositoryId: req.repositoryId, headHash: req.headHash ?? "", kind: "COMMENT", state: "FAILED", idempotencyKey: "pub:none", lastError: "NOT_FOUND: no such analysis" };
+    const headHash = req.headHash ?? analysisRow.head_hash;
+    const report = this.engine.impactReportOf(req.analysisId);
+    const policy = req.policy ?? DEFAULT_IMPACT_POLICY;
+    if (!report) {
+      const key = hashId("pub", [req.repositoryId, req.prNumber, headHash, this.impactContext, "no-report"]);
+      const id = "pub:" + sha([grantId, key, nowIso()].join("|")).slice(0, 14);
+      this.store.db.prepare("insert into check_publications values (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        .run(id, "", req.repositoryId, "github", headHash, key, "COMMENT", null, null, "FAILED", 0, "no impact report exists for this analysis; run C23/analyzePullRequest with an F11 build", nowIso());
+      return { publicationId: id, forge: "github", repositoryId: req.repositoryId, headHash, kind: "COMMENT", state: "FAILED", idempotencyKey: key, lastError: "no impact report exists for this analysis" };
+    }
+    // The key binds the saying to the exact report hash: the same report repeats its receipt; a new head or a
+    // changed report is a new saying that supersedes the old one.
+    const idempotencyKey = hashId("pub", [req.repositoryId, req.prNumber, headHash, this.impactContext, report.analysisId, sha(JSON.stringify(report)).slice(0, 16)]);
+    const existing = this.store.db.prepare("select * from check_publications where idempotency_key = ?").get(idempotencyKey) as any;
+    if (existing && existing.state === "PUBLISHED") return this.receiptOf(existing);
+    if (existing && existing.state === "PUBLISHING") throw new GitHubPublishError("CONFLICT", "this exact impact publication is already in flight");
+
+    const grant0 = this.assertGrant(grantId, "PUBLISH_IMPACT");
+    const pubId = existing?.id ?? "pub:" + sha([grant0.id, idempotencyKey, nowIso(), Math.random()].join("|")).slice(0, 14);
+    if (!existing) this.store.db.prepare("insert into check_publications values (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .run(pubId, "", req.repositoryId, "github", headHash, idempotencyKey, "COMMENT", null, null, "PUBLISHING", 0, null, nowIso());
+    else this.store.db.prepare("update check_publications set state = 'PUBLISHING', attempts = attempts + 1 where id = ?").run(pubId);
+
+    try {
+      this.engine.sweepExpired();
+      const t = this.transportFor(analysisRow.repo_root ?? req.repositoryId);
+      if ((await t.visibility()) === "public" && this.store.deniedPrefixes(analysisRow.repo_root ?? req.repositoryId).length > 0) {
+        throw new GitHubPublishError("FORBIDDEN", "GitHub shows this repository publicly while the analysis scope is narrower than the platform's; nothing is published");
+      }
+      // stale-head guard: the comment is bound to the exact head the report was built from (§6.1, F11-A1).
+      let currentHead: string | null = null;
+      try { currentHead = await t.resolvePrHead(req.prNumber); } catch { currentHead = headHash; }
+      if (currentHead && headHash !== currentHead) {
+        throw new GitHubPublishError("STALE_REVISION", `the PR's head moved after the report (built for ${headHash.slice(0, 8)}, the PR's head is now ${currentHead.slice(0, 8)}); the stale report is superseded, not published`);
+      }
+      const secondGrant = this.assertGrant(grant0.id, "PUBLISH_IMPACT");
+      if (secondGrant.id !== grantId) throw new GitHubPublishError("FORBIDDEN", "the publication grant changed under us");
+
+      const denied = this.store.deniedPrefixes(analysisRow.repo_root ?? req.repositoryId);
+      const reviewUrl = this.selfUrl ? `${this.selfUrl}/#pr=${req.analysisId}` : undefined;
+      const resolveEvidence = (id: string) => !!this.store.evidence(analysisRow.head_revision ?? "", id);
+      const rendered = renderImpactComment({
+        report, analysisState: analysisRow.state, policy, deniedPrefixes: denied, resolveEvidence, reviewUrl,
+      });
+      if (rendered.silent) {
+        // §7.4: nothing met the threshold. If an earlier impact comment exists it must not keep claiming stale
+        // items — update it to say they no longer apply; otherwise post nothing at all.
+        const prior = await t.findComment(req.prNumber, IMPACT_MARKER);
+        if (prior) {
+          const said = await t.updateComment(prior.id, renderImpactRetiredComment(headHash, policy, reviewUrl));
+          this.markPublished(pubId, said);
+        } else {
+          this.store.db.prepare("update check_publications set state = 'PREPARED', last_error = ?, updated_at = ? where id = ?")
+            .run("silent: nothing met the noise threshold and no earlier comment exists; nothing was posted (§7.4)", nowIso(), pubId);
+        }
+      } else {
+        // find-before-create: a repeated delivery for one head updates the one comment (F11-A4).
+        const prior = await t.findComment(req.prNumber, IMPACT_MARKER);
+        const said = prior ? await t.updateComment(prior.id, rendered.markdown) : await t.postComment(req.prNumber, rendered.markdown);
+        this.markPublished(pubId, said);
+        // One current impact saying per PR: the new head's publication supersedes the earlier one. Impact
+        // publications always record decision_id = '' (F02 decision comments bind a decision id), which
+        // distinguishes the family without a schema change.
+        this.store.db.prepare("update check_publications set state = 'SUPERSEDED', updated_at = ? where repository_id = ? and kind = 'COMMENT' and decision_id = '' and id <> ? and state = 'PUBLISHED'")
+          .run(nowIso(), req.repositoryId, pubId);
+      }
+      if (analysisRow.state === "DECIDED") this.engine.markPublished(req.analysisId);
+      return this.receiptOf(this.store.db.prepare("select * from check_publications where id = ?").get(pubId) as any);
+    } catch (e) {
+      const err = e as { code?: string; name?: string };
+      const code = err.code ?? "NETWORK";
+      const msg = `${err.name ?? "Error"}${err.code ? ` (${err.code})` : ""}: ${String((e as Error).message ?? e).slice(0, 300)}`;
+      this.store.db.prepare("update check_publications set state = 'FAILED', last_error = ?, updated_at = ? where id = ?").run(msg.slice(0, 400), nowIso(), pubId);
+      return { publicationId: pubId, forge: "github", repositoryId: req.repositoryId, headHash, kind: "COMMENT", state: "FAILED", idempotencyKey, lastError: `${code}: ${String((e as Error).message ?? e).slice(0, 300)}` };
+    }
+  }
+
   receiptOf(r: any): PublicationReceipt {
     return {
       publicationId: r.id, forge: r.forge, repositoryId: r.repository_id, headHash: r.head_hash, kind: r.kind,
