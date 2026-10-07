@@ -141,7 +141,7 @@ export type FormId =
   | "SemanticMap" | "CausalGraph" | "HypothesisGraph"
   | "TransactionJourney" | "DataLineage" | "SemanticDiff" | "Archaeology" | "TrustBoundary" | "RuntimeOverlay"
   | "RaceWindow" | "Counterfactual" | "TestConfidence" | "Ownership" | "ConceptAtlas" | "PolicyMap" | "ChangeRisk"
-  | "TraceLinkedProfile" | "RouteMap";
+  | "TraceLinkedProfile" | "RouteMap" | "GeneratedChart";
 export interface TerrainCell {
   id: Id; label: string; file: string; factors: Record<string, number>; raw: Record<string, string>; evidenceIds: Id[]; area: number; entityIds: Id[]; note?: string;
 }
@@ -234,6 +234,7 @@ export const SCHEMA_CONCEPTS = "concepts.v1";
 export const SCHEMA_CHALLENGE = "challenge.v1";
 export const SCHEMA_ROUTE = "route.v1";
 export const SCHEMA_HYPOTHESES = "hypotheses.v1";
+export const SCHEMA_CHART = "chart.v1";
 
 export const RepresentationOutput = z.object({
   caption: z.string().max(400),
@@ -277,6 +278,23 @@ export const HypothesesOutput = z.object({
 }).strict();
 export type HypothesesOutput = z.infer<typeof HypothesesOutput>;
 
+/** A bounded, evidence-referenced chart plan. It is compiled into the normal ViewSpec graph; never executable source. */
+export const ChartOutput = z.object({
+  chartType: z.string().min(1).max(60),
+  layout: z.enum(["flow", "lanes", "hierarchy", "timeline", "network"]),
+  caption: z.string().max(400),
+  nodes: z.array(z.object({
+    entityId: z.string().max(300), evidenceIds: z.array(z.string()).max(20),
+    shape: z.enum(["process", "decision", "event", "state", "external"]),
+    lane: z.string().max(80).optional(), column: z.number().int().min(0).max(20), row: z.number().int().min(0).max(40),
+  }).strict()).max(40),
+  edges: z.array(z.object({
+    from: z.string().max(300), to: z.string().max(300), relationshipId: z.string().max(300),
+    label: z.string().max(100).optional(), evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(80),
+}).strict();
+export type ChartOutput = z.infer<typeof ChartOutput>;
+
 export const ExplanationOutput = z.object({
   summary: z.string().max(1000),
   claims: z.array(z.object({
@@ -305,7 +323,7 @@ export const ChallengeOutput = z.object({
 export type ChallengeOutput = z.infer<typeof ChallengeOutput>;
 
 /** Which visual a question wants. The model picks a form only; it cannot cite evidence or change what the form shows. */
-export const ROUTE_FORMS = ["SemanticMap", "CausalGraph", "TransactionJourney", "DataLineage", "SemanticDiff", "Archaeology", "TrustBoundary", "RuntimeOverlay", "RaceWindow", "Counterfactual", "TestConfidence", "Ownership", "ConceptAtlas", "PolicyMap", "ChangeRisk"] as const;
+export const ROUTE_FORMS = ["SemanticMap", "CausalGraph", "TransactionJourney", "DataLineage", "SemanticDiff", "Archaeology", "TrustBoundary", "RuntimeOverlay", "RaceWindow", "Counterfactual", "TestConfidence", "Ownership", "ConceptAtlas", "PolicyMap", "ChangeRisk", "GeneratedChart"] as const;
 export const RouteOutput = z.object({
   form: z.enum(ROUTE_FORMS).nullable(),
   /** Set when form is CausalGraph. */
@@ -323,12 +341,15 @@ export const OUTPUT_SCHEMAS = {
   [SCHEMA_CHALLENGE]: ChallengeOutput,
   [SCHEMA_ROUTE]: RouteOutput,
   [SCHEMA_HYPOTHESES]: HypothesesOutput,
+  [SCHEMA_CHART]: ChartOutput,
 } as const;
 
 // ---- Model gateway interface ----
 export interface ModelRequest {
-  purpose: "REPRESENT" | "EXPLAIN" | "EXTRACT" | "CHALLENGE" | "ROUTE" | "HYPOTHESIZE"; schemaId: keyof typeof OUTPUT_SCHEMAS;
+  purpose: "REPRESENT" | "EXPLAIN" | "EXTRACT" | "CHALLENGE" | "ROUTE" | "HYPOTHESIZE" | "CHART"; schemaId: keyof typeof OUTPUT_SCHEMAS;
   question: string; bundle: EvidenceBundle; selected?: Id[];
+  /** For a bounded model task such as generating a chart plan. */
+  instructions?: string;
   /** For CHALLENGE: the claim being attacked. */
   claim?: { assertion: string; evidenceIds: Id[] };
 }
@@ -1436,4 +1457,72 @@ export interface CampaignView {
   /** Budget usage so far: wall time admitted, model tokens and GitHub writes (global, viewer-independent). */
   usage?: { wallMs: number; modelTokens: number; githubWrites: number };
   budget?: CampaignBudgets;
+}
+
+// ---- Release scope — what's actually in a release, frozen against a GitHub milestone ----
+//
+// Mirrors F08's campaign population model (create / freeze / version-diff / event-sourced replay), scaled down to a
+// single repository's milestone issues. An item added to the milestone after freeze is NEEDS_ASSESSMENT, never
+// silently folded into scope (the same rule campaigns apply to a repository added after freeze).
+
+export type ReleaseState = "DRAFT" | "SCOPE_FROZEN" | "CANCELLED";
+export type ReleaseItemState = "IN_SCOPE" | "EXCLUDED";
+
+export interface ReleaseMilestoneRef {
+  host: string; owner: string; repo: string; number: number;
+}
+
+export interface ReleaseSpec {
+  name: string;
+  tag: string;
+  milestone: ReleaseMilestoneRef;
+}
+
+export interface Release {
+  releaseId: string; tenantId: string; name: string; tag: string;
+  milestone: ReleaseMilestoneRef;
+  state: ReleaseState; version: number;
+  createdBy: string; createdAt: string; updatedAt: string;
+}
+
+export interface ReleaseScopeVersionInfo {
+  releaseId: string; version: number; scopeHash: string;
+  issueNumbers: number[];
+  frozenAt: string; createdBy: string;
+}
+
+export interface ReleaseItem {
+  releaseId: string; issueNumber: number; scopeVersion: number;
+  title: string; issueState: "open" | "closed";
+  state: ReleaseItemState; assessmentState: AssessmentState;
+  updatedAt: string;
+}
+
+export interface ReleaseItemView {
+  issueNumber: number; title: string; issueState: "open" | "closed";
+  state: ReleaseItemState; assessmentState: AssessmentState;
+  /** The most recent stated reason for a non-default state (added after freeze, no longer in the milestone). */
+  reason?: string;
+}
+
+export interface ReleaseScopeDiffEntry {
+  issueNumber: number;
+  change: "ADDED" | "REMOVED" | "UNCHANGED";
+  previousVersion: number; nextVersion: number;
+  state: ReleaseItemState | "NEEDS_ASSESSMENT";
+  reason: string;
+}
+
+export interface ReleaseScopeDiff {
+  releaseId: string; fromVersion: number; toVersion: number; scopeHash: string;
+  entries: ReleaseScopeDiffEntry[];
+  added: number[]; removed: number[];
+}
+
+export interface ReleaseView {
+  release: Release;
+  scope: { version: number; scopeHash: string; frozenAt: string } | null;
+  items: ReleaseItemView[];
+  counts: Partial<Record<ReleaseItemState, number>>;
+  needsAssessment: number;
 }

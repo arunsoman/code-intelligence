@@ -47,6 +47,7 @@ export const VISUALS: VisualDef[] = [
   // Ordered last on purpose: the earlier entries are the fallback forms a scripted/absent router may pick, and a form
   // whose need (an imported profile) is unmet must never shadow the general map it falls back to.
   { code: "V17", formId: "TraceLinkedProfile", name: "Trace-linked profile", blurb: "Where sampled execution time (or allocations) actually fell, per sample kind, joined to the traced window — measured shares with their population hash, unattributed and withheld parts shown as fog, never a causal claim.", example: "Where does the CPU actually go?", needs: ["profiles"], build: buildProfile },
+  { code: "V19", formId: "GeneratedChart", name: "Generated chart", blurb: "An LLM-designed chart layout compiled into CIE's interactive, evidence-linked canvas when no built-in visual fits.", example: "Show this flow as a sequence diagram", needs: [] },
 ];
 
 /** Any inferred or hypothetical edge without its own claim (asynchronous hand-offs, mostly) gets one, so nothing uncertain is shown unexplained. */

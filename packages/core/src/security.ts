@@ -19,6 +19,8 @@ export const RULES: Record<string, Rule> = {
   "R-PII-LOG": { id: "R-PII-LOG", version: 1, title: "Sensitive data in logs", text: "A log call whose arguments include an identifier named like a secret or personal datum, not passed through a masking, hashing or length operation." },
   "R-AUTHZ-GAP": { id: "R-AUTHZ-GAP", version: 1, title: "State change without an authorisation check", text: "A request-handling entry point (takes a request parameter) reaches code that changes state through calls, with no check that can refuse it before the change." },
   "R-POLICY-MISSING": { id: "R-POLICY-MISSING", version: 1, title: "Required policy not declared", text: "A policy the task requires is not declared in policies/*.json, so there is nothing to enforce or audit against." },
+  "R-DEBUG-LEFTOVER": { id: "R-DEBUG-LEFTOVER", version: 1, title: "Debug statement left in code", text: "A console.log, console.debug or debugger statement outside a comment, left in non-test code." },
+  "R-TODO-SCAN": { id: "R-TODO-SCAN", version: 1, title: "TODO/FIXME/HACK marker left in code", text: "A TODO, FIXME or HACK marker inside a comment, naming unfinished or risky work that was never tracked as its own task." },
 };
 const ruleDigest = (r: Rule) => createHash("sha256").update(JSON.stringify([r.id, r.version, r.title, r.text])).digest("hex").slice(0, 12);
 
@@ -44,6 +46,12 @@ const LOGGER_RECEIVERS = ["console", "logger", "log", "LOG", "LOGGER", "logging"
 const LOG_METHODS = ["log", "info", "warn", "warning", "error", "debug", "trace", "fatal", "critical", "exception", "printf", "println", "print", "Printf", "Println", "Print", "Infof", "Info", "Warnf", "Warn", "Errorf", "Error", "Debugf", "Debug", "Fatalf", "Fatal", "Panicf", "Panic"];
 const LOGGER_FACTORY = /^(?:LoggerFactory|LogFactory|logrus|zap|slog|logging)$/;
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// R-DEBUG-LEFTOVER: live (non-commented, non-string) console.log/console.debug/debugger — blank() strips comments
+// and strings first, so a string literal that merely mentions "console.log" or a commented-out line never matches.
+const DEBUG_LEFTOVER_PATTERN = /\bconsole\s*\.\s*(?:log|debug)\s*\(|\bdebugger\b\s*;?/g;
+// R-TODO-SCAN: the opposite direction — these markers only count inside a comment, so this scans line (// or #) and
+// block (/* */) comments directly on the raw source rather than blanking them away.
+const TODO_MARKER = /\b(TODO|FIXME|HACK)\b/;
 
 /**
  * Names that refer to a logger in this text: `const out = console`, `const l = logger.child(...)`,
@@ -209,6 +217,30 @@ export class Security {
         const ev = spanEvidence(store, rev, fn as Fn, hit.at, hit.end - hit.at);
         const secret = hit.ids.some((i) => SECRET_KIND.test(i));
         out.push(this.mk(rev, pii, `${fn.entity.entityId}@${hit.at}`, { title: pii.title, severity: secret ? "high" : "medium", summary: `${short(fn.entity.entityId)} logs ${hit.ids.join(", ")} without masking it.`, evidenceIds: [ev.id], assumptions: ["the log output is persisted or shipped somewhere", "the named value carries what its name says"], counterArgument: "The identifier may hold a non-sensitive value despite its name, or the logger may redact it downstream; neither is visible in the code." }));
+      }
+    }
+    // ---- R-DEBUG-LEFTOVER
+    const dbg = rules["R-DEBUG-LEFTOVER"];
+    if (dbg && dbg.enabled !== false) for (const fn of [...fns.values()].sort((a, b) => a.entity.entityId.localeCompare(b.entity.entityId))) {
+      if (fn.file.includes("test")) continue;
+      const clean = blank(fn.src, fn.lang);
+      for (const m of clean.matchAll(DEBUG_LEFTOVER_PATTERN)) {
+        const at = m.index!, end = at + m[0].length;
+        const ev = spanEvidence(store, rev, fn as Fn, at, end - at);
+        out.push(this.mk(rev, dbg, `${fn.entity.entityId}@${at}`, { title: dbg.title, severity: "low", summary: `${short(fn.entity.entityId)} still has a debug statement (${m[0].trim().replace(/\($/, "")}) outside any comment.`, evidenceIds: [ev.id], assumptions: ["this path runs in production, not only under a local debugger"], counterArgument: "The statement may be intentionally gated behind a debug flag that is invisible to this scan." }));
+      }
+    }
+    // ---- R-TODO-SCAN
+    const todo = rules["R-TODO-SCAN"];
+    if (todo && todo.enabled !== false) for (const fn of [...fns.values()].sort((a, b) => a.entity.entityId.localeCompare(b.entity.entityId))) {
+      if (fn.file.includes("test")) continue;
+      const comments = [...fn.src.matchAll(/\/\/[^\n]*/g), ...fn.src.matchAll(/(?:^|[^:])#[^\n]*/g), ...fn.src.matchAll(/\/\*[^]*?\*\//g)];
+      for (const c of comments) {
+        const hit = TODO_MARKER.exec(c[0]);
+        if (!hit) continue;
+        const at = c.index! + hit.index!, end = at + hit[0].length;
+        const ev = spanEvidence(store, rev, fn as Fn, at, end - at);
+        out.push(this.mk(rev, todo, `${fn.entity.entityId}@${at}`, { title: todo.title, severity: "low", summary: `${short(fn.entity.entityId)} carries a ${hit[0]} marker that was never tracked as its own task.`, evidenceIds: [ev.id], assumptions: ["the marker still describes work that has not been done"], counterArgument: "The marker may be stale (the work was already finished elsewhere) or may name a deliberate, accepted limitation." }));
       }
     }
     // ---- R-AUTHZ-GAP

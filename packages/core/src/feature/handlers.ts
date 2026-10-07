@@ -25,6 +25,8 @@ import { issueHandlers, type IssueHooks } from "./issue-handlers.ts";
 import { patchHandlers } from "./delivery-handlers.ts";
 import { builderHandlers } from "./builder-handlers.ts";
 import { coordinationHandlers } from "./coordination-handlers.ts";
+import { approvalHandlers } from "./approval-handlers.ts";
+import { releaseBoardHandlers } from "./release-board.ts";
 import { pipelineHandlers, type PipelineHooks } from "./pipeline-handlers.ts";
 import { opsHandlers } from "./ops-handlers.ts";
 import { publishHandlers, type PublishHooks } from "./publish-handlers.ts";
@@ -61,6 +63,8 @@ export function featureHandlers(svc: Service, opts: { gates?: GateHooks; perf?: 
     ...pipelineHandlers(svc, fs, { gates: opts.gates, publish: opts.publish, adapter: opts.requirements?.adapter, ...opts.pipeline }),
     ...builderHandlers(svc, fs, opts.builder),
     ...coordinationHandlers(svc, fs, { forge: opts.issues?.forge, authOf, requireFence: opts.requireFence }),
+    ...approvalHandlers(svc, fs, authOf),
+    ...releaseBoardHandlers(svc, fs),
     ...publishHandlers(svc, fs, opts.publish ?? {}),
     "C19/compileChangeGraph": (c, b) => guarded(c, () => {
       const x = obj(b); const rec = owned(x.requestId, who(c));
@@ -68,7 +72,7 @@ export function featureHandlers(svc: Service, opts: { gates?: GateHooks; perf?: 
       if (x.candidateHash && (!cand || cand.requestId !== rec.requestId)) throw new FeatureError("NOT_FOUND", "no such candidate for this request");
       return compileChangeGraph(rec, featureReview(fs, rec, cand, svc.store).files, { candidateHash: x.candidateHash, filters: x.filters, cursor: x.cursor, budget: x.budget ?? { nodes: 90 } });
     }),
-    "C02/submitFeature": (c, b) => guarded(c, () => { const x = obj(b); return submitFeature(intake, who(c), { inputRefs: x.inputRefs ?? [], text: x.text, repositoryId: str(x.repositoryId, "repositoryId"), mode: x.mode, budget: x.budget, idempotencyKey: c.idempotencyKey }); }),
+    "C02/submitFeature": (c, b) => guarded(c, () => { const x = obj(b); return submitFeature(intake, who(c), { inputRefs: x.inputRefs ?? [], text: x.text, repositoryId: str(x.repositoryId, "repositoryId"), mode: x.mode, budget: x.budget, releaseId: x.releaseId, idempotencyKey: c.idempotencyKey }); }),
     "C10/discoverFeatureContext": (c, b) => guarded(c, () => { const x = obj(b); owned(x.requestId, who(c)); return discoverFeatureContext(intake, who(c), { requestId: x.requestId, snapshot: x.snapshot ?? fs.getRequest(x.requestId)!.source, retrievalBudget: x.retrievalBudget }); }),
     "C02/resumeRequest": (c, b) => guarded(c, () => { const x = obj(b); owned(x.requestId, who(c)); return resumeRequest(fs, x.requestId, who(c), isActive); }),
     "C02/recordDecision": (c, b) => guarded(c, () => {

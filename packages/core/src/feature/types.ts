@@ -94,6 +94,9 @@ export type IssueBinding = {
 export type FeatureTask = { id: Id; componentId: string; requirementIds: Id[]; dependencyTaskIds: Id[]; obligationIds: Id[]; plannedEdits: string[]; capabilityIds: Id[]; state: FeatureTaskState; evidenceIds: Id[] };
 export type FeatureWorkspace = {
   requestId: Id; stage: WizardStage; contractHash?: Hash; candidateHash?: Hash; issueRef?: string; blockers: Id[]; runningJobIds: Id[];
+  /** The release (release-scope.ts's Release, a milestone-bundle id — distinct from contract.releasePlan's
+   *  deployment-safety plan, which is a different "release") this request is being built toward, if any. */
+  releaseId?: Id;
   validationSummaryRef?: Id; workspaceVersion: number;
   /** Read-model extras filled in by openFeatureWorkspace; never stored. */
   contractVersion?: number; state?: RequestState; mode?: OutcomeMode; candidateStatus?: CandidateRecord["status"];

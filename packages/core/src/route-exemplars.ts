@@ -7,6 +7,10 @@ export const EXEMPLARS: Record<string, string[]> = {
     "describe the structure of the checkout feature", "what are the building blocks of the notification service", "show how the login feature is put together", "map out the billing module",
     "what are the layers of this application", "how are responsibilities split between packages",
   ],
+  GeneratedChart: [
+    "draw a sankey diagram for this flow", "show this as a sequence diagram", "make a chart type that is not in the gallery",
+    "create a custom visual for this evidence", "use a timeline chart to explain these code paths", "pick the best chart to represent this relationship",
+  ],
   "CausalGraph:failure": [
     "what could make an order submission fail", "list every place a request can be rejected", "what are all the ways this call can blow up", "under what conditions does the upload error out",
     "which exceptions can the payment flow raise", "where can the sync job give up", "how can a login attempt be refused", "what are the failure points of the import",
@@ -21,6 +25,8 @@ export const EXEMPLARS: Record<string, string[]> = {
     "trace what happens from the click to the database when buying", "take me through the signup in order", "what are the steps when an invoice is paid", "follow the order from creation to delivery",
     "describe the sequence of calls for a refund", "step through the password reset", "what happens first, then next, when a message is published", "the life of a payment from start to finish",
     "show the path a request takes through the services", "lay out the checkout flow stage by stage",
+    "what happens if the user pays but the mobile topup fails", "could payment succeed while the recharge is still pending",
+    "show the sequence when customer payment is accepted but the operator topup fails", "what happens after a payment if the next service step fails",
   ],
   DataLineage: [
     "which code touches the customers table", "what reads the discount column", "who sets the shipped flag", "find every writer of the session state",

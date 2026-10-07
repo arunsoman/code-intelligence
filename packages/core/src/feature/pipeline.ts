@@ -33,7 +33,7 @@ import { publishFeaturePR, type PublishDeps } from "./publish.ts";
 import { normalizeRequirements } from "./requirements.ts";
 import type { SqliteFeatureStore } from "./store.ts";
 import type { Store } from "../store.ts";
-import type { CandidateRecord, DecisionRecord, FeatureRecord, Id, OutcomeMode, PublicationDecision, PublicationReceipt, QuestionBatch, Runner } from "./types.ts";
+import type { CandidateRecord, DecisionRecord, FeatureRecord, Hash, Id, OutcomeMode, PublicationDecision, PublicationReceipt, QuestionBatch, Runner } from "./types.ts";
 import { computeEligibility, defaultValidationPlan, runFeatureValidation, type ValidationPlan } from "./validation.ts";
 
 export type StepName = "SUBMIT" | "DISCOVER" | "NORMALISE" | "CONSTRAINTS" | "CLARIFY" | "CONFIRM" | "OVERLAP" | "PLAN" | "GENERATE" | "CANDIDATE" | "DECLARE" | "VALIDATE" | "DECIDE" | "EXPORT" | "PUBLISH";
@@ -62,6 +62,8 @@ export interface PipelineDeps {
 }
 export interface PipelineInput {
   repositoryId: Id; text: string; mode: OutcomeMode; idempotencyKey: string;
+  /** The release this request is being built toward, if any; gates DECIDE behind a second, release-authorized approver. */
+  releaseId?: Id;
   /** Answers by question id, applied in order. An answer for a question the contract does not have is ignored and reported. */
   answers?: Record<string, string>; scope?: CandidateScope; releasePlan?: FeatureRecord["contract"] extends infer C ? C extends { releasePlan?: infer R } ? R : never : never;
   /** A person confirms the generated expected outcomes (all, or the named criteria); without this the oracle stays unreviewed and nothing can be verified. */
@@ -113,6 +115,17 @@ export function validationPlanFor(request: FeatureRecord, candidate: CandidateRe
 type Draft = { steps: PipelineStep[]; onStep?: (s: PipelineStep) => void };
 const add = (d: Draft, step: StepName, status: StepStatus, detail: string) => { const s = { step, status, detail }; d.steps.push(s); d.onStep?.(s); };
 
+/** A release-scoped request's second-approver verdict: an additive sign-off (C30/approveFeatureDecision) bound to
+ * the exact candidate's bindingHash, from a principal other than the request's own author who is authorized for
+ * release scope. Exported so tests exercise the exact same logic the pipeline uses, not a duplicate of it. */
+export function releaseSecondApprover(fs: SqliteFeatureStore, auth: AuthorityConfig, rec: FeatureRecord, candidateBindingHash: Hash): { ok: boolean; reason: string } {
+  const approvals = fs.decisionApprovals(rec.requestId);
+  const valid = approvals.find((a) => a.bindingHash === candidateBindingHash && a.principal !== rec.createdBy && authorize(auth, a.principal, "release", rec.createdBy).allowed);
+  if (valid) return { ok: true, reason: `approved by ${valid.principal}` };
+  const stale = approvals.some((a) => a.principal !== rec.createdBy && a.bindingHash !== candidateBindingHash);
+  return { ok: false, reason: stale ? "an approval exists but for a different candidate; the candidate changed after approval" : "no second person with release authority has approved this exact candidate yet" };
+}
+
 export async function runFeaturePipeline(d: PipelineDeps, actor: Id, i: PipelineInput): Promise<PipelineResult> {
   const t: Draft = { steps: [], onStep: d.onStep }; let requestId: Id = "";
   const finish = (stop: PipelineStop, reason: string, extra: Partial<PipelineResult> = {}): PipelineResult => ({ requestId, stop, reason, steps: t.steps, ...extra });
@@ -122,7 +135,7 @@ export async function runFeaturePipeline(d: PipelineDeps, actor: Id, i: Pipeline
   const hash = (): string => req().contract!.hash;
   try {
     // ---- submit and discover
-    const sub = submitFeature(intake, actor, { inputRefs: [], text: i.text, repositoryId: i.repositoryId, mode: i.mode, idempotencyKey: i.idempotencyKey, budget: undefined });
+    const sub = submitFeature(intake, actor, { inputRefs: [], text: i.text, repositoryId: i.repositoryId, mode: i.mode, idempotencyKey: i.idempotencyKey, budget: undefined, releaseId: i.releaseId });
     requestId = sub.requestId; add(t, "SUBMIT", "DONE", `${sub.replayed ? "replayed " : ""}request ${requestId} in ${sub.mode} mode${sub.warnings?.length ? `; ${sub.warnings[0]}` : ""}`);
     const rec0 = req();
     if (rec0.state === "RECEIVED" || rec0.state === "DISCOVERING" || !rec0.assessment) {
@@ -229,7 +242,18 @@ export async function runFeaturePipeline(d: PipelineDeps, actor: Id, i: Pipeline
 
     // ---- decide, then deliver
     const fresh = d.fs.getCandidate(cand.id)!; const rec = req();
-    const decide = (purpose: string) => computeEligibility({ request: rec, candidate: fresh, plan: rec.validationPlan ?? vplan, evidence: d.fs.listEvidence(fresh.id).filter((e) => !e.verdict), decisions: d.fs.listDecisions(requestId), purpose, externalGaps: declarationGaps(d.fs, rec, d.auth) });
+    // A release-scoped request cannot be decided on its own author's say-so: a second person bound for release
+    // authority must have recorded an approval (C30/approveFeatureDecision, approval-handlers.ts) for this EXACT
+    // candidate's bindingHash first — mirrors F07-D10's "a candidate's author cannot approve it" for the
+    // prompt-to-feature pipeline, which otherwise trusts a single owner throughout. releaseSecondApprover() reads
+    // an additive sign-off record (mirroring F08's campaign_approvals) rather than comparing the deciding actor to
+    // the author: every real path through this pipeline runs as the request's own owner (owned() enforces that
+    // everywhere else), so "the deciding actor differs from the author" could never be true to begin with — the
+    // second person acts through the separate approval endpoint, not by running this pipeline themselves.
+    // Computed once so both decide() calls below see it, and passed into computeEligibility rather than patched
+    // onto its result, so the returned decision's content-hash id still matches its own eligibility/reasons.
+    const secondApprover = rec.workspace.releaseId ? releaseSecondApprover(d.fs, d.auth, rec, fresh.bindingHash) : undefined;
+    const decide = (purpose: string) => computeEligibility({ request: rec, candidate: fresh, plan: rec.validationPlan ?? vplan, evidence: d.fs.listEvidence(fresh.id).filter((e) => !e.verdict), decisions: d.fs.listDecisions(requestId), purpose, externalGaps: declarationGaps(d.fs, rec, d.auth), secondApprover });
     const decision = decide("EXPORT_PATCH");
     add(t, "DECIDE", decision.eligibility === "VERIFIED_WITHIN_SCOPE" ? "DONE" : "PARTIAL", `${decision.eligibility}${decision.reasons.length ? `: ${decision.reasons.slice(0, 3).join("; ")}${decision.reasons.length > 3 ? ` (+${decision.reasons.length - 3} more)` : ""}` : ""}`);
     const result: Partial<PipelineResult> = { candidate: d.fs.getCandidate(cand.id)!, decision, unusedAnswers: [...unused] };

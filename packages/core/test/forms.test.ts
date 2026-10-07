@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ViewNode } from "@cie/schema";
+import { StubProvider } from "@cie/model";
 import { ctx, demoRepo, setup, traceFor } from "./helpers.ts";
 
 const label = (n: ViewNode) => n.label;
@@ -29,6 +30,28 @@ test("failure question → CausalGraph listing every failure site with cited evi
   assert.equal(cc.gates.find((g) => g.gate === "ADVERSARIAL")!.status, "INSUFFICIENT");
   assert.match(view.caption, /only through an async hand-off/);
   assert.deepEqual(view.nodes.filter((n) => n.role === "operation").map(label), ["createPayment"], "only real operations that can fail; no error classes, no operations without a failure site");
+  worker.close();
+});
+
+test("an empty native causal graph falls back to a reusable evidence-grounded chart", async () => {
+  class CountingProvider extends StubProvider {
+    chartCalls = 0;
+    override async generate(req: Parameters<StubProvider["generate"]>[0]): Promise<unknown> {
+      if (req.purpose === "CHART") this.chartCalls++;
+      return super.generate(req);
+    }
+  }
+  const model = new CountingProvider();
+  const { svc, worker, revision } = await setup(model, demoRepo());
+  const question = "What could happen in the widget lifecycle?";
+  const first = await svc.ask(ctx(), { question, revision, form: "CausalGraph", pins: ["function:src/api/payments-controller.ts#createPayment"] });
+  assert.ok(first.ok);
+  assert.equal(first.value.view.formId, "GeneratedChart");
+  assert.ok(first.value.view.nodes.length > 0, first.value.view.gaps.join("; "));
+  const second = await svc.ask(ctx(), { question, revision, form: "CausalGraph", pins: ["function:src/api/payments-controller.ts#createPayment"] });
+  assert.ok(second.ok);
+  assert.equal(second.value.view.formId, "GeneratedChart");
+  assert.equal(model.chartCalls, 1, "the validated chart plan is reused on the next request");
   worker.close();
 });
 
@@ -128,7 +151,6 @@ test("suspects are only executable code, and on-stack frames outrank merely adja
 });
 
 import type { ModelProvider, ModelRequest } from "@cie/schema";
-import { StubProvider } from "@cie/model";
 
 class Clusterer implements ModelProvider {
   readonly name = "clusterer"; readonly model = "x"; readonly hosted = false; private inner = new StubProvider();

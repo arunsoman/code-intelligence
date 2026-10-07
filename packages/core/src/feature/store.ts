@@ -52,8 +52,8 @@ export class SqliteFeatureStore implements FeatureStore {
         return { record: existing, replayed: true };
       }
       const stored: FeatureRecord = { ...rec, version: 0 };
-      this.db.prepare("insert into feature_records(request_id,repository_id,state,version,contract_version,schema_version,json,idempotency_key,created_by,created_at,updated_at) values (?,?,?,?,?,?,?,?,?,?,?)")
-        .run(stored.requestId, stored.repositoryId, stored.state, 0, stored.contractVersion, stored.schemaVersion, JSON.stringify(stored), idempotencyKey, stored.createdBy, stored.createdAt, stored.updatedAt);
+      this.db.prepare("insert into feature_records(request_id,repository_id,state,version,contract_version,schema_version,json,idempotency_key,created_by,created_at,updated_at,release_id) values (?,?,?,?,?,?,?,?,?,?,?,?)")
+        .run(stored.requestId, stored.repositoryId, stored.state, 0, stored.contractVersion, stored.schemaVersion, JSON.stringify(stored), idempotencyKey, stored.createdBy, stored.createdAt, stored.updatedAt, stored.workspace.releaseId ?? null);
       this.insertEvent(firstEvent);
       return { record: stored, replayed: false };
     });
@@ -70,8 +70,8 @@ export class SqliteFeatureStore implements FeatureStore {
       if (cur.version !== expectedVersion) throw new FeatureError("VERSION_CONFLICT", `the request changed (version ${cur.version}, expected ${expectedVersion})`, cur.version);
       if (next.createdBy !== cur.created_by || next.repositoryId !== cur.repository_id) throw new FeatureError("INVALID_SCHEMA", "the owner and repository of a request cannot change");
       const stored: FeatureRecord = { ...next, version: expectedVersion + 1, updatedAt: now() };
-      this.db.prepare("update feature_records set state=?, version=?, contract_version=?, json=?, updated_at=? where request_id=? and version=?")
-        .run(stored.state, stored.version, stored.contractVersion, JSON.stringify(stored), stored.updatedAt, requestId, expectedVersion);
+      this.db.prepare("update feature_records set state=?, version=?, contract_version=?, json=?, updated_at=?, release_id=? where request_id=? and version=?")
+        .run(stored.state, stored.version, stored.contractVersion, JSON.stringify(stored), stored.updatedAt, stored.workspace.releaseId ?? null, requestId, expectedVersion);
       if (event) this.insertEvent(event);
       return stored;
     });
@@ -80,6 +80,12 @@ export class SqliteFeatureStore implements FeatureStore {
     const rows = (repositoryId
       ? this.db.prepare("select json, version from feature_records where repository_id = ? order by updated_at desc limit ?").all(repositoryId, limit)
       : this.db.prepare("select json, version from feature_records order by updated_at desc limit ?").all(limit)) as { json: string; version: number }[];
+    return rows.map((r) => ({ ...(JSON.parse(r.json) as FeatureRecord), version: r.version }));
+  }
+  /** Every request building toward a release (release-scope.ts's Release), newest first — an indexed column, not a
+   *  load-then-filter over every request (contrast with the owner-filtered loops elsewhere that reuse listRequests). */
+  listRequestsByRelease(releaseId: Id, limit = 50): FeatureRecord[] {
+    const rows = this.db.prepare("select json, version from feature_records where release_id = ? order by updated_at desc limit ?").all(releaseId, limit) as { json: string; version: number }[];
     return rows.map((r) => ({ ...(JSON.parse(r.json) as FeatureRecord), version: r.version }));
   }
 
@@ -164,6 +170,21 @@ export class SqliteFeatureStore implements FeatureStore {
   getCandidateByBinding(bindingHash: string): CandidateRecord | null { const r = this.db.prepare("select json from feature_candidates where binding_hash = ? order by created_at desc limit 1").get(bindingHash) as { json: string } | undefined; return r ? JSON.parse(r.json) as CandidateRecord : null; }
   listCandidates(requestId: Id): CandidateRecord[] { return (this.db.prepare("select json from feature_candidates where request_id = ? order by ordinal").all(requestId) as { json: string }[]).map((r) => JSON.parse(r.json) as CandidateRecord); }
   nextOrdinal(requestId: Id): number { return (this.db.prepare("select coalesce(max(ordinal),0)+1 n from feature_candidates where request_id = ?").get(requestId) as { n: number }).n; }
+
+  // ------------------------------------------------------------------ decision approvals (migration 39)
+  // An additive sign-off bound to the exact candidate's bindingHash, mirroring campaigns.ts's campaign_approvals:
+  // approving does not require owning the request (owned() stays untouched everywhere else), and an approval
+  // bound to a since-superseded candidate never counts for a later one.
+  recordDecisionApproval(requestId: Id, principal: Id, bindingHash: string, explanation: string, at: string = now()): void {
+    this.db.prepare(
+      "insert into feature_decision_approvals(request_id, principal, binding_hash, explanation, created_at) values (?,?,?,?,?) " +
+      "on conflict(request_id, principal) do update set binding_hash = excluded.binding_hash, explanation = excluded.explanation, created_at = excluded.created_at",
+    ).run(requestId, principal, bindingHash, explanation, at);
+  }
+  decisionApprovals(requestId: Id): { principal: Id; bindingHash: string; explanation: string; createdAt: string }[] {
+    return (this.db.prepare("select principal, binding_hash, explanation, created_at from feature_decision_approvals where request_id = ?").all(requestId) as { principal: Id; binding_hash: string; explanation: string; created_at: string }[])
+      .map((r) => ({ principal: r.principal, bindingHash: r.binding_hash, explanation: r.explanation, createdAt: r.created_at }));
+  }
 
   // ------------------------------------------------------------------ observed coverage (#94B)
   // The table is created on first use so this record family needs no migration number of its own yet; fold it into the migration list when the numbering is settled.

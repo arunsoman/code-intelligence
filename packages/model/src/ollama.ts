@@ -65,6 +65,7 @@ function compact(req: ModelRequest) {
 }
 
 function task(req: ModelRequest): string {
+  if (req.purpose === "CHART") return req.instructions ?? `Build the requested CIE chart from this repository evidence. Return only a bounded chart plan that references exact entity and relationship ids in the bundle; do not return executable source code.`;
   if (req.purpose === "REPRESENT") {
     return `Question: ${JSON.stringify(req.question)}
 Compose a map for this question.

@@ -6,6 +6,7 @@ export interface Message {
   role: "user" | "assistant"; text: string; at: string; error?: boolean; results?: ChatAnalysisResult[];
   /** The pre-answer trace (why this form, the bare caption) kept once `text` carries the composed answer; shown collapsed. */
   thinking?: string;
+  providerWizard?: boolean;
 }
 interface Props {
   messages: Message[]; referents: { id: string; label: string; source?: "map" | "editor" | "cell" }[]; busy: boolean; canAsk: boolean;
@@ -13,9 +14,10 @@ interface Props {
   /** Seeded from other panels (e.g. "ask about this finding"); a new `n` replaces the composer's text. */
   seed?: { text: string; n: number };
   onShowResult?: (result: ChatAnalysisResult) => void;
+  onCreateProvider?: () => void;
 }
 
-export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend, onDropReferent, seed, onShowResult }: Props) {
+export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend, onDropReferent, seed, onShowResult, onCreateProvider }: Props) {
   const [text, setText] = useState("");
   const end = useRef<HTMLDivElement>(null);
   useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [messages.length, busy]);
@@ -34,6 +36,7 @@ export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend,
         )}
         {messages.map((m, i) => <div key={i} className={`msg ${m.role} ${m.error ? "err" : ""}`}><span className="who">{m.role === "user" ? "You" : "Assistant"}</span><p>{m.text}</p>
           {m.thinking && <details className="thinking"><summary>How this was found</summary><p className="muted small">{m.thinking}</p></details>}
+          {m.providerWizard && <div className="chat-results"><button className="secondary small" disabled={busy} onClick={onCreateProvider}>Create a provider</button></div>}
           {m.results && <div className="chat-results" role="group" aria-label="Analysis views">{m.results.filter((r) => r.view).map((r, j) => <button key={j} className="secondary small" disabled={busy} onClick={() => onShowResult?.(r)}>Show {r.title}</button>)}</div>}
         </div>)}
         {busy && <div className="msg assistant"><span className="who">Assistant</span><p className="muted">Working…</p></div>}

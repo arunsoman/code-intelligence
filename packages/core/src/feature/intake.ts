@@ -69,7 +69,7 @@ function checkRefs(repoRoot: string, refs: SourceRef[]): string[] {
   return warnings;
 }
 
-export interface SubmitInput { inputRefs: SourceRef[]; text: string; repositoryId: Id; mode: OutcomeMode; budget?: { modelTokens: number; wallMs: number }; idempotencyKey: string }
+export interface SubmitInput { inputRefs: SourceRef[]; text: string; repositoryId: Id; mode: OutcomeMode; budget?: { modelTokens: number; wallMs: number }; idempotencyKey: string; /** The release this request is being built toward, if any (release-scope.ts's Release). */ releaseId?: Id }
 
 export function submitFeature(d: IntakeDeps, actor: Id, i: SubmitInput): FeatureRequest {
   if (typeof i.text !== "string") throw new FeatureError("INVALID_SCHEMA", "the request text must be a string");
@@ -101,7 +101,7 @@ export function submitFeature(d: IntakeDeps, actor: Id, i: SubmitInput): Feature
     inputRefs: i.inputRefs ?? [], source: snapshot, contractVersion: 0, tasks: [], blockers: [],
     // MANDATORY tracking blocks mutation (candidate creation, publication) until an issue is bound; it never blocks reading or planning (S13).
     issue: { repository: "", syncState: tracking === "MANDATORY" ? "TRACKING_BLOCKED" : tracking === "OFFLINE_UNSYNCED" ? "UNSYNCED" : "UNBOUND", lastSyncedSequence: 0, projectionRevision: 0 },
-    workspace: { requestId, stage: "DESCRIBE", blockers: [], runningJobIds: [], workspaceVersion: 0 }, version: 0, createdBy: actor, createdAt: now, updatedAt: now, budget: i.budget,
+    workspace: { requestId, stage: "DESCRIBE", blockers: [], runningJobIds: [], workspaceVersion: 0, releaseId: i.releaseId }, version: 0, createdBy: actor, createdAt: now, updatedAt: now, budget: i.budget,
   };
   const { record, replayed } = d.fs.createRequest(rec, eventFor(rec, "FeatureSubmitted", actor, { rationale: `mode ${mode}${downgradedBecause ? " (lowered from " + i.mode + ")" : ""}; tracking ${tracking}`, after: contentHash }), i.idempotencyKey);
   return { schemaVersion: 1, id: record.requestId, requestId: record.requestId, state: record.state, replayed, mode: record.mode, warnings: warnings.length ? warnings : undefined };

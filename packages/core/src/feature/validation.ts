@@ -165,7 +165,7 @@ export async function runFeatureValidation(d: ValidationDependencies, i: { candi
 }
 
 /** Pure single eligibility authority. The full plan is evaluated even for a subset/rerun of evidence. */
-export function computeEligibility(i: { request: FeatureRecord; candidate: CandidateRecord; plan: ValidationPlan; evidence: EvidenceRecord[]; decisions?: DecisionRecord[]; now?: string; purpose?: string; unresolvedFindingIds?: string[]; /** 3.U: model identities behind the generation that have no passing builder evaluation (see builder-eval.ts). */ unevaluatedModels?: string[]; /** Gaps another module computed (declarations whose authority is gone or missing, D001); reported verbatim and never a pass. */ externalGaps?: string[] }): PublicationDecision {
+export function computeEligibility(i: { request: FeatureRecord; candidate: CandidateRecord; plan: ValidationPlan; evidence: EvidenceRecord[]; decisions?: DecisionRecord[]; now?: string; purpose?: string; unresolvedFindingIds?: string[]; /** 3.U: model identities behind the generation that have no passing builder evaluation (see builder-eval.ts). */ unevaluatedModels?: string[]; /** Gaps another module computed (declarations whose authority is gone or missing, D001); reported verbatim and never a pass. */ externalGaps?: string[]; /** A release-scoped request's author cannot decide it alone; the pipeline computes who is deciding and passes the verdict in here, never patched onto the result afterward (the result's id is a hash of eligibility+reasons). */ secondApprover?: { ok: boolean; reason: string } }): PublicationDecision {
   const { request, candidate: c, plan } = i; const contract = request.contract; const reasons: string[] = []; let blocked = false; let stale = false;
   const block = (s: string) => { reasons.push(s); blocked = true; }; const gap = (s: string) => reasons.push(s);
   try { assertPlan(plan); } catch { block("validation plan is invalid"); }
@@ -173,6 +173,7 @@ export function computeEligibility(i: { request: FeatureRecord; candidate: Candi
   if (["CANCELLED", "FAILED"].includes(request.state)) block(`request is ${request.state}`);
   if (request.blockers.length || i.unresolvedFindingIds?.length) block("unresolved findings or questions");
   if (!dataAllowed(plan)) block("test data lacks authorization or synthetic provenance");
+  if (i.secondApprover && !i.secondApprover.ok) block(`a release-scoped request needs a second person with release authority to decide it: ${i.secondApprover.reason}`);
   if (c.oracleState === "PROPERTY_CHANGE_PENDING_REVIEW" || (c.binding.originalOracleHash !== c.binding.candidateOracleHash && !c.binding.propertyChangeReviewId)) block("original oracle changed without property-change review");
   if (c.mutations.some((m) => m.attribution !== "COMPLETE")) gap("mutation attribution is incomplete");
   for (const m of i.unevaluatedModels ?? []) gap(`builder not evaluated: ${m}`);

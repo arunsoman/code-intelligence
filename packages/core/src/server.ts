@@ -80,6 +80,7 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
     "C19/setOverride": { mutating: true, run: (c, b) => svc.setOverride(c, b) },
     "C19/listOverrides": { mutating: false, run: (c, b) => svc.listOverrides(c, b) },
     "C19/visuals": { mutating: false, run: (c, b) => svc.visuals(c, b) },
+    "C19/providerGuide": { mutating: false, run: (c, b) => svc.providerGuide(c, b) },
     "C19/ask": { mutating: false, run: (c, b) => svc.ask(c, b) },
     "C19/investigate": { mutating: false, run: (c, b) => svc.investigate(c, b) },
     "C19/steer": { mutating: false, run: (c, b) => svc.steer(c, b) },
@@ -122,6 +123,8 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
   const TASK_MUTATING = new Set(["C02/submitTask", "C02/confirmIntent", "C02/cancelTask", "C15/draftPlan", "C22/resolveObligation", "C28/prepareChange", "C27/validatePatch", "C28/reviewPropertyChange", "C28/approveCandidate", "C30/createPublicationGrant", "C30/publishDraftPR"]);
   for (const [key, run] of Object.entries(svc.taskOps)) ops[key] = { mutating: TASK_MUTATING.has(key), run: run as any };
   for (const [key, run] of Object.entries(svc.campaignOps)) ops[key] = { mutating: !["C28/getCampaign", "C28/listCampaigns", "C28/listChildren", "C28/getCampaignPlan", "C28/clusterChildren", "C28/getDryRun"].includes(key), run: run as any };
+  for (const [key, run] of Object.entries(svc.releaseOps)) ops[key] = { mutating: !["C32/getRelease", "C32/listReleases", "C32/getReleaseReadiness", "C32/previewMilestone"].includes(key), run: run as any };
+  for (const [key, run] of Object.entries(svc.ciOps)) ops[key] = { mutating: false, run: run as any };
   // Prompt-to-feature (docs/prompt-to-feature): typed stubs until each owning task registers its handler in feature/routes.ts.
   Object.assign(ops, featureOps(featureHandlers(svc), ops));
   return ops;

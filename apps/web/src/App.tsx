@@ -17,6 +17,7 @@ import { TerrainView } from "./TerrainView.tsx";
 import { MatrixView } from "./MatrixView.tsx";
 import { JobBar } from "./JobBar.tsx";
 import { VisualsGallery, type CatalogEntry } from "./VisualsGallery.tsx";
+import { ProviderWizard } from "./ProviderWizard.tsx";
 import { FolderPicker } from "./FolderPicker.tsx";
 import { DefectPanel } from "./DefectPanel.tsx";
 import { PrPanel } from "./PrPanel.tsx";
@@ -24,6 +25,9 @@ import { ProfilePanel } from "./ProfilePanel.tsx";
 import { TaskPanel } from "./TaskPanel.tsx";
 import { BuildFeature } from "./build/BuildFeature.tsx";
 import { CampaignPanel } from "./CampaignPanel.tsx";
+import { ReleaseWizardPanel } from "./ReleaseWizardPanel.tsx";
+import { ReleaseBoardPanel } from "./ReleaseBoardPanel.tsx";
+import { ReleaseLensPanel } from "./ReleaseLensPanel.tsx";
 import { SearchPanel } from "./SearchPanel.tsx";
 import { HotspotPanel } from "./HotspotPanel.tsx";
 import { InsightsPanel } from "./InsightsPanel.tsx";
@@ -87,12 +91,17 @@ export function App() {
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [fitTick, setFitTick] = useState(0);
   const [galleryOpen, setGalleryOpen] = useState(false);
+  const [providerWizardOpen, setProviderWizardOpen] = useState(false);
   const [defectsOpen, setDefectsOpen] = useState(false);
   const [prOpen, setPrOpen] = useState(false);
   const [profilesOpen, setProfilesOpen] = useState(false);
   const [tasksOpen, setTasksOpen] = useState(false);
   const [buildOpen, setBuildOpen] = useState(false);
+  const [buildContext, setBuildContext] = useState<{ releaseId?: string; requestId?: string } | null>(null);
   const [campaignsOpen, setCampaignsOpen] = useState(false);
+  const [releasesOpen, setReleasesOpen] = useState(false);
+  const [boardOpen, setBoardOpen] = useState(false);
+  const [lensOpen, setLensOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [hotspotsOpen, setHotspotsOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
@@ -299,13 +308,22 @@ export function App() {
           log("ASK", text.slice(0, 80));
           break;
         }
-        case "view": adoptView(v.view, v.claims, !!view && view.id === v.view.id); say("assistant", v.message, false, v.thinking); log("ASK", text.slice(0, 80)); break;
+        case "view": adoptView(v.view, v.claims, !!view && view.id === v.view.id); setMessages((m) => [...m, { role: "assistant", text: v.message, at: now(), ...(v.thinking ? { thinking: v.thinking } : {}), ...(v.view.formId === "SemanticMap" ? { providerWizard: true } : {}) }].slice(-200)); log("ASK", text.slice(0, 80)); break;
         case "explanation": mergeClaims(v.explanation.claims); setDrawer({ kind: "explain", data: v.explanation }); say("assistant", v.message); log("EXPLAIN", text.slice(0, 80)); break;
         case "zoom": setLevel((l) => v.direction === "overview" ? 1 : Math.max(0, Math.min(MAX_LEVEL, l + (v.direction === "in" ? 1 : -1)))); setFitTick((t) => t + 1); say("assistant", v.message); break;
         case "resume": say("assistant", v.message); await resume(v.workspaceId); break;
         case "message": say("assistant", v.message); break;
       }
     } finally { setBusy(null); }
+  };
+
+  const showChatResult = (result: ChatAnalysisResult) => {
+    if (!result.view) return;
+    adoptView(result.view, result.claims, false);
+    const count = result.view.nodes.length;
+    const message = count ? `Showing ${result.title}: ${count} chart element(s). Click an element to inspect its code and evidence.` : `${result.title} has no chart elements to show; check the gaps listed below the canvas.`;
+    setNotice(message);
+    setAnnouncement(message);
   };
 
   // ------------------------------------------------------------ inspection
@@ -321,9 +339,12 @@ export function App() {
     }
     if (n.kind === "agg") {
       setSelection(n.members);
+      setAnnouncement(`Selected the group ${n.label}; opened its ${n.count} member elements.`);
       setDrawer({ kind: "inspect", title: n.label, sub: `${n.count} element(s) collapsed at level ${level}`, notes: [`Zoom in or press + to see them individually. Selecting this selects all ${n.count}.`], claimIds: [], evidence: [], members: n.members.map((m) => nodeById.get(m)?.label ?? m) });
       return;
     }
+    setSelection(n.members);
+    setAnnouncement(`Selected ${n.label}; opened its code and evidence details.`);
     await openNodeDrawer(n.node!);
   };
   const openNodeDrawer = async (vn: ViewNode) => {
@@ -467,6 +488,7 @@ export function App() {
     <div className="app">
       {picking && <FolderPicker initialPath={repoPath} onClose={() => setPicking(false)} onPick={(p) => { setRepoPath(p); setPicking(false); log("PICK_REPO", p); }} />}
       {galleryOpen && <VisualsGallery revision={info?.revision?.id} onClose={() => setGalleryOpen(false)} onShow={(it: CatalogEntry, q: string) => { setGalleryOpen(false); void askForm(q, it.formId); }} />}
+      {providerWizardOpen && <ProviderWizard revision={info?.revision?.id} onClose={() => setProviderWizardOpen(false)} />}
       {outlineOpen && <Outline rendered={rendered} level={level} onClose={() => setOutlineOpen(false)} onPick={(id) => { const n = rendered.nodes.find((x) => x.id === id); setOutlineOpen(false); if (n) void inspectNode(n); }} />}
       {browsingCards && (
         <ConceptBrowser revision={info?.revision?.id} jobs={jobs} onShowJobs={() => setJobsOpen(true)} onClose={() => { setBrowsingCards(false); void refresh(); }} onVerdict={verdict}
@@ -500,8 +522,25 @@ export function App() {
         {prOpen && repoPath && <PrPanel repoPath={repoPath} onClose={() => setPrOpen(false)} />}
         {profilesOpen && <ProfilePanel revision={revision} onClose={() => setProfilesOpen(false)} />}
         {tasksOpen && <TaskPanel revision={revision} onClose={() => setTasksOpen(false)} />}
-        {buildOpen && <BuildFeature onClose={() => setBuildOpen(false)} api={info?.revision?.repoRoot ? { repositoryId: info.revision.repoRoot, call: call as never } : undefined} />}
+        {buildOpen && (
+          <BuildFeature
+            key={buildContext?.requestId ?? buildContext?.releaseId ?? "default"}
+            onClose={() => { setBuildOpen(false); setBuildContext(null); }}
+            api={info?.revision?.repoRoot ? { repositoryId: info.revision.repoRoot, call: call as never } : undefined}
+            releaseId={buildContext?.releaseId}
+            initialRequestId={buildContext?.requestId}
+          />
+        )}
         {campaignsOpen && <CampaignPanel onClose={() => setCampaignsOpen(false)} />}
+        {releasesOpen && <ReleaseWizardPanel onClose={() => setReleasesOpen(false)} />}
+        {boardOpen && (
+          <ReleaseBoardPanel
+            onClose={() => setBoardOpen(false)}
+            onOpenRequest={(requestId) => { setBoardOpen(false); setBuildContext({ requestId }); setBuildOpen(true); }}
+            onOpenNew={(releaseId) => { setBoardOpen(false); setBuildContext({ releaseId }); setBuildOpen(true); }}
+          />
+        )}
+        {lensOpen && <ReleaseLensPanel onClose={() => setLensOpen(false)} />}
         {searchOpen && repoPath && <SearchPanel repoPath={repoPath} revision={revision} onClose={() => setSearchOpen(false)} />}
         {hotspotsOpen && repoPath && <HotspotPanel repoPath={repoPath} revision={revision} onClose={() => setHotspotsOpen(false)} />}
         {insightsOpen && revision && <InsightsPanel revision={revision} view={view} onClose={() => setInsightsOpen(false)} onAsk={askFromInsights} onReindexed={refresh} />}
@@ -521,6 +560,9 @@ export function App() {
         <button className="secondary small" onClick={() => setTasksOpen(true)} title="F07: turn a defect report into a candidate patch, validate it against the original oracle in an isolated run, get a second-person approval, and publish one draft pull request on a CIE-owned branch. Nothing here merges.">Tasks</button>
         <button className="secondary small" onClick={() => setBuildOpen(true)} title="Build feature: describe a change in plain language, clarify, plan, review the exact candidate, validate and deliver">Build feature</button>
         <button className="secondary small" onClick={() => setCampaignsOpen(true)} title="Coordinated multi-repository changes: freeze a versioned population, plan a dependency-ordered canary rollout, review each child independently, run joint compatibility checks, and publish per-child draft PRs">Campaigns</button>
+        <button className="secondary small" onClick={() => setReleasesOpen(true)} title="Release scope: freeze what's in a release against a GitHub milestone. An issue added to the milestone later needs assessment before it counts, never silently in scope.">Releases</button>
+        <button className="secondary small" onClick={() => setBoardOpen(true)} title="Release Board: every feature request building toward a release, for dev and QA. QA approves a candidate as a genuinely different person, never a self-approval.">Release Board</button>
+        <button className="secondary small" onClick={() => setLensOpen(true)} title="Release Lens: one evidence ledger for a release's go/no-go, viewed through a stakeholder lens. The lens only reorders rows; it never recomputes them.">Release Lens</button>
         <button className="secondary small" disabled={!revision} onClick={() => setInsightsOpen(true)}>Insights</button>
         <button className="secondary small" disabled={!revision} onClick={() => setInvestigationsOpen(true)}>Investigations</button>
         <button className="link" onClick={openAudit}>Audit log</button>
@@ -713,7 +755,7 @@ export function App() {
       </main>
 
       <aside className="right">
-        <ChatPanel onShowResult={(r) => { if (r.view) adoptView(r.view, r.claims, false); }} messages={messages} referents={referents} busy={!!busy} canAsk={!!info?.revision} examples={EXAMPLES} seed={chatSeed ?? undefined} onSend={(t) => void send(t)} onDropReferent={(id) => (id.startsWith("cell:") ? setCellSel(cellSel.filter((x) => x !== id)) : id === "card:pins" ? setCardPins(null) : id.startsWith("editor:") ? setDismissed(new Set([...dismissed, id.slice(7)])) : setSelection(selection.filter((x) => x !== id)))} />
+        <ChatPanel onShowResult={showChatResult} onCreateProvider={() => setProviderWizardOpen(true)} messages={messages} referents={referents} busy={!!busy} canAsk={!!info?.revision} examples={EXAMPLES} seed={chatSeed ?? undefined} onSend={(t) => void send(t)} onDropReferent={(id) => (id.startsWith("cell:") ? setCellSel(cellSel.filter((x) => x !== id)) : id === "card:pins" ? setCardPins(null) : id.startsWith("editor:") ? setDismissed(new Set([...dismissed, id.slice(7)])) : setSelection(selection.filter((x) => x !== id)))} />
         <section className="drawer" aria-label="Evidence">
           {code && (
             <div className="codecard">

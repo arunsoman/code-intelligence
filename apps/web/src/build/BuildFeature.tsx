@@ -20,8 +20,16 @@ const KEY = (repo: string) => `cie.build.request.${repo}`;
 const MODE_OUT: Record<string, string> = { PLAN_ONLY: "PLAN", BUILD_AND_PREVIEW: "BUILD_PREVIEW", DRAFT_PR: "CREATE_DRAFT_PR" };
 const uid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
 
-export function BuildFeature({ onClose, store, api }: { onClose: () => void; store?: WizardStore; /** The server and repository to build against; without it the shell stays empty. */ api?: { repositoryId: string; call: RemoteCall } }) {
-  const [requestId, setRequestId] = useState<string | null>(() => { try { return api ? localStorage.getItem(KEY(api.repositoryId)) : null; } catch { return null; } });
+export function BuildFeature({ onClose, store, api, releaseId, initialRequestId }: {
+  onClose: () => void; store?: WizardStore;
+  /** The server and repository to build against; without it the shell stays empty. */
+  api?: { repositoryId: string; call: RemoteCall };
+  /** Tag a brand-new request to this release (release-scope.ts's Release) so the Release Board can find it later. */
+  releaseId?: string;
+  /** Open this exact request instead of whatever this repository's localStorage last remembered — how the Release Board opens a specific row. */
+  initialRequestId?: string;
+}) {
+  const [requestId, setRequestId] = useState<string | null>(() => { if (initialRequestId) return initialRequestId; try { return api ? localStorage.getItem(KEY(api.repositoryId)) : null; } catch { return null; } });
   const remote = api && requestId ? { requestId, call: api.call } : undefined;
   const persistence = store ?? localStore();
   const [ws, setWs] = useState<WizardWorkspace>(() => { const w = blankWorkspace(); return { ...w, stage: landingStage(w) }; });
@@ -75,7 +83,7 @@ export function BuildFeature({ onClose, store, api }: { onClose: () => void; sto
   const analyse = async () => {
     if (!api || requestId) { move("CLARIFY"); return; }
     const key = uid();
-    const sub = await api.call<{ requestId: string; warnings?: string[] }>("C02", "submitFeature", { text: ws.prompt, repositoryId: api.repositoryId, mode: MODE_OUT[ws.outcomeMode] ?? "PLAN" }, key);
+    const sub = await api.call<{ requestId: string; warnings?: string[] }>("C02", "submitFeature", { text: ws.prompt, repositoryId: api.repositoryId, mode: MODE_OUT[ws.outcomeMode] ?? "PLAN", ...(releaseId ? { releaseId } : {}) }, key);
     if (!sub.ok) { setNote(sub.error.message); return; }
     const found = await api.call("C10", "discoverFeatureContext", { requestId: sub.value.requestId, retrievalBudget: { tokens: 8000, files: 5000 } }, uid());
     try { localStorage.setItem(KEY(api.repositoryId), sub.value.requestId); } catch { /* a private window: the request still exists on the server */ }

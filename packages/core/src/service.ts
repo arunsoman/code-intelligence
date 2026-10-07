@@ -1,6 +1,7 @@
 // Orchestration. Public operations return ApiResult (contracts §1). Every model call goes through callModel,
 // which enforces the per-repository egress opt-in, scrubs secrets, and writes the audit trail.
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -13,7 +14,7 @@ import { executeChatPlan } from "./chat-execution.ts";
 import { runChatAgent } from "./chat-agent.ts";
 import type {
   AnalysisBatch, ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptStore, ConceptsOutput, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceRef, ExplainResult, ExplanationOutput,
-  HypothesesOutput, ModelProvider, ModelRequest, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec, SourceSpan,
+  ChartOutput, HypothesesOutput, ModelProvider, ModelRequest, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec, SourceSpan,
   DefectDetectionInput, DetectorFinding, BenchmarkPolicy, BenchmarkResult, Fact,
 } from "@cie/schema";
 import { SCHEMA_CHALLENGE, SCHEMA_CONCEPTS, SCHEMA_EXPLANATION, SCHEMA_HYPOTHESES, SCHEMA_REPRESENTATION } from "@cie/schema";
@@ -36,7 +37,7 @@ import { PrAnalysis, PrCheckError, resolvePr, type PrRef } from "./pr-analysis.t
 import { Profiles, ProfileCheckError } from "./profiles-analysis.ts";
 import { Tasks, TaskError } from "./execution.ts";
 import { GitHubCheckPublisher, newGrant } from "./pr-publish.ts";
-import { githubRemote } from "./gh.ts";
+import { githubRemote, isGhInstalled } from "./gh.ts";
 import type { PrAnalysisView } from "@cie/schema";
 import { overviewSeeds } from "./overview.ts";
 import { projectDescription, projectProfile } from "./profile.ts";
@@ -46,13 +47,14 @@ import { Journal, type CommitReceipt } from "./journal.ts";
 import { Cancelled, JobRunner, type JobControl } from "./jobs.ts";
 import { EGRESS_FIELDS, payloadHash, scrubBundle } from "./policy.ts";
 import { bundleFor, retrieveAround, retrieveForQuestion } from "./retrieval.ts";
-import { matchName, readText, type RouterModel } from "./llm-router.ts";
+import { matchName, readText, validateProviderGuide, type ProviderGuideResponse, type RouterModel } from "./llm-router.ts";
 import { revisionIndex, scoreEntity, WEIGHTS } from "./salience.ts";
 import { DeltaBaseError, type RevisionRow, type Store } from "./store.ts";
 import { entityAt, fingerprint, locateFrames, looksLikeTrace, parseTrace } from "./trace.ts";
 import { compileView } from "./viewspec.ts";
 import { viewMessage, withAnswer } from "./answer.ts";
 import { catalog, ensureEdgeClaims, visualByForm, type CatalogEntry } from "./visuals.ts";
+import { cachedChartPlan, chartCreatorRequest, chartPlanCacheKey, compileChartPlan, rememberChartPlan } from "./chart-creator.ts";
 import { fileHistory, headOf, isGitRepo } from "./gitinfo.ts";
 import { ensureGhForgeConnector } from "./gh.ts";
 import { backup as backupStore, deleteRepository as deleteRepo, gc as gcStore, type DeleteReport, type GcReport } from "./storage.ts";
@@ -83,6 +85,9 @@ import { artifactHash } from "./defect-schedule.ts";
 import { Profiling } from "./profiling.ts";
 import { Campaigns, CampaignError, type CampaignAdapters } from "./campaigns.ts";
 import { GitHubPublisher, JointRunner, RecipeRunner, repositoryInventory, validateCandidate } from "./campaign-runner.ts";
+import { ReleaseScope, ReleaseError, type ReleaseAdapters } from "./release-scope.ts";
+import { GhCiForge, GhError as CiGhError } from "./feature/ci-forge.ts";
+import { buildReleaseReadiness } from "./release-readiness.ts";
 
 const chunkTokenBudget = () => Number(process.env.CIE_CHUNK_TOKEN_BUDGET) || 60_000; // per concept-extraction request; the gateway hard limit is 200k
 
@@ -178,6 +183,8 @@ export class Service {
   readonly profiling: Profiling;
   /** F08: coordinated multi-repository campaigns. */
   readonly campaigns: Campaigns;
+  /** Release scope: what's actually in a release, frozen against a GitHub milestone. */
+  readonly releases: ReleaseScope;
   /** F05: the profiling engine — persists artifacts, attributes builds, correlates traces, and verifies presentation (F05-A5). */
   readonly profiles: Profiles;
   readonly tasks: Tasks;
@@ -338,6 +345,63 @@ export class Service {
   };
   private campaignResult<T>(ctx: CallContext, fn: () => T): ApiResult<T> { try { return ok(ctx, fn()); } catch (e) { const api = e instanceof CampaignError ? e.api : storageFailure(e); return fail(ctx, api); } }
 
+  /** Release-scope gateway operations: what's actually in a release, frozen against a GitHub milestone. */
+  readonly releaseOps: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>> | ApiResult<unknown>> = {
+    "C32/createRelease": (c, b) => this.releaseResult(c, () => this.releases.createRelease(c.actor.principalId, c.actor.tenantId, b.spec)),
+    "C32/listReleases": (c, b) => this.releaseResult(c, () => this.releases.listReleases(c.actor.tenantId, b.limit)),
+    "C32/getRelease": (c, b) => this.releaseResult(c, () => this.releases.getRelease(b.releaseId)),
+    "C32/previewMilestone": (c, b) => this.releaseResult(c, () => this.releases.previewMilestone(b.releaseId)),
+    "C32/freezeScope": (c, b) => this.releaseResult(c, () => this.releases.freezeScope(b.releaseId, c.actor.principalId, b.expectedVersion)),
+    "C32/assessScopeChange": (c, b) => this.releaseResult(c, () => this.releases.assessScopeChange(b.releaseId, c.actor.principalId, b.fromVersion, b.toVersion)),
+    "C32/assessReleaseItem": (c, b) => this.releaseResult(c, () => this.releases.assessItem(b.releaseId, c.actor.principalId, b.issueNumber)),
+    "C32/getReleaseReadiness": async (c, b) => {
+      try { return ok(c, await buildReleaseReadiness({ releases: this.releases, ci: this.ciForge(), security: this.security, store: this.store }, { releaseId: b.releaseId, revisionId: b.revisionId, prNumbers: b.prNumbers, headSha: b.headSha })); }
+      catch (e) { const api = e instanceof ReleaseError ? e.api : storageFailure(e); return fail(c, api); }
+    },
+  };
+  private releaseResult<T>(ctx: CallContext, fn: () => T): ApiResult<T> { try { return ok(ctx, fn()); } catch (e) { const api = e instanceof ReleaseError ? e.api : storageFailure(e); return fail(ctx, api); } }
+
+  /** C04 read-only GitHub CI/security signal operations, backing the release-readiness ledger. */
+  private ciForgeInstance?: GhCiForge;
+  private ciForge(): GhCiForge { return (this.ciForgeInstance ??= new GhCiForge()); }
+  private async ciResult<T>(ctx: CallContext, fn: () => Promise<T>): Promise<ApiResult<T>> {
+    try { return ok(ctx, await fn()); }
+    catch (e) {
+      if (e instanceof CiGhError) return fail(ctx, { code: e.state === "NOT_FOUND" ? "NOT_FOUND" : e.state === "REFUSED" ? "FORBIDDEN" : "PROVIDER_UNAVAILABLE", message: `GitHub: ${e.message}`, retryable: e.state === "RATE_LIMITED" });
+      return fail(ctx, storageFailure(e));
+    }
+  }
+  readonly ciOps: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>>> = {
+    "C04/pullReviews": (c, b) => this.ciResult(c, () => this.ciForge().pullReviews(b.repo, b.pr)),
+    "C04/checkRuns": (c, b) => this.ciResult(c, () => this.ciForge().checkRuns(b.repo, b.sha)),
+    "C04/dependabotAlerts": (c, b) => this.ciResult(c, () => this.ciForge().dependabotAlerts(b.repo)),
+    "C04/codeScanningAlerts": (c, b) => this.ciResult(c, () => this.ciForge().codeScanningAlerts(b.repo)),
+    "C04/actionsRuns": (c, b) => this.ciResult(c, () => this.ciForge().actionsRuns(b.repo, b.workflow)),
+    "C04/releaseByTag": (c, b) => this.ciResult(c, () => this.ciForge().releaseByTag(b.repo, b.tag)),
+  };
+
+  /** Real release adapters: milestone issues read live via the `gh` CLI (no token stored or passed; `gh auth`
+   * handles authentication). When `gh` is unavailable this answers with no issues rather than guessing — the
+   * same "say I can't determine this" rule the rest of the system follows. */
+  private releaseAdapters(): ReleaseAdapters {
+    return {
+      milestoneIssues: (milestone) => {
+        if (!isGhInstalled()) return [];
+        try {
+          const out = execFileSync(
+            "gh",
+            ["api", `repos/${milestone.owner}/${milestone.repo}/issues`, "-f", `milestone=${milestone.number}`, "-f", "state=all", "-f", "per_page=100"],
+            { encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "ignore"] },
+          );
+          const parsed = JSON.parse(out || "[]");
+          return (Array.isArray(parsed) ? parsed : [])
+            .filter((i: any) => !i.pull_request)
+            .map((i: any) => ({ number: Number(i.number), title: String(i.title ?? ""), state: i.state === "closed" ? "closed" as const : "open" as const }));
+        } catch { return []; }
+      },
+    };
+  }
+
   /** Real campaign adapters: the F01/F04 repository inventory (packages, cross-repository edges, owners), an isolated
    * recipe runner, an isolated per-child validator, an npm local-link joint runner and a `gh`-based draft publisher.
    * Each is synchronous, matching the change engine; nothing here writes inside a repository's own root. */
@@ -449,6 +513,7 @@ export class Service {
     });
     this.collab = new Collab(store, this.workspaceLog);
     this.campaigns = new Campaigns(store, this.campaignAdapters());
+    this.releases = new ReleaseScope(store, this.releaseAdapters());
     this.journal = new Journal(store);
     this.jobs = new JobRunner(store);
     // F01: the cross-repository search engine shares the store (its own schema slice) and the worker (regex runs there).
@@ -1613,7 +1678,7 @@ export class Service {
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; ingest a repository first", retryable: false });
     // The form is named explicitly (gallery, or a chip for another reading) or read from the question.
-    const route = req.form ? this.chosenRoute(req.form, req.kind) : req.route ?? await this.readQuestion(question);
+    let route = req.form ? this.chosenRoute(req.form, req.kind) : req.route ?? await this.readQuestion(question);
     const visual = route.source === "chosen" && route.form === "SemanticMap" ? null : visualByForm(route.form);
     if (visual?.build) {
       this.store.audit(actor(ctx), "ask", rev.id, { form: visual.formId, chars: question.length, route: route.source });
@@ -1631,6 +1696,39 @@ export class Service {
       const built = choice.kind === "invariant" ? buildInvariantGraph(this.store, rev, question) : buildFailureGraph(this.store, rev, question);
       built.view.formReason = choice.reason;
       built.view.route = route;
+      // The native causal analysis can be empty when static indexing found no matching
+      // throw/write path. In that case, use the bounded chart planner to arrange only
+      // entities and relationships already present in this revision. The compiled
+      // ViewSpec remains interactive, and the validated plan is persisted by evidence
+      // bundle + question so a repeat does not call the model again.
+      if (built.view.nodes.length === 0) {
+        const fallbackOptions = { overview: req.overview, lens: req.lens, pins: new Set(req.pins ?? []), extraSeeds: [...(req.pins ?? []), ...(req.overview ? overviewSeeds(this.store, rev.id) : req.seeds ?? [])], access: policyFor(this.store, rev.repoRoot) };
+        const modelBundle = retrieveForQuestion(this.store, rev.id, question, { ...fallbackOptions, tokenBudget: req.overview ? undefined : chunkTokenBudget() }).bundle;
+        if (modelBundle.entities.length > 0) {
+          const cacheKey = chartPlanCacheKey(modelBundle, question);
+          let plan = this.store.generatedChartPlan(cacheKey, modelBundle.id, question) ?? cachedChartPlan(modelBundle, question);
+          const warnings: string[] = [];
+          if (!plan) {
+            const generated = await this.callModel<ChartOutput>(ctx, rev, chartCreatorRequest(question, modelBundle));
+            if (generated.note) warnings.push(generated.note);
+            if (generated.result.ok) {
+              plan = generated.result.value;
+              rememberChartPlan(modelBundle, question, plan);
+              this.store.saveGeneratedChartPlan(cacheKey, modelBundle.id, question, plan);
+            } else warnings.push(modelFailureNotice(generated.result.error, generated.provider));
+          }
+          if (plan?.nodes.length) {
+            const chartRoute = { ...route, form: "GeneratedChart" as const, name: "Evidence-grounded chart" };
+            const chart = compileChartPlan({ plan, bundle: modelBundle, rev, question, route: chartRoute });
+            chart.view.formReason = `The native causal analysis found no statically supported path. This chart arranges indexed code elements and relationships; it does not establish runtime payment or top-up outcomes. ${choice.reason}`;
+            chart.view.gaps.unshift(...built.view.gaps);
+            this.persist(chart.claims);
+            redactBuilt(this.store, rev, chart);
+            return ok(ctx, chart, { revision: rev.id, warnings, completeness: chart.view.gaps.length ? "PARTIAL" : "COMPLETE" });
+          }
+          built.view.gaps.push("No evidence-grounded chart could be assembled from the indexed code relationships.");
+        }
+      }
       this.persist(built.claims);
       redactBuilt(this.store, rev, built);
       return ok(ctx, built, { revision: rev.id, completeness: built.view.gaps.length ? "PARTIAL" : "COMPLETE" });
@@ -1645,6 +1743,26 @@ export class Service {
     const diagnostics = rev.diagnostics.filter((d) => d.code === "PARSE_ERRORS").map((d) => d.message);
     let representation: RepresentationOutput | undefined, run;
     const warnings: string[] = [];
+    if (route.form === "GeneratedChart") {
+      const cacheKey = chartPlanCacheKey(modelBundle, question);
+      let plan = this.store.generatedChartPlan(cacheKey, modelBundle.id, question) ?? cachedChartPlan(modelBundle, question);
+      if (!plan && bundle.entities.length > 0) {
+        const generated = await this.callModel<ChartOutput>(ctx, rev, chartCreatorRequest(question, modelBundle));
+        if (generated.note) warnings.push(generated.note);
+        if (generated.result.ok) {
+          plan = generated.result.value;
+          rememberChartPlan(modelBundle, question, plan);
+          this.store.saveGeneratedChartPlan(cacheKey, modelBundle.id, question, plan);
+        } else warnings.push(modelFailureNotice(generated.result.error, generated.provider));
+      }
+      if (plan) {
+        const built = compileChartPlan({ plan, bundle: modelBundle, rev, question, route });
+        this.persist(built.claims);
+        redactBuilt(this.store, rev, built);
+        return ok(ctx, built, { revision: rev.id, warnings, completeness: built.view.gaps.length ? "PARTIAL" : "COMPLETE" });
+      }
+      route = { ...route, source: "default", confidence: "low", form: "SemanticMap", name: "Architecture map", because: "The generated chart was unavailable, so I fell back to the standard architecture map.", alternatives: [] };
+    }
     if (bundle.entities.length > 0) {
       const { result, note, provider } = await this.callModel<RepresentationOutput>(ctx, rev, { purpose: "REPRESENT", schemaId: SCHEMA_REPRESENTATION, question, bundle: modelBundle });
       if (note) warnings.push(note);
@@ -1682,6 +1800,31 @@ export class Service {
   visuals(ctx: CallContext, req: { revision?: string }): ApiResult<CatalogEntry[]> {
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     return ok(ctx, catalog(this.store, rev, !!rev && isGitRepo(rev.repoRoot)), rev ? { revision: rev.id } : {});
+  }
+
+  /** Generate a provider wizard from the configured chat model; invalid or unavailable model output is explicit. */
+  async providerGuide(ctx: CallContext, req: { providerName: string; revision?: string }): Promise<ApiResult<{ guide: ProviderGuideResponse | null; source: string; model: string | null; message: string }>> {
+    const name = typeof req?.providerName === "string" ? req.providerName.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 40) : "";
+    if (!name) return fail(ctx, { code: "INVALID_SCHEMA", message: "enter a provider name using letters or numbers", retryable: false });
+    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+    const context = rev ? (() => {
+      const entities = this.store.entities(rev.id);
+      const files = [...new Set(entities.map((e) => e.file).filter(Boolean))].slice(0, 500);
+      const symbols = entities.filter((e) => e.kind !== "file" && e.kind !== "test").slice(0, 1000).map((e) => `${e.kind} ${e.name} — ${e.file}`);
+      const concepts = this.store.concepts(rev.id).slice(0, 60).map((c) => `${c.title}: ${c.summary}`);
+      return JSON.stringify({ repoRoot: rev.repoRoot, fileCount: rev.fileCount, files, symbols, concepts });
+    })() : "No indexed repository is available. Treat all paths and project details as proposals.";
+    if (this.router?.providerGuide) {
+      try {
+        const guide = validateProviderGuide(await this.router.providerGuide({ providerName: name, context }), name);
+        if (guide) {
+          this.store.audit(actor(ctx), "provider-guide.generated", "chat", { provider: name, source: "llm", model: this.router.name });
+          return ok(ctx, { guide, source: "llm", model: this.router.name, message: `Recommendations generated by ${this.router.name}. Confirm project-specific paths and database schema before applying them.` });
+        }
+      } catch { /* report that the model path failed below */ }
+      return ok(ctx, { guide: null, source: "unavailable", model: this.router.name, message: `The configured model (${this.router.name}) did not return a valid provider guide. Try again or use the built-in MTN-pattern guide.` });
+    }
+    return ok(ctx, { guide: null, source: "unavailable", model: null, message: "No LLM is configured for the provider wizard. Try again after selecting a model, or use the built-in MTN-pattern guide." });
   }
 
   /** Manual salience override, persistent per repository: pin = always shown, boost = ranked higher, demote = ranked lower. */

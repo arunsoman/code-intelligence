@@ -40,7 +40,10 @@ test("false paths: sanitised, constant, length-only, commented and quoted loggin
   const { sec, revision, worker } = await world();
   const fs = sec.analyze({ revision });
   const flagged = fs.map((f) => f.summary).join("\n");
-  assert.ok(!/\bping\b/.test(flagged), "ping logs only constants, hashes, masks, a length, a string and a comment");
+  // Scoped to R-PII-LOG: ping does call console.log (R-DEBUG-LEFTOVER has its own opinion about that), the point
+  // here is only that none of those calls leak a sensitive value.
+  const piiFlagged = fs.filter((f) => f.ruleId === "R-PII-LOG").map((f) => f.summary).join("\n");
+  assert.ok(!/\bping\b/.test(piiFlagged), "ping logs only constants, hashes, masks, a length, a string and a comment");
   assert.ok(!/updateProfileHandler/.test(flagged), "the owner is checked before the write");
   assert.ok(!/saveProfile/.test(flagged));
   // The detector on its own, over the ways code can look sensitive without being so.

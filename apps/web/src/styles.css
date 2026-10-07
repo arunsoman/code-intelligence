@@ -153,6 +153,13 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1
 ul.gallery { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1; display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 10px; }
 ul.gallery li { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; } ul.gallery li.off { opacity: .72; } ul.gallery p { margin: 6px 0; font-size: 13px; } ul.gallery .row input { flex: 1; }
 .modal.tall { max-height: 88vh; }
+.provider-wizard { width: min(980px, 96vw); }
+.provider-step { min-height: 0; }
+.provider-step h3 { margin-top: 14px; }
+.provider-progress { display: flex; gap: 5px; }
+.provider-progress span { height: 4px; flex: 1; border-radius: 4px; background: var(--line); }
+.provider-progress span.active { background: var(--accent); }
+.provider-code { margin: 8px 0; padding: 12px; max-height: 48vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .terrain { position: absolute; inset: 0; overflow: auto; padding: 10px 16px; display: flex; flex-direction: column; gap: 8px; }
 .terrain-weights { display: flex; gap: 14px; flex-wrap: wrap; align-items: end; } .terrain-weights label { display: flex; flex-direction: column; font-size: 12px; gap: 2px; min-width: 130px; } .terrain-weights input[type=range] { width: 100%; }
 .terrain-svg { width: 100%; max-height: calc(100% - 90px); } .terrain-svg .cell { cursor: pointer; outline: none; } .terrain-svg rect { stroke: var(--panel); stroke-width: 2; }
@@ -556,4 +563,3 @@ header { flex-wrap: wrap; }
 .modal-actions .secondary, .modal-actions button.ghost {
   background: transparent; color: var(--ink); border-color: var(--line);
 }
-

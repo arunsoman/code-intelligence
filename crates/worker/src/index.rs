@@ -11,10 +11,14 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
+use ignore::WalkBuilder;
 
+// Directories skipped regardless of .gitignore (defense in depth: a repo that forgot to ignore its own
+// dependency/build output still shouldn't be indexed). .gitignore, .git/info/exclude and the global git
+// excludes file are honoured on top of this list by `ignore::WalkBuilder` (same crate ripgrep uses), so a
+// project's own ignore rules — not just this fixed list — keep generated and vendored files out of the index.
 const SKIP_DIRS: &[&str] = &["node_modules", ".git", "dist", "build", "target", ".next", "coverage", "__pycache__", ".venv", "venv", ".gradle", ".idea", "vendor", "site-packages"];
-pub const ANALYZER_VERSION: &str = "worker-0.3.0/tree-sitter-typescript-0.23+rust-0.24+nirdosha-v2+defect-semantic-v1";
+pub const ANALYZER_VERSION: &str = "worker-0.4.0/tree-sitter-typescript-0.23+rust-0.24+nirdosha-v2+defect-semantic-v1+gitignore-aware-walk";
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -209,13 +213,16 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>, base: Option<&BaseRe
         return Err(format!("not a directory: {}", root.display()));
     }
     let root = root.canonicalize().map_err(|e| e.to_string())?;
-    let mut paths: Vec<PathBuf> = WalkDir::new(&root)
-        .into_iter()
+    let mut paths: Vec<PathBuf> = WalkBuilder::new(&root)
+        // Honour .gitignore even when the root is not (yet) a git checkout — e.g. a directory copied
+        // without its .git folder should still keep its generated/vendored files out of the index.
+        .require_git(false)
         .filter_entry(|e| {
-            !(e.file_type().is_dir() && e.file_name().to_str().map_or(false, |n| SKIP_DIRS.contains(&n)))
+            !(e.file_type().map_or(false, |ft| ft.is_dir()) && e.file_name().to_str().map_or(false, |n| SKIP_DIRS.contains(&n)))
         })
+        .build()
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
+        .filter(|e| e.file_type().map_or(false, |ft| ft.is_file()))
         .map(|e| e.into_path())
         .filter(|p| {
             let n = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
@@ -1353,6 +1360,61 @@ mod revision_tests {
         let _ = std::fs::remove_dir_all(&dst);
         assert_ne!(a.revision, b.revision);
         assert_eq!(a.entities.len(), b.entities.len());
+    }
+}
+
+#[cfg(test)]
+mod gitignore_tests {
+    use super::*;
+
+    fn write(path: &Path, content: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn a_file_under_a_gitignored_directory_is_not_indexed() {
+        let dir = std::env::temp_dir().join(format!("cie-gitignore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(&dir.join(".gitignore"), "generated/\n");
+        write(&dir.join("src/kept.ts"), "export function keptFunction() {}\n");
+        write(&dir.join("generated/skip.ts"), "export function shouldNotAppear() {}\n");
+
+        let b = index_repo(&dir, None, None).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(b.entities.iter().any(|e| e.file == "src/kept.ts"), "a non-ignored file is still indexed");
+        assert!(!b.entities.iter().any(|e| e.file == "generated/skip.ts"), "a .gitignore'd file is never indexed");
+    }
+
+    #[test]
+    fn a_hardcoded_skip_dir_is_excluded_even_when_not_gitignored() {
+        // Defense in depth: SKIP_DIRS still applies regardless of what .gitignore says (or doesn't say).
+        let dir = std::env::temp_dir().join(format!("cie-gitignore-skipdirs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(&dir.join("src/kept.ts"), "export function keptFunction() {}\n");
+        write(&dir.join("node_modules/vendor/pkg.ts"), "export function vendorFunction() {}\n");
+
+        let b = index_repo(&dir, None, None).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(b.entities.iter().any(|e| e.file == "src/kept.ts"));
+        assert!(!b.entities.iter().any(|e| e.file.contains("node_modules")), "node_modules is excluded regardless of .gitignore content");
+    }
+
+    #[test]
+    fn a_nested_gitignore_is_also_honoured() {
+        let dir = std::env::temp_dir().join(format!("cie-gitignore-nested-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        write(&dir.join("pkg/.gitignore"), "local-only.ts\n");
+        write(&dir.join("pkg/local-only.ts"), "export function localOnlyFunction() {}\n");
+        write(&dir.join("pkg/shared.ts"), "export function sharedFunction() {}\n");
+
+        let b = index_repo(&dir, None, None).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(b.entities.iter().any(|e| e.file == "pkg/shared.ts"));
+        assert!(!b.entities.iter().any(|e| e.file == "pkg/local-only.ts"), "a nested .gitignore's rule is honoured too, not just the repo root's");
     }
 }
 
