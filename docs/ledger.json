@@ -2090,5 +2090,111 @@
         "needs": "a `C15/proposeEdits` command that calls the configured provider through the existing egress gate and returns edit operations, plus a branch-prefix test that asserts a non-`cie/` name is refused at the publisher"
       }
     ]
+  },
+  "F12": {
+    "title": "MCP agent context server",
+    "items": [
+      {
+        "item": "allowlist asserted against the operation table at start-up; mutating-backed tools fail registration (F12-A1)",
+        "tests": [
+          "F12-A1: the allowlist matches the real operation table; tool ops are non-mutating",
+          "F12-A1: a tool built on a mutating operation fails at start-up, not at call time",
+          "F12-A1: an allowlisted operation missing from the table fails at start-up",
+          "F12-A1: DirectGateway refuses an operation outside the allowlist even when the table has it"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "every result carries claim class, citations, gaps, completeness and revision (F12-A2)",
+        "tests": [
+          "F12-A2: all six tools return gate-passing results bound to the indexed revision",
+          "F12-A2: who_calls answers with cited callers; unknown symbols are Fog with nearest names, never a guess",
+          "F12-A2: explain_connection gives a cited hop-by-hop path",
+          "F12-A2: tests_reaching separates parsed call paths from imports and never claims tests pass",
+          "F12-A2: index_status leads with a one-line summary and the schema version is reported"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "staleness is stated in the result, or a bounded refresh runs first (F12-A3)",
+        "tests": [
+          "F12-A3: unchanged index \u2192 workingTreeChanged false; changed + autoRefresh off \u2192 stated with count and gap",
+          "F12-A3: changed + autoRefresh on \u2192 refresh runs and the answer reports the new revision",
+          "F12-A3: a refresh that does not finish in time answers on the indexed revision with the staleness gap"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "claims about changed files are downgraded one class when no refresh succeeded (F12-A4)",
+        "tests": [
+          "F12-A4: a stale claim touching a changed file is downgraded FACT \u2192 INFERENCE; unrelated claims keep their class",
+          "F12-A4: downgradeClass walks one step and never below FOG"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "denied paths counted, never named, in tools and resources (F12-A5)",
+        "tests": [
+          "F12-A5: withheld counts omit the denied path; resources refuse denied evidence without naming it"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "non-loopback --url refused (F12-A6)",
+        "tests": [
+          "F12-A6: isLoopbackUrl and the CLI refuse non-loopback gateways",
+          "F12-A6: the CLI defaults to the loopback gateway and honours --no-auto-refresh"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "session call budget: typed error with retry hint; recovers (F12-A7)",
+        "tests": [
+          "F12-A7: the sliding-hour budget exhausts with a retry hint and recovers"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "repository text returned verbatim under untrustedText: true (F12-A8)",
+        "tests": [
+          "F12-A8: agent-directed text in an identifier comes back verbatim under untrustedText: true"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "tools/list under the 6 KB host budget; schema version reported (F12-A9)",
+        "tests": [
+          "F12-A9: tools/list stays under the 6 KB host budget and carries the schema version"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "checkMcpResult rejects presentation mutation: hypothesis-as-fact, missing evidence, certainty wording (F12-A10)",
+        "tests": [
+          "F12-A10: checkMcpResult rejects hypothesis-as-fact, missing evidence, missing revision and certainty wording"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "per-call bounds: claim count and text budget, overflow counted in gaps (\u00a77.5)",
+        "tests": [
+          "\u00a77.5: claim overflow is counted in gaps and completeness drops to PARTIAL"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "MCP stdio protocol: initialize, tools/list, tools/call, resources/read, typed errors",
+        "tests": [
+          "protocol: initialize, tools/list, a tool call, a resource read and an unknown method",
+          "protocol: bad arguments are a typed INVALID_SCHEMA error with the reason"
+        ],
+        "state": "done"
+      },
+      {
+        "item": "pending: real-agent-host slice-0 transcript (S0) and refresh-cost measurement on a large repository (\u00a73.3)",
+        "tests": [],
+        "state": "pending-tests"
+      }
+    ]
   }
 }
