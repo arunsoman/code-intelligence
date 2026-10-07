@@ -84,8 +84,8 @@ export function buildArchitecturalTree(store: Store, revision: string, repoRoot:
 
   const entryPoints: EntryPoint[] = [];
   for (const e of entities) {
-    if (/^(main|server|start|index)$/.test(e.name)) {
-      entryPoints.push({ entityId: e.entityId, kind: "symbol", file: e.file, detail: "the symbol's name matches an entry convention" });
+    if (/^(main|server|start|index)$/.test(e.name) || /(^|\/)(index|server|main)\.[cm]?[jt]sx?$/.test(e.file)) {
+      entryPoints.push({ entityId: e.entityId, kind: "symbol", file: e.file, detail: `name or file matches an entry convention` });
       if (entryPoints.length >= 50) break;
     }
   }
@@ -106,7 +106,7 @@ export function exportSurfaceOf(repoRoot: string, file: string): ExportSurface |
   try { text = readFileSync(abs, "utf8"); } catch { return null; }
   const sf = ts.createSourceFile(abs, text, ts.ScriptTarget.Latest, true);
   const exports: ExportSurface["exports"] = [];
-  const exported = (n: ts.Node): boolean => (ts.canHaveModifiers(n) ? ts.getModifiers(n) : undefined)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false;
+  const exported = (n: ts.Node): boolean => n.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false;
   for (const st of sf.statements) {
     if (ts.isVariableStatement(st) && exported(st)) {
       for (const d of st.declarationList.declarations) {

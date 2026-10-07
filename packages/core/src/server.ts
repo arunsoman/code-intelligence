@@ -31,12 +31,14 @@ const LOCAL: Identify = () => ({ principalId: "local-user", tenantId: "local", s
  * `identify`, which stands for the trusted transport (a reverse proxy that authenticated the caller); it is never read from
  * the request body, and a null answer is a 401.
  */
-export function buildHandler(target: Service | TenantHost, opts: { identify?: Identify } = {}) {
-  const identify = opts.identify ?? LOCAL;
-  // Allowlisted public operations. Mutating ones require an Idempotency-Key header.
-  const interactionCache = new WeakMap<Service, Interactions>();
-  const interactionsOf = (svc: Service) => { let i = interactionCache.get(svc); if (!i) { i = new Interactions(svc); interactionCache.set(svc, i); } return i; };
-  const makeOps = (svc: Service) => {
+const interactionCache = new WeakMap<Service, Interactions>();
+const interactionsOf = (svc: Service) => { let i = interactionCache.get(svc); if (!i) { i = new Interactions(svc); interactionCache.set(svc, i); } return i; };
+
+/**
+ * The gateway's full operation table for one service. Exported so the F12 MCP adapter can assert its allowlist
+ * against the real table at start-up and, in tests, dispatch through the very same routes the HTTP gateway serves.
+ */
+export function opsFor(svc: Service) {
   const ops: Record<string, { mutating: boolean; run: (ctx: CallContext, body: any) => Promise<ApiResult<unknown>> | ApiResult<unknown> }> = {
     "C01/status": { mutating: false, run: (c, b) => svc.status(c, b) },
     "C01/browseDirectory": { mutating: false, run: (c, b) => svc.browseDirectory(c, b) },
@@ -128,7 +130,10 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
   // Prompt-to-feature (docs/prompt-to-feature): typed stubs until each owning task registers its handler in feature/routes.ts.
   Object.assign(ops, featureOps(featureHandlers(svc), ops));
   return ops;
-  };
+}
+
+export function buildHandler(target: Service | TenantHost, opts: { identify?: Identify } = {}) {
+  const identify = opts.identify ?? LOCAL;
   const statusFor = (r: ApiResult<unknown>) => r.ok ? 200 : ({ INVALID_SCHEMA: 400, NOT_FOUND: 404, EVIDENCE_MISSING: 404, VERSION_CONFLICT: 409, UNAUTHORIZED: 401, FORBIDDEN: 403, BUDGET_EXCEEDED: 429, DEADLINE_EXCEEDED: 504, PROVIDER_UNAVAILABLE: 503 } as Record<string, number>)[r.error.code] ?? 500;
   const send = (res: ServerResponse, code: number, body: unknown, type = "application/json") => {
     res.writeHead(code, { "content-type": type, "cache-control": "no-store", "x-content-type-options": "nosniff" });
@@ -181,7 +186,7 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
     if (m) {
       const c1 = mk(""); const sv1 = serviceFor(c1);
       if ("failure" in sv1) return send(res, statusFor(sv1.failure), sv1.failure);
-      const op = makeOps(sv1.svc)[`${m[1]}/${m[2]}`];
+      const op = opsFor(sv1.svc)[`${m[1]}/${m[2]}`];
       if (!op || req.method !== "POST") return send(res, op ? 405 : 404, { ok: false, error: { code: "NOT_FOUND", message: "unknown operation", retryable: false } });
       if (!(req.headers["content-type"] ?? "").startsWith("application/json")) return send(res, 415, { ok: false, error: { code: "INVALID_SCHEMA", message: "content-type must be application/json", retryable: false } });
       let body: any;

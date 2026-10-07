@@ -46,7 +46,7 @@ export function buildInvariants(store: Store, revision: string, pdgs: Pdg[]): In
         basis = "an explicit assertion sits on the guarded path";
       }
       out.push({
-        id: `inv:${sha(`${pdg.entityId}|${def.name}|${branchId}`).slice(0, 12)}`,
+        id: `inv:${sha(`${revision}|${pdg.entityId}|${def.name}|${branchId}`).slice(0, 12)}`,
         revision,
         subjectEntityId: pdg.entityId,
         variable: def.name,

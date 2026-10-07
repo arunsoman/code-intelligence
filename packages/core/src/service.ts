@@ -13,14 +13,13 @@ import { validateChatPlan } from "./chat-plan.ts";
 import { executeChatPlan } from "./chat-execution.ts";
 import { runChatAgent } from "./chat-agent.ts";
 import type {
-  AnalysisBatch, ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptHierarchyView, ConceptStore, ConceptsOutput, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceBundle, EvidenceRef, ExplainResult, ExplanationOutput,
-  ChartOutput, HypothesesOutput, ModelProvider, ModelRequest, NameArchOutput, NameConceptOutput, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec, SourceSpan,
-  DefectDetectionInput, DetectorFinding, BenchmarkPolicy, BenchmarkResult, Fact,
+  AnalysisBatch, ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptStore, ConceptsOutput, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceRef, ExplainResult, ExplanationOutput,
+  ChartOutput, HypothesesOutput, ModelProvider, ModelRequest, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec, SourceSpan,
+  DefectDetectionInput, DetectorFinding, BenchmarkPolicy, BenchmarkResult, Fact, Entity, Relationship,
 } from "@cie/schema";
-import { SCHEMA_CHALLENGE, SCHEMA_CONCEPTS, SCHEMA_EXPLANATION, SCHEMA_HYPOTHESES, SCHEMA_NAME_ARCH, SCHEMA_NAME_CONCEPT, SCHEMA_REPRESENTATION } from "@cie/schema";
+import { SCHEMA_CHALLENGE, SCHEMA_CONCEPTS, SCHEMA_EXPLANATION, SCHEMA_HYPOTHESES, SCHEMA_REPRESENTATION } from "@cie/schema";
 import { applyVerdict, gateClaim, modelText, wilson, withChallenge } from "./claims.ts";
 import { claimOf } from "./forms/common.ts";
-import { buildHierarchy, persistHierarchy, type NamingAdapter } from "./concept-hierarchy/index.ts";
 import { cardsFromOutput, chunkSymbols, mergeCards } from "./concepts.ts";
 import { buildFailureGraph, buildInvariantGraph } from "./forms/causal.ts";
 import { short } from "./forms/common.ts";
@@ -74,7 +73,8 @@ import { C22Error, type HypothesisDraft } from "./c22/types.ts";
 import { seedContext, toDrafts } from "./c22/proposer.ts";
 import { toPlan } from "./c22/compat.ts";
 import { CausalityEngine, type CausalityScopeInput, type MechanismEvidenceRecord, type CauseClaimRecord, type Snapshot as C24Snapshot } from "./c24/causality.ts";
-import { ingestTestArtifacts, loadTestSummary, type TestSummary } from "./testartifacts.ts";
+import { ingestTestArtifacts, loadTestSummary, testFactsFor, type TestSummary } from "./testartifacts.ts";
+import { dependents as graphDependents, findPath as graphFindPath } from "./graph.ts";
 import { ingestTraceExports } from "./traceexport.ts";
 import type { WorkerClient } from "./worker.ts";
 import { WorkerError } from "./worker.ts";
@@ -494,7 +494,151 @@ export class Service {
     "C23/reanchorThreads": (c, b) => ok(c, this.history.reanchorThreads(b.mergedRevision)),
     "C23/explainHotspot": (c, b) => this.hotspotCallSync(c, () => this.hotspots.explainHotspot(c, b ?? {})),
     "C23/explainCoupling": (c, b) => this.hotspotCallSync(c, () => this.hotspots.explainCoupling(c, b ?? {})),
+    // F12 MCP backing reads: single-symbol blast radius, cited connection paths, static test reach. All read-only,
+    // access-filtered (denied entities are counted by the graph layer, never named), revision-bound.
+    "C23/dependents": (c, b) => this.dependentsCall(c, b ?? {}),
+    "C23/findConnection": (c, b) => this.findConnectionCall(c, b ?? {}),
+    "C23/testsReaching": (c, b) => this.testsReachingCall(c, b ?? {}),
   };
+
+  /** F12: the revision an entity-name operation works on: the requested one, else the latest of the repo, else overall. */
+  private mcpRevision(ctx: CallContext, b: { repoPath?: string; revision?: string }): ApiResult<NonNullable<ReturnType<Store["latestRevision"]>>> {
+    const rev = (typeof b.revision === "string" && this.store.revision(b.revision))
+      ? this.store.revision(b.revision)
+      : typeof b.repoPath === "string" ? this.store.latestRevision(b.repoPath) : this.store.latestRevision();
+    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index the repository first", retryable: true });
+    return ok(ctx, rev);
+  }
+
+  /** F12: resolve a name or entity id to an entity of the revision; on a miss, offer nearest names, never a guess. */
+  private mcpEntity(rev: RevisionRow, name: string): { entity: Entity } | { failure: { code: "NOT_FOUND"; message: string; retryable: false }; nearest: string[] } {
+    const q = name.trim();
+    const ents = this.store.entities(rev.id);
+    const byId = ents.find((e) => e.entityId === q);
+    if (byId) return { entity: byId };
+    const lower = q.toLowerCase();
+    const named = ents.filter((e) => e.kind !== "file" && e.name.toLowerCase() === lower);
+    if (named.length === 1) return { entity: named[0] };
+    if (named.length > 1) return { failure: { code: "NOT_FOUND" as const, message: `“${q}” is ambiguous: it names ${named.length} elements; give the file or an id`, retryable: false as const }, nearest: named.slice(0, 5).map((e) => `${e.name} — ${e.file}`) };
+    const near = ents.filter((e) => e.kind !== "file" && (e.name.toLowerCase().includes(lower) || lower.includes(e.name.toLowerCase())) && e.name.toLowerCase() !== lower)
+      .sort((a, b) => a.name.length - b.name.length).slice(0, 5).map((e) => `${e.name} — ${e.file}`);
+    return { failure: { code: "NOT_FOUND" as const, message: near.length ? `no element is exactly named “${q}”; nearest: ${near.join("; ")}` : `no element is named “${q}” in the indexed revision`, retryable: false as const }, nearest: near };
+  }
+
+  /** F12: line location of an entity's primary span, for citations. Null when the file is gone or has no span. */
+  private mcpLocation(rev: RevisionRow, e: Entity): { path: string; startLine: number; endLine: number } | null {
+    const span = e.spans[0];
+    if (!span) return null;
+    let buf: Buffer;
+    try { buf = readFileSync(resolve(rev.repoRoot, span.sourceId)); } catch { return null; }
+    const startLine = buf.subarray(0, span.startByte).toString("utf8").split("\n").length;
+    const text = buf.subarray(span.startByte, span.endByteExclusive).toString("utf8");
+    return { path: e.file, startLine, endLine: startLine + text.split("\n").length - 1 };
+  }
+
+  /** F12 `C23/dependents`: everything that reaches one entity within a bounded hop count, with per-edge evidence ids. */
+  private dependentsCall(ctx: CallContext, b: { repoPath?: string; revision?: string; name?: string; entityId?: string; maxDepth?: number; maxNodes?: number }): ApiResult<unknown> {
+    const revR = this.mcpRevision(ctx, b);
+    if (!revR.ok) return revR;
+    const rev = revR.value;
+    const wanted = typeof b.entityId === "string" ? b.entityId : b.name;
+    if (typeof wanted !== "string" || !wanted.trim()) return fail(ctx, { code: "INVALID_SCHEMA", message: "give a name or entityId", retryable: false });
+    const hit = this.mcpEntity(rev, wanted);
+    if ("failure" in hit) return fail(ctx, { ...hit.failure, message: hit.failure.message } as never);
+    const access = policyFor(this.store, rev.repoRoot);
+    const projection = graphDependents(this.store, rev.id, hit.entity.entityId, { access, ...(b.maxDepth ? { maxDepth: b.maxDepth } : {}), ...(b.maxNodes ? { maxNodes: b.maxNodes } : {}) });
+    const locations = new Map<string, { path: string; startLine: number; endLine: number } | null>();
+    for (const n of projection.nodes) { const e = this.store.entitiesById(rev.id, [n.id])[0]; locations.set(n.id, e ? this.mcpLocation(rev, e) : null); }
+    return ok(ctx, {
+      entity: { entityId: hit.entity.entityId, name: hit.entity.name, kind: hit.entity.kind, file: hit.entity.file, location: this.mcpLocation(rev, hit.entity) },
+      projection: { ...projection, locations: Object.fromEntries(locations) },
+    }, { revision: rev.id });
+  }
+
+  /** F12 `C23/findConnection`: the shortest cited call path between two entities, or an honest "cannot determine". */
+  private findConnectionCall(ctx: CallContext, b: { repoPath?: string; revision?: string; from: string; to: string }): ApiResult<unknown> {
+    const revR = this.mcpRevision(ctx, b);
+    if (!revR.ok) return revR;
+    const rev = revR.value;
+    for (const key of ["from", "to"] as const) {
+      if (typeof b[key] !== "string" || !b[key].trim()) return fail(ctx, { code: "INVALID_SCHEMA", message: `give ${key} as a name or entity id`, retryable: false });
+    }
+    const from = this.mcpEntity(rev, b.from), to = this.mcpEntity(rev, b.to);
+    for (const [key, hit] of [["from", from], ["to", to]] as const) {
+      if ("failure" in hit) return fail(ctx, { ...hit.failure, message: `${key}: ${hit.failure.message}` } as never);
+    }
+    const access = policyFor(this.store, rev.repoRoot);
+    const r = graphFindPath(this.store, rev.id, (from as { entity: Entity }).entity.entityId, (to as { entity: Entity }).entity.entityId, { access });
+    const ents = new Map(this.store.entities(rev.id).map((e) => [e.entityId, e]));
+    const describe = (id: string) => { const e = ents.get(id); return { entityId: id, name: e?.name ?? id, kind: e?.kind ?? "unknown", file: e?.file ?? "", location: e ? this.mcpLocation(rev, e) : null }; };
+    const spanLoc = (span: SourceSpan) => {
+      let buf: Buffer;
+      try { buf = readFileSync(resolve(rev.repoRoot, span.sourceId)); } catch { return null; }
+      const startLine = buf.subarray(0, span.startByte).toString("utf8").split("\n").length;
+      const text = buf.subarray(span.startByte, span.endByteExclusive).toString("utf8");
+      return { path: relative(rev.repoRoot, resolve(rev.repoRoot, span.sourceId)), startLine, endLine: startLine + text.split("\n").length - 1 };
+    };
+    return ok(ctx, {
+      from: describe((from as { entity: Entity }).entity.entityId), to: describe((to as { entity: Entity }).entity.entityId),
+      found: r.found, path: r.path.map(describe),
+      edges: r.edges.map((e) => ({
+        from: e.from, to: e.to, kind: e.kind, label: e.label ?? null, evidenceIds: e.evidence.map((x) => x.id),
+        evidenceLocations: e.evidence.map((x) => ({ evidenceId: x.id, location: x.location.kind === "CodeLocation" ? spanLoc(x.location.span) : null })),
+      })),
+      hops: r.hops, hiddenRouteExists: r.hiddenRouteExists, truncated: r.truncated, visited: r.visited,
+    }, { revision: rev.id });
+  }
+
+  /** F12 `C23/testsReaching`: static test links to one entity's file — call paths and imports, never "tests pass". */
+  private testsReachingCall(ctx: CallContext, b: { repoPath?: string; revision?: string; name?: string; entityId?: string }): ApiResult<unknown> {
+    const revR = this.mcpRevision(ctx, b);
+    if (!revR.ok) return revR;
+    const rev = revR.value;
+    const wanted = typeof b.entityId === "string" ? b.entityId : b.name;
+    if (typeof wanted !== "string" || !wanted.trim()) return fail(ctx, { code: "INVALID_SCHEMA", message: "give a name or entityId", retryable: false });
+    const hit = this.mcpEntity(rev, wanted);
+    if ("failure" in hit) return fail(ctx, { ...hit.failure, message: hit.failure.message } as never);
+    const entity = (hit as { entity: Entity }).entity;
+    const access = policyFor(this.store, rev.repoRoot);
+    const ents = this.store.entities(rev.id).filter((e) => !access.denied(e.file));
+    const byId = new Map(ents.map((e) => [e.entityId, e]));
+    const incoming = new Map<string, Relationship[]>();
+    for (const r of this.store.allRelationships(rev.id)) {
+      if (r.kind !== "calls" || r.resolution === "UNRESOLVED" || !byId.has(r.from) || !byId.has(r.to)) continue;
+      incoming.set(r.to, [...(incoming.get(r.to) ?? []), r]);
+    }
+    // Reverse BFS from the entity, at most four hops, collecting test entities (the same bound module-tests uses).
+    const paths = new Map<string, Relationship[]>([[entity.entityId, []]]);
+    let frontier = [entity.entityId];
+    for (let depth = 0; depth < 4 && frontier.length; depth++) {
+      const next: string[] = [];
+      for (const id of frontier) for (const r of incoming.get(id) ?? []) {
+        if (paths.has(r.from)) continue;
+        paths.set(r.from, [r, ...paths.get(id)!]);
+        next.push(r.from);
+      }
+      frontier = next;
+    }
+    const isTest = (e: Entity) => e.kind === "test" || /(^|\/)(__tests__|tests?)(\/|$)|[._-](test|spec)\.[^/]+$/i.test(e.file);
+    const reached = ents.filter((e) => isTest(e) && paths.has(e.entityId));
+    const reachedFiles = new Set(reached.map((e) => e.file));
+    const fileEntity = ents.find((e) => e.kind === "file" && e.file === entity.file);
+    const imports = fileEntity
+      ? this.store.allRelationships(rev.id).filter((r) => r.kind === "imports" && r.to === fileEntity.entityId && byId.has(r.from) && isTest(byId.get(r.from)!) && !reachedFiles.has(byId.get(r.from)!.file))
+      : [];
+    const tests = [
+      ...reached.map((e) => ({ entityId: e.entityId, name: e.name, file: e.file, mode: "calls" as const, evidenceIds: [...new Set(paths.get(e.entityId)!.flatMap((r) => r.evidence.map((x) => x.id)))] })),
+      ...imports.map((r) => ({ entityId: r.from, name: byId.get(r.from)!.name, file: byId.get(r.from)!.file, mode: "imports" as const, evidenceIds: r.evidence.map((x) => x.id) })),
+    ];
+    const coverage = fileEntity ? testFactsFor(this.store, rev.id, fileEntity.entityId).coverage ?? null : null;
+    const truncated = frontier.length > 0;
+    const testEntities = new Map(ents.filter((e) => tests.some((t) => t.entityId === e.entityId)).map((e) => [e.entityId, e]));
+    return ok(ctx, {
+      entity: { entityId: entity.entityId, name: entity.name, kind: entity.kind, file: entity.file, location: this.mcpLocation(rev, entity) },
+      tests: tests.slice(0, 60).map((t) => ({ ...t, location: testEntities.has(t.entityId) ? this.mcpLocation(rev, testEntities.get(t.entityId)!) : null })),
+      truncated, coverage: coverage ? { percent: coverage.percent, covered: coverage.covered, lines: coverage.lines, evidenceIds: coverage.evidenceIds } : null,
+    }, { revision: rev.id });
+  }
   /** C08 gateway operations. */
   readonly registryOps: Record<string, (ctx: CallContext, b: any) => ApiResult<unknown>> = {
     "C08/proposals": (c, b) => ok(c, this.registry.proposals(b ?? {})),
@@ -1359,8 +1503,8 @@ export class Service {
   }
 
   // ---------------------------------------------------------------- C07 jobs
-  /** Start indexing, concept extraction, or hierarchy building in the background. Returns the job at once; poll getJob for progress. */
-  enqueueJob(ctx: CallContext, req: { kind: "index" | "concepts" | "concept-hierarchy"; repoPath?: string; revision?: string }): ApiResult<JobView & { deduped?: boolean }> {
+  /** Start indexing or concept extraction in the background. Returns the job at once; poll getJob for progress. */
+  enqueueJob(ctx: CallContext, req: { kind: "index" | "concepts"; repoPath?: string; revision?: string }): ApiResult<JobView & { deduped?: boolean }> {
     if (req.kind === "index") {
       if (!req.repoPath || !isAbsolute(req.repoPath)) return fail(ctx, { code: "INVALID_SCHEMA", message: "repoPath must be an absolute path", retryable: false });
       const repoPath = req.repoPath;
@@ -1371,12 +1515,7 @@ export class Service {
       if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index a repository first", retryable: false });
       return ok(ctx, this.jobs.enqueue(ctx, { kind: "concepts", params: { revision: rev.id, repoPath: rev.repoRoot }, run: (jctx, control) => this.extractConcepts(jctx, { revision: rev.id }, control) }));
     }
-    if (req.kind === "concept-hierarchy") {
-      const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
-      if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index a repository first", retryable: false });
-      return ok(ctx, this.jobs.enqueue(ctx, { kind: "concept-hierarchy", params: { revision: rev.id, repoPath: rev.repoRoot }, run: (jctx, control) => this.buildConceptHierarchy(jctx, { revision: rev.id }, control) }));
-    }
-    return fail(ctx, { code: "INVALID_SCHEMA", message: "kind must be index, concepts or concept-hierarchy", retryable: false });
+    return fail(ctx, { code: "INVALID_SCHEMA", message: "kind must be index or concepts", retryable: false });
   }
 
   getJob(ctx: CallContext, req: { jobId: string }): ApiResult<JobView> {
@@ -1673,102 +1812,6 @@ export class Service {
   listConcepts(ctx: CallContext, req: { revision?: string }): ApiResult<ConceptCard[]> {
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     return rev ? ok(ctx, this.store.concepts(rev.id), { revision: rev.id }) : fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
-  }
-
-  // ---------------------------------------------------------------- concept hierarchy (dual-axis)
-  /**
-   * Naming runs through the same gateway path as every model call (egress, budget, audit), but its
-   * result is a label, never a claim: it is stored in the naming cache and on the concept, and the
-   * claims/verdicts tables are untouched. `modelVersion` in the cache key keeps names from one model
-   * from leaking into another's cache.
-   */
-  private namingAdapter(rev: RevisionRow): NamingAdapter {
-    const modelVersion = `${this.model.name}/${this.model.model}`;
-    return {
-      modelVersion,
-      name: async (req) => {
-        const schemaId = req.purpose === "NAME_ARCH" ? SCHEMA_NAME_ARCH : SCHEMA_NAME_CONCEPT;
-        const callCtx: CallContext = {
-          requestId: `req-name:${randomUUID()}`, idempotencyKey: `naming:${rev.id}:${randomUUID()}`,
-          actor: { principalId: "system", tenantId: "local", sessionId: "system" },
-          deadlineMs: Date.now() + 120_000, traceId: `trace-name:${randomUUID()}`,
-        };
-        const bundle: EvidenceBundle = { id: "naming", revision: rev.id, evidence: [], entities: [], relationships: [], facts: [], coverage: [], unresolved: [], tokenEstimate: 0 };
-        const { result } = await this.callModel<NameConceptOutput & NameArchOutput>(callCtx, rev, { purpose: req.purpose, schemaId, question: req.question, bundle });
-        if (!result.ok) return null;
-        return result.value.names.map((n) => ({ conceptId: n.conceptId, name: n.name }));
-      },
-    };
-  }
-
-  /**
-   * Build the dual-axis hierarchy for a revision: graphs → motifs → concepts → invariants →
-   * architecture → links → anchoring → naming. Job-controlled like concept extraction; everything is
-   * written in one persist step at the end, so a cancelled run leaves nothing behind.
-   */
-  async buildConceptHierarchy(ctx: CallContext, req: { revision?: string }, control?: JobControl): Promise<ApiResult<ConceptHierarchyView>> {
-    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
-    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
-    const result = await buildHierarchy(this.store, rev.id, { repoRoot: rev.repoRoot, adapter: this.namingAdapter(rev), control, provider: `${this.model.name}/${this.model.model}` });
-    control?.commit();
-    const provider = `${this.model.name}/${this.model.model}`;
-    const version = persistHierarchy(this.store, result, provider);
-    this.store.audit(actor(ctx), "concept-hierarchy.build", rev.id, {
-      version, concepts: result.concepts.length, invariants: result.invariants.length,
-      archNodes: result.arch.length, crossPackage: result.crossPackage.length, fullRebuild: result.stats.fullRebuild,
-      pdgsReused: result.stats.pdgs.reused, namingCacheHits: result.stats.naming.cacheHits,
-    });
-    const view = this.hierarchyView(rev, version, result);
-    return ok(ctx, view, { revision: rev.id, warnings: result.stats.warnings });
-  }
-
-  /** The read-only hierarchy view: the current version's live tables, or an older version's snapshot. */
-  conceptHierarchy(ctx: CallContext, req: { revision?: string; version?: number }): ApiResult<ConceptHierarchyView> {
-    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
-    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
-    const versions = this.store.semanticConceptVersions(rev.repoRoot);
-    const current = versions[0]?.version ?? 0;
-    const want = req.version ?? current;
-    if (!want) {
-      return ok(ctx, { revision: rev.id, version: 0, versions: [], concepts: [], invariants: [], arch: [], surfaces: [], entryPoints: [], crossPackage: [], links: [], stats: null });
-    }
-    if (want === current) {
-      const snapshot = this.store.latestSemanticVersionSnapshot(rev.id);
-      return ok(ctx, {
-        revision: rev.id, version: want, versions,
-        concepts: this.store.semanticConcepts(rev.id),
-        invariants: (snapshot?.invariants as ConceptHierarchyView["invariants"]) ?? [],
-        arch: this.store.archNodes(rev.id),
-        surfaces: (snapshot?.surfaces as ConceptHierarchyView["surfaces"]) ?? [],
-        entryPoints: [], crossPackage: (snapshot?.crossPackage as ConceptHierarchyView["crossPackage"]) ?? [],
-        links: this.store.crossAxisLinks(rev.id),
-        stats: (snapshot?.stats as ConceptHierarchyView["stats"]) ?? null,
-      });
-    }
-    const snap = this.store.semanticConceptVersion(rev.repoRoot, want);
-    if (!snap) return fail(ctx, { code: "NOT_FOUND", message: `no hierarchy version ${want}`, retryable: false });
-    const versionRevision = versions.find((v) => v.version === want)?.revision ?? rev.id;
-    return ok(ctx, {
-      revision: versionRevision, version: want, versions,
-      concepts: (snap.concepts as ConceptHierarchyView["concepts"]),
-      invariants: (snap.invariants as ConceptHierarchyView["invariants"]),
-      arch: this.store.archNodes(versionRevision),
-      surfaces: (snap.surfaces as ConceptHierarchyView["surfaces"]),
-      entryPoints: [], crossPackage: (snap.crossPackage as ConceptHierarchyView["crossPackage"]),
-      links: this.store.crossAxisLinks(versionRevision),
-      stats: null,
-    });
-  }
-
-  private hierarchyView(rev: RevisionRow, version: number, result: Awaited<ReturnType<typeof buildHierarchy>>): ConceptHierarchyView {
-    return {
-      revision: rev.id, version,
-      versions: this.store.semanticConceptVersions(rev.repoRoot),
-      concepts: result.concepts, invariants: result.invariants, arch: result.arch,
-      surfaces: result.surfaces, entryPoints: result.entryPoints, crossPackage: result.crossPackage,
-      links: result.links.map(({ conceptId, archNodeId }) => ({ conceptId, archNodeId })),
-      stats: result.stats,
-    };
   }
 
   // ---------------------------------------------------------------- views

@@ -64,15 +64,6 @@ function compact(req: ModelRequest) {
   };
 }
 
-/**
- * Naming payloads are already minimal (shape features and member names, computed offline), so the
- * full evidence bundle is neither read nor sent: naming requests carry the question JSON only. The
- * gateway's budget check still sees the real bundle, but nothing in it reaches the prompt.
- */
-function compactForNaming(req: ModelRequest) {
-  return { question: req.question };
-}
-
 function task(req: ModelRequest): string {
   if (req.purpose === "CHART") return req.instructions ?? `Build the requested CIE chart from this repository evidence. Return only a bounded chart plan that references exact entity and relationship ids in the bundle; do not return executable source code.`;
   if (req.purpose === "REPRESENT") {
@@ -108,15 +99,6 @@ Question: ${JSON.stringify(req.question)}
 - predictions: 1-3 per hypothesis. tool must be exactly one of: graph.dependents {entityId, depth?, minCount?}, graph.paths {from, to, maxDepth?}, source.entity {entityId, predicate: one of throws | writes | uses_transaction | unresolved_calls}, retrieve.evidence {query, limit?}, runtime.window {signature}. payload values are strings/numbers/booleans only. outcomeIfTrue/outcomeIfFalse use tags: PRESENT, ABSENT_WITH_COVERAGE (only when absence is certified: no sampling, no truncation), MATCH, MISMATCH. Mark essential true for the prediction whose contradiction would refute the hypothesis.
 - Do not claim a mechanism is proven; these are candidates and stay labelled as hypotheses in the UI.`;
   }
-  if (req.purpose === "NAME_CONCEPT") {
-    return `Name each concept below. The concepts are structural shapes mined from code (motifs and compositions of motifs); the members are the functions that carry the shape.
-For each concept return conceptId and a name of at most 60 characters that a developer would recognize: prefer the operation the shape performs (for example a guarded subtraction that lowers a balance is "withdraw funds"), not the shape's mechanics. Do not describe the shape in the name. Use only what the concept's own features and member names show; never invent behaviour. Names must be distinct within one batch.
-Concepts: ${req.question}`;
-  }
-  if (req.purpose === "NAME_ARCH") {
-    return `Name each package below from its path and module count. Return conceptId and a name of at most 60 characters: the domain the package owns (for example "payments"), not the directory spelling. Use only what is given.
-Packages: ${req.question}`;
-  }
   return `Question: ${JSON.stringify(req.question)}
 Selected entityIds: ${JSON.stringify(req.selected ?? [])}
 Explain how the selected elements are related using only the relationships given. Return a short summary and one claim per distinct relationship; each claim cites evidenceIds of the relationships it relies on (claimClass "structural-path") and gives pathEntityIds, the ordered entityIds of the chain it asserts. If they are not connected in the bundle, say so with zero claims.`;
@@ -145,10 +127,9 @@ export class OllamaProvider implements ModelProvider {
     const schema = z.toJSONSchema(zodSchema);
     // Cloud-hosted models do not always honor `format`, so the schema is also stated in the prompt,
     // and one repair attempt feeds the validation errors back. The gateway still re-validates.
-    const isNaming = req.purpose === "NAME_CONCEPT" || req.purpose === "NAME_ARCH";
     const messages: { role: string; content: string }[] = [
       { role: "system", content: SYSTEM },
-      { role: "user", content: `${task(req)}\n\nRequired JSON schema (use these exact field names):\n${JSON.stringify(schema)}\n\nbundle:\n${JSON.stringify(isNaming ? compactForNaming(req) : compact(req))}` },
+      { role: "user", content: `${task(req)}\n\nRequired JSON schema (use these exact field names):\n${JSON.stringify(schema)}\n\nbundle:\n${JSON.stringify(compact(req))}` },
     ];
     let lastErr = "";
     for (let attempt = 0; attempt < 2; attempt++) {

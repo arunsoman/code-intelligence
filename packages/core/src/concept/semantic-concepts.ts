@@ -73,27 +73,27 @@ export function buildSemanticConcepts(store: Store, revision: string, pdgs: Pdg[
     for (const n of pdg.nodes) if (n.kind === "def" && n.op) ops[n.op] = (ops[n.op] ?? 0) + 1;
 
     // Composition 1: guarded-write specialised by the operator that computes the written value.
-    // With several guarded writes, one concept per composed kind is emitted, from the first def
-    // whose operator matches; the plain guarded-write concept is then consumed for this function.
-    const composedKinds = new Set<string>();
-    for (const gw of matches.filter((m) => m.motif === "guarded-write")) {
+    const gw = matches.find((m) => m.motif === "guarded-write");
+    let composed = false;
+    if (gw) {
       const defNode = pdg.nodes.find((n) => gw.nodes.includes(n.id) && n.kind === "def");
-      if (defNode?.op === "op:sub" && !composedKinds.has("debit-form")) {
+      if (defNode?.op === "op:sub") {
         drafts.push({ entityId: pdg.entityId, kind: "debit-form", motifs: ["guarded-write"], features: { "motif:guarded-write": 1, "op:sub": 1 }, compositionRule: "guarded-write+op:sub", variable: gw.binds.var ?? null, tier: "supported", basis: "a guarded write whose value is a subtraction", source: "COMPOSITION" });
-        composedKinds.add("debit-form");
-      } else if (defNode?.op === "op:add" && !composedKinds.has("credit-form")) {
+        composed = true;
+      } else if (defNode?.op === "op:add") {
         drafts.push({ entityId: pdg.entityId, kind: "credit-form", motifs: ["guarded-write"], features: { "motif:guarded-write": 1, "op:add": 1 }, compositionRule: "guarded-write+op:add", variable: gw.binds.var ?? null, tier: "supported", basis: "a guarded write whose value is an addition", source: "COMPOSITION" });
-        composedKinds.add("credit-form");
+        composed = true;
       }
     }
-    const composed = composedKinds.size > 0;
     // Composition 2: an acquire with no release after it is a leak candidate (speculative).
     if (!byMotif.has("resource-acquire-release") && pdg.nodes.some((n) => n.kind === "acquire")) {
       drafts.push({ entityId: pdg.entityId, kind: "leak-candidate", motifs: ["resource-acquire-release"], features: { "motif:resource-acquire-release": 1 }, compositionRule: "acquire-without-release", variable: null, tier: "speculative", basis: "an acquire call with no matching release call on any path the graph shows", source: "COMPOSITION" });
+      composed = true;
     }
-    // Plain motif concepts: every matched motif except guarded-write when a composed form consumed it.
+    // Plain motif concepts: every matched motif except the one a composed form consumed.
     for (const [motif, count] of byMotif) {
       if (composed && motif === "guarded-write") continue;
+      if (composed && motif === "resource-acquire-release") continue;
       drafts.push(motifDraft(pdg.entityId, motif, count, ops));
     }
   }

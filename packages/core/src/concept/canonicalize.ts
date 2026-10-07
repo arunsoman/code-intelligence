@@ -1,5 +1,4 @@
-// Canonical form and hashing (plan §1). A concept's identity across revisions is its canonical motif
-// hash: a hash over the sorted motif set and the sorted feature histogram, deliberately ignoring which
+ash: a hash over the sorted motif set and the sorted feature histogram, deliberately ignoring which
 // function it lives in and any identifier names. Two functions that compute different things in the
 // same shape share the hash — that is the point: names are attached per anchored concept, and the
 // anchored members decide which business meaning the name refers to.

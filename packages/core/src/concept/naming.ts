@@ -85,38 +85,32 @@ export async function nameConcepts(
   }
 
   // Architecture names: the model names packages (few, stable) once each through the cache; every
-  // other node keeps its mechanical name. The cache is checked first, so a fully cached run calls
-  // the model not at all.
-  const done = new Set<string>();
-  const pendingPkgs: { node: ArchConcept; key: string }[] = [];
-  for (const p of opts.arch) {
-    if (p.kind !== "package") continue;
-    const key = cacheKey(p.id, `arch|${p.path}`);
-    const hit = store.namingCacheGet(key);
-    if (hit) { cacheHits++; archOut.push({ ...p, name: hit.label }); done.add(p.id); continue; }
-    pendingPkgs.push({ node: p, key });
-  }
-  if (pendingPkgs.length) {
+  // other node keeps its mechanical name.
+  const archPending: ArchConcept[] = opts.arch.filter((n) => n.kind === "package");
+  if (archPending.length) {
     let names: { conceptId: string; name: string }[] | null = null;
     try {
       names = await opts.adapter.name({
         purpose: "NAME_ARCH",
-        question: JSON.stringify({ packages: pendingPkgs.map(({ node }) => ({ conceptId: node.id, path: node.path, modules: node.memberEntityIds.length })) }),
-        items: pendingPkgs.map(({ node }) => ({ conceptId: node.id, kind: node.kind, features: { modules: node.memberEntityIds.length }, compositionRule: null, members: [{ entityId: node.id, name: node.name, file: node.path }] })),
+        question: JSON.stringify({ packages: archPending.map((p) => ({ conceptId: p.id, path: p.path, modules: p.memberEntityIds.length })) }),
+        items: archPending.map((p) => ({ conceptId: p.id, kind: p.kind, features: { modules: p.memberEntityIds.length }, compositionRule: null, members: [{ entityId: p.id, name: p.name, file: p.path }] })),
       });
     } catch { names = null; }
     const got = new Map((names ?? []).map((n) => [n.conceptId, n.name]));
-    for (const { node: p, key } of pendingPkgs) {
+    for (const p of opts.arch) {
+      if (p.kind !== "package") { archOut.push(p); continue; }
+      const key = cacheKey(p.id, `arch|${p.path}`);
+      const hit = store.namingCacheGet(key);
       const model = got.get(p.id);
+      if (hit) { cacheHits++; archOut.push({ ...p, name: hit.label }); continue; }
       const label = model && model.trim() ? model.trim().slice(0, 60) : p.name;
-      const namedBy = model && model.trim() ? "MODEL" : "FALLBACK";
-      if (namedBy === "MODEL") named++; else fallback++;
-      store.namingCachePut(key, label, namedBy);
+      if (model && model.trim()) named++; else fallback++;
+      store.namingCachePut(key, label, model && model.trim() ? "MODEL" : "FALLBACK");
       archOut.push({ ...p, name: label });
-      done.add(p.id);
     }
+  } else {
+    for (const p of opts.arch) archOut.push(p);
   }
-  for (const p of opts.arch) if (!done.has(p.id)) archOut.push(p);
 
   const order = new Map([...out.map((c) => c.id), ...opts.concepts.map((c) => c.id)].map((id, i) => [id, i]));
   out.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));

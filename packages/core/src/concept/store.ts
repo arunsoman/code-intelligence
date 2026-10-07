@@ -7,7 +7,7 @@ import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { migrate } from "./migrations.ts";
 import { clearHistoryCache } from "./gitinfo.ts";
-import { ChartOutput, type AnalysisBatch, type ChartOutput as ChartPlan, type Claim, type ConceptCard, type Entity, type EvidenceRef, type Fact, type JobView, type Relationship, type Verdict } from "@cie/schema";
+import type { AnalysisBatch, Claim, ConceptCard, Entity, EvidenceRef, Fact, JobView, Relationship, Verdict } from "@cie/schema";
 
 export interface RevisionRow { id: string; repoRoot: string; gitHead: string | null; createdAt: string; analyzerVersion: string; diagnostics: AnalysisBatch["diagnostics"]; fileCount: number }
 
@@ -16,20 +16,6 @@ export class DeltaBaseError extends Error {}
 export class Store {
   readonly db: DatabaseSync;
   readonly path: string;
-
-  /** Reuse a validated generated layout only for the exact evidence bundle and question. */
-  generatedChartPlan(cacheKey: string, bundleId: string, question: string): ChartPlan | null {
-    const row = this.db.prepare("select plan_json from generated_chart_plans where cache_key = ? and bundle_id = ? and question = ?").get(cacheKey, bundleId, question) as { plan_json: string } | undefined;
-    if (!row) return null;
-    try { const parsed = ChartOutput.safeParse(JSON.parse(row.plan_json)); return parsed.success ? parsed.data : null; } catch { return null; }
-  }
-
-  saveGeneratedChartPlan(cacheKey: string, bundleId: string, question: string, plan: ChartPlan): void {
-    const parsed = ChartOutput.safeParse(plan);
-    if (!parsed.success) return;
-    this.db.prepare("insert into generated_chart_plans(cache_key, bundle_id, question, plan_json, created_at) values (?,?,?,?,?) on conflict(cache_key) do update set bundle_id=excluded.bundle_id, question=excluded.question, plan_json=excluded.plan_json, created_at=excluded.created_at")
-      .run(cacheKey, bundleId, question, JSON.stringify(parsed.data), new Date().toISOString());
-  }
 
   constructor(path = process.env.CIE_DB ?? ".cie/cie.db") {
     this.path = path;
@@ -64,6 +50,12 @@ export class Store {
       create table if not exists overrides(repo_root text not null, entity_id text not null, mode text not null, updated_at text not null, primary key(repo_root, entity_id));
       create table if not exists jobs(id text primary key, idem text unique, kind text not null, state text not null, params text not null, json text not null, created_at text not null);
       create table if not exists repo_policy(repo_root text primary key, allow_hosted integer not null, updated_at text not null);
+      create table if not exists pdgs(revision text not null, entity_id text not null, body_hash text not null, json text not null, primary key(revision, entity_id));
+      create table if not exists semantic_concepts(revision text not null, id text not null, kind text not null, json text not null, primary key(revision, id));
+      create table if not exists semantic_concept_versions(repo_root text not null, version integer not null, revision text not null, created_at text not null, provider text not null, json text not null, primary key(repo_root, version));
+      create table if not exists arch_nodes(revision text not null, id text not null, kind text not null, parent text, json text not null, primary key(revision, id));
+      create table if not exists cross_axis_links(revision text not null, concept_id text not null, arch_node_id text not null, json text not null, primary key(revision, concept_id, arch_node_id));
+      create table if not exists naming_cache(cache_key text primary key, label text not null, named_by text not null, created_at text not null);
     `);
     migrate(this.db);
   }
@@ -260,6 +252,83 @@ export class Store {
     const r = this.db.prepare("select json from concept_versions where repo_root = ? and version = ?").get(repoRoot, version) as any;
     return r ? JSON.parse(r.json) : null;
   }
+
+  // ---- concept hierarchy (dual-axis): graphs, semantic concepts, architecture, links, name cache ----
+  pdgs(rev: string): any[] {
+    return (this.db.prepare("select json from pdgs where revision = ? order by rowid").all(rev) as any[]).map((r) => JSON.parse(r.json));
+  }
+
+  /** The whole hierarchy of one revision, written in one transaction, plus an immutable version row. */
+  replaceSemanticConcepts(rev: string, payload: {
+    concepts: unknown[]; invariants: unknown[]; arch: unknown[];
+    links: { conceptId: string; archNodeId: string; revision: string }[];
+    snapshot: object;
+  }, provider = "unknown"): number {
+    return this.tx(() => {
+      this.db.prepare("delete from semantic_concepts where revision = ?").run(rev);
+      this.db.prepare("delete from arch_nodes where revision = ?").run(rev);
+      this.db.prepare("delete from cross_axis_links where revision = ?").run(rev);
+      for (const c of payload.concepts) {
+        const r = c as { id: string; kind: string };
+        this.db.prepare("insert into semantic_concepts values (?,?,?,?)").run(rev, r.id, r.kind, JSON.stringify(c));
+      }
+      for (const a of payload.arch) {
+        const r = a as { id: string; kind: string; parent: string | null };
+        this.db.prepare("insert into arch_nodes values (?,?,?,?,?)").run(rev, r.id, r.kind, r.parent, JSON.stringify(a));
+      }
+      for (const l of payload.links) {
+        this.db.prepare("insert or ignore into cross_axis_links values (?,?,?,?)").run(rev, l.conceptId, l.archNodeId, JSON.stringify(l));
+      }
+      const root = (this.db.prepare("select repo_root from revisions where id = ?").get(rev) as any)?.repo_root ?? "";
+      const last = Number((this.db.prepare("select max(version) as v from semantic_concept_versions where repo_root = ?").get(root) as any)?.v ?? 0);
+      this.db.prepare("insert into semantic_concept_versions values (?,?,?,?,?,?)").run(root, last + 1, rev, new Date().toISOString(), provider, JSON.stringify(payload.snapshot));
+      return last + 1;
+    });
+  }
+  semanticConcepts(rev: string): any[] {
+    return (this.db.prepare("select json from semantic_concepts where revision = ? order by rowid").all(rev) as any[]).map((r) => JSON.parse(r.json));
+  }
+  semanticConceptVersions(repoRoot: string): { version: number; revision: string; createdAt: string; provider: string; concepts: number }[] {
+    return (this.db.prepare("select version, revision, created_at, provider, json from semantic_concept_versions where repo_root = ? order by version desc").all(repoRoot) as any[])
+      .map((r) => { const snap = JSON.parse(r.json) as { concepts?: unknown[] }; return { version: r.version, revision: r.revision, createdAt: r.created_at, provider: r.provider, concepts: snap.concepts?.length ?? 0 }; });
+  }
+  /** The immutable snapshot of the newest version recorded at or before the given revision, if any. */
+  latestSemanticVersionSnapshot(revision: string): Record<string, unknown> | null {
+    const root = (this.db.prepare("select repo_root from revisions where id = ?").get(revision) as any)?.repo_root;
+    if (!root) return null;
+    const r = this.db.prepare("select json from semantic_concept_versions where repo_root = ? order by version desc limit 1").get(root) as any;
+    return r ? JSON.parse(r.json) : null;
+  }
+  semanticConceptVersion(repoRoot: string, version: number): { concepts: unknown[]; invariants: unknown[]; surfaces: unknown[]; crossPackage: unknown[] } | null {
+    const r = this.db.prepare("select json from semantic_concept_versions where repo_root = ? and version = ?").get(repoRoot, version) as any;
+    return r ? JSON.parse(r.json) : null;
+  }
+  archNodes(rev: string): any[] {
+    return (this.db.prepare("select json from arch_nodes where revision = ? order by rowid").all(rev) as any[]).map((r) => JSON.parse(r.json));
+  }
+  crossAxisLinks(rev: string): { conceptId: string; archNodeId: string; revision: string }[] {
+    return (this.db.prepare("select json from cross_axis_links where revision = ?").all(rev) as any[]).map((r) => JSON.parse(r.json));
+  }
+  putPdgs(rev: string, pdgs: unknown[]) {
+    this.tx(() => {
+      this.db.prepare("delete from pdgs where revision = ?").run(rev);
+      const ins = this.db.prepare("insert into pdgs values (?,?,?,?)");
+      for (const p of pdgs) {
+        const r = p as { entityId: string; bodyHash: string };
+        ins.run(rev, r.entityId, r.bodyHash, JSON.stringify(p));
+      }
+    });
+  }
+  namingCacheGet(key: string): { label: string; namedBy: "MODEL" | "FALLBACK" } | null {
+    const r = this.db.prepare("select label, named_by from naming_cache where cache_key = ?").get(key) as any;
+    return r ? { label: r.label, namedBy: r.named_by } : null;
+  }
+  namingCachePut(key: string, label: string, namedBy: "MODEL" | "FALLBACK") {
+    this.db.prepare("insert into naming_cache values (?,?,?,?) on conflict(cache_key) do update set label=excluded.label, named_by=excluded.named_by, created_at=excluded.created_at")
+      .run(key, label, namedBy, new Date().toISOString());
+  }
+  /** Naming cache size, for ops screens and tests. */
+  namingCacheCount(): number { return Number((this.db.prepare("select count(*) as n from naming_cache").get() as any).n); }
 
   // ---- claims & verdicts ----
   putClaim(c: Claim, actor = "system", event = "gate") {
