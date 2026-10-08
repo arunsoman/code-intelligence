@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { JobView, PrAnalysisView, PublicationReceipt } from "@cie/schema";
 import { call } from "./api.ts";
+import { Modal } from "./Modal.tsx";
 
 /**
  * "Pull requests" panel (F02, §12). The browser never trusts the gate: it shows the decision with its binding hash,
@@ -88,24 +89,11 @@ export function PrPanel({ repoPath, onClose }: { repoPath: string; onClose: () =
     else { setNotice(`disposition recorded; the gate was re-evaluated${r.value.decisionId ? "" : " (no decision to re-evaluate)"}`); void refresh(); }
   };
 
-  // lock page scroll behind the dialog (UX-13, same as the other panels)
-  useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = prev; };
-  }, []);
-  const onKey = (e: React.KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-
   const d = view?.decision;
   const statusChip = d ? (d.status === "PASS" ? "chip pass" : d.status === "FAIL" ? "chip fail" : "chip incomplete") : "chip";
 
   return (
-    <div className="modal-backdrop" onKeyDown={onKey}>
-      <div className="modal pr-panel" role="dialog" aria-modal="true" aria-label="Pull request review">
-        <div className="modal-head">
-          <h2>Pull request review</h2>
-          <button className="link push" onClick={onClose} aria-label="Close the pull-request panel">Close ✕</button>
-        </div>
+    <Modal title="Pull request review" onClose={onClose} className="pr-panel">
 
         <section className="pr-controls" aria-label="Open a pull request">
           <label htmlFor="pr-num">Pull-request number</label>
@@ -281,7 +269,6 @@ export function PrPanel({ repoPath, onClose }: { repoPath: string; onClose: () =
             </ul>
           </section>
         )}
-      </div>
-    </div>
+    </Modal>
   );
 }

@@ -5,7 +5,7 @@ import { RepositoryGit } from "./RepositoryGit.tsx";
 import type { RepositoryGitInfo } from "@cie/schema";
 import { buttonFeedback } from "./button.ts";
 import { Canvas } from "./Canvas.tsx";
-import { ChatPanel, type Message } from "./ChatPanel.tsx";
+import { ChatPanel, type Message, type MessageAlt } from "./ChatPanel.tsx";
 import { ModelMenu } from "./ModelMenu.tsx";
 import { CanvasSkeleton, Loading } from "./Skeleton.tsx";
 import { COMPOSING_CAPTION, EMPTY_NO_INDEX, canvasPhase, emptyStageCopy } from "./loading.ts";
@@ -19,7 +19,7 @@ import { Consequences } from "./Consequences.tsx";
 import { TerrainView } from "./TerrainView.tsx";
 import { MatrixView } from "./MatrixView.tsx";
 import { JobBar } from "./JobBar.tsx";
-import { VisualsGallery, type CatalogEntry } from "./VisualsGallery.tsx";
+import { VisualsGallery, SYSTEM_CHARTS, type CatalogEntry } from "./VisualsGallery.tsx";
 import { ProviderWizard } from "./ProviderWizard.tsx";
 import { FolderPicker } from "./FolderPicker.tsx";
 import { DefectPanel } from "./DefectPanel.tsx";
@@ -35,6 +35,7 @@ import { SearchPanel } from "./SearchPanel.tsx";
 import { HotspotPanel } from "./HotspotPanel.tsx";
 import { InsightsPanel } from "./InsightsPanel.tsx";
 import { InvestigationPanel } from "./InvestigationPanel.tsx";
+import { Modal } from "./Modal.tsx";
 import { overlayMarks } from "./mapoverlays.ts";
 import { RuntimeReplay, type ReplayFrame } from "./RuntimeReplay.tsx";
 import { EpistemicSummary } from "./EpistemicSummary.tsx";
@@ -69,6 +70,8 @@ export function App() {
   }, [highContrast]);
   const [info, setInfo] = useState<StatusInfo | null>(null);
   const [repoPath, setRepoPath] = useState("");
+  const selectedRepoRef = useRef("");
+  const repoGeneration = useRef(0);
   const [view, setView] = useState<ViewSpec | null>(null);
   const [claimMap, setClaimMap] = useState<Record<string, Claim>>({});
   const [selection, setSelection] = useState<string[]>([]); // view node ids (symbol identity)
@@ -118,6 +121,13 @@ export function App() {
   const [terrainWeights, setTerrainWeights] = useState<Record<string, number>>({});
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [announcement, setAnnouncement] = useState("");
+  // UX-04: collapsible side pane
+  const [sideCollapsed, setSideCollapsed] = useState(false);
+  // UX-07: repo section expand/collapse, auto-collapses once when indexed
+  const [repoExpanded, setRepoExpanded] = useState(true);
+  const [repoAutoCollapsed, setRepoAutoCollapsed] = useState(false);
+  // UX-12: view controls collapsible
+  const [viewCtrlOpen, setViewCtrlOpen] = useState(true);
   const [exceptions, setExceptions] = useState<ExceptionRow[]>([]);
   const [browsingCards, setBrowsingCards] = useState(false);
   // Two ways to discover concepts; the choice is remembered. They keep separate stores and never overwrite each other.
@@ -129,24 +139,95 @@ export function App() {
   const [cardPins, setCardPins] = useState<{ title: string; ids: string[] } | null>(null);
   const [audit, setAudit] = useState<{ events: AuditEvent[]; chain: { ok: boolean } } | null>(null);
 
+  const closeAllDialogs = useCallback(() => {
+    setGalleryOpen(false);
+    setProviderWizardOpen(false);
+    setDefectsOpen(false);
+    setPrOpen(false);
+    setProfilesOpen(false);
+    setTasksOpen(false);
+    setBuildOpen(false);
+    setCampaignsOpen(false);
+    setReleasesOpen(false);
+    setBoardOpen(false);
+    setLensOpen(false);
+    setSearchOpen(false);
+    setHotspotsOpen(false);
+    setInsightsOpen(false);
+    setInvestigationsOpen(false);
+    setJobsOpen(false);
+    setBrowsingCards(false);
+    setBrowsingHierarchy(false);
+    setOutlineOpen(false);
+    setAudit(null);
+    setPicking(false);
+  }, []);
+
+  const openDialog = useCallback((opener: () => void) => {
+    closeAllDialogs();
+    opener();
+  }, [closeAllDialogs]);
+
   const log = useCallback((kind: string, detail?: string) => setEvents((e) => [...e, { kind, at: now(), detail }].slice(-200)), []);
   const say = useCallback((role: Message["role"], text: string, isError = false, thinking?: string) => setMessages((m) => [...m, { role, text, at: now(), error: isError, ...(thinking ? { thinking } : {}) }].slice(-200)), []);
   const mergeClaims = useCallback((cs: Claim[]) => setClaimMap((m) => ({ ...m, ...Object.fromEntries(cs.map((c) => [c.draft.id, c])) })), []);
 
-  const refresh = useCallback(async () => {
-    const [s, l] = await Promise.all([call<StatusInfo>("C01", "status"), call<typeof workspaces>("C13", "listWorkspaces")]);
+  const refresh = useCallback(async (repoRoot = selectedRepoRef.current) => {
+    const requestedRoot = repoRoot || undefined;
+    const [s, l] = await Promise.all([
+      call<StatusInfo>("C01", "status", requestedRoot ? { repoRoot: requestedRoot } : {}),
+      call<typeof workspaces>("C13", "listWorkspaces"),
+    ]);
+    if (selectedRepoRef.current !== repoRoot) return; // Ignore responses for a repository the user has since left.
     if (s.ok) {
       setInfo(s.value);
-      if (s.value.revision) { setRepoPath((p) => p || s.value.revision!.repoRoot); const c = await call<ConceptCard[]>("C11", "listConcepts", { revision: s.value.revision.id }); if (c.ok) setCards(c.value); const h = await call<ConceptHierarchyView>("C11", "conceptHierarchy", { revision: s.value.revision.id, summary: true }); if (h.ok) setHierarchyConcepts(h.value.version > 0 ? (h.value.summary?.concepts ?? 0) : 0); }
+      const rev = s.value.revision;
+      if (rev) {
+        if (!selectedRepoRef.current) { selectedRepoRef.current = rev.repoRoot; setRepoPath((p) => p || rev.repoRoot); }
+        else if (selectedRepoRef.current === repoRoot && selectedRepoRef.current !== rev.repoRoot) {
+          selectedRepoRef.current = rev.repoRoot;
+          setRepoPath(rev.repoRoot);
+        }
+        const [c, h] = await Promise.all([
+          call<ConceptCard[]>("C11", "listConcepts", { revision: rev.id }),
+          call<ConceptHierarchyView>("C11", "conceptHierarchy", { revision: rev.id, summary: true }),
+        ]);
+        if (selectedRepoRef.current !== rev.repoRoot) return;
+        setCards(c.ok ? c.value : []);
+        setHierarchyConcepts(h.ok && h.value.version > 0 ? (h.value.summary?.concepts ?? 0) : 0);
+      } else {
+        setCards([]);
+        setHierarchyConcepts(0);
+      }
     } else setError(s.error.message);
     if (l.ok) setWorkspaces(l.value);
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
 
+  const clearRepositoryContext = () => {
+    repoGeneration.current += 1;
+    setBusy(null); setError(null);
+    setView(null); setClaimMap({}); setSelection([]); setCellSel([]); setLevel(DEFAULT_LEVEL);
+    setCards([]); setHierarchyConcepts(0); setMessages([]); setEvents([]); setDrawer(null); setCode(null);
+    setStale(null); setChanges(null); setCardPins(null); setEditorFocus([]); setDismissed(new Set());
+    setWs({ version: 0 }); setWsName(""); setExceptions([]); setReplay(null); setOverlays(null);
+    setInfo((current) => current ? { ...current, revision: null, concepts: 0, tests: null, allowHosted: false } : null);
+  };
+  const normalizeRepoPath = (path: string) => path.trim().replace(/[\\/]+$/, "") || path.trim();
+  const selectRepository = (path: string, loadExisting = false) => {
+    const root = normalizeRepoPath(path);
+    setRepoPath(path);
+    if (root === selectedRepoRef.current) { if (loadExisting && root) void refresh(root); return; }
+    selectedRepoRef.current = root;
+    clearRepositoryContext();
+    setNotice(root ? "Repository changed. Previous project context was cleared." : null);
+    if (loadExisting && root) void refresh(root);
+  };
+
   // F01: Ctrl/Cmd+K opens cross-repository search from anywhere in the app.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && !e.defaultPrevented) { e.preventDefault(); setSearchOpen(true); }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && !e.defaultPrevented) { e.preventDefault(); openDialog(() => setSearchOpen(true)); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -234,15 +315,26 @@ export function App() {
     if (j.state === "SUCCEEDED") {
       const warnings = j.result?.warnings ?? [];
       if (j.kind === "index") {
-        const v = j.result!.value as RevisionInfo;
-        setNotice(`Indexed ${v.fileCount} files at ${v.id}${warnings.length ? ` — ${warnings.length} warning(s)` : ""}`);
+        const v = j.result!.value as RevisionInfo & { delta?: { mode: string; changed: number; removed: number; of: number } };
+        const requestedRoot = normalizeRepoPath(j.params.repoPath ?? "");
+        const belongsToSelectedRepo = requestedRoot && requestedRoot === selectedRepoRef.current;
+        if (requestedRoot && requestedRoot === selectedRepoRef.current && v.repoRoot !== selectedRepoRef.current) {
+          selectedRepoRef.current = v.repoRoot;
+          setRepoPath(v.repoRoot);
+        }
+        if (belongsToSelectedRepo) {
+          const incremental = warnings.find((warning) => /^(Incremental:|All files unchanged)/.test(warning));
+          setNotice(incremental ?? `Indexed ${v.fileCount} files at ${v.id}${warnings.length ? ` — ${warnings.length} warning(s)` : ""}`);
+        }
         log("INDEX", v.id);
       } else if (j.kind === "concepts") {
+        if (j.params.revision !== info?.revision?.id) { await refresh(); return; }
         const v = j.result!.value as { cards: ConceptCard[]; dropped: string[]; provider: string };
         setCards(v.cards);
         setNotice(`Extracted ${v.cards.length} concept card(s) with ${v.provider}${v.dropped.length ? `; ${v.dropped.length} dropped (ungrounded)` : ""}.${warnings.length ? ` ${warnings[0]}` : ""}`);
         log("CONCEPTS", String(v.cards.length));
       } else if (j.kind === "concept-hierarchy") {
+        if (j.params.revision !== info?.revision?.id) { await refresh(); return; }
         const v = j.result!.value as ConceptHierarchyView;
         setHierarchyConcepts(v.concepts.length);
         setNotice(`Built the concept hierarchy: ${hierarchySummary(v)}.${warnings.length ? ` ${warnings[0]}` : ""}`);
@@ -251,8 +343,17 @@ export function App() {
         setNotice(`${j.kind} completed.${warnings.length ? ` ${warnings[0]}` : ""}`);
       }
       await refresh();
-    } else if (j.state === "CANCELLED") setNotice(`${j.kind === "index" ? "Indexing" : j.kind === "concept-hierarchy" ? "Concept hierarchy build" : "Concept extraction"} cancelled. Nothing from that run was saved.`);
-    else setError(`${j.error?.code ?? "FAILED"}: ${j.message}`);
+    } else if (j.state === "CANCELLED") {
+      const belongsToSelectedRepo = j.kind === "index"
+        ? normalizeRepoPath(j.params.repoPath ?? "") === selectedRepoRef.current
+        : j.params.revision === info?.revision?.id;
+      if (belongsToSelectedRepo) setNotice(`${j.kind === "index" ? "Indexing" : j.kind === "concept-hierarchy" ? "Concept hierarchy build" : "Concept extraction"} cancelled. Nothing from that run was saved.`);
+    } else {
+      const belongsToSelectedRepo = j.kind === "index"
+        ? normalizeRepoPath(j.params.repoPath ?? "") === selectedRepoRef.current
+        : j.params.revision === info?.revision?.id;
+      if (belongsToSelectedRepo) setError(`${j.error?.code ?? "FAILED"}: ${j.message}`);
+    }
   };
   const syncJobs = async () => {
     const r = await call<JobView[]>("C07", "listJobs", { limit: 10 });
@@ -269,7 +370,8 @@ export function App() {
   }); // eslint-disable-line react-hooks/exhaustive-deps
   const startJob = async (kind: "index" | "concepts" | "concept-hierarchy") => {
     setError(null); setNotice(null);
-    const r = await call<JobView>("C07", "enqueue", kind === "index" ? { kind, repoPath } : { kind, revision: info?.revision?.id }, uuid());
+    if (kind === "index") setNotice(info?.revision?.repoRoot === selectedRepoRef.current && !!selectedRepoRef.current ? "Checking the repository for file changes; unchanged parses will be reused…" : "Building an initial index for this repository…");
+    const r = await call<JobView>("C07", "enqueue", kind === "index" ? { kind, repoPath: repoPath.trim() } : { kind, revision: info?.revision?.id }, uuid());
     if (!r.ok) return setError(failMsg(r));
     await syncJobs();
   };
@@ -304,11 +406,68 @@ export function App() {
     if (!keepSelection) { setLevel(v.level ?? DEFAULT_LEVEL); setFitTick((t) => t + 1); setChanges(null); }
   }
 
+  type ChatChartOption = { code: string; formId: string; name: string; blurb: string; example: string; needs: string[] };
+  const availableChatCharts = (catalog: CatalogEntry[]): ChatChartOption[] => {
+    const testsAvailable = catalog.some((entry) => entry.formId === "TestConfidence" && entry.available);
+    const system = SYSTEM_CHARTS.filter((chart) => chart.formId !== "TestConfidence" || testsAvailable);
+    const byCode = new Map<string, ChatChartOption>();
+    for (const chart of [...system, ...catalog.filter((entry) => entry.available)]) byCode.set(chart.code, chart);
+    return [...byCode.values()];
+  };
+
+  const displayAlternatives = (question: string, routeAlternatives: { form: string; kind?: string; name: string }[] = [], charts: ChatChartOption[] = SYSTEM_CHARTS) => {
+    const presets = charts.map((chart) => ({
+      form: chart.formId,
+      name: chart.name,
+      question,
+      prompt: `${question}\n\nRender this same topic as a ${chart.name}. ${chart.example}`,
+    }));
+    const known = new Set(presets.map((option) => option.name));
+    const routed = routeAlternatives.filter((option) => !known.has(option.name)).map((option) => ({ ...option, question }));
+    return [...presets, ...routed];
+  };
+
+  const appendChartMessage = (question: string, response: string, message: Omit<Message, "role" | "alternatives">, routeAlternatives: { form: string; kind?: string; name: string }[] = []) => {
+    const id = uuid();
+    const alternatives = displayAlternatives(question, routeAlternatives);
+    setMessages((current) => [...current, { ...message, id, role: "assistant", alternatives }].slice(-200));
+    const generation = repoGeneration.current;
+    const revision = info?.revision?.id;
+    void call<CatalogEntry[]>("C19", "visuals", { revision }).then(async (catalogResult) => {
+      if (generation !== repoGeneration.current) return;
+      if (!catalogResult.ok) {
+        console.warn("[chart-recommendations] catalog request failed", { code: catalogResult.error.code, message: catalogResult.error.message });
+        return;
+      }
+      const charts = availableChatCharts(catalogResult.value);
+      const fallback = displayAlternatives(question, routeAlternatives, charts);
+      setMessages((current) => current.map((item) => item.id === id ? { ...item, alternatives: fallback } : item));
+      const result = await call<{ codes: string[]; source: "llm" | "unavailable"; model: string | null; reason?: string }>("C19", "recommendCharts", {
+        question, response, revision,
+        options: charts.map((chart) => ({ code: chart.code, name: chart.name, description: chart.blurb, form: chart.formId, example: chart.example, needs: chart.needs })),
+      });
+      if (!result.ok) {
+        console.warn("[chart-recommendations] request failed", { code: result.error.code, message: result.error.message, optionCount: charts.length });
+        return;
+      }
+      console.info("[chart-recommendations] completed", { requestId: result.metadata.requestId, model: result.value.model, source: result.value.source, reason: result.value.reason, optionCount: charts.length, optionCodes: charts.map((chart) => chart.code), selectedCount: result.value.codes.length, selectedCodes: result.value.codes });
+      if (generation !== repoGeneration.current || result.value.source !== "llm") return;
+      const byCode = new Map(charts.map((chart) => [chart.code, chart]));
+      const ranked = result.value.codes.flatMap((code) => {
+        const chart = byCode.get(code);
+        return chart ? [{ form: chart.formId, name: chart.name, question, prompt: `${question}\n\nRender this same topic as a ${chart.name}. ${chart.example}` }] : [];
+      });
+      if (ranked.length) setMessages((current) => current.map((item) => item.id === id ? { ...item, alternatives: ranked } : item));
+    });
+  };
+
   const send = async (text: string) => {
+    const generation = repoGeneration.current;
     say("user", text);
     setBusy("Thinking…"); setError(null); setNotice(null);
     try {
       const r = await call<ConverseResult>("C15", "converse", { text, view, selection, revision: info?.revision?.id, pins, history: messages.slice(-6).map(({ role, text }) => ({ role, text })) });
+      if (generation !== repoGeneration.current) return;
       if (!r.ok) { say("assistant", failMsg(r), true); return; }
       const v = r.value;
       for (const w of r.metadata.warnings) say("assistant", `Note: ${w}`);
@@ -318,17 +477,23 @@ export function App() {
           for (const result of shown) mergeClaims(result.claims);
           const last = shown.at(-1);
           if (last?.view) adoptView(last.view, last.claims, false);
-          setMessages((m) => [...m, { role: "assistant", text: v.message, at: now(), results: v.results, ...(v.thinking ? { thinking: v.thinking } : {}) } as Message].slice(-200));
+          const summary = [v.message, ...v.results.flatMap((result) => result.view ? [result.title, result.view.caption, ...result.view.nodes.slice(0, 30).map((node) => `${node.label}: ${(node.notes ?? []).join(" ")}`)] : [result.title, result.message])].join("\n");
+          appendChartMessage(text, summary, { text: v.message, at: now(), results: v.results, ...(v.thinking ? { thinking: v.thinking } : {}) });
           log("ASK", text.slice(0, 80));
           break;
         }
-        case "view": adoptView(v.view, v.claims, !!view && view.id === v.view.id); setMessages((m) => [...m, { role: "assistant", text: v.message, at: now(), ...(v.thinking ? { thinking: v.thinking } : {}), ...(v.view.formId === "SemanticMap" ? { providerWizard: true } : {}) }].slice(-200)); log("ASK", text.slice(0, 80)); break;
+        case "view": {
+          adoptView(v.view, v.claims, !!view && view.id === v.view.id);
+          const summary = [v.message, v.view.caption, ...v.view.nodes.slice(0, 40).map((node) => `${node.label}: ${(node.notes ?? []).join(" ")}`), ...v.view.edges.slice(0, 40).map((edge) => `${edge.fromNodeId} ${edge.label ?? edge.kind} ${edge.toNodeId}`)].join("\n");
+          appendChartMessage(v.view.question, summary, { text: v.message, at: now(), ...(v.thinking ? { thinking: v.thinking } : {}), ...(v.view.formId === "SemanticMap" ? { providerWizard: true } : {}) }, v.view.route?.alternatives);
+          log("ASK", text.slice(0, 80)); break;
+        }
         case "explanation": mergeClaims(v.explanation.claims); setDrawer({ kind: "explain", data: v.explanation }); say("assistant", v.message); log("EXPLAIN", text.slice(0, 80)); break;
         case "zoom": setLevel((l) => v.direction === "overview" ? 1 : Math.max(0, Math.min(MAX_LEVEL, l + (v.direction === "in" ? 1 : -1)))); setFitTick((t) => t + 1); say("assistant", v.message); break;
         case "resume": say("assistant", v.message); await resume(v.workspaceId); break;
         case "message": say("assistant", v.message); break;
       }
-    } finally { setBusy(null); }
+    } finally { if (generation === repoGeneration.current) setBusy(null); }
   };
 
   const showChatResult = (result: ChatAnalysisResult) => {
@@ -367,16 +532,19 @@ export function App() {
     setDrawer({ kind: "inspect", title: vn.label, sub: `${vn.role ?? vn.kind}${vn.file ? ` · ${vn.file}` : ""}`, notes: [...(vn.notes ?? []), ...(mark ? [mark.summary, ...mark.notes] : [])], factors: vn.factors, claimIds: vn.claimIds, evidence: await evidence(evidenceIds), entityId: vn.entityRefs[0] });
     log("INSPECT", vn.label);
   };
-  const askForm = async (question: string, form: string, subject?: string, kind?: string) => {
-    say("user", question);
+  const askForm = async (question: string, form: string, subject?: string, kind?: string, chatLabel?: string, baseQuestion?: string) => {
+    const generation = repoGeneration.current;
+    say("user", chatLabel ?? question);
     setBusy("Composing view…"); setError(null); setNotice(null);
     try {
       const r = await call<{ view: ViewSpec; claims: Claim[] }>("C19", "ask", { question, revision: info?.revision?.id, form, subject, kind });
+      if (generation !== repoGeneration.current) return;
       if (!r.ok) { say("assistant", failMsg(r), true); return; }
       adoptView(r.value.view, r.value.claims, !!view && view.id === r.value.view.id);
-      say("assistant", `${r.value.view.formReason ?? ""} ${r.value.view.caption}`.trim());
+      const summary = [r.value.view.caption, ...r.value.view.nodes.slice(0, 40).map((node) => `${node.label}: ${(node.notes ?? []).join(" ")}`), ...r.value.view.edges.slice(0, 40).map((edge) => `${edge.fromNodeId} ${edge.label ?? edge.kind} ${edge.toNodeId}`)].join("\n");
+      appendChartMessage(baseQuestion ?? question, summary, { text: `${r.value.view.formReason ?? ""} ${r.value.view.caption}`.trim(), at: now() });
       log("ASK", `${form}: ${question.slice(0, 60)}`);
-    } finally { setBusy(null); }
+    } finally { if (generation === repoGeneration.current) setBusy(null); }
   };
   const inspectCell = async (cell: MatrixCell | null, row: MatrixAxis, col: MatrixAxis, additive = false) => {
     if (!view?.matrix) return;
@@ -498,42 +666,43 @@ export function App() {
   const phase = canvasPhase({ hasView: !!view, pending });
   const indexed = !!info?.revision;
 
+  // UX-07: auto-collapse repo section once after indexing completes
+  useEffect(() => {
+    if (indexed && !repoAutoCollapsed) {
+      setRepoExpanded(false);
+      setRepoAutoCollapsed(true);
+    }
+  }, [indexed, repoAutoCollapsed]);
+
   return (
     <div className="app">
-      {picking && <FolderPicker initialPath={repoPath} onClose={() => setPicking(false)} onPick={(p) => { setRepoPath(p); setPicking(false); log("PICK_REPO", p); }} />}
+      {picking && <FolderPicker initialPath={repoPath} onClose={() => setPicking(false)} onPick={(p) => { selectRepository(p, true); setPicking(false); log("PICK_REPO", p); }} />}
       {galleryOpen && <VisualsGallery revision={info?.revision?.id} onClose={() => setGalleryOpen(false)} onShow={(it: CatalogEntry, q: string) => { setGalleryOpen(false); void askForm(q, it.formId); }} />}
       {providerWizardOpen && <ProviderWizard revision={info?.revision?.id} onClose={() => setProviderWizardOpen(false)} />}
       {outlineOpen && <Outline rendered={rendered} level={level} onClose={() => setOutlineOpen(false)} onPick={(id) => { const n = rendered.nodes.find((x) => x.id === id); setOutlineOpen(false); if (n) void inspectNode(n); }} />}
       {browsingHierarchy && (
-        <ConceptHierarchyBrowser revision={info?.revision?.id} jobs={jobs} onShowJobs={() => setJobsOpen(true)} onClose={() => { setBrowsingHierarchy(false); void refresh(); }}
+        <ConceptHierarchyBrowser revision={info?.revision?.id} jobs={jobs} onShowJobs={() => openDialog(() => setJobsOpen(true))} onClose={() => { setBrowsingHierarchy(false); void refresh(); }}
           onAsk={(p) => { setCardPins(p); setBrowsingHierarchy(false); say("assistant", `Referring to “${p.title}” (${p.ids.length} element(s)). Ask your question; they are in the context.`); }} />
       )}
       {browsingCards && (
-        <ConceptBrowser revision={info?.revision?.id} jobs={jobs} onShowJobs={() => setJobsOpen(true)} onClose={() => { setBrowsingCards(false); void refresh(); }} onVerdict={verdict}
+        <ConceptBrowser revision={info?.revision?.id} jobs={jobs} onShowJobs={() => openDialog(() => setJobsOpen(true))} onClose={() => { setBrowsingCards(false); void refresh(); }} onVerdict={verdict}
           onAsk={(c) => { setCardPins({ title: c.title, ids: c.members.slice(0, 8) }); setBrowsingCards(false); say("assistant", `Referring to “${c.title}” (${c.members.length} element(s)). Ask your question; they are in the context.`); }} />
       )}
       {jobsOpen && (
-        <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setJobsOpen(false); }}>
-          <div className="modal" role="dialog" aria-modal="true" aria-label="Background work" tabIndex={-1} onKeyDown={(e) => { if (e.key === "Escape") setJobsOpen(false); }}>
-            <h2>Background work</h2>
-            <JobBar jobs={jobs} onCancel={(j) => void cancelJob(j)} />
-            {jobs.length === 0 ? <p className="muted">No jobs yet.</p> : (
-              <ul className="dirs" tabIndex={0} aria-label="Recent jobs">
-                {jobs.map((j) => <li key={j.id}><span className="mono">{j.kind}</span><span className="muted small">{j.state.toLowerCase()}{j.message ? ` — ${j.message}` : ""}</span></li>)}
-              </ul>
-            )}
-            <div className="modal-actions"><span className="muted small">Indexing and extraction run in the background; nothing is saved from a cancelled or interrupted run.</span><button onClick={() => setJobsOpen(false)}>Close</button></div>
-          </div>
-        </div>
+        <Modal title="Background work" onClose={() => setJobsOpen(false)} actions={<><span className="muted small">Indexing and extraction run in the background; nothing is saved from a cancelled or interrupted run.</span><button onClick={() => setJobsOpen(false)}>Done</button></>}>
+          <JobBar jobs={jobs} onCancel={(j) => void cancelJob(j)} />
+          {jobs.length === 0 ? <p className="muted">No jobs yet.</p> : (
+            <ul className="dirs" tabIndex={0} aria-label="Recent jobs">
+              {jobs.map((j) => <li key={j.id}><span className="mono">{j.kind}</span><span className="muted small">{j.state.toLowerCase()}{j.message ? ` — ${j.message}` : ""}</span></li>)}
+            </ul>
+          )}
+        </Modal>
       )}
       {audit && (
-        <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setAudit(null); }}>
-          <div className="modal" role="dialog" aria-modal="true" aria-label="Audit log" tabIndex={-1} onKeyDown={(e) => { if (e.key === "Escape") setAudit(null); }}>
-            <h2>Audit log <span className={`badge ${audit.chain.ok ? "fact" : "warn"}`}>{audit.chain.ok ? "chain intact" : "chain broken"}</span></h2>
-            <ul className="dirs" tabIndex={0} aria-label="Audit events">{audit.events.map((e) => <li key={e.seq}><span className="mono">{e.ts.slice(11, 19)} {e.action}</span><span className="muted small">{e.resource.slice(0, 40)}</span></li>)}</ul>
-            <div className="modal-actions"><span className="muted small">Local, hash-chained. Source code is never written here.</span><button onClick={() => setAudit(null)}>Close</button></div>
-          </div>
-        </div>
+        <Modal title="Audit log" onClose={() => setAudit(null)} actions={<><span className="muted small">Local, hash-chained. Source code is never written here.</span><button onClick={() => setAudit(null)}>Done</button></>}>
+          <p><span className={`badge ${audit.chain.ok ? "fact" : "warn"}`}>{audit.chain.ok ? "chain intact" : "chain broken"}</span></p>
+          <ul className="dirs" tabIndex={0} aria-label="Audit events">{audit.events.map((e) => <li key={e.seq}><span className="mono">{e.ts.slice(11, 19)} {e.action}</span><span className="muted small">{e.resource.slice(0, 40)}</span></li>)}</ul>
+        </Modal>
       )}
       <header>
         {defectsOpen && revision && <DefectPanel revision={revision} onClose={() => setDefectsOpen(false)} />}
@@ -570,37 +739,69 @@ export function App() {
         {hierarchyConcepts > 0 && <span className="chip">{hierarchyConcepts} hierarchy concepts</span>}
         {info?.tests && <span className="chip" title={`Loaded from ${info.tests.found.join(", ")}${info.tests.staleness.length ? `. ${info.tests.staleness.join("; ")}` : ""}`}>tests: {info.tests.tests.passed} pass · {info.tests.tests.failed} fail{info.tests.coverageLinePercent !== null ? ` · ${info.tests.coverageLinePercent}% covered` : ""}{info.tests.staleness.length ? " ⚠" : ""}</span>}
         {busy && <span className="chip busy" role="status">{busy}</span>}
-        <button className="secondary small push" accessKey="k" title="Cross-repository search (Ctrl+K): revision-bound text, symbol and regex search, then jump to definitions and references" aria-keyshortcuts="Ctrl+K" onClick={() => setSearchOpen(true)}>Search</button>
-        <button className="secondary small" onClick={() => setGalleryOpen(true)}>Visuals</button>
-        <button className="secondary small" disabled={!revision} onClick={() => setDefectsOpen(true)}>Defects</button>
-        <button className="secondary small" onClick={() => setPrOpen(true)} title="Analyse a pull request: changed-code findings, the quality gate, and publishing its status to GitHub">Pull requests</button>
-        <button className="secondary small" onClick={() => setHotspotsOpen(true)} title="Historical hotspots and change coupling: ranked from the repository's own git history, rename-aware, with the excluded commits listed and every rank explained down to the commits">Hotspots</button>
-        <button className="secondary small" onClick={() => setProfilesOpen(true)} title="Import a profile (V8 .cpuprofile or folded stacks), read hotspots per sample kind, correlate it to a recorded trace window, and compare under the error-population gate">Profiles</button>
-        <button className="secondary small" onClick={() => setTasksOpen(true)} title="F07: turn a defect report into a candidate patch, validate it against the original oracle in an isolated run, get a second-person approval, and publish one draft pull request on a CIE-owned branch. Nothing here merges.">Tasks</button>
-        <button className="secondary small" onClick={() => setBuildOpen(true)} title="Build feature: describe a change in plain language, clarify, plan, review the exact candidate, validate and deliver">Build feature</button>
-        <button className="secondary small" onClick={() => setCampaignsOpen(true)} title="Coordinated multi-repository changes: freeze a versioned population, plan a dependency-ordered canary rollout, review each child independently, run joint compatibility checks, and publish per-child draft PRs">Campaigns</button>
-        <button className="secondary small" onClick={() => setReleasesOpen(true)} title="Release scope: freeze what's in a release against a GitHub milestone. An issue added to the milestone later needs assessment before it counts, never silently in scope.">Releases</button>
-        <button className="secondary small" onClick={() => setBoardOpen(true)} title="Release Board: every feature request building toward a release, for dev and QA. QA approves a candidate as a genuinely different person, never a self-approval.">Release Board</button>
-        <button className="secondary small" onClick={() => { setLensReleaseId(undefined); setLensOpen(true); }} title="Release Lens: one evidence ledger for a release's go/no-go, viewed through a stakeholder lens. The lens only reorders rows; it never recomputes them.">Release Lens</button>
-        <button className="secondary small" disabled={!revision} onClick={() => setInsightsOpen(true)}>Insights</button>
-        <button className="secondary small" disabled={!revision} onClick={() => setInvestigationsOpen(true)}>Investigations</button>
-        <button className="link" onClick={openAudit}>Audit log</button>
-        <button className="secondary small" aria-pressed={highContrast} onClick={() => setHighContrast(!highContrast)}>High contrast</button>
+        <nav className="main-nav" aria-label="Main navigation" onClick={(e) => {
+          const target = e.target as HTMLElement;
+          const menu = target.closest("details.nav-menu");
+          if (target.closest("summary")) {
+            e.currentTarget.querySelectorAll("details[open]").forEach((item) => { if (item !== menu) item.removeAttribute("open"); });
+          } else if (target.closest("button")) {
+            e.currentTarget.querySelectorAll("details[open]").forEach((item) => item.removeAttribute("open"));
+          }
+        }}>
+          <details className="nav-menu"><summary>Explore</summary><div className="nav-popover">
+            <button className="nav-item" accessKey="k" title="Cross-repository search (Ctrl+K)" aria-keyshortcuts="Ctrl+K" onClick={() => openDialog(() => setSearchOpen(true))}>Search</button>
+            <button className="nav-item" onClick={() => openDialog(() => setGalleryOpen(true))}>Visuals</button>
+          </div></details>
+          <details className="nav-menu" aria-disabled={!indexed || undefined}><summary className={indexed ? "" : "nav-disabled"} title={indexed ? undefined : "Index a repository first"}>Health</summary><div className="nav-popover">
+            <button className="nav-item" disabled={!revision} onClick={() => openDialog(() => setDefectsOpen(true))}>Defects</button>
+            <button className="nav-item" onClick={() => openDialog(() => setHotspotsOpen(true))}>Hotspots</button>
+            <button className="nav-item" onClick={() => openDialog(() => setProfilesOpen(true))}>Profiles</button>
+            <button className="nav-item" disabled={!revision} onClick={() => openDialog(() => setInsightsOpen(true))}>Insights</button>
+            <button className="nav-item" disabled={!revision} onClick={() => openDialog(() => setInvestigationsOpen(true))}>Investigations</button>
+          </div></details>
+          <details className="nav-menu" aria-disabled={!indexed || undefined}><summary className={indexed ? "" : "nav-disabled"} title={indexed ? undefined : "Index a repository first"}>Work</summary><div className="nav-popover">
+            <button className="nav-item" onClick={() => openDialog(() => setPrOpen(true))} title="Analyse a pull request: changed-code findings, the quality gate, and publishing its status to GitHub">Pull requests</button>
+            <button className="nav-item" onClick={() => openDialog(() => setTasksOpen(true))}>Tasks</button>
+            <button className="nav-item" onClick={() => openDialog(() => setBuildOpen(true))} title="Describe a change, clarify, plan, review the candidate, validate and deliver">Build feature</button>
+            <button className="nav-item" onClick={() => openDialog(() => setCampaignsOpen(true))}>Campaigns</button>
+          </div></details>
+          <details className="nav-menu" aria-disabled={!indexed || undefined}><summary className={indexed ? "" : "nav-disabled"} title={indexed ? undefined : "Index a repository first"}>Releases</summary><div className="nav-popover">
+            <button className="nav-item" onClick={() => openDialog(() => setReleasesOpen(true))} title="Freeze what's in a release against a GitHub milestone">New release</button>
+            <button className="nav-item" onClick={() => openDialog(() => setBoardOpen(true))} title="Release work for development and QA">Release Board</button>
+            <button className="nav-item" onClick={() => openDialog(() => { setLensReleaseId(undefined); setLensOpen(true); })} title="Evidence ledger for release go/no-go">Release Lens</button>
+          </div></details>
+          <details className="nav-menu settings-menu"><summary aria-label="Settings" title="Settings">⚙</summary><div className="nav-popover">
+            <button className="nav-item" onClick={() => openDialog(openAudit)}>Audit log</button>
+            <button className="nav-item" aria-pressed={highContrast} onClick={() => setHighContrast(!highContrast)}>High contrast {highContrast ? "✓" : ""}</button>
+          </div></details>
+        </nav>
       </header>
 
-      <aside className="side" aria-label="Controls">
-        <section>
-          <h2>Repository</h2>
+      <aside className="side" aria-label="Controls" data-collapsed={sideCollapsed ? "true" : undefined}>
+        <button
+          className="side-toggle"
+          onClick={() => setSideCollapsed(!sideCollapsed)}
+          aria-label={sideCollapsed ? "Expand controls pane" : "Collapse controls pane"}
+          title={sideCollapsed ? "Expand" : "Collapse"}
+        >{sideCollapsed ? "▶" : "◀"}</button>
+        <section data-indexed={indexed ? "true" : undefined}>
+          <h2 style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+            Repository
+            {indexed && <span className="badge fact" title={`Indexed: ${info!.revision!.fileCount} files`}>✓ ready</span>}
+            <button className="link" style={{fontSize: '11px'}} onClick={() => setRepoExpanded(e => !e)} aria-expanded={repoExpanded} aria-controls="repo-section-body">{repoExpanded ? 'Hide' : 'Show'}</button>
+          </h2>
+          <div id="repo-section-body" hidden={!repoExpanded}>
           <JobBar jobs={jobs} onCancel={(j) => void cancelJob(j)} />
-          <label className="sr" htmlFor="repo">Absolute repository path</label>
-          <input id="repo" value={repoPath} onChange={(e) => setRepoPath(e.target.value)} placeholder="/absolute/path/to/ts/repo" />
+          <label htmlFor="repo">Repository path</label>
+          <input id="repo" value={repoPath} onChange={(e) => selectRepository(e.target.value)} onBlur={() => { if (selectedRepoRef.current) void refresh(selectedRepoRef.current); }} placeholder="" />
+          <p className="hint">Example: /home/user/my-project</p>
           <RepositoryGit key={repoPath} repoPath={repoPath} revision={info?.revision ?? null} disabled={!!busy || jobActive} onSwitch={async (git, branch, kind) => {
             await withBusy("Switching branch", async () => {
               const r = await call<RepositoryGitInfo>("C01", "switchBranch", { repoPath: git.repoRoot, branch, kind, expectedHead: git.head, expectedBranch: git.branch });
               if (!r.ok) throw new Error(r.error.message);
-              setView(null); setClaimMap({}); setSelection([]); setCellSel([]); setCards([]); setHierarchyConcepts(0); setMessages([]); setDrawer(null); setCode(null); setStale(null); setChanges(null); setCardPins(null); setEditorFocus([]);
-              setWs({ version: 0 }); setWsName("");
-              setInfo((s) => s ? { ...s, revision: null, concepts: 0 } : s);
+              selectedRepoRef.current = normalizeRepoPath(r.value.repoRoot);
+              setRepoPath(r.value.repoRoot);
+              clearRepositoryContext();
               setNotice(`Switched to ${r.value.branch}. Indexing the checkout…`);
               const indexed = await call<JobView>("C07", "enqueue", { kind: "index", repoPath: git.repoRoot });
               if (!indexed.ok) throw new Error(`Switched to ${branch}, but indexing could not start: ${indexed.error.message}. Click Index to retry.`);
@@ -608,8 +809,8 @@ export function App() {
             });
           }} />
           <div className="row">
-            <button className="secondary" onClick={() => setPicking(true)} disabled={!!busy || jobActive}>Browse…</button>
-            <button onClick={index} disabled={!repoPath || !!busy || jobActive} className={indexFb.className} aria-busy={indexFb["aria-busy"]} title="Index the selected repository">{indexFb.spinner && <span className="spinner" aria-hidden="true" />}Index</button>
+            <button className="secondary" onClick={() => openDialog(() => setPicking(true))} disabled={!!busy || jobActive}>Browse…</button>
+            <button onClick={index} disabled={!repoPath.trim() || !!busy || jobActive} className={indexFb.className} aria-busy={indexFb["aria-busy"]} title={info?.revision?.repoRoot === selectedRepoRef.current ? "Incrementally update the selected repository index" : "Build an initial index for the selected repository"}>{indexFb.spinner && <span className="spinner" aria-hidden="true" />}{info?.revision?.repoRoot === selectedRepoRef.current ? "Update index" : "Index"}</button>
           </div>
           <div className="segmented" role="radiogroup" aria-label="How to discover concepts">
             {(["hierarchy", "cards"] as const).map((m) => (
@@ -625,9 +826,12 @@ export function App() {
                 : "Not approved: answers use the offline model, and nothing leaves this machine."}</p>
             </div>
           )}
-          {hierarchyConcepts > 0 && <button className="secondary" onClick={() => setBrowsingHierarchy(true)}>Browse concept hierarchy</button>}
-          {cards.length > 0 && <button className="secondary" onClick={() => setBrowsingCards(true)}>Browse concept cards</button>}
+          {hierarchyConcepts > 0 && <button className="secondary" onClick={() => openDialog(() => setBrowsingHierarchy(true))}>Browse concept hierarchy</button>}
+          {cards.length > 0 && <button className="secondary" onClick={() => openDialog(() => setBrowsingCards(true))}>Browse concept cards</button>}
+          </div>
         </section>
+
+        <hr className="side-separator" aria-hidden />
 
         <section>
           <h2>Exceptions {exceptions.length > 0 && <small>({exceptions.length})</small>}</h2>
@@ -689,50 +893,59 @@ export function App() {
         {stale && !changes?.changed && (
           <div className="banner warn" role="alert">Source changed since this was saved ({stale.files.join(", ")}). {stale.evidence} evidence span(s) may no longer match — treat affected claims as stale.</div>
         )}
-        <div className="caption">
-          {view ? view.caption : phase === "composing" ? COMPOSING_CAPTION : indexed ? "" : EMPTY_NO_INDEX}
-          {view?.formReason && <div className="reason muted small">{view.formReason}</div>}
-          {view?.route && view.route.source !== "chosen" && (
-            <div className={`readas small ${view.route.confidence}`} role="group" aria-label="How your question was read">
-              <span><strong>I read this as: {view.route.name}.</strong> {view.route.confidence === "low" ? "I wasn't sure. " : ""}<span className="muted">{view.route.because}</span></span>
-              {view.route.confidence === "low" && view.route.alternatives.length === 0 && <button className="secondary small" onClick={() => setGalleryOpen(true)}>Choose a view…</button>}
-              {view.route.alternatives.length > 0 && <span className="alts"><span className="muted">Or show it as</span>{view.route.alternatives.map((a) => <button key={a.form + (a.kind ?? "")} className="secondary small" onClick={() => void askForm(view.question, a.form, undefined, a.kind)}>{a.name}</button>)}</span>}
+        {(view?.formId === "RuntimeOverlay" || (view && !view.matrix && !view.terrain) || view?.formId === "ChangeRisk" || view?.matrix || view?.consequences) && (
+          <details className="viewctrls" open={viewCtrlOpen} onToggle={(e) => setViewCtrlOpen((e.currentTarget as HTMLDetailsElement).open)}>
+            <summary className="viewctrls-toggle">View controls</summary>
+            <div className="viewctrls-body">
+              <div className="caption">
+                {view ? view.caption : phase === "composing" ? COMPOSING_CAPTION : indexed ? "" : EMPTY_NO_INDEX}
+                {view?.formReason && <div className="reason muted small">{view.formReason}</div>}
+                {view?.route && view.route.source !== "chosen" && (
+                  <div className={`readas small ${view.route.confidence}`} role="group" aria-label="How your question was read">
+                    <span><strong>I read this as: {view.route.name}.</strong> {view.route.confidence === "low" ? "I wasn't sure. " : ""}<span className="muted">{view.route.because}</span></span>
+                    {view.route.confidence === "low" && view.route.alternatives.length === 0 && <button className="secondary small" onClick={() => setGalleryOpen(true)}>Choose a view…</button>}
+                    {view.route.alternatives.length > 0 && <span className="alts"><span className="muted">Or show it as</span>{view.route.alternatives.map((a) => <button key={a.form + (a.kind ?? "")} className="secondary small" onClick={() => void askForm(view.question, a.form, undefined, a.kind)}>{a.name}</button>)}</span>}
+                  </div>
+                )}
+              </div>
+              {view?.formId === "RuntimeOverlay" && (
+                <div className="formctl" role="group" aria-label="Time window">
+                  <span className="muted small">Window</span>
+                  {["24h", "7d", "all"].map((w) => <button key={w} className={`secondary small ${view.params?.subject === w ? "on" : ""}`} aria-pressed={view.params?.subject === w} onClick={() => void askForm(view.question, "RuntimeOverlay", w)}>{w === "all" ? "everything" : `last ${w}`}</button>)}
+                </div>
+              )}
+              {view?.formId === "RuntimeOverlay" && <RuntimeReplay key={viewKey} revision={view.revision} onFrame={setReplay} />}
+              {view && !view.matrix && !view.terrain && (
+                <div className="formctl map-overlays" role="group" aria-label="Map overlays">
+                  <span className="muted small">Overlay</span>
+                  <button className={`secondary small ${showTestOverlay ? "on" : ""}`} aria-pressed={showTestOverlay} onClick={() => setShowTestOverlay((v) => !v)}>Test confidence</button>
+                  <button className={`secondary small ${showRuntimeOverlay ? "on" : ""}`} aria-pressed={showRuntimeOverlay} onClick={() => setShowRuntimeOverlay((v) => !v)}>Recorded runtime</button>
+                  {showRuntimeOverlay && <label className="small">Window <select aria-label="Overlay runtime window" value={overlayWindowName} onChange={(e) => setOverlayWindowName(e.target.value as typeof overlayWindowName)}><option value="24h">24 hours</option><option value="7d">7 days</option><option value="30d">30 days</option></select></label>}
+                  {(showTestOverlay || showRuntimeOverlay) && <button className="link small" disabled={overlayBusy} onClick={() => setOverlayRefresh((n) => n + 1)}>Refresh overlays</button>}
+                  {overlayBusy && <span className="muted small" role="status">Loading overlay data…</span>}
+                  {overlayError && <span className="warn-text small" role="alert">{overlayError}</span>}
+                  {showTestOverlay && <span className="overlay-legend" aria-label="Test overlay legend"><span className="test-low">Low line coverage</span> · <span className="test-covered">Coverage measured</span> · <span className="test-failing">Mapped test failing</span> · no data is grey</span>}
+                  {showRuntimeOverlay && <span className="overlay-legend" aria-label="Runtime overlay legend"><span className="runtime-observed">Recorded spans</span> · <span className="runtime-errors">Recorded errors</span> · no matching spans is grey</span>}
+                  {(showTestOverlay || showRuntimeOverlay) && overlays && <span className="muted small">Signal markings decorate drawn nodes. Inspect a node for counts and evidence. {overlays.withheld ? "Some overlay information was withheld or unavailable under current access." : ""}</span>}
+                </div>
+              )}
+              {view?.formId === "ChangeRisk" && (
+                <div className="formctl" role="group" aria-label="Kind of change">
+                  <span className="muted small">Weighted for</span>
+                  {[["default", "any change"], ["security", "security work"], ["refactor", "a refactor"], ["incident", "an incident"]].map(([k, l]) => <button key={k} className={`secondary small ${view.params?.subject === k ? "on" : ""}`} aria-pressed={view.params?.subject === k} onClick={() => void askForm(view.question, "ChangeRisk", k)}>{l}</button>)}
+                </div>
+              )}
+              {view?.matrix && (
+                <div className="formctl" role="group" aria-label="How to draw this">
+                  <span className="muted small">Draw as</span>
+                  <button className={`secondary small ${drawMode === "matrix" ? "on" : ""}`} aria-pressed={drawMode === "matrix"} onClick={() => setDrawMode("matrix")}>Matrix</button>
+                  <button className={`secondary small ${drawMode === "graph" ? "on" : ""}`} aria-pressed={drawMode === "graph"} onClick={() => setDrawMode("graph")}>Graph</button>
+                </div>
+              )}
+              {view?.consequences && <Consequences items={view.consequences} onOpen={(id) => void openConsequence(id)} />}
             </div>
-          )}
-        </div>
-        {view?.formId === "RuntimeOverlay" && (
-          <div className="formctl" role="group" aria-label="Time window">
-            <span className="muted small">Window</span>
-            {["24h", "7d", "all"].map((w) => <button key={w} className={`secondary small ${view.params?.subject === w ? "on" : ""}`} aria-pressed={view.params?.subject === w} onClick={() => void askForm(view.question, "RuntimeOverlay", w)}>{w === "all" ? "everything" : `last ${w}`}</button>)}
-          </div>
+          </details>
         )}
-        {view?.formId === "RuntimeOverlay" && <RuntimeReplay key={viewKey} revision={view.revision} onFrame={setReplay} />}
-        {view && !view.matrix && !view.terrain && <div className="formctl map-overlays" role="group" aria-label="Map overlays">
-          <span className="muted small">Overlay</span>
-          <button className={`secondary small ${showTestOverlay ? "on" : ""}`} aria-pressed={showTestOverlay} onClick={() => setShowTestOverlay((v) => !v)}>Test confidence</button>
-          <button className={`secondary small ${showRuntimeOverlay ? "on" : ""}`} aria-pressed={showRuntimeOverlay} onClick={() => setShowRuntimeOverlay((v) => !v)}>Recorded runtime</button>
-          {showRuntimeOverlay && <label className="small">Window <select aria-label="Overlay runtime window" value={overlayWindowName} onChange={(e) => setOverlayWindowName(e.target.value as typeof overlayWindowName)}><option value="24h">24 hours</option><option value="7d">7 days</option><option value="30d">30 days</option></select></label>}
-          {(showTestOverlay || showRuntimeOverlay) && <button className="link small" disabled={overlayBusy} onClick={() => setOverlayRefresh((n) => n + 1)}>Refresh overlays</button>}
-          {overlayBusy && <span className="muted small" role="status">Loading overlay data…</span>}
-          {overlayError && <span className="warn-text small" role="alert">{overlayError}</span>}
-          {showTestOverlay && <span className="overlay-legend" aria-label="Test overlay legend"><span className="test-low">Low line coverage</span> · <span className="test-covered">Coverage measured</span> · <span className="test-failing">Mapped test failing</span> · no data is grey</span>}
-          {showRuntimeOverlay && <span className="overlay-legend" aria-label="Runtime overlay legend"><span className="runtime-observed">Recorded spans</span> · <span className="runtime-errors">Recorded errors</span> · no matching spans is grey</span>}
-          {(showTestOverlay || showRuntimeOverlay) && overlays && <span className="muted small">Signal markings decorate drawn nodes. Inspect a node for counts and evidence. {overlays.withheld ? "Some overlay information was withheld or unavailable under current access." : ""}</span>}
-        </div>}
-        {view?.formId === "ChangeRisk" && (
-          <div className="formctl" role="group" aria-label="Kind of change">
-            <span className="muted small">Weighted for</span>
-            {[["default", "any change"], ["security", "security work"], ["refactor", "a refactor"], ["incident", "an incident"]].map(([k, l]) => <button key={k} className={`secondary small ${view.params?.subject === k ? "on" : ""}`} aria-pressed={view.params?.subject === k} onClick={() => void askForm(view.question, "ChangeRisk", k)}>{l}</button>)}
-          </div>
-        )}
-        {view?.matrix && (
-          <div className="formctl" role="group" aria-label="How to draw this">
-            <span className="muted small">Draw as</span>
-            <button className={`secondary small ${drawMode === "matrix" ? "on" : ""}`} aria-pressed={drawMode === "matrix"} onClick={() => setDrawMode("matrix")}>Matrix</button>
-            <button className={`secondary small ${drawMode === "graph" ? "on" : ""}`} aria-pressed={drawMode === "graph"} onClick={() => setDrawMode("graph")}>Graph</button>
-          </div>
-        )}
-        {view?.consequences && <Consequences items={view.consequences} onOpen={(id) => void openConsequence(id)} />}
         <div className="stage" aria-busy={phase === "composing" ? "true" : undefined}>
           {view?.matrix && drawMode === "matrix" ? (
             <MatrixView matrix={eff!.view.matrix!} stale={eff!.stale} selected={new Set(cellSel)} onPick={(c, r, k, add) => void inspectCell(c, r, k, add)} />
@@ -745,7 +958,7 @@ export function App() {
             onSelectNodes={(ids) => setSelection([...new Set(rendered.nodes.filter((n) => ids.includes(n.id)).flatMap((n) => n.members))])}
             onTapNode={inspectNode} onTapEdge={inspectEdge} onExpand={expand} onZoomLevel={setLevel}
             onToggleNode={(n) => setSelection((sel) => (n.members.every((m) => sel.includes(m)) ? sel.filter((x) => !n.members.includes(x)) : [...new Set([...sel, ...n.members])]))}
-            onStepLevel={stepLevel} onClear={() => setSelection([])} onOpenOutline={() => setOutlineOpen(true)} announce={setAnnouncement} />
+            onStepLevel={stepLevel} onClear={() => setSelection([])} onOpenOutline={() => openDialog(() => setOutlineOpen(true))} announce={setAnnouncement} />
           )}
           {view && view.nodes.length > 0 && !view.terrain && !(view.matrix && drawMode === "matrix") && (
             <div className="toolbar" role="toolbar" aria-label="Canvas tools">
@@ -779,8 +992,8 @@ export function App() {
         </footer>
       </main>
 
-      <aside className="right">
-        <ChatPanel onShowResult={showChatResult} onCreateProvider={() => setProviderWizardOpen(true)} messages={messages} referents={referents} busy={!!busy} canAsk={!!info?.revision} examples={EXAMPLES} seed={chatSeed ?? undefined} onSend={(t) => void send(t)} onDropReferent={(id) => (id.startsWith("cell:") ? setCellSel(cellSel.filter((x) => x !== id)) : id === "card:pins" ? setCardPins(null) : id.startsWith("editor:") ? setDismissed(new Set([...dismissed, id.slice(7)])) : setSelection(selection.filter((x) => x !== id)))} />
+      <aside className="right" data-has-evidence={code || drawer ? "true" : "false"}>
+        <ChatPanel onShowResult={showChatResult} onShowAlt={(alt) => void askForm(alt.prompt ?? alt.question, alt.form, undefined, alt.kind, `Show as ${alt.name}`, alt.question)} onCreateProvider={() => openDialog(() => setProviderWizardOpen(true))} messages={messages} referents={referents} busy={!!busy} canAsk={!!info?.revision} examples={EXAMPLES} seed={chatSeed ?? undefined} onSend={(t) => void send(t)} onDropReferent={(id) => (id.startsWith("cell:") ? setCellSel(cellSel.filter((x) => x !== id)) : id === "card:pins" ? setCardPins(null) : id.startsWith("editor:") ? setDismissed(new Set([...dismissed, id.slice(7)])) : setSelection(selection.filter((x) => x !== id)))} />
         <section className="drawer" aria-label="Evidence">
           {code && (
             <div className="codecard">

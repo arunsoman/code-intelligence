@@ -55,7 +55,7 @@ export function ModelMenu({ current, hosted, call, onChanged }: ModelMenuProps) 
       <button
         ref={triggerRef}
         type="button"
-        className="chip chip-button"
+        className="chip chip-button model-menu__trigger"
         title="Model provider — click to choose another from what Ollama has installed"
         aria-haspopup="listbox"
         aria-expanded={open}

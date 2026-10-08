@@ -183,6 +183,20 @@ export function detailPolicyFor(formId: FormId): DetailPolicy {
       defaultLevel: "AUTO",
       caveatChannels: { asyncHandoff: "BORDER" },
     };
+    case "GeneratedChart": return {
+      formId: "GeneratedChart",
+      aggregationSupported: true,
+      levels: [
+        { n: 0, name: "Overview", hint: "lane or group summaries — zoom in to see individual nodes", aggregation: { by: "ROLE" }, labelClasses: { NODE_NAME: { essential: true, fontUnits: 12 }, GROUP_CAPTION: { essential: true, fontUnits: 12 } } },
+        { n: 1, name: "Groups", hint: "nodes grouped by lane or cluster", aggregation: { by: "FILE" }, labelClasses: { NODE_NAME: { essential: true, fontUnits: 11 } } },
+        { n: 2, name: "Nodes", hint: "every node in the chart", aggregation: null, labelClasses: { NODE_NAME: { essential: true, fontUnits: 11 } } },
+        { n: 3, name: "Detail", hint: "edge labels and evidence notes; click a node to inspect it", aggregation: null, labelClasses: { NODE_NAME: { essential: true, fontUnits: 11 }, DETAIL_LINE: { essential: false, fontUnits: 10 } } },
+      ],
+      ...DEFAULT_THRESHOLDS,
+      labelFallback: "ABBREVIATE",
+      defaultLevel: "AUTO",
+      caveatChannels: { generatedLayout: "BORDER" },
+    };
     default:
       return defaultDetailPolicy(formId);
   }

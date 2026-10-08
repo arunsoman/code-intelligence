@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { SearchResponse, SearchHit, SearchModes, ReferenceHit } from "@cie/schema";
 import { call } from "./api.ts";
+import { Modal } from "./Modal.tsx";
 
 /**
  * Cross-repository search panel (F01, §12). One dialog, three honest surfaces:
@@ -39,10 +40,8 @@ export function SearchPanel({ repoPath, revision, onClose, onLocate }: {
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
 
   useEffect(() => {
-    openerRef.current = document.activeElement as HTMLElement | null;
     inputRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && e.target === (e.currentTarget as Document | null)?.body) onClose(); };
-    return () => { openerRef.current?.focus?.(); void onKey; };
+    return () => { void 0; };
   }, []);
 
   const run = async (q: string = query, m: ModeChoice = mode, cursor?: string) => {
@@ -95,7 +94,6 @@ export function SearchPanel({ repoPath, revision, onClose, onLocate }: {
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Escape") { e.preventDefault(); onClose(); return; }
     if (e.key === "ArrowDown") { e.preventDefault(); move(1); }
     else if (e.key === "ArrowUp") { e.preventDefault(); move(-1); }
   };
@@ -105,9 +103,9 @@ export function SearchPanel({ repoPath, revision, onClose, onLocate }: {
   const matchedLabel = !total ? "" : total.matched != null ? String(total.matched) : total.matchedAtLeast != null ? `at least ${total.matchedAtLeast}` : "…";
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal search-dialog" role="dialog" aria-modal="true" aria-label="Cross-repository search" tabIndex={-1} onKeyDown={onKeyDown}>
-        <h2>Search <span className="muted small" title="One answer across every visible repository, on the indexed revision of each">across repositories</span></h2>
+    <Modal title="Search" onClose={onClose} className="search-dialog"
+      actions={<button onClick={onClose}>Done</button>}>
+      <p className="muted small" title="One answer across every visible repository, on the indexed revision of each">Across repositories</p>
         <div className="row">
           <input
             ref={inputRef}
@@ -225,9 +223,7 @@ export function SearchPanel({ repoPath, revision, onClose, onLocate }: {
             </div>
           </div>
         )}
-        <div className="modal-actions"><button onClick={onClose}>Close</button></div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

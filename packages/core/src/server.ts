@@ -84,6 +84,7 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
     "C19/setOverride": { mutating: true, run: (c, b) => svc.setOverride(c, b) },
     "C19/listOverrides": { mutating: false, run: (c, b) => svc.listOverrides(c, b) },
     "C19/visuals": { mutating: false, run: (c, b) => svc.visuals(c, b) },
+    "C19/recommendCharts": { mutating: false, run: (c, b) => svc.recommendCharts(c, b) },
     "C19/providerGuide": { mutating: false, run: (c, b) => svc.providerGuide(c, b) },
     "C19/ask": { mutating: false, run: (c, b) => svc.ask(c, b) },
     "C19/investigate": { mutating: false, run: (c, b) => svc.investigate(c, b) },

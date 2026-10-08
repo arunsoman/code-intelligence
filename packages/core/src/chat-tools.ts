@@ -162,6 +162,51 @@ export const CHAT_TOOLS: ChatTool[] = [
     run: (env, a) => analysis(env, { tool: "view", form: a.form as string, question: a.question as string, ...(a.kind ? { kind: a.kind as "failure" | "invariant" } : {}), ...(a.subject ? { subject: a.subject as string } : {}), ...(a.subject ? { seeds: seedsFor(env, a.subject as string) } : {}) }),
   },
   {
+    name: "read_module",
+    description: "Inspect a named indexed component, module, package or subsystem. Returns its indexed file and symbol counts, package layout, and representative classes/interfaces. Use this for named component introductions; use project_overview only for the entire repository.",
+    parameters: obj({ module: str("Component, module, package, or directory name", { maxLength: 300 }) }, ["module"]),
+    async run(env, { module }) {
+      const all = env.svc.store.entities(env.rev.id).filter((e) => !env.access.denied(e.file));
+      const files = [...new Set(all.map((e) => e.file).filter(Boolean))];
+      const requested = String(module).toLowerCase().replace(/\\/g, "/").replace(/\b(component|module|package|subsystem|service)\b/g, " ").split(/[^a-z0-9]+/).filter(Boolean);
+      const dirs = new Set<string>();
+      for (const file of files) {
+        const parts = file.split("/");
+        for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join("/"));
+      }
+      const candidates = [...dirs].map((path) => {
+        const tail = path.split("/").at(-1)!.toLowerCase();
+        const exact = requested.some((term) => term === tail);
+        const pathMatch = requested.length > 1 && path.toLowerCase().endsWith(requested.join("/"));
+        const count = files.filter((file) => file.startsWith(`${path}/`)).length;
+        return { path, exact, pathMatch, count, depth: path.split("/").length };
+      }).filter((x) => x.exact || x.pathMatch).sort((a, b) => Number(b.pathMatch) - Number(a.pathMatch) || b.count - a.count || a.depth - b.depth || a.path.localeCompare(b.path));
+      const scope = candidates[0]?.path;
+      if (!scope) return `No indexed directory matches "${String(module)}". Use find_code to locate the component or provide its directory name.`;
+      const scopedFiles = new Set(files.filter((file) => file === scope || file.startsWith(`${scope}/`)));
+      const scoped = all.filter((e) => scopedFiles.has(e.file));
+      const byDir = new Map<string, number>();
+      for (const file of scopedFiles) {
+        const rest = file.slice(scope.length).replace(/^\//, "");
+        const child = rest.split("/")[0] || ".";
+        byDir.set(child, (byDir.get(child) ?? 0) + 1);
+      }
+      const symbols = scoped.filter((e) => ["class", "interface", "function", "method"].includes(e.kind));
+      const priority = /engine|service|manager|controller|consumer|processor|writer|reserve|posting|rollback|impl|job|listener/i;
+      const representative = [...symbols].sort((a, b) => Number(priority.test(b.name)) - Number(priority.test(a.name)) || ["class", "interface"].indexOf(a.kind) - ["class", "interface"].indexOf(b.kind) || a.file.localeCompare(b.file) || a.name.localeCompare(b.name)).slice(0, 40);
+      const counts = new Map<string, number>();
+      for (const e of scoped) counts.set(e.kind, (counts.get(e.kind) ?? 0) + 1);
+      const lines = [
+        `Indexed component scope: ${scope}`,
+        `Coverage: ${scopedFiles.size} files; ${scoped.length} indexed entities (${counts.get("class") ?? 0} classes, ${counts.get("interface") ?? 0} interfaces, ${counts.get("method") ?? 0} methods, ${counts.get("test") ?? 0} tests). This is index coverage, not a claim that every file was read in full.`,
+        `Package layout: ${[...byDir].sort((a, b) => b[1] - a[1]).slice(0, 16).map(([dir, count]) => `${dir}/ (${count})`).join(", ")}`,
+        "Representative indexed symbols:",
+        ...representative.map((e) => `- [${note(env, e)}] ${e.kind} ${e.name} — ${e.file}`),
+      ];
+      return lines.join("\n");
+    },
+  },
+  {
     name: "project_overview",
     description: "Explain the whole project: its purpose, structure and architecture.",
     parameters: obj({ question: str("What the user asked about the project") }, ["question"]),

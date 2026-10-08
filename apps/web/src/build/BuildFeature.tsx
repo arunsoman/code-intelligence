@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { STAGES, type WizardStage } from "./stages.ts";
 import { blankWorkspace, localStore, type WizardStore } from "./store.ts";
 import { advanceRemote, openRemote, type RemoteCall } from "./remote.ts";
 import { advanceWizard, recordDecision, stageGate, type WizardWorkspace } from "./wizard.ts";
 import { GLOSSARY, MODES, STATUS_WORDS, actionReasons, ago, digestOf, issueLink, landingStage, openQuestions, primaryOf, refKind, retryTask, sectionsOf, stepsOf, summaryNotes, type TaskCard } from "./view.ts";
+import { Modal } from "../Modal.tsx";
 import "./build.css";
 import { ChangeReview, ClarifyReview, PlanReview } from "./ReviewStages.tsx";
 import { DeliverReview, ValidateReview } from "./DeliverStages.tsx";
@@ -137,9 +137,25 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
   );
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Build feature">
-      <div className="bf-dialog" ref={dialogRef} tabIndex={-1} onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}>
-        <div className="bf-top">
+    <Modal title="Build feature" onClose={onClose} className="bf-dialog"
+      actions={<>
+        <button className="secondary" disabled={at === 0} onClick={() => move(STAGES[at - 1].id)}>← {at > 0 ? STAGES[at - 1].label : "Back"}</button>
+        <span className="bf-grow" />
+        <details className="bf-details bf-menu">
+          <summary className="secondary" style={{ cursor: "pointer", padding: "5px 12px", border: "1px solid var(--line)", borderRadius: 6 }}>More actions ▾</summary>
+          <div className="bf-pop up right" role="region" aria-label="Actions that change things">
+            <p className="muted" style={{ margin: 0 }}>Each of these changes something, so each is its own button. Moving between stages never runs them.</p>
+            {actionReasons(ws).map((a) => (
+              <div className="bf-act" key={a.action}>
+                <button className="secondary small" aria-disabled={!a.enabled} aria-describedby={`why-${a.action}`} onClick={(e) => { if (!a.enabled) e.preventDefault(); }}>{a.action}</button>
+                <p id={`why-${a.action}`}>{a.enabled ? "Ready." : `Not available yet: ${a.reason}`}</p>
+              </div>
+            ))}
+          </div>
+        </details>
+        <button disabled={primaryDisabled} title={primary.kind === "ANALYSE" ? primary.disabledReason ?? undefined : undefined} onClick={runPrimary}>{primary.label}</button>
+      </>}>
+      <div className="bf-top">
           <div className="bf-title">
             <h2>Build feature<span className="bf-updated" aria-live="polite">updated {ago(ws.updatedAt, now)}</span></h2>
             <details className="bf-details">
@@ -343,8 +359,7 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
             </div>
           </details>
           <button disabled={primaryDisabled} title={primary.kind === "ANALYSE" ? primary.disabledReason ?? undefined : undefined} onClick={runPrimary}>{primary.label}</button>
-        </div>
       </div>
-    </div>
+    </Modal>
   );
 }

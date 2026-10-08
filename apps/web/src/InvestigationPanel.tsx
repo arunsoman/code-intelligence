@@ -4,6 +4,7 @@ import type { InvestigationDetails, InvestigationSnapshot } from "../../../packa
 import { call } from "./api.ts";
 import { Loading } from "./Skeleton.tsx";
 import { comparison, discriminates } from "./investigation.ts";
+import { Modal } from "./Modal.tsx";
 
 const read = <T,>(op: string, body: unknown) => call<T>("C22", op, body, undefined, "v2");
 const write = <T,>(op: string, body: unknown) => call<T>("C22", op, body, crypto.randomUUID(), "v2");
@@ -26,15 +27,12 @@ export function InvestigationPanel({ revision, workspaceId, initialQuestion, ent
   const [evidence, setEvidence] = useState<ResolvedEvidence | null>(null);
   const [evidenceError, setEvidenceError] = useState<string | null>(null);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
-  const dialog = useRef<HTMLElement>(null);
   const alive = useRef(true);
   const evidenceRequest = useRef(0);
   const command = useRef(false);
   useEffect(() => {
     alive.current = true;
-    const previous = document.activeElement as HTMLElement | null;
-    dialog.current?.querySelector<HTMLButtonElement>("button")?.focus();
-    return () => { alive.current = false; previous?.focus(); };
+    return () => { alive.current = false; };
   }, []);
 
   useEffect(() => {
@@ -100,19 +98,8 @@ export function InvestigationPanel({ revision, workspaceId, initialQuestion, ent
   }
   const evidenceLinks = (ids: string[]) => ids.length ? ids.map((eid) => <button key={eid} className="link small" onClick={() => void inspectEvidence(eid)}>{eid}</button>) : <span className="muted">No source citation</span>;
 
-  function onKey(e: React.KeyboardEvent) {
-    if (e.key === "Escape") { e.stopPropagation(); onClose(); }
-    if (e.key !== "Tab") return;
-    const controls = [...(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex="0"]') ?? [])].filter((x) => x.getClientRects().length);
-    const first = controls[0], last = controls.at(-1);
-    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
-    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
-  }
-
-  return <div className="modal-backdrop"><section ref={dialog} className="modal investigation-panel" role="dialog" aria-modal="true" aria-label="Investigations" onKeyDown={onKey}>
-    <div className="defect-heading"><h2>Investigations</h2><button onClick={onClose}>Close investigations</button></div>
-    <p className="muted small">Saved investigations in this workspace. Each stays pinned to its original revision. Priority is an order for investigation, not a probability.</p>
-    <label htmlFor="investigation-select">Open investigation</label>
+  return <Modal title="Investigations" onClose={onClose} className="investigation-panel">
+    <p className="muted small">Saved investigations in this workspace. Each stays pinned to its original revision. Priority is an order for investigation, not a probability.</p>    <label htmlFor="investigation-select">Open investigation</label>
     <select id="investigation-select" disabled={busy} value={id} onChange={(e) => open(e.target.value)}>
       <option value="">Choose an investigation</option>
       {items.map((item) => <option key={item.id} value={item.id}>{item.goal.question} — {words(item.execution)}</option>)}
@@ -176,5 +163,5 @@ export function InvestigationPanel({ revision, workspaceId, initialQuestion, ent
     <Loading pending={evidenceLoading} label="Loading evidence" rows={4} lines={1} />
     {evidenceError && <p role="alert">{evidenceError}</p>}
     {evidence && <section className="evidence" aria-label="Investigation evidence"><h3>{evidence.file}:{evidence.startLine}</h3><p>{evidence.class} · {evidence.state}</p><pre tabIndex={0}>{evidence.snippet || "Source text unavailable."}</pre></section>}
-  </section></div>;
+  </Modal>;
 }

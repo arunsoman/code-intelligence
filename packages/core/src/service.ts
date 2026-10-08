@@ -48,7 +48,7 @@ import { Journal, type CommitReceipt } from "./journal.ts";
 import { Cancelled, JobRunner, type JobControl } from "./jobs.ts";
 import { EGRESS_FIELDS, payloadHash, scrubBundle } from "./policy.ts";
 import { bundleFor, retrieveAround, retrieveForQuestion } from "./retrieval.ts";
-import { matchName, readText, validateProviderGuide, type ProviderGuideResponse, type RouterModel } from "./llm-router.ts";
+import { matchName, readText, validateProviderGuide, type ChartOption, type ProviderGuideResponse, type RouterModel } from "./llm-router.ts";
 import { revisionIndex, scoreEntity, WEIGHTS } from "./salience.ts";
 import { DeltaBaseError, type RevisionRow, type Store } from "./store.ts";
 import { entityAt, fingerprint, locateFrames, looksLikeTrace, parseTrace } from "./trace.ts";
@@ -1492,8 +1492,8 @@ export class Service {
     return done ? ok(ctx, { dismissed: true }) : fail(ctx, { code: "NOT_FOUND", message: "no such exception", retryable: false });
   }
 
-  status(ctx: CallContext, req: { revision?: string }): ApiResult<{ revision: RevisionRow | null; provider: string; model: string | null; hosted: boolean; allowHosted: boolean; concepts: number; tests: TestSummary | null }> {
-    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+  status(ctx: CallContext, req: { revision?: string; repoRoot?: string }): ApiResult<{ revision: RevisionRow | null; provider: string; model: string | null; hosted: boolean; allowHosted: boolean; concepts: number; tests: TestSummary | null }> {
+    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision(req.repoRoot);
     return ok(ctx, {
       revision: rev, provider: `${this.model.name}/${this.model.model}`, model: this.model.name === "stub" ? null : this.model.model, hosted: this.model.hosted,
       allowHosted: rev ? this.store.allowHosted(rev.repoRoot) : false, concepts: rev ? this.store.concepts(rev.id).length : 0,
@@ -1937,6 +1937,52 @@ export class Service {
   visuals(ctx: CallContext, req: { revision?: string }): ApiResult<CatalogEntry[]> {
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     return ok(ctx, catalog(this.store, rev, !!rev && isGitRepo(rev.repoRoot)), rev ? { revision: rev.id } : {});
+  }
+
+  /** Rank supported chat chart options against the question and the answer that was just shown. */
+  async recommendCharts(ctx: CallContext, req: { question?: string; response?: string; revision?: string; options?: ChartOption[] }): Promise<ApiResult<{ codes: string[]; source: "llm" | "unavailable"; model: string | null; reason?: string }>> {
+    const question = typeof req?.question === "string" ? req.question.trim().slice(0, 1600) : "";
+    const response = typeof req?.response === "string" ? req.response.trim().slice(0, 6000) : "";
+    const options = Array.isArray(req?.options) ? req.options.slice(0, 40) : [];
+    if (!question || !response || options.length < 3 || options.some((o) => !o || !/^[SV]\d+$/.test(o.code) || !o.name || !o.description || !o.form || [o.name, o.description, o.form, o.example ?? ""].some((v) => typeof v !== "string" || v.length > 500) || (o.needs !== undefined && (!Array.isArray(o.needs) || o.needs.length > 12 || o.needs.some((n) => typeof n !== "string" || n.length > 80)))) || new Set(options.map((o) => o.code)).size !== options.length) {
+      return fail(ctx, { code: "INVALID_SCHEMA", message: "chart recommendations need a question, response and at least three unique supported chart options", retryable: false });
+    }
+    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+    const router = this.router;
+    const log = (details: Record<string, unknown>) => { try { this.store.audit(actor(ctx), "chart.recommendation", rev?.id ?? "unbound", { requestId: ctx.requestId, promptVersion: "chart-options-v3-all-catalog", optionCount: options.length, optionCodes: options.map((o) => o.code), optionNames: options.map((o) => o.name), questionChars: question.length, responseChars: response.length, ...details }); } catch { /* diagnostics must not block rendering */ } };
+    if (!router?.recommendCharts) {
+      log({ model: router?.name ?? null, outcome: "router-unavailable" });
+      return ok(ctx, { codes: [], source: "unavailable", model: router?.name ?? null, reason: "router-unavailable" }, rev ? { revision: rev.id } : {});
+    }
+    if ((router as RouterModel & { hosted?: boolean }).hosted) {
+      if (!rev) {
+        log({ model: router.name, hosted: true, outcome: "no-revision" });
+        return ok(ctx, { codes: [], source: "unavailable", model: router.name, reason: "no-revision" });
+      }
+      let allowed = false;
+      try { allowed = this.store.allowHosted(rev.repoRoot) === true; } catch { /* fail closed */ }
+      if (!allowed) {
+        try { this.store.audit(actor(ctx), "egress.denied", rev.repoRoot, { purpose: "chart-recommendations", destination: router.name }); } catch { /* denial stands */ }
+        log({ model: router.name, hosted: true, outcome: "hosted-not-approved" });
+        return ok(ctx, { codes: [], source: "unavailable", model: router.name, reason: "hosted-not-approved" }, { revision: rev.id, warnings: ["Chart recommendations were not sent to the hosted model because hosted access is not approved for this repository."] });
+      }
+      const payloadHash = createHash("sha256").update(JSON.stringify({ question, response, options })).digest("hex");
+      try { this.store.audit(actor(ctx), "egress.approved", rev.repoRoot, { purpose: "chart-recommendations", destination: router.name, payloadHash }); }
+      catch {
+        log({ model: router.name, hosted: true, outcome: "egress-audit-failed" });
+        return ok(ctx, { codes: [], source: "unavailable", model: router.name, reason: "egress-audit-failed" }, { revision: rev.id, warnings: ["Chart recommendations were not sent because the hosted-model egress audit could not be recorded."] });
+      }
+    }
+    try {
+      const result = await router.recommendCharts({ question, response, options });
+      const allowed = new Set(options.map((o) => o.code));
+      const selected = [...new Set(result.codes.filter((code) => allowed.has(code)))].slice(0, options.length);
+      log({ model: router.name, hosted: !!(router as RouterModel & { hosted?: boolean }).hosted, outcome: result.outcome, httpStatus: result.httpStatus, selectedCodes: selected, selectedCount: selected.length, rejectedCodes: result.rejectedCodes ?? 0 });
+      return ok(ctx, selected.length ? { codes: selected, source: "llm", model: router.name } : { codes: [], source: "unavailable", model: router.name, reason: result.outcome }, rev ? { revision: rev.id } : {});
+    } catch {
+      log({ model: router.name, outcome: "service-error" });
+      return ok(ctx, { codes: [], source: "unavailable", model: router.name, reason: "service-error" }, rev ? { revision: rev.id } : {});
+    }
   }
 
   /** Generate a provider wizard from the configured chat model; invalid or unavailable model output is explicit. */

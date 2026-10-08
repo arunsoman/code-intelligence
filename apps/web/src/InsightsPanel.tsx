@@ -137,7 +137,7 @@ export function InsightsPanel({ revision: openedRevision, view, onClose, onAsk, 
             <h2 className="d-title">Insights</h2>
             <div className="d-title-actions">
               <button className="secondary small" aria-pressed={maximized} onClick={() => setMaximized((m) => !m)} title="Make the panel taller and wider, or return it to the saved size">{maximized ? "⤡ Restore" : "⤢ Maximize"}</button>
-              <button autoFocus className="d-close" onClick={onClose} aria-label="Close the insights panel" title="Close (Esc also closes)">Close ✕</button>
+              <button autoFocus className="d-close icon-close" onClick={onClose} aria-label="Close Insights" title="Close (Esc)">✕</button>
             </div>
           </div>
           <div className="d-meta">

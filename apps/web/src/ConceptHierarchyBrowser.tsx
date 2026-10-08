@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ConceptHierarchyView, JobView } from "@cie/schema";
 import { call } from "./api.ts";
 import { Loading } from "./Skeleton.tsx";
+import { Modal } from "./Modal.tsx";
 import { ConceptTreeGraph } from "./ConceptTreeGraph.tsx";
 import {
   HIERARCHY_HELP, SOUNDNESS, archRows, conceptTitle, groupConcepts, hierarchyBuilds, hierarchySummary, isEmptyHierarchy, mechanicalNamesNotice, memberNames, namingBadge, namingProvenance, sortInvariants, statsNotes,
@@ -54,9 +55,9 @@ export function ConceptHierarchyBrowser({ revision, jobs = [], onShowJobs, onClo
   const empty = isEmptyHierarchy(view);
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal full" role="dialog" aria-modal="true" aria-label="Concept hierarchy" tabIndex={-1} onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}>
-        <h2>Concept hierarchy {view && !empty && <span className="muted small">version {view.version}{view.version === current ? " (current)" : ""}</span>} {prov && <span className={`chip ${prov.deterministic || !prov.known ? "warn" : ""}`}>names: {prov.badge}</span>}</h2>
+    <Modal title="Concept hierarchy" onClose={onClose} className="full"
+      actions={<><span className="muted small">{selected && prov ? `This version: ${prov.known ? selected.provider : "provider not recorded"} — names: ${prov.badge}.` : ""}</span><button onClick={onClose}>Done</button></>}>
+      {view && !empty && <p className="muted small" style={{margin: "0 0 6px"}}>version {view.version}{view.version === current ? " (current)" : ""} {prov && <span className={`chip ${prov.deterministic || !prov.known ? "warn" : ""}`}>names: {prov.badge}</span>}</p>}
         {error && <div className="banner error" role="alert">{error}</div>}
         {(active.length > 0 || failed.length > 0) && (
           <div className="banner" role="status" aria-label="Concept hierarchy build status">
@@ -143,8 +144,6 @@ export function ConceptHierarchyBrowser({ revision, jobs = [], onShowJobs, onClo
           </>
         )}
         <p className="muted small help">{HIERARCHY_HELP}</p>
-        <div className="modal-actions"><span className="muted small">{selected && prov ? `This version: ${prov.known ? selected.provider : "provider not recorded"} — names: ${prov.badge}.` : ""}</span><button onClick={onClose}>Close</button></div>
-      </div>
-    </div>
+    </Modal>
   );
 }

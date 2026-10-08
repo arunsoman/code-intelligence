@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { CouplingEdgeView, ExplainCouplingView, ExplainHotspotView, HotspotReportView, HotspotScoreRow, RankStabilityView } from "@cie/schema";
 import { call } from "./api.ts";
+import { Modal } from "./Modal.tsx";
 
 /**
  * Historical hotspots and change coupling (F06, §15). One dialog, honest at every level:
@@ -94,14 +95,9 @@ export function HotspotPanel({ repoPath, revision, onClose, onPickFile }: {
   const ariaSort = (k: SortKey) => (order === k ? "ascending" : "none");
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal hotspot-modal" role="dialog" aria-modal="true" aria-label="Historical hotspots and change coupling" tabIndex={-1} ref={dialogRef}>
-        <h2>
-          Hotspots
-          {report && <span className="badge fact" title={report.boundary.headCommit}>history {report.boundary.since?.slice(0, 10) ?? "start"} → {report.boundary.until.slice(0, 10)} · {report.boundary.commitCount} commits</span>}
-          {report && <span className="badge" title="The merge policy the analysis detector chose">{report.mergePolicyUsed}</span>}
-          {report?.state === "PARTIAL" && <span className="badge warn" title="A bound bit: see the warnings">partial</span>}
-        </h2>
+    <Modal title="Hotspots" onClose={onClose} className="hotspot-modal"
+      actions={<><span className="muted small">The score is a prioritisation heuristic; co-change is not a dependency; contributor identity is keyed and names appear only with a policy and a grant (F06-A6).</span><button onClick={onClose}>Done</button></>}>
+      {report && <p className="muted small">history {report.boundary.since?.slice(0, 10) ?? "start"} → {report.boundary.until.slice(0, 10)} · {report.boundary.commitCount} commits{report.mergePolicyUsed ? ` · ${report.mergePolicyUsed}` : ""}{report.state === "PARTIAL" ? " · partial" : ""}</p>}
         <p className="muted small" role="status" aria-live="polite" id={liveId}>
           {busy ?? (report ? `${sorted.length} ranked file(s); ${report.exclusions.total} excluded commit(s) listed with reasons` : "No analysis yet. A score is a prioritisation heuristic, never a defect probability.")}
         </p>
@@ -185,47 +181,34 @@ export function HotspotPanel({ repoPath, revision, onClose, onPickFile }: {
         {report && <ul className="dirs small muted" aria-label="What this does not tell you">{report.coverage.gaps.map((g) => <li key={g}>{g}</li>)}</ul>}
         {error && <p className="badge warn" role="alert">{error}</p>}
 
-        <div className="modal-actions">
-          <span className="muted small">The score is a prioritisation heuristic; co-change is not a dependency; contributor identity is keyed and names appear only with a policy and a grant (F06-A6).</span>
-          <button onClick={onClose}>Close</button>
-        </div>
-
         {explain && (
-          <div className="modal-backdrop" onMouseDown={(ev) => { if (ev.target === ev.currentTarget) setExplain(null); }}>
-            <div className="modal" role="dialog" aria-modal="true" aria-label={`Why ${explain.path} ranks here`} tabIndex={-1}>
-              <h3>{explain.path} — rank {explain.rank}, score {explain.score.toFixed(2)}</h3>
-              <table className="hotspot-table">
-                <thead><tr><th scope="col">Factor</th><th scope="col">Raw</th><th scope="col">Weight</th><th scope="col">Contribution</th></tr></thead>
-                <tbody>
-                  {explain.factors.map((f) => <tr key={f.id}><td>{f.label}{f.missing ? <span className="badge warn" title="Missing data counted as a neutral 0.5"> no data</span> : null}</td><td>{f.raw}</td><td>{f.weight.toFixed(2)}</td><td>{f.contribution.toFixed(4)}</td></tr>)}
-                </tbody>
-              </table>
-              <p className="muted small">The contributions sum to the score. Rank with each exclusion class counted back in: {explain.sensitivity.withClass.map((w) => `${w.rule} → ${w.rank}`).join(", ") || "no excluded class touches it"}. Remove one factor: {explain.sensitivity.withoutFactor.map((w) => `${w.label} → ${w.rank}`).join(", ")}.</p>
-              <h4>Counted changes ({explain.changes.length})</h4>
-              <ul className="dirs small" aria-label="Counted commits">{explain.changes.map((c) => <li key={c.commitHash} className="mono">{c.committedAt.slice(0, 10)} {c.commitHash.slice(0, 8)} {c.subject}{c.prNumber ? ` (#${c.prNumber})` : ""}</li>)}</ul>
-              <h4>Excluded commits touching this file ({explain.excluded.length})</h4>
-              <ul className="dirs small" aria-label="Excluded commits touching this file">{explain.excluded.length ? explain.excluded.map((c) => <li key={c.commitHash} className="mono">{c.committedAt.slice(0, 10)} {c.subject} — {c.rule}{c.classReason ? `: ${c.classReason}` : ""}</li>) : <li className="muted">none</li>}</ul>
-              {explain.contributors && <><h4>Contributors (names shown because the policy allows them and you hold a grant)</h4><ul className="dirs small">{explain.contributors.map((c) => <li key={c.displayName}>{c.displayName} — {c.commits} commit(s)</li>)}</ul></>}
-              <h4>Trend</h4>
-              <p className="mono small">{explain.trend.map((t) => `${t.month}:${t.raw}`).join("  ") || "no counted changes"}</p>
-              <ul className="dirs small muted">{explain.gaps.map((g) => <li key={g}>{g}</li>)}</ul>
-              <div className="modal-actions"><button onClick={() => setExplain(null)}>Close</button></div>
-            </div>
-          </div>
+          <Modal title={`${explain.path} — rank ${explain.rank}`} onClose={() => setExplain(null)} className="hotspot-explain">
+            <p className="muted small">score {explain.score.toFixed(2)}</p>
+            <table className="hotspot-table">
+              <thead><tr><th scope="col">Factor</th><th scope="col">Raw</th><th scope="col">Weight</th><th scope="col">Contribution</th></tr></thead>
+              <tbody>
+                {explain.factors.map((f) => <tr key={f.id}><td>{f.label}{f.missing ? <span className="badge warn" title="Missing data counted as a neutral 0.5"> no data</span> : null}</td><td>{f.raw}</td><td>{f.weight.toFixed(2)}</td><td>{f.contribution.toFixed(4)}</td></tr>)}
+              </tbody>
+            </table>
+            <p className="muted small">The contributions sum to the score. Rank with each exclusion class counted back in: {explain.sensitivity.withClass.map((w) => `${w.rule} → ${w.rank}`).join(", ") || "no excluded class touches it"}. Remove one factor: {explain.sensitivity.withoutFactor.map((w) => `${w.label} → ${w.rank}`).join(", ")}.</p>
+            <h4>Counted changes ({explain.changes.length})</h4>
+            <ul className="dirs small" aria-label="Counted commits">{explain.changes.map((c) => <li key={c.commitHash} className="mono">{c.committedAt.slice(0, 10)} {c.commitHash.slice(0, 8)} {c.subject}{c.prNumber ? ` (#${c.prNumber})` : ""}</li>)}</ul>
+            <h4>Excluded commits touching this file ({explain.excluded.length})</h4>
+            <ul className="dirs small" aria-label="Excluded commits touching this file">{explain.excluded.length ? explain.excluded.map((c) => <li key={c.commitHash} className="mono">{c.committedAt.slice(0, 10)} {c.subject} — {c.rule}{c.classReason ? `: ${c.classReason}` : ""}</li>) : <li className="muted">none</li>}</ul>
+            {explain.contributors && <><h4>Contributors (names shown because the policy allows them and you hold a grant)</h4><ul className="dirs small">{explain.contributors.map((c) => <li key={c.displayName}>{c.displayName} — {c.commits} commit(s)</li>)}</ul></>}
+            <h4>Trend</h4>
+            <p className="mono small">{explain.trend.map((t) => `${t.month}:${t.raw}`).join("  ") || "no counted changes"}</p>
+            <ul className="dirs small muted">{explain.gaps.map((g) => <li key={g}>{g}</li>)}</ul>
+          </Modal>
         )}
 
         {edgeExplain && (
-          <div className="modal-backdrop" onMouseDown={(ev) => { if (ev.target === ev.currentTarget) setEdgeExplain(null); }}>
-            <div className="modal" role="dialog" aria-modal="true" aria-label="Why these files change together" tabIndex={-1}>
-              <h3>{edgeExplain.aPath} ↔ {edgeExplain.bPath}</h3>
-              <p className="muted small">Support {edgeExplain.support} of {edgeExplain.total} eligible logical changes · countA {edgeExplain.countA} · countB {edgeExplain.countB} · confidence {edgeExplain.confidenceAToB.toFixed(2)} / {edgeExplain.confidenceBToA.toFixed(2)} · lift {edgeExplain.lift.toFixed(2)} · {edgeExplain.staticDependency === "NONE" ? "NO static dependency (hidden coupling)" : edgeExplain.staticDependency === "UNKNOWN" ? "static relation unknown (nothing indexed)" : `static ${edgeExplain.staticDependency}`}</p>
-              <ul className="dirs small" aria-label="Commits where both changed">{edgeExplain.commits.map((c) => <li key={c.commitHash} className="mono">{c.committedAt.slice(0, 10)} {c.subject}</li>)}</ul>
-              <ul className="dirs small muted">{edgeExplain.gaps.map((g) => <li key={g}>{g}</li>)}</ul>
-              <div className="modal-actions"><button onClick={() => setEdgeExplain(null)}>Close</button></div>
-            </div>
-          </div>
+          <Modal title={`${edgeExplain.aPath} ↔ ${edgeExplain.bPath}`} onClose={() => setEdgeExplain(null)} className="hotspot-explain">
+            <p className="muted small">Support {edgeExplain.support} of {edgeExplain.total} eligible logical changes · countA {edgeExplain.countA} · countB {edgeExplain.countB} · confidence {edgeExplain.confidenceAToB.toFixed(2)} / {edgeExplain.confidenceBToA.toFixed(2)} · lift {edgeExplain.lift.toFixed(2)} · {edgeExplain.staticDependency === "NONE" ? "NO static dependency (hidden coupling)" : edgeExplain.staticDependency === "UNKNOWN" ? "static relation unknown (nothing indexed)" : `static ${edgeExplain.staticDependency}`}</p>
+            <ul className="dirs small" aria-label="Commits where both changed">{edgeExplain.commits.map((c) => <li key={c.commitHash} className="mono">{c.committedAt.slice(0, 10)} {c.subject}</li>)}</ul>
+            <ul className="dirs small muted">{edgeExplain.gaps.map((g) => <li key={g}>{g}</li>)}</ul>
+          </Modal>
         )}
-      </div>
-    </div>
+    </Modal>
   );
 }

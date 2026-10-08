@@ -299,7 +299,7 @@ export function DefectPanel({ revision, onClose }: { revision: string; onClose: 
         <header className="d-header">
           <div className="d-title-row">
             <h2 className="d-title">Defects &amp; performance</h2>
-            <button className="d-close" onClick={close} aria-label="Close the defect panel">Close ✕</button>
+            <button className="d-close" onClick={close} aria-label="Close Defects &amp; performance" title="Close (Esc)">✕</button>
           </div>
           <div className="d-meta" role="status">
             <span title={meta?.repoRoot ?? revision}>{meta ? `${meta.repoRoot?.split("/").pop() ?? "?"} · ${(meta.gitHead ?? "").slice(0, 8) || "no git head"} · indexed ${relative(meta.createdAt)} · ${meta.files} files` : `revision ${truncateMiddle(revision, 26)}`}</span>

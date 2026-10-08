@@ -3,6 +3,7 @@ import type { Claim, ConceptCard, ConceptStore, JobView, VerdictKind } from "@ci
 import { call } from "./api.ts";
 import { ClaimCard } from "./ClaimCard.tsx";
 import { Loading } from "./Skeleton.tsx";
+import { Modal } from "./Modal.tsx";
 import { VERSIONING_HELP, conceptExtractions, versionInfos } from "./concept-status.ts";
 
 interface Props { revision?: string; jobs?: JobView[]; onShowJobs?: () => void; onClose: () => void; onAsk: (card: ConceptCard) => void; onVerdict: (claim: Claim, v: VerdictKind, text: string) => Promise<string | null> }
@@ -31,9 +32,9 @@ export function ConceptBrowser({ revision, jobs = [], onShowJobs, onClose, onAsk
   const verdict = async (c: Claim, v: VerdictKind, t: string) => { const e = await onVerdict(c, v, t); if (!e) await load(version); return e; };
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal wide" role="dialog" aria-modal="true" aria-label="Concept cards" tabIndex={-1} onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}>
-        <h2>Concept cards {store && <span className="muted small">version {store.version}{store.version === latest ? " (current)" : ""}</span>} {selected && <span className={`chip ${selected.deterministic ? "warn" : ""}`} title={selected.provider}>{selected.badge}</span>}</h2>
+    <Modal title="Concept cards" onClose={onClose} className="wide"
+      actions={<><span className="muted small">{selected ? `This version: ${selected.provider} — ${selected.badge}.` : ""}</span><button onClick={onClose}>Done</button></>}>
+        {store && <p className="muted small" style={{margin: "0 0 6px"}}>version {store.version}{store.version === latest ? " (current)" : ""} {selected && <span className={`chip ${selected.deterministic ? "warn" : ""}`} title={selected.provider}>{selected.badge}</span>}</p>}
         {error && <div className="banner error" role="alert">{error}</div>}
         {(active.length > 0 || failed.length > 0) && (
           <div className="banner" role="status" aria-label="Concept extraction status">
@@ -76,8 +77,6 @@ export function ConceptBrowser({ revision, jobs = [], onShowJobs, onClose, onAsk
           </>
         )}
         <p className="muted small help">{VERSIONING_HELP}</p>
-        <div className="modal-actions"><span className="muted small">{selected ? `This version: ${selected.provider} — ${selected.badge}.` : ""}</span><button onClick={onClose}>Close</button></div>
-      </div>
-    </div>
+    </Modal>
   );
 }
