@@ -532,12 +532,12 @@ export function App() {
     setDrawer({ kind: "inspect", title: vn.label, sub: `${vn.role ?? vn.kind}${vn.file ? ` · ${vn.file}` : ""}`, notes: [...(vn.notes ?? []), ...(mark ? [mark.summary, ...mark.notes] : [])], factors: vn.factors, claimIds: vn.claimIds, evidence: await evidence(evidenceIds), entityId: vn.entityRefs[0] });
     log("INSPECT", vn.label);
   };
-  const askForm = async (question: string, form: string, subject?: string, kind?: string, chatLabel?: string, baseQuestion?: string) => {
+  const askForm = async (question: string, form: string, subject?: string, kind?: string, chatLabel?: string, baseQuestion?: string, chartCode?: string) => {
     const generation = repoGeneration.current;
     say("user", chatLabel ?? question);
     setBusy("Composing view…"); setError(null); setNotice(null);
     try {
-      const r = await call<{ view: ViewSpec; claims: Claim[] }>("C19", "ask", { question, revision: info?.revision?.id, form, subject, kind });
+      const r = await call<{ view: ViewSpec; claims: Claim[] }>("C19", "ask", { question, revision: info?.revision?.id, form, subject, kind, ...(chartCode ? { chartCode } : {}) });
       if (generation !== repoGeneration.current) return;
       if (!r.ok) { say("assistant", failMsg(r), true); return; }
       adoptView(r.value.view, r.value.claims, !!view && view.id === r.value.view.id);
@@ -677,7 +677,7 @@ export function App() {
   return (
     <div className="app">
       {picking && <FolderPicker initialPath={repoPath} onClose={() => setPicking(false)} onPick={(p) => { selectRepository(p, true); setPicking(false); log("PICK_REPO", p); }} />}
-      {galleryOpen && <VisualsGallery revision={info?.revision?.id} onClose={() => setGalleryOpen(false)} onShow={(it: CatalogEntry, q: string) => { setGalleryOpen(false); void askForm(q, it.formId); }} />}
+      {galleryOpen && <VisualsGallery revision={info?.revision?.id} onClose={() => setGalleryOpen(false)} onShow={(it: CatalogEntry, q: string) => { setGalleryOpen(false); void askForm(q, it.formId, undefined, undefined, undefined, undefined, it.code); }} />}
       {providerWizardOpen && <ProviderWizard revision={info?.revision?.id} onClose={() => setProviderWizardOpen(false)} />}
       {outlineOpen && <Outline rendered={rendered} level={level} onClose={() => setOutlineOpen(false)} onPick={(id) => { const n = rendered.nodes.find((x) => x.id === id); setOutlineOpen(false); if (n) void inspectNode(n); }} />}
       {browsingHierarchy && (
@@ -900,6 +900,7 @@ export function App() {
               <div className="caption">
                 {view ? view.caption : phase === "composing" ? COMPOSING_CAPTION : indexed ? "" : EMPTY_NO_INDEX}
                 {view?.formReason && <div className="reason muted small">{view.formReason}</div>}
+                {view?.params?.chartId && <div className="chart-id-chip small" role="note" aria-label={`Chart type: ${view.params.chartId}`}><span className="badge inference">{String(view.params.chartId)}</span></div>}
                 {view?.route && view.route.source !== "chosen" && (
                   <div className={`readas small ${view.route.confidence}`} role="group" aria-label="How your question was read">
                     <span><strong>I read this as: {view.route.name}.</strong> {view.route.confidence === "low" ? "I wasn't sure. " : ""}<span className="muted">{view.route.because}</span></span>

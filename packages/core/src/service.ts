@@ -14,7 +14,7 @@ import { executeChatPlan } from "./chat-execution.ts";
 import { runChatAgent } from "./chat-agent.ts";
 import type {
   AnalysisBatch, ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptHierarchyView, ConceptStore, ConceptsOutput, EntityCode, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceBundle, EvidenceRef, ExplainResult, ExplanationOutput,
-  ChartOutput, HypothesesOutput, ModelProvider, ModelRequest, NameArchOutput, NameConceptOutput, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec, SourceSpan,
+  ChartOutput, ChartOutputV2, HypothesesOutput, ModelProvider, ModelRequest, NameArchOutput, NameConceptOutput, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec, SourceSpan,
   DefectDetectionInput, DetectorFinding, BenchmarkPolicy, BenchmarkResult, Fact,
 } from "@cie/schema";
 import { SCHEMA_CHALLENGE, SCHEMA_CONCEPTS, SCHEMA_EXPLANATION, SCHEMA_HYPOTHESES, SCHEMA_NAME_ARCH, SCHEMA_NAME_CONCEPT, SCHEMA_REPRESENTATION } from "@cie/schema";
@@ -55,7 +55,7 @@ import { entityAt, fingerprint, locateFrames, looksLikeTrace, parseTrace } from 
 import { compileView } from "./viewspec.ts";
 import { viewMessage, withAnswer } from "./answer.ts";
 import { catalog, ensureEdgeClaims, visualByForm, type CatalogEntry } from "./visuals.ts";
-import { cachedChartPlan, chartCreatorRequest, chartPlanCacheKey, compileChartPlan, rememberChartPlan } from "./chart-creator.ts";
+import { cachedChartPlan, chartCreatorRequest, chartPlanCacheKey, compileChartPlan, rememberChartPlan, validateChartIdNotChanged } from "./chart-creator.ts";
 import { fileHistory, headOf, isGitRepo } from "./gitinfo.ts";
 import { ensureGhForgeConnector } from "./gh.ts";
 import { backup as backupStore, deleteRepository as deleteRepo, gc as gcStore, type DeleteReport, type GcReport } from "./storage.ts";
@@ -1809,7 +1809,7 @@ export class Service {
     return r;
   }
 
-  private async askView(ctx: CallContext, req: { question: string; route?: ViewRoute; revision?: string; pins?: string[]; seeds?: string[]; overview?: boolean; level?: number; form?: string; kind?: "failure" | "invariant"; subject?: string; lens?: string }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
+  private async askView(ctx: CallContext, req: { question: string; route?: ViewRoute; revision?: string; pins?: string[]; seeds?: string[]; overview?: boolean; level?: number; form?: string; kind?: "failure" | "invariant"; subject?: string; lens?: string; chartCode?: string }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
     const question = (req.question ?? "").trim();
     if (!question || question.length > 1000) return fail(ctx, { code: "INVALID_SCHEMA", message: "question must be 1–1000 characters", retryable: false });
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
@@ -1842,21 +1842,25 @@ export class Service {
         const fallbackOptions = { overview: req.overview, lens: req.lens, pins: new Set(req.pins ?? []), extraSeeds: [...(req.pins ?? []), ...(req.overview ? overviewSeeds(this.store, rev.id) : req.seeds ?? [])], access: policyFor(this.store, rev.repoRoot) };
         const modelBundle = retrieveForQuestion(this.store, rev.id, question, { ...fallbackOptions, tokenBudget: req.overview ? undefined : chunkTokenBudget() }).bundle;
         if (modelBundle.entities.length > 0) {
-          const cacheKey = chartPlanCacheKey(modelBundle, question);
+          const cacheKey = chartPlanCacheKey(modelBundle, question, req.chartCode);
           let plan = this.store.generatedChartPlan(cacheKey, modelBundle.id, question) ?? cachedChartPlan(modelBundle, question);
           const warnings: string[] = [];
           if (!plan) {
-            const generated = await this.callModel<ChartOutput>(ctx, rev, chartCreatorRequest(question, modelBundle));
+            const generated = await this.callModel<ChartOutput>(ctx, rev, chartCreatorRequest(question, modelBundle, req.chartCode));
             if (generated.note) warnings.push(generated.note);
             if (generated.result.ok) {
               plan = generated.result.value;
+              if (req.chartCode) {
+                const idCheck = validateChartIdNotChanged(plan as unknown as ChartOutputV2, req.chartCode);
+                if (!idCheck.ok) { warnings.push(idCheck.warning!); process.stderr.write(`[chart] ${idCheck.warning}\n`); }
+              }
               rememberChartPlan(modelBundle, question, plan);
               this.store.saveGeneratedChartPlan(cacheKey, modelBundle.id, question, plan);
             } else warnings.push(modelFailureNotice(generated.result.error, generated.provider));
           }
           if (plan?.nodes.length) {
             const chartRoute = { ...route, form: "GeneratedChart" as const, name: "Evidence-grounded chart" };
-            const chart = compileChartPlan({ plan, bundle: modelBundle, rev, question, route: chartRoute });
+            const chart = compileChartPlan({ plan, bundle: modelBundle, rev, question, route: chartRoute, chartId: req.chartCode });
             chart.view.formReason = `The native causal analysis found no statically supported path. This chart arranges indexed code elements and relationships; it does not establish runtime payment or top-up outcomes. ${choice.reason}`;
             chart.view.gaps.unshift(...built.view.gaps);
             this.persist(chart.claims);
@@ -1881,19 +1885,23 @@ export class Service {
     let representation: RepresentationOutput | undefined, run;
     const warnings: string[] = [];
     if (route.form === "GeneratedChart") {
-      const cacheKey = chartPlanCacheKey(modelBundle, question);
+      const cacheKey = chartPlanCacheKey(modelBundle, question, req.chartCode);
       let plan = this.store.generatedChartPlan(cacheKey, modelBundle.id, question) ?? cachedChartPlan(modelBundle, question);
       if (!plan && bundle.entities.length > 0) {
-        const generated = await this.callModel<ChartOutput>(ctx, rev, chartCreatorRequest(question, modelBundle));
+        const generated = await this.callModel<ChartOutput>(ctx, rev, chartCreatorRequest(question, modelBundle, req.chartCode));
         if (generated.note) warnings.push(generated.note);
         if (generated.result.ok) {
           plan = generated.result.value;
+          if (req.chartCode) {
+            const idCheck = validateChartIdNotChanged(plan as unknown as ChartOutputV2, req.chartCode);
+            if (!idCheck.ok) { warnings.push(idCheck.warning!); process.stderr.write(`[chart] ${idCheck.warning}\n`); }
+          }
           rememberChartPlan(modelBundle, question, plan);
           this.store.saveGeneratedChartPlan(cacheKey, modelBundle.id, question, plan);
         } else warnings.push(modelFailureNotice(generated.result.error, generated.provider));
       }
       if (plan) {
-        const built = compileChartPlan({ plan, bundle: modelBundle, rev, question, route });
+        const built = compileChartPlan({ plan, bundle: modelBundle, rev, question, route, chartId: req.chartCode });
         this.persist(built.claims);
         redactBuilt(this.store, rev, built);
         return ok(ctx, built, { revision: rev.id, warnings, completeness: built.view.gaps.length ? "PARTIAL" : "COMPLETE" });

@@ -187,7 +187,7 @@ npm install && npm run web:build
 npm start                             # http://127.0.0.1:4317 (loopback only)
 ./scripts_make_demo_repo.sh           # a git-backed payments app at .cie/demo/payments-app, with history
 ```
-In the UI: **Browse…** to pick a repo → **Index** → ask. Try the demo repo with the three example prompts, then paste a stack trace (see `packages/core/test/helpers.ts` → `traceFor`). `./scripts_dev.sh [--fresh]` restarts the server.
+In the UI: **Browse…** to pick a repo → **Index** → ask. Try the demo repo with the three example prompts, then paste a stack trace (see `packages/core/test/helpers.ts` → `traceFor`). `./scripts_dev.sh [--fresh]` stops the existing server on port 4317, type-checks TypeScript, builds the web app and Rust worker, then starts the server. Set `PORT` to use another port; `--fresh` clears the local database first.
 
 ### Models
 The **local Ollama daemon**, one model, for everything (the status chip's own reasoning and the chat router): no model name is built into the source. Click the status chip to pick from whatever `ollama list` reports, live, no restart. With nothing picked yet, the first installed model is used and the choice is remembered (`selected_model` in the database); with nothing installed, or the daemon down, the offline stub answers instead and the chip says so.

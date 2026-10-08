@@ -16,6 +16,26 @@ import { SIZES, measure, measureLegibility } from "../src/layoutmetrics.ts";
 const item = (id: string, x: number, y: number, w = 150, h = 28): Item => ({ id, x, y, w, h });
 const overlapping = (items: Item[], gap = 0) => { let n = 0; for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) { const a = items[i], b = items[j]; if (Math.abs(a.x - b.x) < (a.w + b.w) / 2 + gap && Math.abs(a.y - b.y) < (a.h + b.h) / 2 + gap) n++; } return n; };
 
+test("generated chart arrangement preserves its requested columns and rows", () => {
+  const node = (id: string, x: number, y: number) => ({
+    id, entityRefs: [id], label: id, kind: "class", file: `${id}.ts`, claimIds: [], evidenceIds: ["ev"],
+    tier: "RELEVANT" as const, displayMode: "FACT" as const, unresolvedCalls: 0, pos: { x, y },
+  });
+  const view = {
+    id: "generated", version: 1, revision: "rev", taskId: "task", formId: "GeneratedChart" as const,
+    caption: "Generated sequence", question: "show sequence", level: 5,
+    nodes: [node("a", 0, 0), node("b", 210, 110), node("c", 630, 0)],
+    edges: [
+      { id: "ab", fromNodeId: "a", toNodeId: "b", kind: "calls", evidenceIds: ["ev"], displayMode: "FACT" as const },
+      { id: "bc", fromNodeId: "b", toNodeId: "c", kind: "calls", evidenceIds: ["ev"], displayMode: "FACT" as const },
+    ], groups: [], legend: [], cameraPolicy: { behavior: "PRESERVE" as const }, gaps: [],
+  };
+  const laidOut = arrange(render(view, 5, basePositions(view)), view, 5);
+  assert.deepEqual(Object.fromEntries(laidOut.nodes.map((n) => [n.id, n.pos])), {
+    a: { x: 0, y: 0 }, b: { x: 210, y: 110 }, c: { x: 630, y: 0 },
+  });
+});
+
 test("separate: removes every overlap, including nodes stacked on the same centre", () => {
   const items = Array.from({ length: 30 }, (_, i) => item(`n${i}`, (i % 3) * 20, (i % 5) * 6));
   assert.ok(overlapping(items) > 0);
@@ -161,7 +181,8 @@ test("every form at every level: no node overlaps and no edge through an unrelat
   // A label that cannot fit its box is a silent truncation; every form's labels must fit once wrapped.
   for (const [form, n] of Object.entries(worstTruncated)) assert.equal(n, 0, `${form}: ${n} label(s) do not fit their node`);
   for (const [form, n] of Object.entries(worstEdgeLabel)) assert.ok(n <= (EDGE_LABEL_CEILING[form] ?? 0), `${form}: ${n} edge label(s) under an edge exceeds its ceiling of ${EDGE_LABEL_CEILING[form] ?? 0}`);
-  assert.equal(views.length, 16, "all sixteen canvas forms were checked (the terrain view is not a node-link drawing)");
+  assert.equal(views.length, VISUALS.filter((x) => x.formId !== "ChangeRisk" && x.formId !== "HypothesisGraph" && x.formId !== "SemanticDiff").length + 2,
+    "every node-link visual, investigation graph and semantic diff was checked (the terrain view is not a node-link drawing)");
   worker.close();
 });
 

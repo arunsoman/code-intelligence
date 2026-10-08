@@ -235,6 +235,7 @@ export const SCHEMA_CHALLENGE = "challenge.v1";
 export const SCHEMA_ROUTE = "route.v1";
 export const SCHEMA_HYPOTHESES = "hypotheses.v1";
 export const SCHEMA_CHART = "chart.v1";
+export const SCHEMA_CHART_V2 = "chart.v2";
 export const SCHEMA_NAME_CONCEPT = "name-concept.v1";
 export const SCHEMA_NAME_ARCH = "name-arch.v1";
 
@@ -297,6 +298,270 @@ export const ChartOutput = z.object({
 }).strict();
 export type ChartOutput = z.infer<typeof ChartOutput>;
 
+// ---- chart.v2: typed discriminated union per chartId ----
+export type ChartId =
+  | "S1" | "S2" | "S3" | "S4" | "S5" | "S6" | "S7" | "S8" | "S9" | "S10"
+  | "S11" | "S12" | "S13" | "S14" | "S15" | "generic";
+
+const CHART_IDS = ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12", "S13", "S14", "S15", "generic"] as const satisfies [ChartId, ...ChartId[]];
+
+/** Shared base fields present in every chart.v2 variant. */
+const chartV2Base = {
+  contractVersion: z.literal("chart.v2"),
+  chartType: z.string().min(1).max(60),
+  layout: z.enum(["flow", "lanes", "hierarchy", "timeline", "network"]),
+  caption: z.string().max(400),
+  nodes: z.array(z.object({
+    entityId: z.string().max(300), evidenceIds: z.array(z.string()).max(20),
+    shape: z.enum(["process", "decision", "event", "state", "external"]),
+    lane: z.string().max(80).optional(), column: z.number().int().min(0).max(20), row: z.number().int().min(0).max(40),
+  }).strict()).max(40),
+  edges: z.array(z.object({
+    from: z.string().max(300), to: z.string().max(300), relationshipId: z.string().max(300),
+    label: z.string().max(100).optional(), evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(80),
+};
+
+/** Generic fallback variant (same shape as chart.v1 plus chartId/contractVersion). */
+const ChartOutputV2Generic = z.object({ ...chartV2Base, chartId: z.literal("generic") }).strict();
+
+/** S3 — state machine */
+const ChartOutputV2StateMachine = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S3"),
+  states: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+    evidenceIds: z.array(z.string()).max(20),
+    isInitial: z.boolean().optional(), isFinal: z.boolean().optional(),
+  }).strict()).max(60),
+  transitions: z.array(z.object({
+    from: z.string().max(200), to: z.string().max(200),
+    trigger: z.string().max(200), guard: z.string().max(200).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+    isIdempotentReplay: z.boolean().optional(),
+  }).strict()).max(120),
+}).strict();
+
+/** S4, S9 — ER diagram */
+const ChartOutputV2ErDiagram = z.object({
+  ...chartV2Base,
+  chartId: z.union([z.literal("S4"), z.literal("S9")]),
+  tables: z.array(z.object({
+    id: z.string().max(200), name: z.string().max(200),
+    columns: z.array(z.object({
+      name: z.string().max(200), type: z.string().max(100).optional(),
+      isPrimaryKey: z.boolean().optional(), isForeignKey: z.boolean().optional(),
+      references: z.string().max(200).optional(),
+      isNullable: z.boolean().optional(), isUnique: z.boolean().optional(),
+      evidenceIds: z.array(z.string()).max(20),
+    }).strict()).max(60),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(40),
+  relationships: z.array(z.object({
+    fromTable: z.string().max(200), toTable: z.string().max(200),
+    cardinality: z.enum(["1:1", "1:N", "N:M"]),
+    fkColumn: z.string().max(200).optional(),
+    isInferred: z.boolean(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(80),
+}).strict();
+
+/** S7 — BPMN */
+const ChartOutputV2Bpmn = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S7"),
+  elements: z.array(z.object({
+    id: z.string().max(200),
+    kind: z.enum(["startEvent", "endEvent", "task", "xorGateway", "andGateway", "intermediateEvent", "compensation"]),
+    label: z.string().max(200), laneId: z.string().max(200).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(80),
+  flows: z.array(z.object({
+    from: z.string().max(200), to: z.string().max(200),
+    kind: z.enum(["sequence", "message", "default"]),
+    condition: z.string().max(200).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(160),
+  lanes: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+    participantId: z.string().max(200).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(20),
+}).strict();
+
+/** S8 — event storming */
+const ChartOutputV2EventStorming = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S8"),
+  elements: z.array(z.object({
+    id: z.string().max(200),
+    kind: z.enum(["command", "domainEvent", "policy", "aggregate", "readModel", "externalSystem"]),
+    label: z.string().max(200),
+    band: z.enum(["commands", "events", "aggregates", "readModels", "external"]),
+    orderHint: z.number(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(120),
+  flows: z.array(z.object({
+    from: z.string().max(200), to: z.string().max(200),
+    kind: z.enum(["triggers", "produces", "consumes", "reacts"]),
+    isAsync: z.boolean(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(240),
+}).strict();
+
+/** S10 — DFD */
+const ChartOutputV2Dfd = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S10"),
+  elements: z.array(z.object({
+    id: z.string().max(200),
+    kind: z.enum(["externalEntity", "process", "dataStore"]),
+    label: z.string().max(200), level: z.number().int().min(0).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(80),
+  flows: z.array(z.object({
+    from: z.string().max(200), to: z.string().max(200),
+    label: z.string().max(200),
+    kind: z.enum(["sync", "async", "persisted"]),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(160),
+}).strict();
+
+/** S11 — decision table */
+const ChartOutputV2DecisionTable = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S11"),
+  conditions: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(20),
+  rules: z.array(z.object({
+    id: z.string().max(200),
+    values: z.record(z.string(), z.string()),
+    outcome: z.string().max(200),
+    outcomeEvidenceIds: z.array(z.string()).max(20),
+    evidenceIds: z.array(z.string()).max(20),
+    isCovered: z.boolean(),
+  }).strict()).max(100),
+}).strict();
+
+/** S12 — saga */
+const ChartOutputV2Saga = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S12"),
+  steps: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+    kind: z.enum(["forward", "compensation", "retry"]),
+    isIrreversible: z.boolean().optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(60),
+  edges: z.array(z.object({
+    from: z.string().max(200), to: z.string().max(200),
+    kind: z.enum(["happyPath", "failure", "compensation", "retry"]),
+    triggerCondition: z.string().max(200).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(120),
+}).strict();
+
+/** S13 — outbox pattern */
+const ChartOutputV2Outbox = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S13"),
+  elements: z.array(z.object({
+    id: z.string().max(200),
+    kind: z.enum(["writer", "outboxStore", "poller", "consumer", "deadLetter"]),
+    label: z.string().max(200),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(40),
+  flows: z.array(z.object({
+    from: z.string().max(200), to: z.string().max(200),
+    kind: z.enum(["transactionalWrite", "poll", "deliver", "retry", "deadLetter"]),
+    isAtomic: z.boolean().optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(80),
+}).strict();
+
+/** S14 — idempotency matrix */
+const ChartOutputV2IdempotencyMatrix = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S14"),
+  operations: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(40),
+  scenarios: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+  }).strict()).max(20),
+  cells: z.array(z.object({
+    operationId: z.string().max(200), scenarioId: z.string().max(200),
+    outcome: z.enum(["idempotent", "noOp", "rejected", "unknown"]),
+    mechanism: z.string().max(200).optional(), keyScope: z.string().max(200).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(200),
+}).strict();
+
+/** S15 — DI wiring */
+const ChartOutputV2DiWiring = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S15"),
+  components: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+    kind: z.enum(["class", "interface", "factory"]),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(80),
+  bindings: z.array(z.object({
+    from: z.string().max(200), to: z.string().max(200),
+    injectionKind: z.enum(["constructor", "field", "factory", "unknown"]),
+    qualifier: z.string().max(200).optional(), scope: z.string().max(200).optional(),
+    isUnresolved: z.boolean().optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(160),
+  cycles: z.array(z.object({
+    componentIds: z.array(z.string().max(200)).max(20),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(20),
+}).strict();
+
+/** S1, S2, S5, S6 — generic fallback for chart ids not yet specialised */
+const ChartOutputV2GenericFallback = (id: "S1" | "S2" | "S5" | "S6") =>
+  z.object({ ...chartV2Base, chartId: z.literal(id) }).strict();
+
+export const ChartOutputV2 = z.discriminatedUnion("chartId", [
+  ChartOutputV2Generic,
+  ChartOutputV2StateMachine,
+  ChartOutputV2ErDiagram,
+  ChartOutputV2Bpmn,
+  ChartOutputV2EventStorming,
+  ChartOutputV2Dfd,
+  ChartOutputV2DecisionTable,
+  ChartOutputV2Saga,
+  ChartOutputV2Outbox,
+  ChartOutputV2IdempotencyMatrix,
+  ChartOutputV2DiWiring,
+  ChartOutputV2GenericFallback("S1"),
+  ChartOutputV2GenericFallback("S2"),
+  ChartOutputV2GenericFallback("S5"),
+  ChartOutputV2GenericFallback("S6"),
+]);
+export type ChartOutputV2 = z.infer<typeof ChartOutputV2>;
+
+/** Diagnostics emitted alongside every chart.v2 compilation. */
+export interface ChartDiagnostics {
+  chartId: string;
+  contractVersion: string;
+  provider: string;
+  model: string;
+  cacheHit: boolean;
+  schemaValidationPassed: boolean;
+  suppliedEntities: number;
+  suppliedRelationships: number;
+  suppliedEvidence: number;
+  acceptedNodes: number;
+  omittedNodes: number;
+  gaps: string[];
+  fallbackReason?: string;
+}
+
 export const ExplanationOutput = z.object({
   summary: z.string().max(1000),
   claims: z.array(z.object({
@@ -357,6 +622,7 @@ export const OUTPUT_SCHEMAS = {
   [SCHEMA_ROUTE]: RouteOutput,
   [SCHEMA_HYPOTHESES]: HypothesesOutput,
   [SCHEMA_CHART]: ChartOutput,
+  [SCHEMA_CHART_V2]: ChartOutputV2,
   [SCHEMA_NAME_CONCEPT]: NameConceptOutput,
   [SCHEMA_NAME_ARCH]: NameArchOutput,
 } as const;
@@ -369,6 +635,8 @@ export interface ModelRequest {
   instructions?: string;
   /** For CHALLENGE: the claim being attacked. */
   claim?: { assertion: string; evidenceIds: Id[] };
+  /** For CHART: the requested chart type identifier (e.g. "S3", "S7"). */
+  chartId?: string;
 }
 export interface ModelProvider {
   readonly name: string; readonly model: string;

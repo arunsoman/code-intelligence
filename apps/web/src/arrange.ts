@@ -26,7 +26,12 @@ export function arrange(r: Rendered, view: ViewSpec, level: number): Rendered {
   for (const g of view.groups) if (g.kind === "lane") for (const c of g.childNodeIds) laneOf.set(c, g.id);
   let via = new Map<string, Pos[]>();
 
-  if (aggregated) {
+  if (view.formId === "GeneratedChart") {
+    // The chart plan supplies explicit column/row positions for its chosen notation.
+    // Running columnFlow here used to replace those positions with a generic call-graph
+    // layout, which erased the model's requested layout (including ER and state charts).
+    separate(items, 14);
+  } else if (aggregated) {
     forceLayout(items, links);
     separate(items, 28);
   } else if (layeredForm) {
