@@ -44,6 +44,7 @@ struct SpringWalker<'a> {
 struct ClassFrame {
     name: String,
     has_tx: bool,
+    persistence_entity: bool,
     symbol_index: Option<usize>,
 }
 
@@ -167,6 +168,15 @@ impl<'a> SpringWalker<'a> {
                 let anns = self.annotations(n);
                 let tx = self.has_annotation(&anns, "Transactional");
                 let idx = self.symbol_index(&nm);
+                let persistence_entity = self.has_annotation(&anns, "Entity");
+                if persistence_entity {
+                    let table_name = self.annotation_named(&anns, "Table").and_then(|a| a.args.iter().find(|(k, _)| k == "name" || k == "value").and_then(|(_, v)| v.as_str()).map(String::from)).unwrap_or_else(|| nm.clone());
+                    self.push_meta(FrameworkEntityKind::PersistenceEntity, nm.clone(), idx, n.start_byte(), n.end_byte(), json!({
+                        "tableName": table_name,
+                        "javaClass": nm,
+                        "tableNameExplicit": self.annotation_named(&anns, "Table").is_some_and(|a| a.args.iter().any(|(k, v)| (k == "name" || k == "value") && v.as_str().is_some())),
+                    }), None);
+                }
                 if self.has_annotation(&anns, "Controller") || self.has_annotation(&anns, "RestController") {
                     let prefix = route_prefix(&anns);
                     self.push_meta(FrameworkEntityKind::Controller, nm.clone(), idx, n.start_byte(), n.end_byte(), json!({"pathPrefix": prefix}), None);
@@ -174,7 +184,7 @@ impl<'a> SpringWalker<'a> {
                 if self.is_stereotype(&anns) {
                     self.push_meta(FrameworkEntityKind::Provider, nm.clone(), idx, n.start_byte(), n.end_byte(), json!({"stereotypes": stereotype_names(&anns)}), None);
                 }
-                self.class_stack.push(ClassFrame { name: nm.clone(), has_tx: tx, symbol_index: idx });
+                self.class_stack.push(ClassFrame { name: nm.clone(), has_tx: tx, persistence_entity, symbol_index: idx });
                 self.kids(n);
                 self.class_stack.pop();
                 return;
@@ -184,7 +194,61 @@ impl<'a> SpringWalker<'a> {
                 self.visit_executable(n, &anns);
                 return;
             }
+            "field_declaration" => {
+                if let Some(class) = self.class_stack.last().cloned() {
+                    self.visit_injection(n, &class, false, &[]);
+                    if class.persistence_entity { self.visit_persistence_field(n, &class); }
+                }
+                self.kids(n);
+                return;
+            }
             _ => self.kids(n),
+        }
+    }
+
+    fn visit_persistence_field(&mut self, n: Node, class: &ClassFrame) {
+        let anns = self.annotations(n);
+        let ty = n.child_by_field_name("type").map(|x| self.text(x)).unwrap_or_default();
+        if ty.is_empty() { return; }
+        let column = self.annotation_named(&anns, "Column");
+        let join = self.annotation_named(&anns, "JoinColumn");
+        let column_name = column.or(join).and_then(|a| a.args.iter().find(|(k, _)| k == "name" || k == "value").and_then(|(_, v)| v.as_str()).map(String::from));
+        let relation = ["ManyToOne", "OneToMany", "OneToOne", "ManyToMany"].iter().find_map(|name| self.annotation_named(&anns, name));
+        let target_type = (relation.is_some() || join.is_some()).then(|| jpa_target_type(&ty)).flatten();
+        let relation_name = relation.map(|a| a.name.as_str());
+        let cardinality = match relation_name {
+            Some("OneToOne") => "1:1",
+            Some("ManyToMany") => "N:M",
+            Some("OneToMany") => "1:N",
+            Some("ManyToOne") => "N:1",
+            _ => "",
+        };
+
+        let modifiers = n.named_child(0).filter(|x| x.kind() == "modifiers").map(|x| self.text(x)).unwrap_or_default();
+        if modifiers.contains("static") || modifiers.contains("transient") { return; }
+        let mut c = n.walk();
+        for declarator in n.named_children(&mut c).filter(|x| x.kind() == "variable_declarator") {
+            let Some(name_node) = declarator.child_by_field_name("name") else { continue };
+            let field_name = self.text(name_node);
+            let full_name = format!("{}.{}", class.name, field_name);
+            let is_primary_key = self.has_annotation(&anns, "Id") || self.has_annotation(&anns, "EmbeddedId");
+            let is_foreign_key = join.is_some() || matches!(relation_name, Some("ManyToOne" | "OneToOne"));
+            let nullable = column.and_then(|a| a.args.iter().find(|(k, _)| k == "nullable").and_then(|(_, v)| v.as_bool()));
+            let unique = column.or(join).and_then(|a| a.args.iter().find(|(k, _)| k == "unique").and_then(|(_, v)| v.as_bool()));
+            let target = target_type.clone();
+            self.push_meta(FrameworkEntityKind::PersistenceColumn, full_name, class.symbol_index, n.start_byte(), n.end_byte(), json!({
+                "columnName": column_name.clone().unwrap_or_else(|| field_name.clone()),
+                "javaField": field_name,
+                "javaType": ty,
+                "isPrimaryKey": is_primary_key,
+                "isForeignKey": is_foreign_key,
+                "isNullable": nullable,
+                "isUnique": unique,
+                "relationKind": if target.is_some() { if join.is_some() || matches!(relation_name, Some("ManyToOne" | "OneToOne")) { "foreign_key" } else { "persistence_association" } } else { "" },
+                "targetType": target,
+                "cardinality": cardinality,
+                "joinColumn": join.and_then(|a| a.args.iter().find(|(k, _)| k == "name" || k == "value").and_then(|(_, v)| v.as_str())),
+            }), Some(class.name.clone()));
         }
     }
 
@@ -306,6 +370,16 @@ impl<'a> SpringWalker<'a> {
 
 fn nm_or_index(nm: &str, i: usize) -> String {
     if nm.is_empty() || nm == "<init>" { format!("arg{}", i) } else { nm.to_string() }
+}
+
+fn jpa_target_type(declared: &str) -> Option<String> {
+    let mut ty = declared.trim();
+    if let Some((_, inner)) = ty.split_once('<') { ty = inner.split('>').next().unwrap_or(inner).trim(); }
+    ty = ty.trim_start_matches("? extends ").trim_start_matches("? super ").trim();
+    if let Some((_, last)) = ty.rsplit_once(',') { ty = last.trim(); }
+    ty = ty.trim_end_matches("[]").trim();
+    let simple = ty.rsplit('.').next().unwrap_or(ty).trim();
+    (!simple.is_empty() && !["String", "Long", "Integer", "Boolean", "UUID"].contains(&simple)).then(|| simple.to_string())
 }
 
 fn route_prefix(anns: &[Annotation]) -> Option<String> {

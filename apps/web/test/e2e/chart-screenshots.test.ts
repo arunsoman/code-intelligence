@@ -1,4 +1,4 @@
-// Renders every chart type (V1–V19) with simulated data and takes a screenshot of each.
+// Renders every gallery chart type (S1–S28, V1–V19) with simulated data and takes a screenshot of each.
 // Screenshots are written to /tmp/cie-chart-screenshots/ (or CIE_SCREENSHOT_DIR).
 // Skipped automatically when Google Chrome is not installed.
 //
@@ -17,7 +17,7 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { Browser, CHROME } from "./cdp.ts";
 import { ROOT } from "./harness.ts";
 
@@ -92,11 +92,15 @@ async function showVisual(
   question: string,
 ): Promise<"shown" | "trace" | "unavailable" | "notfound"> {
   await clickButton(b, "Visuals");
-  await b.waitFor(() => `document.querySelectorAll('.gallery li').length > 0`, 15_000, "visuals gallery");
+  await b.waitFor(
+    () => ` [...document.querySelectorAll('.gallery li')].some((x) => x.querySelector('strong')?.innerText.includes(${JSON.stringify(namePart)}))`,
+    15_000,
+    `${namePart} in visuals gallery`,
+  );
 
   const result = await b.eval<"shown" | "trace" | "unavailable" | "notfound">(
     `(() => {
-      const li = [...document.querySelectorAll('.gallery li')].find((x) => x.innerText.includes(${JSON.stringify(namePart)}));
+      const li = [...document.querySelectorAll('.gallery li')].find((x) => x.querySelector('strong')?.innerText.includes(${JSON.stringify(namePart)}));
       if (!li) return 'notfound';
 
       // This entry needs a pasted stack trace — no Show button.
@@ -121,7 +125,7 @@ async function showVisual(
 
   // Close the gallery if it did not close itself (e.g. on 'unavailable' or 'trace').
   const open = await b.eval<boolean>(`!!document.querySelector('.modal')`);
-  if (open) await clickButton(b, "Done");
+  if (open && result !== "unavailable") await clickButton(b, "Done");
 
   return result;
 }
@@ -186,10 +190,17 @@ async function ensureIndexed(): Promise<void> {
     INDEX_TIMEOUT,
     "repository indexed",
   );
+  await b.waitFor(() => `[...document.querySelectorAll('button')].some((x) => x.textContent.trim().startsWith('Build concept hierarchy') && !x.disabled)`, INDEX_TIMEOUT, "hierarchy build available");
+  assert.equal(await clickButton(b, "Build concept hierarchy"), true);
+  await b.waitFor(() => `/[1-9]\\d* hierarchy concepts/.test(document.querySelector('header')?.innerText ?? '')`, INDEX_TIMEOUT, "concept hierarchy built");
   indexed = true;
 }
 
 // Clean up after all tests.
+after(() => {
+  try { browser?.close(); } catch { /* best effort */ }
+  try { serverProc?.kill("SIGKILL"); } catch { /* best effort */ }
+});
 process.on("exit", () => {
   try { browser?.close(); } catch { /* best effort */ }
   try { serverProc?.kill("SIGKILL"); } catch { /* best effort */ }
@@ -202,8 +213,50 @@ const CHARTS: {
   name: string;        // substring of the gallery entry name
   question: string;
   waitFor: () => string;
+  timeoutMs?: number;
   extraWait?: number;  // ms to settle after waitFor resolves
 }[] = [
+  // S1–S28 exercise the notation-specific chart.v2 renderers added by the generated-chart pipeline.
+  // Unsupported offline notations still render their evidence-gap caption and are screenshot-worthy.
+  ...[
+    ["S1", "C4 container / component architecture", "Show how createPayment calls charge, reserve, and commit in the payment and ledger code."],
+    ["S2", "Reserve fast-path sequence / swimlane", "Show reserve as a swimlane journey."],
+    ["S3", "BatchId lifecycle state machine", "Show the reserve, commit, and adjustBalance lifecycle in src/ledger/ledger.ts."],
+    ["S4", "Ledger and entry relationships", "Show the ledger and entry relationships."],
+    ["S5", "Test-guarantee matrix", "Show the test-guarantee matrix."],
+    ["S6", "Use case diagram", "Show the payments use case diagram."],
+    ["S7", "BPMN process diagram", "Show the payments BPMN process."],
+    ["S8", "Event storming / event modeling", "Show the payments event storming board."],
+    ["S9", "Entity-relationship (ER) diagram", "Show the account balance and held fields written by reserve and commit through db.update in ledger.ts as an ER-style diagram."],
+    ["S10", "Data flow diagram (DFD)", "Show the payments data flow diagram."],
+    ["S11", "Decision table", "Show the reserve decision table."],
+    ["S12", "Saga / compensation graph", "Show the reserve saga and compensations."],
+    ["S13", "Outbox pattern topology", "Show the queue and capture-worker flow from payment-service through ledger.commit, including any outbox evidence."],
+    ["S14", "Idempotency matrix", "Show the idempotency matrix."],
+    ["S15", "DI wiring diagram", "Show the dependencies from payment-service to ledger.reserve, fraud.checkFraud, and gateway-client."],
+    ["S16", "UML class diagram", "Show the classes, fields, operations, and relationships in the payments code."],
+    ["S17", "UML package diagram", "Show the packages and dependencies in this repository."],
+    ["S18", "UML communication diagram", "Show the numbered messages for the reserve flow."],
+    ["S19", "UML interaction overview", "Show an interaction overview for reserve, commit, and rollback."],
+    ["S20", "CRC cards", "Show CRC cards for the payment and ledger classes."],
+    ["S21", "Call graph", "Show the static call graph rooted at createPayment."],
+    ["S22", "Layered architecture", "Show the layers and dependencies in this service."],
+    ["S23", "Dependency / module graph", "Show the compile-time module dependencies in this repository."],
+    ["S24", "State transition table", "Show the state transition table for reserve, commit, and rollback."],
+    ["S25", "FMEA / compensation matrix", "Show failure modes and their evidenced impacts and compensations."],
+    ["S26", "Metrics / telemetry map", "Show metric names and emitters declared in this repository."],
+    ["S27", "C4 context diagram", "Show the bookkeeping system, its callers, and external systems."],
+    ["S28", "UML sequence diagram", "Draw the UML sequence diagram for createPayment calling charge, reserve, and commit in the payments code."],
+  ].map(([code, name, question]) => ({
+    code, name, question,
+    waitFor: () => code === "S2"
+      ? `!!document.querySelector('.canvas') && !document.querySelector('.chip.busy') && document.body.innerText.includes(${JSON.stringify(question)})`
+      : code === "S5"
+        ? `document.body.innerText.includes('Test-guarantee matrix')`
+        : `!!document.querySelector('[aria-label="Chart type: ${code}"]')`,
+    timeoutMs: 15_000,
+    extraWait: 500,
+  })),
   {
     code: "V1",
     name: "Intent-relative architecture map",
@@ -323,11 +376,26 @@ const CHARTS: {
     extraWait: 600,
   },
   {
+    code: "V17",
+    name: "Trace-linked profile",
+    question: "Show the sampled profile for this repository.",
+    waitFor: () => `!!document.querySelector('.modal') && document.body.innerText.includes('Trace-linked profile')`,
+    extraWait: 300,
+  },
+  {
     code: "V18",
     name: "Framework route",
     question: "What endpoints does this service expose and which are guarded?",
     waitFor: () =>
       `document.querySelector('.canvas') !== null || document.querySelector('.matrix table') !== null || document.querySelector('.stage') !== null`,
+    extraWait: 500,
+  },
+  {
+    code: "V19",
+    name: "Generated chart",
+    question: "Show the createPayment call flow as a generated chart.",
+    waitFor: () => `!!document.querySelector('[aria-label="Chart type: generic"]')`,
+    timeoutMs: 15_000,
     extraWait: 500,
   },
 ];
@@ -344,7 +412,10 @@ test(
 
     const results: { code: string; name: string; file: string | null; skipped: boolean; error?: string }[] = [];
 
-    for (const chart of CHARTS) {
+    const selected = process.env.CIE_CHART_CODES
+      ? CHARTS.filter((chart) => process.env.CIE_CHART_CODES!.split(",").includes(chart.code))
+      : CHARTS;
+    for (const chart of selected) {
       await t.test(`${chart.code} – ${chart.name}`, async () => {
         try {
           // Open the gallery and trigger the visual.
@@ -357,21 +428,20 @@ test(
             await b.eval(`(() => {
               const inp = document.getElementById('chat-input');
               if (!inp) return;
-              const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
-                ?? Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+              const proto = inp instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+              const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
               if (setter) setter.call(inp, ${JSON.stringify(fakeTrace)});
               inp.dispatchEvent(new Event('input', { bubbles: true }));
             })()`);
             await b.key("Enter");
-          } else if (outcome === "notfound" || outcome === "unavailable") {
-            // Fallback: ask via chat (handles unavailable charts like SemanticDiff needing two revisions,
-            // or ConceptAtlas needing concept cards — the server will return a gap notice, which we still screenshot).
+          } else if (outcome === "notfound") {
+            // If the catalog entry is absent, ask via chat and screenshot the honest fallback answer.
             await b.eval(`document.getElementById('chat-input')?.focus()`);
             await b.eval(`(() => {
               const inp = document.getElementById('chat-input');
               if (!inp) return;
-              const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
-                ?? Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+              const proto = inp instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+              const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
               if (setter) setter.call(inp, ${JSON.stringify(chart.question)});
               inp.dispatchEvent(new Event('input', { bubbles: true }));
             })()`);
@@ -380,13 +450,21 @@ test(
           // "shown" → the gallery button was clicked; nothing extra to do.
 
           // Wait for something to render.
-          await b.waitFor(chart.waitFor, RENDER_TIMEOUT, `${chart.code} to render`);
+          await b.waitFor(chart.waitFor, chart.timeoutMs ?? RENDER_TIMEOUT, `${chart.code} to render`);
+          await b.waitFor(() => `!document.querySelector('.canvas[aria-busy="true"]')`, RENDER_TIMEOUT, "graph layout finished");
+          if (["S1", "S16"].includes(chart.code) && outcome === "shown") {
+            await b.waitFor(() => `document.querySelector('.canvas')?.dataset.layoutEngine === 'elk' && !document.querySelector('.canvas[aria-busy="true"]')`, RENDER_TIMEOUT, `${chart.code} uses the ELK worker`);
+            if (chart.code === "S1") {
+              assert.ok(await b.eval(`document.querySelector('.canvas')._cyreg.cy.nodes().filter((n) => !n.isParent()).length > 1`), "architecture chart retains its detail");
+              assert.ok(await b.eval(`document.querySelector('.canvas')._cyreg.cy.edges().some((e) => e.style('curve-style') === 'segments')`), "ELK edge routes reach the renderer");
+            }
+          }
           if (chart.extraWait) await wait(chart.extraWait);
 
           // Screenshot.
           const safeName = `${chart.code}-${chart.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`;
           const file = await screenshot(b, safeName);
-          results.push({ code: chart.code, name: chart.name, file, skipped: false });
+          results.push({ code: chart.code, name: chart.name, file, skipped: outcome === "unavailable" });
 
           // Verify the screenshot was written and is not trivially empty.
           assert.ok(existsSync(file), `screenshot file exists: ${file}`);
@@ -396,6 +474,7 @@ test(
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           results.push({ code: chart.code, name: chart.name, file: null, skipped: false, error: msg });
+          try { console.log(`  page state (${chart.code}): ${(await b.eval<string>(`document.body.innerText.slice(0, 2400)`)).replace(/\s+/g, " ")}`); } catch { /* page may have navigated */ }
           // Re-throw so the sub-test is marked failed.
           throw err;
         }

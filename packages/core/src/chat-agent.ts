@@ -1,3 +1,4 @@
+import { diagnostic } from "./diagnostics.ts";
 // A chat question answered by a model that calls read-only tools (chat-tools.ts) until it can answer, instead of a plan fixed
 // before anything was looked at. The names the question mentions are resolved against the index first (mentions.ts) and
 // handed to the model as facts, so "what is MiFilter" starts from MiFilter's class rather than from a guess at a picture.
@@ -60,6 +61,7 @@ const brief = (c: AgentToolCall) => `${c.name}(${Object.entries(c.arguments).map
  */
 export async function runChatAgent(svc: Service, ctx: CallContext, rev: RevisionRow, model: RouterModel, req: AgentRequest): Promise<ApiResult<ConverseResult> | null> {
   if (!model.converse) return null;
+  diagnostic("agent.start", { requestId: ctx.requestId, revision: rev.id, router: model.name, question: req.text, subject: req.subject, historyTurns: req.history.length });
   const access = policyFor(svc.store, rev.repoRoot);
   const env: ToolEnv = { svc, ctx, rev, access, pins: req.pins, currentSubject: req.subject, seen: new Map(), results: [], warnings: [] };
   const mentions = resolveMentions(svc.store, rev.id, req.text, access);
@@ -95,7 +97,10 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
     const lastChance = turn === MAX_TURNS - 1 || calls >= MAX_CALLS || left < ANSWER_RESERVE_MS;
     if (left <= 0) { stopped = "the request deadline was reached"; break; }
     if (lastChance && turn > 0) messages.push({ role: "user", content: "The tool budget is used up. Call answer now with what the results show." });
+    const turnStarted = performance.now();
+    diagnostic("agent.turn.start", { requestId: ctx.requestId, turn, calls, lastChance, deadlineRemainingMs: left });
     const reply: AgentReply | null = await model.converse(messages, lastChance && turn > 0 ? specs.filter((s) => s.name === "answer") : specs, AbortSignal.timeout(Math.max(1000, left)));
+    diagnostic("agent.turn.complete", { requestId: ctx.requestId, turn, elapsedMs: performance.now() - turnStarted, toolCalls: reply?.toolCalls.map((c) => ({ name: c.name, argumentKeys: Object.keys(c.arguments) })), responseChars: reply?.content.length, empty: !reply });
     if (!reply) { if (turn === 0) return null; stopped = `${model.name} stopped answering`; break; }
     if (!reply.toolCalls.length) {
       // Plain text is often the model thinking aloud; ask once for the answer tool before showing it as the reply.
@@ -110,6 +115,8 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
       const tool = toolByName.get(call.name);
       const problem = !tool ? `unknown tool "${call.name}"` : checkArgs(tool.parameters, call.arguments);
       if (call.name === "answer" && !problem) { final = { text: String(call.arguments.text).trim(), cites: (call.arguments.cites as string[]) ?? [] }; break; }
+      const wasCached = cache.has(callKey(call));
+      const toolStarted = performance.now();
       let observation: string;
       if (problem) observation = `Refused: ${problem}.`;
       else if (!tool!.run) observation = "This tool cannot be combined with others; it was ignored.";
@@ -122,6 +129,7 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
         cache.set(callKey(call), observation);
         svc.store.audit(ctx.actor.principalId, "chat.tool", rev.id, { tool: call.name, status: observation.startsWith("Failed") ? "failed" : "complete" });
       }
+      diagnostic("agent.tool.complete", { requestId: ctx.requestId, turn, tool: call.name, argumentKeys: Object.keys(call.arguments), problem, observationChars: observation.length, failed: observation.startsWith("Failed"), cached: wasCached, elapsedMs: performance.now() - toolStarted });
       trace.push(`${brief(call)} → ${observation.split("\n")[0]}`);
       messages.push({ role: "tool", toolName: call.name, content: observation });
     }

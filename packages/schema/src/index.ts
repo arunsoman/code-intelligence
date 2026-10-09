@@ -230,7 +230,6 @@ export interface ViewSpec {
 // ---- Model I/O schemas (registry IDs; contracts §1: SchemaValue carries a registered schema ID) ----
 export const SCHEMA_REPRESENTATION = "representation.v1";
 export const SCHEMA_EXPLANATION = "explanation.v1";
-export const SCHEMA_CONCEPTS = "concepts.v1";
 export const SCHEMA_CHALLENGE = "challenge.v1";
 export const SCHEMA_ROUTE = "route.v1";
 export const SCHEMA_HYPOTHESES = "hypotheses.v1";
@@ -301,9 +300,12 @@ export type ChartOutput = z.infer<typeof ChartOutput>;
 // ---- chart.v2: typed discriminated union per chartId ----
 export type ChartId =
   | "S1" | "S2" | "S3" | "S4" | "S5" | "S6" | "S7" | "S8" | "S9" | "S10"
-  | "S11" | "S12" | "S13" | "S14" | "S15" | "generic";
+  | "S11" | "S12" | "S13" | "S14" | "S15"
+  | "S16" | "S17" | "S18" | "S19" | "S20" | "S21" | "S22" | "S23" | "S24" | "S25"
+  | "S26" | "S27" | "S28" | "S29"
+  | "generic";
 
-const CHART_IDS = ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12", "S13", "S14", "S15", "generic"] as const satisfies [ChartId, ...ChartId[]];
+const CHART_IDS = ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12", "S13", "S14", "S15", "S16", "S17", "S18", "S19", "S20", "S21", "S22", "S23", "S24", "S25", "S26", "S27", "S28", "S29", "generic"] as const satisfies [ChartId, ...ChartId[]];
 
 /** Shared base fields present in every chart.v2 variant. */
 const chartV2Base = {
@@ -339,6 +341,8 @@ const ChartOutputV2StateMachine = z.object({
     trigger: z.string().max(200), guard: z.string().max(200).optional(),
     evidenceIds: z.array(z.string()).max(20),
     isIdempotentReplay: z.boolean().optional(),
+    /** A transition the source forbids (e.g. rollback after post): drawn as a negative fact, never as available behavior. */
+    isForbidden: z.boolean().optional(),
   }).strict()).max(120),
 }).strict();
 
@@ -362,6 +366,8 @@ const ChartOutputV2ErDiagram = z.object({
     cardinality: z.enum(["1:1", "1:N", "N:M"]),
     fkColumn: z.string().max(200).optional(),
     isInferred: z.boolean(),
+    /** For an inferred relation: why it is inferred. A relation marked inferred without a reason is dropped at compile time. */
+    reason: z.string().max(300).optional(),
     evidenceIds: z.array(z.string()).max(20),
   }).strict()).max(80),
 }).strict();
@@ -526,6 +532,254 @@ const ChartOutputV2DiWiring = z.object({
 const ChartOutputV2GenericFallback = (id: "S1" | "S2" | "S5" | "S6") =>
   z.object({ ...chartV2Base, chartId: z.literal(id) }).strict();
 
+/** S16 — UML class diagram */
+const ChartOutputV2ClassDiagram = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S16"),
+  classes: z.array(z.object({
+    id: z.string().max(200), name: z.string().max(200),
+    kind: z.enum(["class", "interface", "abstract", "enum"]),
+    stereotype: z.string().max(80).optional(),
+    attributes: z.array(z.object({ text: z.string().max(200), evidenceIds: z.array(z.string()).max(20) }).strict()).max(30),
+    operations: z.array(z.object({ text: z.string().max(200), evidenceIds: z.array(z.string()).max(20) }).strict()).max(30),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(60),
+  relations: z.array(z.object({
+    from: z.string().max(200), to: z.string().max(200),
+    kind: z.enum(["inheritance", "realization", "association", "aggregation", "composition", "dependency"]),
+    label: z.string().max(120).optional(),
+    isInferred: z.boolean(),
+    /** Required when isInferred: why the relation is inferred. Without a reason the relation is dropped at compile time. */
+    reason: z.string().max(300).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(120),
+}).strict();
+
+/** S17 — UML package diagram */
+const ChartOutputV2PackageDiagram = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S17"),
+  packages: z.array(z.object({
+    id: z.string().max(200), name: z.string().max(200),
+    members: z.array(z.object({ text: z.string().max(200), evidenceIds: z.array(z.string()).max(20) }).strict()).max(30),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(60),
+  dependencies: z.array(z.object({
+    from: z.string().max(200), to: z.string().max(200),
+    label: z.string().max(120).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(120),
+}).strict();
+
+/** S18 — UML communication diagram */
+const ChartOutputV2Communication = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S18"),
+  participants: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(40),
+  messages: z.array(z.object({
+    from: z.string().max(200), to: z.string().max(200),
+    order: z.number().int().min(1),
+    label: z.string().max(200),
+    kind: z.enum(["sync", "async", "return"]),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(120),
+}).strict();
+
+/** S19 — UML interaction overview */
+const ChartOutputV2InteractionOverview = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S19"),
+  frames: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+    kind: z.enum(["initial", "final", "interaction", "decision"]),
+    /** For an interaction frame: the interaction it refers to (e.g. a nested sequence or operation name). */
+    ref: z.string().max(200).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(60),
+  flows: z.array(z.object({
+    from: z.string().max(200), to: z.string().max(200),
+    guard: z.string().max(200).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(120),
+}).strict();
+
+/** S20 — CRC cards */
+const ChartOutputV2CrcCards = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S20"),
+  cards: z.array(z.object({
+    className: z.string().max(200),
+    responsibilities: z.array(z.object({ text: z.string().max(200), evidenceIds: z.array(z.string()).max(20) }).strict()).max(20),
+    collaborators: z.array(z.object({ className: z.string().max(200), evidenceIds: z.array(z.string()).max(20) }).strict()).max(20),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(60),
+}).strict();
+
+/** S21 — call graph */
+const ChartOutputV2CallGraph = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S21"),
+  functions: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+    kind: z.enum(["function", "method"]),
+    /** The class/module that owns this method, when evidenced. */
+    parentId: z.string().max(200).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(80),
+  calls: z.array(z.object({
+    from: z.string().max(200), to: z.string().max(200),
+    label: z.string().max(200).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(160),
+}).strict();
+
+/** S22 — layered architecture */
+const ChartOutputV2LayeredArchitecture = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S22"),
+  layers: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+    order: z.number().int().min(0),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(12),
+  components: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+    layerId: z.string().max(200),
+    kind: z.enum(["component", "store", "external"]),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(80),
+  edges: z.array(z.object({
+    from: z.string().max(200), to: z.string().max(200),
+    kind: z.enum(["uses", "calls", "async"]),
+    label: z.string().max(120).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(160),
+}).strict();
+
+/** S23 — dependency / module graph */
+const ChartOutputV2ModuleGraph = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S23"),
+  modules: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+    kind: z.enum(["module", "package", "crate", "workspace"]),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(80),
+  dependencies: z.array(z.object({
+    from: z.string().max(200), to: z.string().max(200),
+    kind: z.enum(["compileTime", "runtime", "test", "unknown"]),
+    label: z.string().max(120).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(160),
+}).strict();
+
+/** S24 — state transition table */
+const ChartOutputV2StateTransitionTable = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S24"),
+  states: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(40),
+  events: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(40),
+  cells: z.array(z.object({
+    stateId: z.string().max(200), eventId: z.string().max(200),
+    nextStateId: z.string().max(200),
+    guard: z.string().max(200).optional(),
+    /** A transition the source forbids: drawn as a negative fact in the table, never as behavior. */
+    isForbidden: z.boolean().optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(200),
+}).strict();
+
+/** S25 — FMEA / compensation matrix */
+const ChartOutputV2FmeaMatrix = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S25"),
+  failures: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+    impact: z.object({ text: z.string().max(300), evidenceIds: z.array(z.string()).max(20) }).strict().optional(),
+    compensation: z.object({ text: z.string().max(300), evidenceIds: z.array(z.string()).max(20) }).strict().optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(60),
+}).strict();
+
+/** S29 — control flow graph */
+const ChartOutputV2Cfg = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S29"),
+  blocks: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+    kind: z.enum(["entry", "exit", "statement", "decision"]), evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(60),
+  jumps: z.array(z.object({
+    from: z.string().max(200), to: z.string().max(200),
+    kind: z.enum(["fallthrough", "branchTrue", "branchFalse", "jump", "exceptionExit"]),
+    label: z.string().max(200).optional(), evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(120),
+}).strict();
+
+/** S26 — metrics / telemetry map (declared metric names, not live values) */
+const ChartOutputV2MetricsMap = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S26"),
+  metrics: z.array(z.object({
+    id: z.string().max(200), name: z.string().max(200),
+    meaning: z.string().max(300).optional(),
+    emitters: z.array(z.object({ label: z.string().max(200), evidenceIds: z.array(z.string()).max(20) }).strict()).max(20),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(60),
+}).strict();
+
+/** S27 — C4 context diagram */
+const ChartOutputV2C4Context = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S27"),
+  elements: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+    kind: z.enum(["person", "softwareSystem", "externalSystem"]),
+    description: z.string().max(300).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(40),
+  relationships: z.array(z.object({
+    from: z.string().max(200), to: z.string().max(200),
+    label: z.string().max(200),
+    technology: z.string().max(120).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(120),
+}).strict();
+
+/** S28 — UML sequence diagram (ordered message outline with lifelines and fragments) */
+const ChartOutputV2Sequence = z.object({
+  ...chartV2Base,
+  chartId: z.literal("S28"),
+  participants: z.array(z.object({
+    id: z.string().max(200), label: z.string().max(200),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(20),
+  messages: z.array(z.object({
+    from: z.string().max(200), to: z.string().max(200),
+    order: z.number().int().min(1),
+    label: z.string().max(200),
+    kind: z.enum(["sync", "async", "return", "self"]),
+    /** The fragment block this message belongs to (alt / opt / loop / exception), when the plan declares one. */
+    fragmentId: z.string().max(200).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(120),
+  fragments: z.array(z.object({
+    id: z.string().max(200),
+    kind: z.enum(["alt", "opt", "loop", "exception"]),
+    condition: z.string().max(200).optional(),
+    evidenceIds: z.array(z.string()).max(20),
+  }).strict()).max(20),
+}).strict();
+
 export const ChartOutputV2 = z.discriminatedUnion("chartId", [
   ChartOutputV2Generic,
   ChartOutputV2StateMachine,
@@ -538,12 +792,177 @@ export const ChartOutputV2 = z.discriminatedUnion("chartId", [
   ChartOutputV2Outbox,
   ChartOutputV2IdempotencyMatrix,
   ChartOutputV2DiWiring,
+  ChartOutputV2ClassDiagram,
+  ChartOutputV2PackageDiagram,
+  ChartOutputV2Communication,
+  ChartOutputV2InteractionOverview,
+  ChartOutputV2CrcCards,
+  ChartOutputV2CallGraph,
+  ChartOutputV2LayeredArchitecture,
+  ChartOutputV2ModuleGraph,
+  ChartOutputV2StateTransitionTable,
+  ChartOutputV2FmeaMatrix,
+  ChartOutputV2MetricsMap,
+  ChartOutputV2C4Context,
+  ChartOutputV2Sequence,
+  ChartOutputV2Cfg,
   ChartOutputV2GenericFallback("S1"),
   ChartOutputV2GenericFallback("S2"),
   ChartOutputV2GenericFallback("S5"),
   ChartOutputV2GenericFallback("S6"),
 ]);
 export type ChartOutputV2 = z.infer<typeof ChartOutputV2>;
+
+// Per-family plan types, for compilers and tests that handle one notation at a time.
+export type ChartPlanGeneric = z.infer<typeof ChartOutputV2Generic>;
+export type ChartPlanStateMachine = z.infer<typeof ChartOutputV2StateMachine>;
+export type ChartPlanErDiagram = z.infer<typeof ChartOutputV2ErDiagram>;
+export type ChartPlanBpmn = z.infer<typeof ChartOutputV2Bpmn>;
+export type ChartPlanEventStorming = z.infer<typeof ChartOutputV2EventStorming>;
+export type ChartPlanDfd = z.infer<typeof ChartOutputV2Dfd>;
+export type ChartPlanDecisionTable = z.infer<typeof ChartOutputV2DecisionTable>;
+export type ChartPlanSaga = z.infer<typeof ChartOutputV2Saga>;
+export type ChartPlanOutbox = z.infer<typeof ChartOutputV2Outbox>;
+export type ChartPlanIdempotencyMatrix = z.infer<typeof ChartOutputV2IdempotencyMatrix>;
+export type ChartPlanDiWiring = z.infer<typeof ChartOutputV2DiWiring>;
+export type ChartPlanClassDiagram = z.infer<typeof ChartOutputV2ClassDiagram>;
+export type ChartPlanPackageDiagram = z.infer<typeof ChartOutputV2PackageDiagram>;
+export type ChartPlanCommunication = z.infer<typeof ChartOutputV2Communication>;
+export type ChartPlanInteractionOverview = z.infer<typeof ChartOutputV2InteractionOverview>;
+export type ChartPlanCrcCards = z.infer<typeof ChartOutputV2CrcCards>;
+export type ChartPlanCallGraph = z.infer<typeof ChartOutputV2CallGraph>;
+export type ChartPlanLayeredArchitecture = z.infer<typeof ChartOutputV2LayeredArchitecture>;
+export type ChartPlanModuleGraph = z.infer<typeof ChartOutputV2ModuleGraph>;
+export type ChartPlanStateTransitionTable = z.infer<typeof ChartOutputV2StateTransitionTable>;
+export type ChartPlanFmeaMatrix = z.infer<typeof ChartOutputV2FmeaMatrix>;
+export type ChartPlanMetricsMap = z.infer<typeof ChartOutputV2MetricsMap>;
+export type ChartPlanC4Context = z.infer<typeof ChartOutputV2C4Context>;
+export type ChartPlanSequence = z.infer<typeof ChartOutputV2Sequence>;
+
+/** Canonical display names for the gallery's system charts: the rendered title and legend must name the selected type. */
+export const CHART_NAMES: Record<ChartId | (string & {}), string> = {
+  S1: "C4 container / component architecture",
+  S2: "Reserve fast-path sequence / swimlane",
+  S3: "BatchId lifecycle state machine",
+  S4: "Ledger and entry relationships",
+  S5: "test-guarantee matrix",
+  S6: "Use case diagram",
+  S7: "BPMN process diagram",
+  S8: "Event storming / event modeling",
+  S9: "Entity-relationship diagram",
+  S10: "Data flow diagram",
+  S11: "Decision table",
+  S12: "Saga / compensation graph",
+  S13: "Outbox pattern topology",
+  S14: "Idempotency matrix",
+  S15: "DI wiring diagram",
+  S16: "UML class diagram",
+  S17: "UML package diagram",
+  S18: "UML communication diagram",
+  S19: "UML interaction overview",
+  S20: "CRC cards",
+  S21: "Call graph",
+  S22: "Layered architecture",
+  S23: "Dependency / module graph",
+  S24: "State transition table",
+  S25: "FMEA / compensation matrix",
+  S26: "Metrics / telemetry map",
+  S27: "C4 context diagram",
+  S28: "UML sequence diagram",
+  S29: "Control flow graph",
+  generic: "Generated chart",
+};
+
+/** Shared routing and retrieval metadata for every selectable chart type. */
+const CHART_ALIASES: Partial<Record<ChartId, readonly string[]>> = {
+  S1: ["C4 container component architecture", "C4 component diagram", "container diagram", "architecture diagram"],
+  S2: ["reserve fast path sequence swimlane", "reserve sequence", "swimlane diagram"],
+  S3: ["state machine", "state diagram", "lifecycle diagram"],
+  S4: ["ledger and entry relationships", "ledger er diagram", "ledger entity relationship diagram"],
+  S5: ["test guarantee matrix", "test traceability matrix"],
+  S6: ["use case diagram", "usecase diagram"],
+  S7: ["bpmn diagram", "business process diagram"],
+  S8: ["event storming event modeling", "event storming board", "event model"],
+  S9: ["entity relationship er diagram", "er diagram", "entity relationship diagram", "entity relationship chart"],
+  S10: ["data flow diagram dfd", "dfd", "data flow chart"],
+  S11: ["decision matrix", "decision table"],
+  S12: ["saga graph", "compensation graph"],
+  S13: ["outbox diagram", "outbox topology"],
+  S14: ["idempotency matrix"],
+  S15: ["di wiring diagram", "dependency injection diagram", "di diagram", "wiring diagram"],
+  S16: ["class diagram", "uml class diagram"],
+  S17: ["package diagram", "uml package diagram"],
+  S18: ["communication diagram", "uml communication diagram"],
+  S19: ["interaction overview diagram", "uml interaction overview"],
+  S20: ["crc cards", "class responsibility collaborator cards"],
+  S21: ["call graph"],
+  S22: ["layered architecture", "layer diagram", "layered architecture diagram"],
+  S23: ["dependency module graph", "module graph", "dependency graph", "module dependency diagram"],
+  S24: ["state transition table", "transition table"],
+  S25: ["fmea compensation matrix", "fmea matrix", "failure mode analysis"],
+  S26: ["metrics telemetry map", "metrics map", "telemetry map"],
+  S27: ["c4 context diagram", "context diagram"],
+  S28: ["uml sequence diagram", "sequence diagram"],
+  S29: ["control flow graph", "cfg", "control flow diagram"],
+};
+
+const CHART_REQUIRED_KINDS: Partial<Record<ChartId, readonly string[]>> = {
+  S16: ["class", "interface", "enum", "field", "method"],
+  S17: ["class", "interface", "module", "package", "function", "method"],
+  S21: ["function", "method"],
+  S23: ["module", "package", "crate", "workspace", "class", "interface", "function", "method"],
+  S12: ["function", "method"],
+  S13: ["function", "method"],
+  S14: ["function", "method"],
+  S15: ["class", "interface"],
+  S18: ["function", "method"],
+  S19: ["function", "method"],
+  S25: ["function", "method"],
+  S27: ["class", "function"],
+  S28: ["function", "method"],
+  S29: ["function", "method"],
+  S11: ["field"],
+  S9: ["table", "column"],
+  S4: ["table", "column"],
+};
+const CHART_REPO_KINDS: Partial<Record<ChartId, readonly string[]>> = {
+  S4: ["table", "column"],
+  S9: ["table", "column"],
+  // These are repository diagrams. Their plans need source facts beyond the files that
+  // happened to win lexical retrieval, otherwise valid branches/dependencies disappear.
+  S11: ["function", "method"],
+  S17: ["class", "interface", "module", "package", "function", "method"],
+  S23: ["module", "package", "crate", "workspace", "class", "interface", "function", "method"],
+  S25: ["function", "method"],
+  S26: ["function", "method"],
+  S27: ["class", "function"],
+};
+const CHART_FORMS: Partial<Record<ChartId, FormId>> = { S2: "TransactionJourney", S5: "TestConfidence" };
+const STANDARD_CHARTS = new Set<ChartId>(["S1", "S2", "S5", "S6", "generic"]);
+const SPECIALIZED_CHARTS = new Set<ChartId>(["S3", "S4", "S7", "S8", "S9", "S10", "S11", "S16"]);
+const PROJECTED_CHARTS = new Set<ChartId>(["S12", "S13", "S14", "S15", "S17", "S18", "S19", "S20", "S21", "S22", "S23", "S24", "S25", "S26", "S27", "S28"]);
+
+const OFFLINE_DERIVED_CHARTS = new Set<ChartId>(["S1", "S2", "S5", "S6", "S8", "S10", "S21", "generic"]);
+export const CHART_REGISTRY = Object.fromEntries(CHART_IDS.map((id) => [id, {
+  id,
+  name: CHART_NAMES[id],
+  form: CHART_FORMS[id] ?? "GeneratedChart",
+  compiler: STANDARD_CHARTS.has(id) ? "standard" as const : SPECIALIZED_CHARTS.has(id) ? "specialized" as const : PROJECTED_CHARTS.has(id) ? "projected" as const : "missing" as const,
+  version: 3,
+  aliases: [...new Set([CHART_NAMES[id], ...(CHART_ALIASES[id] ?? [])])],
+  requiredKinds: CHART_REQUIRED_KINDS[id] ?? [],
+  requiredAcrossRepository: CHART_REPO_KINDS[id] ?? [],
+  offline: OFFLINE_DERIVED_CHARTS.has(id) ? "derived" as const : "gap" as const,
+}])) as Record<ChartId, { id: ChartId; name: string; form: FormId; compiler: "standard" | "specialized" | "projected" | "missing"; version: number; aliases: string[]; requiredKinds: readonly string[]; requiredAcrossRepository: readonly string[]; offline: "derived" | "gap" }>;
+
+/** Resolve an explicitly named chart with token boundaries, preferring the most specific alias. */
+export function chartCodeForQuestion(question: string): ChartId | undefined {
+  const normalized = question.toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const matches = Object.values(CHART_REGISTRY).flatMap((chart) => chart.aliases.map((alias) => ({ chart, alias: alias.toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").trim() })))
+    .filter(({ alias }) => alias && (` ${normalized} `).includes(` ${alias} `))
+    .sort((a, b) => b.alias.length - a.alias.length || a.chart.id.localeCompare(b.chart.id));
+  return matches[0]?.chart.id;
+}
 
 /** Diagnostics emitted alongside every chart.v2 compilation. */
 export interface ChartDiagnostics {
@@ -560,6 +979,11 @@ export interface ChartDiagnostics {
   omittedNodes: number;
   gaps: string[];
   fallbackReason?: string;
+  /** Typed-chart additions: edges and matrix cells accepted/omitted during compilation. */
+  acceptedEdges?: number;
+  omittedEdges?: number;
+  acceptedCells?: number;
+  omittedCells?: number;
 }
 
 export const ExplanationOutput = z.object({
@@ -575,14 +999,7 @@ export const ExplanationOutput = z.object({
 export type ExplanationOutput = z.infer<typeof ExplanationOutput>;
 
 export const CARD_KINDS = ["capability", "domain-concept", "invariant", "workflow", "failure-mode"] as const;
-export const ConceptsOutput = z.object({
-  cards: z.array(z.object({
-    kind: z.enum(CARD_KINDS), title: z.string().max(100), summary: z.string().max(500),
-    memberEntityIds: z.array(z.string()).max(60), evidenceIds: z.array(z.string()).max(60),
-    statedConfidence: z.enum(["low", "medium", "high"]),
-  })).max(40),
-}).strict();
-export type ConceptsOutput = z.infer<typeof ConceptsOutput>;
+
 
 export const ChallengeOutput = z.object({
   objections: z.array(z.object({ text: z.string().max(500), evidenceIds: z.array(z.string()).max(30) })).max(8),
@@ -614,10 +1031,21 @@ export type NameConceptOutput = z.infer<typeof NameConceptOutput>;
 export const NameArchOutput = z.object({ names: z.array(nameEntry).max(40) }).strict();
 export type NameArchOutput = z.infer<typeof NameArchOutput>;
 
+export const SCHEMA_SOURCE_OVERVIEW = "source-overview.v1" as const;
+export const SourceOverviewOutput = z.object({
+  statements: z.array(z.object({
+    text: z.string().min(1).max(800),
+    entityIds: z.array(z.string()).min(1).max(12),
+    evidenceIds: z.array(z.string()).min(1).max(20),
+  }).strict()).max(6),
+  limits: z.array(z.string().max(300)).max(3),
+}).strict();
+export type SourceOverviewOutput = z.infer<typeof SourceOverviewOutput>;
+
 export const OUTPUT_SCHEMAS = {
+  [SCHEMA_SOURCE_OVERVIEW]: SourceOverviewOutput,
   [SCHEMA_REPRESENTATION]: RepresentationOutput,
   [SCHEMA_EXPLANATION]: ExplanationOutput,
-  [SCHEMA_CONCEPTS]: ConceptsOutput,
   [SCHEMA_CHALLENGE]: ChallengeOutput,
   [SCHEMA_ROUTE]: RouteOutput,
   [SCHEMA_HYPOTHESES]: HypothesesOutput,
@@ -629,7 +1057,7 @@ export const OUTPUT_SCHEMAS = {
 
 // ---- Model gateway interface ----
 export interface ModelRequest {
-  purpose: "REPRESENT" | "EXPLAIN" | "EXTRACT" | "CHALLENGE" | "ROUTE" | "HYPOTHESIZE" | "CHART" | "NAME_CONCEPT" | "NAME_ARCH"; schemaId: keyof typeof OUTPUT_SCHEMAS;
+  purpose: "SOURCE_OVERVIEW" | "REPRESENT" | "EXPLAIN" | "CHALLENGE" | "ROUTE" | "HYPOTHESIZE" | "CHART" | "NAME_CONCEPT" | "NAME_ARCH"; schemaId: keyof typeof OUTPUT_SCHEMAS;
   question: string; bundle: EvidenceBundle; selected?: Id[];
   /** For a bounded model task such as generating a chart plan. */
   instructions?: string;

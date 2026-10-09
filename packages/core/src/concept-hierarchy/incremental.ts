@@ -142,6 +142,7 @@ export async function buildHierarchy(
         concepts: anchored,
         arch: arch.nodes,
         adapter: opts.adapter,
+        checkpoint,
       })
     : {
         concepts: anchored.map((c) => ({ ...c, label: c.label ?? `${c.kind} (${c.members[0]?.split("#").pop() ?? c.members[0] ?? "?"})`.slice(0, 60), namedBy: c.label ? c.namedBy : "FALLBACK" as const })),

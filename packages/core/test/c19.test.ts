@@ -8,7 +8,7 @@ import { ctx, demoRepo, setup, traceFor } from "./helpers.ts";
 async function allForms() {
   const repo = demoRepo();
   const t = await setup(undefined, repo);
-  await t.svc.extractConcepts(ctx(), { revision: t.revision });
+  await t.svc.buildConceptHierarchy(ctx(), { revision: t.revision });
   t.svc.reportException(ctx(), { trace: traceFor(repo), source: "api-server" });
   const views: { code: string; view: ViewSpec; claims: any[] }[] = [];
   for (const v of VISUALS) {

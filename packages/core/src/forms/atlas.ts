@@ -1,14 +1,14 @@
 // V14 Implicit-Concept Atlas: the concepts that exist in how the code behaves rather than in its names, pinned onto the
-// places that implement them, with how scattered each one is and where its enforcement is missing. Uses concept cards.
+// places that implement them, with how scattered each one is and where its enforcement is missing. Uses the structural concept hierarchy.
 import type { Claim, ConceptCard } from "@cie/schema";
 import type { RevisionRow, Store } from "../store.ts";
 import { baseView, emptyForm, flowGraph, short } from "./common.ts";
 
 export function buildAtlas(store: Store, rev: RevisionRow, question: string, subject?: string) {
-  const o = { rev, form: "ConceptAtlas" as const, question, kind: "atlas", caption: "", reason: "You asked about hidden concepts, so each concept card is pinned onto the code that implements it, with how scattered it is and where something is missing." };
+  const o = { rev, form: "ConceptAtlas" as const, question, kind: "atlas", caption: "", reason: "You asked about hidden concepts, so each hierarchy concept is pinned onto the code that implements it, with how scattered it is and where something is missing." };
   const cards = store.concepts(rev.id).filter((c) => c.kind !== "capability" || !!subject);
   const all = cards.filter((c) => !subject || c.title.toLowerCase().includes(subject.toLowerCase()) || c.kind === subject.toLowerCase());
-  if (store.concepts(rev.id).length === 0) return emptyForm(o, "There are no concept cards yet. Use “Extract concepts” first, and the atlas will pin them onto the code.");
+  if (store.concepts(rev.id).length === 0) return emptyForm(o, "There is no concept hierarchy for this revision. Use “Build concept hierarchy” first, and the atlas will pin them onto the code.");
   if (!all.length) return emptyForm(o, subject ? `No concept is named like “${subject}”.` : "Only broad capability cards exist; there are no hidden concepts (invariants, workflows, failure modes) to map yet.");
   const flow = flowGraph(store, rev.id);
   const tx = new Set(store.factsByPredicate(rev.id, "uses_transaction").map((f) => f.subject));
@@ -34,7 +34,7 @@ export function buildAtlas(store: Store, rev: RevisionRow, question: string, sub
     const cid = `n:card:${c.id}`, x = ci * 340;
     const claim = store.getClaim(c.claimId);
     if (claim) claims.push(claim);
-    v.nodes.push({ id: cid, entityRefs: sites.slice(0, 1), label: c.title, kind: "concept", file: "", claimIds: claim ? [claim.draft.id] : [], ownClaimId: claim?.draft.id, evidenceIds: c.evidenceIds.slice(0, 8), tier: "CRITICAL", displayMode: claim && claim.displayMode !== "HIDDEN" ? (claim.displayMode === "FACT" ? "INFERENCE" : claim.displayMode) : "INFERENCE", unresolvedCalls: 0, role: "concept", pos: { x, y: 0 }, badge: c.kind, heat: { value: scatter, label: `scattered over ${files.size} file(s) in ${dirs.size} folder(s)` }, notes: [c.summary, consistency ? `Consistency: ${consistency.label}.` : "No consistency measure applies to this kind of concept.", "Inferred by the model from cited evidence; confirm the concept to make it part of the team's vocabulary."] });
+    v.nodes.push({ id: cid, entityRefs: sites.slice(0, 1), label: c.title, kind: "concept", file: "", claimIds: claim ? [claim.draft.id] : [], ownClaimId: claim?.draft.id, evidenceIds: c.evidenceIds.slice(0, 8), tier: "CRITICAL", displayMode: claim && claim.displayMode !== "HIDDEN" ? (claim.displayMode === "FACT" ? "INFERENCE" : claim.displayMode) : "INFERENCE", unresolvedCalls: 0, role: "concept", pos: { x, y: 0 }, badge: c.kind, heat: { value: scatter, label: `scattered over ${files.size} file(s) in ${dirs.size} folder(s)` }, notes: [c.summary, consistency ? `Consistency: ${consistency.label}.` : "No consistency measure applies to this kind of concept.", "Structural concept from the hierarchy; labels do not establish business behavior."] });
     sites.slice(0, 7).forEach((m, si) => {
       const e = flow.entities.get(m)!;
       let id = placed.get(m);

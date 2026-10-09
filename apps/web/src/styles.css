@@ -63,6 +63,9 @@ button.link { background: none; border: none; color: var(--accent); padding: 0 4
 .caption { padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .stage { position: relative; flex: 1; min-height: 0; } .canvas { position: absolute; inset: 0; }
 .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); pointer-events: none; }
+.empty-chart-state { position: absolute; z-index: 3; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(560px, calc(100% - 40px)); max-height: 70%; overflow: auto; padding: 18px 22px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: 0 8px 28px rgba(0, 0, 0, .18); color: var(--ink); }
+.empty-chart-state p { margin: 8px 0 0; color: var(--muted); line-height: 1.5; }
+.empty-chart-state ul { margin: 8px 0 0; padding-left: 20px; color: var(--muted); }
 footer { padding: 8px 16px; border-top: 1px solid var(--line); background: var(--panel); font-size: 12px; position: relative; }
 /* Gaps and left-out candidates open above the footer, out of flow, so the canvas keeps its height (#52). */
 .footer-toggle { padding: 0 4px; }

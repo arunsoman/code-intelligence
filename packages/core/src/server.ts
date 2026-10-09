@@ -1,3 +1,4 @@
+import { diagnostic, withDiagnostics } from "./diagnostics.ts";
 // Local gateway: /api/v1/components/{componentId}/{operation} command routes (contracts §1) + static web app.
 // Loopback only. Trusted identity is established here, never taken from request JSON.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -72,9 +73,6 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
     "C24/dismissException": { mutating: true, run: (c, b) => svc.dismissException(c, b) },
     "C26/detect": { mutating: true, run: (c, b) => svc.startDefectDetection(c, b) },
     "C26/compareBenchmarks": { mutating: false, run: (c, b) => svc.compareDefectBenchmarks(c, b) },
-    "C11/extractConcepts": { mutating: true, run: (c, b) => svc.extractConcepts(c, b) },
-    "C11/listConcepts": { mutating: false, run: (c, b) => svc.listConcepts(c, b) },
-    "C11/conceptStore": { mutating: false, run: (c, b) => svc.conceptStore(c, b) },
     // The dual-axis hierarchy. Building it is a background job (C07/enqueue, kind "concept-hierarchy"); this only reads a saved version.
     "C11/conceptHierarchy": { mutating: false, run: (c, b) => svc.conceptHierarchy(c, b ?? {}) },
     // The source of one function-like element: the leaf of the concept tree.
@@ -92,6 +90,7 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
     "C21/resolve": { mutating: true, run: (c, b) => interactionsOf(svc).resolve(c, b) },
     "C21/followUp": { mutating: true, run: (c, b) => interactionsOf(svc).followUp(c, b.session, b.text, b.view) },
     "C15/converse": { mutating: false, run: (c, b) => svc.converse(c, b) },
+    "C15/conversation": { mutating: false, run: (c, b) => svc.conversation(c, b) },
     "C15/explain": { mutating: false, run: (c, b) => svc.explain(c, b) },
     "C15/whyShown": { mutating: false, run: (c, b) => svc.whyShown(c, b) },
     "C15/whyHidden": { mutating: false, run: (c, b) => svc.whyHidden(c, b) },
@@ -211,17 +210,28 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
         }
       }
       try {
-        const result = await op.run(ctx, body);
+        const result = await withDiagnostics({ requestId: ctx.requestId, traceId: ctx.traceId, operation: opKey }, async () => {
+          const started = performance.now();
+          diagnostic("api.start", { method: req.method, operation: opKey, bodyKeys: body && typeof body === "object" ? Object.keys(body) : [], deadlineMs: ctx.deadlineMs }, "info");
+          try {
+            const result = await op.run(ctx, body);
+            diagnostic("api.complete", { elapsedMs: performance.now() - started, status: statusFor(result), ok: result.ok, ...(result.ok ? { metadata: result.metadata } : { error: result.error }) }, result.ok ? "info" : "warn");
+            return result;
+          } catch (error) {
+            diagnostic("api.exception", { elapsedMs: performance.now() - started, error }, "error");
+            throw error;
+          }
+        });
         return send(res, statusFor(result), result);
       } catch (e) {
         if (e instanceof BodyTooLargeError) return send(res, 413, { ok: false, error: { code: "PAYLOAD_TOO_LARGE", message: "request body exceeds the maximum allowed size", retryable: false } });
         const err = e as Error;
         const msg = err.message ?? String(e);
         if (e instanceof TypeError || /Cannot read properties of|is not a function|must be/.test(msg)) {
-          console.error("schema error mapped to 400:", msg);
+          diagnostic("api.schema_error", { requestId: ctx.requestId, traceId: ctx.traceId, operation: opKey, error: e }, "warn");
           return send(res, 400, { ok: false, error: { code: "INVALID_SCHEMA", message: `request body field has the wrong type: ${msg}`, retryable: false } });
         }
-        console.error("internal error:", e);
+        diagnostic("api.internal_error", { requestId: ctx.requestId, traceId: ctx.traceId, operation: opKey, error: e }, "error");
         return send(res, 500, { ok: false, error: { code: "STORAGE_FAILURE", message: "internal error", retryable: true } });
       }
     }

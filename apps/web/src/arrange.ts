@@ -9,14 +9,81 @@ import { callDepth, forceLayout, gutterRoutes, laneGrid, layered, pathClear, ord
 import type { Pos, Rendered } from "./graph.ts";
 import { nodeSize } from "./layoutmetrics.ts";
 import { columnFlow } from "./layout.ts";
+import type { ElkNode, ELK } from "elkjs/lib/elk-api.js";
+
+// Automatic topology layouts must not erase time, bands or swim-lane ordering.
+const TOPOLOGY_CHARTS = new Set(["S1", "S3", "S4", "S6", "S9", "S10", "S13", "S15", "S16", "S17", "S21", "S23", "S26", "S27", "generic"]);
+export function usesElk(r: Rendered, formId?: string, chartId?: string): boolean {
+  if (!r.nodes.length || r.groups.some((g) => g.kind === "lane")) return false;
+  if (["RaceWindow", "Archaeology", "SemanticDiff", "TransactionJourney"].includes(formId ?? "")) return false;
+  return r.nodes.some((n) => n.kind === "agg" || n.kind === "ext") ||
+    (formId === "GeneratedChart" && TOPOLOGY_CHARTS.has(chartId ?? ""));
+}
+
+/** ELK owns graph geometry; all identities, evidence, grouping and selection stay intact. */
+export async function arrangeElk(r: Rendered, engine: Pick<ELK, "layout">, viewport: { width: number; height: number }): Promise<Rendered> {
+  if (!r.nodes.length) return r;
+  const ids = new Set(r.nodes.map((n) => n.id));
+  const ratio = Math.max(0.25, Math.min(4, viewport.width / Math.max(1, viewport.height)));
+  const containers = new Map(r.groups.map((g) => [g.id, {
+    id: g.id, children: [] as ElkNode[], layoutOptions: { "elk.padding": "[top=44,left=24,bottom=24,right=24]" },
+  }]));
+  const children: ElkNode[] = [];
+  for (const n of r.nodes) {
+    const s = nodeSize(n), node = { id: n.id, width: s.w, height: Math.max(46, s.h) };
+    (n.parent && containers.has(n.parent) ? containers.get(n.parent)!.children : children).push(node);
+  }
+  for (const g of r.groups) {
+    const container = containers.get(g.id)!;
+    (g.parent && containers.has(g.parent) ? containers.get(g.parent)!.children : children).push(container);
+  }
+  const graph: ElkNode = {
+    id: "layout-root",
+    layoutOptions: {
+      "elk.algorithm": "layered", "elk.direction": ratio < 1.4 ? "DOWN" : "RIGHT",
+      "elk.edgeRouting": "ORTHOGONAL", "elk.randomSeed": "1",
+      "elk.hierarchyHandling": "INCLUDE_CHILDREN",
+      "elk.separateConnectedComponents": "true", "elk.aspectRatio": String(ratio),
+      "elk.layered.compaction.connectedComponents": "true",
+      "elk.spacing.nodeNode": "32", "elk.spacing.componentComponent": "48",
+      "elk.layered.spacing.nodeNodeBetweenLayers": "72",
+      "elk.padding": "[top=24,left=24,bottom=24,right=24]",
+    },
+    children,
+    edges: r.edges.filter((e) => ids.has(e.from) && ids.has(e.to)).map((e) => ({ id: e.id, sources: [e.from], targets: [e.to] })),
+  };
+  const result = await engine.layout(graph);
+  const positions = new Map<string, Pos>(), offsets = new Map<string, Pos>();
+  const graphs: ElkNode[] = [];
+  const collect = (node: ElkNode, offset: Pos) => {
+    offsets.set(node.id, offset); graphs.push(node);
+    for (const n of node.children ?? []) {
+      if (!Number.isFinite(n.x) || !Number.isFinite(n.y)) throw new Error(`ELK did not position ${n.id}`);
+      const origin = { x: offset.x + n.x!, y: offset.y + n.y! };
+      if (ids.has(n.id)) positions.set(n.id, { x: origin.x + (n.width ?? 0) / 2, y: origin.y + (n.height ?? 0) / 2 });
+      collect(n, origin);
+    }
+  };
+  collect(result, { x: 0, y: 0 });
+  if (positions.size !== r.nodes.length) throw new Error("ELK returned an incomplete layout");
+  const routes = new Map(graphs.flatMap((node) => (node.edges ?? []).map((e) => {
+    const offset = offsets.get(e.container ?? node.id) ?? { x: 0, y: 0 };
+    return [e.id, (e.sections ?? []).flatMap((s) => [s.startPoint, ...(s.bendPoints ?? []), s.endPoint]).map((p) => ({ x: p.x + offset.x, y: p.y + offset.y }))] as const;
+  })));
+  return { ...r, nodes: r.nodes.map((n) => ({ ...n, pos: positions.get(n.id)! })), edges: r.edges.map((e) => ({ ...e, via: routes.get(e.id) ?? [] })) };
+}
 
 const LARGE_JOURNEY = 14; // beyond this a one-column-per-step sequence is an unreadable strip
 
 // Forms where one kind of link is context, not the answer: drawn faint until a node is selected or focused.
 const AMBIENT_FORMS = new Set<string>(["Ownership"]);
 
-export function arrange(r: Rendered, view: ViewSpec, level: number): Rendered {
+export function arrange(r: Rendered, view: ViewSpec, level: number, deferTopology = false): Rendered {
   if (r.nodes.length === 0) return r;
+  // The browser sends these graphs to ELK's worker rather than also running a force simulation here.
+  if (deferTopology && usesElk(r, view.formId, typeof view.params?.chartId === "string" ? view.params.chartId : undefined)) {
+    return AMBIENT_FORMS.has(view.formId) ? { ...r, edges: r.edges.map((e) => e.kind === "imports" ? { ...e, ambient: true } : e) } : r;
+  }
   const items: Item[] = r.nodes.map((n) => ({ id: n.id, ...nodeSize(n), x: n.pos.x, y: n.pos.y }));
   const links = r.edges.map((e) => ({ from: e.from, to: e.to }));
   const aggregated = r.nodes.some((n) => n.kind === "agg" || n.kind === "ext");

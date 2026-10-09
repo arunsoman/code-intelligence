@@ -47,6 +47,7 @@ export async function nameConcepts(
     concepts: SemanticConcept[];
     arch: ArchConcept[];
     adapter: NamingAdapter;
+    checkpoint?: () => void;
     /** Variable each concept's decisive motif bound, for label quality only. */
     variables?: Map<string, string>;
   },
@@ -72,6 +73,7 @@ export async function nameConcepts(
 
   const batchSize = cfg.namingBatchSize.value;
   for (let i = 0; i < pending.length; i += batchSize) {
+    opts.checkpoint?.();
     const batch = pending.slice(i, i + batchSize);
     const withMembers: NamingRequest[] = batch.map(({ concept }) => ({
       conceptId: concept.id, kind: concept.kind, features: concept.features, compositionRule: concept.compositionRule,
@@ -80,6 +82,7 @@ export async function nameConcepts(
     let names: { conceptId: string; name: string; offline?: boolean }[] | null = null;
     try { names = await opts.adapter.name({ purpose: "NAME_CONCEPT", question: JSON.stringify({ concepts: withMembers }), items: withMembers }); }
     catch { names = null; }
+    opts.checkpoint?.();
     const got = new Map((names ?? []).map((n) => [n.conceptId, n]));
     for (const { concept, cacheKey: key } of batch) {
       const ans = got.get(concept.id);
@@ -108,6 +111,7 @@ export async function nameConcepts(
     pendingPkgs.push({ node: p, key });
   }
   if (pendingPkgs.length) {
+    opts.checkpoint?.();
     let names: { conceptId: string; name: string; offline?: boolean }[] | null = null;
     try {
       names = await opts.adapter.name({
@@ -116,6 +120,7 @@ export async function nameConcepts(
         items: pendingPkgs.map(({ node }) => ({ conceptId: node.id, kind: node.kind, features: { modules: node.memberEntityIds.length }, compositionRule: null, members: [{ entityId: node.id, name: node.name, file: node.path }] })),
       });
     } catch { names = null; }
+    opts.checkpoint?.();
     const got = new Map((names ?? []).map((n) => [n.conceptId, n]));
     for (const { node: p, key } of pendingPkgs) {
       const ans = got.get(p.id);

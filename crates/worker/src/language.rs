@@ -82,6 +82,15 @@ pub struct RawTx {
 }
 
 #[derive(Debug, Clone)]
+pub struct RawMetric {
+    pub caller: Option<usize>,
+    pub name: String,
+    pub kind: String,
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Clone)]
 pub struct RawDeclarationReference {
     pub kind: String,
     pub target: String,
@@ -109,6 +118,50 @@ pub struct RawLock {
     pub end: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct RawHeritage {
+    pub owner: usize,
+    pub rel: &'static str,
+    pub target: String,
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct RawField {
+    pub owner: usize,
+    pub name: String,
+    pub type_text: Option<String>,
+    pub visibility: &'static str,
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct RawEnum {
+    pub owner: usize,
+    pub name: String,
+    pub values: Vec<String>,
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct RawFieldType {
+    pub field: usize,
+    pub type_text: String,
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct RawSignature {
+    pub method: usize,
+    pub text: String,
+    pub start: usize,
+    pub end: usize,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct RawFile {
     pub semantic: Vec<RawSemantic>,
@@ -120,11 +173,40 @@ pub struct RawFile {
     pub writes: Vec<RawWrite>,
     pub reads: Vec<RawRead>,
     pub txs: Vec<RawTx>,
+    pub metrics: Vec<RawMetric>,
     pub locks: Vec<RawLock>,
+    pub heritage: Vec<RawHeritage>,
+    pub field_types: Vec<RawFieldType>,
+    pub signatures: Vec<RawSignature>,
+    pub fields: Vec<RawField>,
+    pub enums: Vec<RawEnum>,
     pub declarations: Vec<RawDeclaration>,
     /// Framework-specific metadata emitted by plugins; the AST stays framework-agnostic.
     pub framework_metadata: Vec<crate::frameworks::RawFrameworkMetadata>,
     pub had_errors: bool,
+}
+
+fn heritage_type_name(t: &str) -> String {
+    let base = t.trim().split('<').next().unwrap_or(t).trim();
+    base.rsplit(|c| c == '.' || c == ':').next().unwrap_or(base).to_string()
+}
+
+pub(crate) fn multiplicity_of(t: &str) -> (&'static str, String) {
+    let tt = t.trim().trim_start_matches(':').trim().trim_end_matches(';');
+    let (mut mult, inner): (&'static str, &str) =
+        if tt.starts_with("Array<") && tt.ends_with('>') { ("0..*", &tt[6..tt.len() - 1]) }
+        else if tt.ends_with("[]") { ("0..*", &tt[..tt.len() - 2]) }
+        else if tt.starts_with("Set<") && tt.ends_with('>') { ("0..*", &tt[4..tt.len() - 1]) }
+        else if tt.starts_with("Vec<") && tt.ends_with('>') { ("0..*", &tt[4..tt.len() - 1]) }
+        else if tt.starts_with("List<") && tt.ends_with('>') { ("0..*", &tt[5..tt.len() - 1]) }
+        else if tt.starts_with("Map<") && tt.ends_with('>') { ("0..*", &tt[4..tt.len() - 1]) }
+        else { ("1", tt) };
+    let inner = inner.trim();
+    if mult == "1" && (inner.starts_with("Option<") || inner.ends_with('?') || inner.contains("| null") || inner.contains("?:")) { mult = "0..1"; }
+    let inner = inner.split('|').next().unwrap_or(inner).trim();
+    let base = inner.split('<').next().unwrap_or(inner).trim().trim_end_matches('?').trim_end_matches("[]").trim();
+    let name = base.rsplit(|c| c == '.' || c == ':').next().unwrap_or(base).to_string();
+    (mult, name)
 }
 
 #[derive(Debug, Clone)]
@@ -156,9 +238,12 @@ pub fn semantic_event(node: Node, caller: Option<usize>, src: &[u8]) -> Option<R
         parent = p.parent();
     }
     let callee = node.child_by_field_name("function").or_else(|| node.child_by_field_name("name")).map(|f| f.utf8_text(src).unwrap_or("").to_owned());
+    let condition = if kind == "BRANCH" {
+        node.child_by_field_name("condition").map(|c| c.utf8_text(src).unwrap_or("").to_owned())
+    } else { None };
     Some(RawSemantic { caller, start: node.start_byte(), end: node.end_byte(), value: serde_json::json!({
         "schemaId": "defect.semantic-event.v1", "schemaVersion": 1,
-        "value": { "kind": kind, "callee": callee, "enclosingLoops": loops, "pathConditions": conditions,
+        "value": { "kind": kind, "callee": callee, "condition": condition, "enclosingLoops": loops, "pathConditions": conditions,
           "effectResolution": "UNKNOWN", "aliasResolution": "UNKNOWN", "controlFlowResolution": "LEXICAL_ONLY" }
     }) })
 }
@@ -223,6 +308,49 @@ impl<'a> Walker<'a> {
         self.out.symbols.len() - 1
     }
 
+    fn heritage(&mut self, owner: usize, class_node: Node) {
+        let mut c = class_node.walk();
+        for ch in class_node.named_children(&mut c) {
+            match ch.kind() {
+                "extends_clause" | "extends_type_clause" => {
+                    if let Some(t) = ch.named_child(0) {
+                        let target = heritage_type_name(&self.text(t));
+                        if !target.is_empty() { self.out.heritage.push(RawHeritage { owner, rel: "extends", target, start: ch.start_byte(), end: ch.end_byte() }); }
+                    }
+                }
+                "implements_clause" => {
+                    let mut cc = ch.walk();
+                    for t in ch.named_children(&mut cc) {
+                        let target = heritage_type_name(&self.text(t));
+                        if !target.is_empty() { self.out.heritage.push(RawHeritage { owner, rel: "implements", target, start: t.start_byte(), end: t.end_byte() }); }
+                    }
+                }
+                "class_heritage" => {
+                    let mut hc = ch.walk();
+                    for clause in ch.named_children(&mut hc) {
+                        match clause.kind() {
+                            "extends_clause" | "extends_type_clause" => {
+                                if let Some(t) = clause.named_child(0) {
+                                    let target = heritage_type_name(&self.text(t));
+                                    if !target.is_empty() { self.out.heritage.push(RawHeritage { owner, rel: "extends", target, start: clause.start_byte(), end: clause.end_byte() }); }
+                                }
+                            }
+                            "implements_clause" => {
+                                let mut cc = clause.walk();
+                                for t in clause.named_children(&mut cc) {
+                                    let target = heritage_type_name(&self.text(t));
+                                    if !target.is_empty() { self.out.heritage.push(RawHeritage { owner, rel: "implements", target, start: t.start_byte(), end: t.end_byte() }); }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn visit(&mut self, node: Node, enclosing: Option<usize>, class: Option<String>, exported: bool) {
         if let Some(event) = semantic_event(node, enclosing, self.src) { self.out.semantic.push(event); }
         match node.kind() {
@@ -248,7 +376,8 @@ impl<'a> Walker<'a> {
             "class_declaration" | "abstract_class_declaration" => {
                 if let Some(n) = node.child_by_field_name("name") {
                     let name = self.text(n);
-                    self.push_symbol("class", name.clone(), None, node, exported);
+                    let idx = self.push_symbol("class", name.clone(), None, node, exported);
+                    self.heritage(idx, node);
                     self.children(node, enclosing, Some(name));
                     return;
                 }
@@ -257,6 +386,29 @@ impl<'a> Walker<'a> {
                 if let Some(n) = node.child_by_field_name("name") {
                     let name = self.text(n);
                     self.push_symbol("interface", name, None, node, exported);
+                    return;
+                }
+            }
+            "enum_declaration" => {
+                if let Some(n) = node.child_by_field_name("name") {
+                    let name = self.text(n);
+                    let enum_idx = self.push_symbol("enum", name.clone(), None, node, exported);
+                    // Extract enum values
+                    let mut values: Vec<String> = Vec::new();
+                    let mut c = node.walk();
+                    for ch in node.named_children(&mut c) {
+                        if ch.kind() == "enum_body" {
+                            let mut bc = ch.walk();
+                            for member in ch.named_children(&mut bc) {
+                                if member.kind() == "enum_member" {
+                                    if let Some(mname) = member.child_by_field_name("name") {
+                                        values.push(self.text(mname));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    self.out.enums.push(RawEnum { owner: enum_idx, name: name.clone(), values, start: node.start_byte(), end: node.end_byte() });
                     return;
                 }
             }
@@ -271,8 +423,50 @@ impl<'a> Walker<'a> {
                 if let Some(n) = node.child_by_field_name("name") {
                     let name = self.text(n);
                     let idx = self.push_symbol("method", name, class.as_deref(), node, false);
+                    if class.is_some() {
+                        let method_name = self.text(n);
+                        let params = node.child_by_field_name("parameters").map(|p| self.text(p)).unwrap_or_else(|| "()".into());
+                        let ret = node.child_by_field_name("return_type").map(|r| self.text(r).trim().trim_start_matches(':').trim().to_string());
+                        let text = match ret { Some(r) => format!("{method_name}{params}: {r}"), None => format!("{method_name}{params}") };
+                        self.out.signatures.push(RawSignature { method: idx, text, start: node.start_byte(), end: node.end_byte() });
+                    }
                     self.children(node, Some(idx), class);
                     return;
+                }
+            }
+            "public_field_definition" | "private_property_declaration" | "abstract_property_declaration" => {
+                if let Some(n) = node.child_by_field_name("name").or_else(|| node.named_child(0)) {
+                    let name = self.text(n);
+                    if let Some(cls) = class.as_deref() {
+                        if let Some(v) = node.child_by_field_name("value") {
+                            if matches!(v.kind(), "arrow_function" | "function_expression" | "function") {
+                                let midx = self.push_symbol("method", name.clone(), Some(cls), node, false);
+                                self.children(v, Some(midx), class);
+                                return;
+                            }
+                        }
+                        let fidx = self.push_symbol("field", name.clone(), Some(cls), node, false);
+                        let type_text = node.child_by_field_name("type").map(|t| self.text(t)).or_else(|| {
+                            let mut c = node.walk();
+                            let found = node.named_children(&mut c).find(|ch| ch.kind() == "type_annotation").map(|t| self.text(t));
+                            found
+                        });
+                        if let Some(type_text) = type_text.clone() {
+                            self.out.field_types.push(RawFieldType { field: fidx, type_text, start: node.start_byte(), end: node.end_byte() });
+                        }
+                        // Extract RawField for UML class diagram support
+                        let visibility = if node.kind().starts_with("public_") {
+                            "public"
+                        } else if node.kind().contains("private") {
+                            "private"
+                        } else if node.kind().contains("protected") {
+                            "protected"
+                        } else {
+                            "default"
+                        };
+                        self.out.fields.push(RawField { owner: cls.parse().unwrap_or(0), name: name.clone(), type_text, visibility, start: node.start_byte(), end: node.end_byte() });
+                        return;
+                    }
                 }
             }
             "variable_declarator" if enclosing.is_none() => {
@@ -318,6 +512,11 @@ impl<'a> Walker<'a> {
                 }
             }
             "call_expression" => {
+                if let (Some(kind), Some(name)) = (self.callee_name(node), self.first_string_arg(node)) {
+                    if matches!(kind.as_str(), "createCounter" | "createHistogram" | "createGauge" | "createUpDownCounter") {
+                        self.out.metrics.push(RawMetric { caller: enclosing, name, kind, start: node.start_byte(), end: node.end_byte() });
+                    }
+                }
                 if let Some(idx) = self.test_call(node, enclosing) {
                     // Calls made inside a test body belong to the test symbol.
                     self.children(node, Some(idx), class);

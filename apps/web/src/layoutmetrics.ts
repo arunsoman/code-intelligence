@@ -11,10 +11,19 @@ export const SIZES: Record<string, [number, number]> = {
   "failure-site": [170, 40], symptom: [190, 46], state: [130, 44], gate: [150, 64], policy: [150, 64], decision: [150, 54],
   hazard: [160, 44], race: [160, 44], unprotected: [160, 44], consequence: [160, 44], gap: [160, 44],
   event: [190, 52], commit: [190, 52], constraint: [190, 52], behavior: [200, 52], concept: [200, 52],
+  table: [210, 56], package: [180, 46], module: [170, 44], crate: [170, 44], component: [180, 46], participant: [180, 46],
+  interface: [170, 44], factory: [170, 44], process: [170, 56], "data-store": [150, 48],
+  "external-entity": [160, 36], "external-system": [160, 36],
+  writer: [170, 44], poller: [170, 44], consumer: [170, 44], "outbox-store": [150, 48], "dead-letter": [150, 44],
 };
 export const nodeSize: Sizer = (n) => {
   if (n.kind === "agg") return { w: 190, h: 44 };
   if (n.kind === "ext") return { w: 150, h: 30 };
+  if (["uml-class", "uml-abstract", "uml-interface", "uml-enum"].includes(n.role ?? "")) {
+    const notes = n.node?.notes?.length ?? 0;
+    const lines = 2 + Math.min(8, notes) + (notes > 8 ? 1 : 0);
+    return { w: 270, h: 76 + (lines - 1) * 18 };
+  }
   const s = n.role ? SIZES[n.role] : undefined;
   if (s) return { w: s[0], h: s[1] };
   return { w: 150, h: n.node?.badge || n.label.includes("\n") ? 44 : 28 };

@@ -1,3 +1,4 @@
+import { diagnostic, bundleDiagnostics, withDiagnostics } from "./diagnostics.ts";
 // Orchestration. Public operations return ApiResult (contracts §1). Every model call goes through callModel,
 // which enforces the per-repository egress opt-in, scrubs secrets, and writes the audit trail.
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
@@ -5,23 +6,24 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { BudgetController, OllamaProvider, hasModel, listInstalledModels, runModel, StubProvider, type GatewayFailure, type GatewayResult } from "@cie/model";
-import { routerFor } from "./llm-router.ts";
+import { BudgetController, inferSourceOverview, OllamaProvider, hasModel, listInstalledModels, runModel, StubProvider, type GatewayFailure, type GatewayResult } from "@cie/model";
+import { SCHEMA_SOURCE_OVERVIEW, type SourceOverviewOutput } from "@cie/schema";
+import { matchName, readText, routerFor, validateProviderGuide, type ChartOption, type Intent as ChatIntent, type ProviderGuideResponse, type RouterModel } from "./llm-router.ts";
+import { INTENT_CONFIDENCE_THRESHOLD } from "../../schema/src/intents.ts";
 import { fetchRepositoryBranches, repositoryGit, switchRepositoryBranch } from "./repository-git.ts";
 import { modelFailureNotice } from "./model-failure.ts";
 import { validateChatPlan } from "./chat-plan.ts";
 import { executeChatPlan } from "./chat-execution.ts";
 import { runChatAgent } from "./chat-agent.ts";
 import type {
-  AnalysisBatch, ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptHierarchyView, ConceptStore, ConceptsOutput, EntityCode, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceBundle, EvidenceRef, ExplainResult, ExplanationOutput,
-  ChartOutput, ChartOutputV2, HypothesesOutput, ModelProvider, ModelRequest, NameArchOutput, NameConceptOutput, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec, SourceSpan,
+  AnalysisBatch, ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptHierarchyView, ConceptStore, EntityCode, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceBundle, EvidenceRef, ExplainResult, ExplanationOutput,
+  ChartOutput, ChartOutputV2, ChartId, HypothesesOutput, ModelProvider, ModelRequest, NameArchOutput, NameConceptOutput, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec, SourceSpan,
   DefectDetectionInput, DetectorFinding, BenchmarkPolicy, BenchmarkResult, Fact,
 } from "@cie/schema";
-import { SCHEMA_CHALLENGE, SCHEMA_CONCEPTS, SCHEMA_EXPLANATION, SCHEMA_HYPOTHESES, SCHEMA_NAME_ARCH, SCHEMA_NAME_CONCEPT, SCHEMA_REPRESENTATION } from "@cie/schema";
+import { chartCodeForQuestion, CHART_REGISTRY, SCHEMA_CHALLENGE, SCHEMA_EXPLANATION, SCHEMA_HYPOTHESES, SCHEMA_NAME_ARCH, SCHEMA_NAME_CONCEPT, SCHEMA_REPRESENTATION } from "@cie/schema";
 import { applyVerdict, gateClaim, modelText, wilson, withChallenge } from "./claims.ts";
 import { claimOf } from "./forms/common.ts";
 import { buildHierarchy, persistHierarchy, type NamingAdapter } from "./concept-hierarchy/index.ts";
-import { cardsFromOutput, chunkSymbols, mergeCards } from "./concepts.ts";
 import { buildFailureGraph, buildInvariantGraph } from "./forms/causal.ts";
 import { short } from "./forms/common.ts";
 import { buildHypothesis } from "./forms/hypothesis.ts";
@@ -39,23 +41,26 @@ import { Profiles, ProfileCheckError } from "./profiles-analysis.ts";
 import { Tasks, TaskError } from "./execution.ts";
 import { GitHubCheckPublisher, newGrant } from "./pr-publish.ts";
 import { githubRemote, isGhInstalled } from "./gh.ts";
-import type { PrAnalysisView } from "@cie/schema";
-import { overviewSeeds } from "./overview.ts";
-import { projectDescription, projectProfile } from "./profile.ts";
+import type { ModelRunRef, PrAnalysisView } from "@cie/schema";
+import { conceptRequirement, navigateHierarchy, overviewSeeds } from "./overview.ts";
+import { projectProfile } from "./profile.ts";
 import { Registry } from "./registry.ts";
 import { WorkspaceLog } from "./workspaces.ts";
 import { Journal, type CommitReceipt } from "./journal.ts";
 import { Cancelled, JobRunner, type JobControl } from "./jobs.ts";
-import { EGRESS_FIELDS, payloadHash, scrubBundle } from "./policy.ts";
-import { bundleFor, retrieveAround, retrieveForQuestion } from "./retrieval.ts";
-import { matchName, readText, validateProviderGuide, type ChartOption, type ProviderGuideResponse, type RouterModel } from "./llm-router.ts";
+import { detectSecret, EGRESS_FIELDS, payloadHash, scrubBundle } from "./policy.ts";
+import { bundleFor, queryTerms, retrieveAround, retrieveForQuestion } from "./retrieval.ts";
+import { resolveReferent, planQuery, type QueryPlan } from "./query-router.ts";
+import { resolveMentions } from "./mentions.ts";
+import { zoomLevelOf, choicesFor, sideZoomChoices } from "./zoom-map.ts";
+import { ChatSessionManager, type ModelContext } from "./chat-session.ts";
 import { revisionIndex, scoreEntity, WEIGHTS } from "./salience.ts";
 import { DeltaBaseError, type RevisionRow, type Store } from "./store.ts";
 import { entityAt, fingerprint, locateFrames, looksLikeTrace, parseTrace } from "./trace.ts";
 import { compileView } from "./viewspec.ts";
 import { viewMessage, withAnswer } from "./answer.ts";
 import { catalog, ensureEdgeClaims, visualByForm, type CatalogEntry } from "./visuals.ts";
-import { cachedChartPlan, chartCreatorRequest, chartPlanCacheKey, compileChartPlan, rememberChartPlan, validateChartIdNotChanged } from "./chart-creator.ts";
+import { cachedChartPlan, chartCreatorRequest, chartPlanCacheKey, compileChartPlan, rememberChartPlan, validateChartIdNotChanged, type ChartCompileDiag } from "./chart-creator.ts";
 import { fileHistory, headOf, isGitRepo } from "./gitinfo.ts";
 import { ensureGhForgeConnector } from "./gh.ts";
 import { backup as backupStore, deleteRepository as deleteRepo, gc as gcStore, type DeleteReport, type GcReport } from "./storage.ts";
@@ -89,6 +94,14 @@ import { GitHubPublisher, JointRunner, RecipeRunner, repositoryInventory, valida
 import { ReleaseScope, ReleaseError, type ReleaseAdapters } from "./release-scope.ts";
 import { GhCiForge, GhError as CiGhError } from "./feature/ci-forge.ts";
 import { buildReleaseReadiness } from "./release-readiness.ts";
+
+/** Every explicitly named chart resolves through the shared chart registry. */
+const explicitChartCode = chartCodeForQuestion;
+
+function matchingChartPlan(plan: ChartOutput | ChartOutputV2 | null, chartCode?: string): ChartOutput | ChartOutputV2 | null {
+  if (!plan || !chartCode) return plan;
+  return "contractVersion" in plan && plan.contractVersion === "chart.v2" && plan.chartId === chartCode ? plan : null;
+}
 
 const chunkTokenBudget = () => Number(process.env.CIE_CHUNK_TOKEN_BUDGET) || 60_000; // per concept-extraction request; the gateway hard limit is 200k
 
@@ -157,6 +170,7 @@ export class Service {
   embedder: Embedder = new HashEmbedder();
   /** Reads what a question wants (which view, or which conversational request). Null: nothing configured, and the general map is used. */
   router: RouterModel | null = null;
+  readonly sessionManager: ChatSessionManager;
   /** The GitHub transport F07 publishes through. Unset means publication is refused, never simulated. */
   forge: DraftForge | null = null;
   private worker: WorkerClient;
@@ -516,6 +530,7 @@ export class Service {
 
   constructor(store: Store, worker: WorkerClient, model: ModelProvider, offline: ModelProvider = new StubProvider()) {
     this.store = store; this.worker = worker; this.model = model; this.offline = offline;
+    this.sessionManager = new ChatSessionManager(this.store);
     this.registry = new Registry(store);
     this.history = new History(store, this.registry);
     this.runtime = new Runtime(store, this.registry);
@@ -660,6 +675,8 @@ export class Service {
 
   // ---------------------------------------------------------------- model gateway with egress control
   private async callModel<T>(ctx: CallContext, rev: RevisionRow, req: ModelRequest): Promise<{ result: GatewayResult<T> | GatewayFailure; provider: ModelProvider; note?: string }> {
+    const modelStarted = performance.now();
+    diagnostic("model.start", { requestId: ctx.requestId, revision: rev.id, purpose: req.purpose, schemaId: req.schemaId, chartId: req.chartId, question: req.question, configuredProvider: this.model.name, configuredModel: this.model.model, deadlineRemainingMs: ctx.deadlineMs - Date.now(), bundle: bundleDiagnostics(req.bundle) });
     let provider = this.model, note: string | undefined, request = req;
     // Fail closed: anything that is not clearly "stays on this machine" is treated as leaving it, and anything that goes wrong
     // while deciding or recording an egress means nothing is sent. An unknown provider, an unreadable policy, an audit that
@@ -688,16 +705,19 @@ export class Service {
         }
       }
     }
+    diagnostic("model.dispatch", { requestId: ctx.requestId, purpose: req.purpose, provider: provider.name, model: provider.model, hosted: provider.hosted !== false, note, sentBundle: bundleDiagnostics(request.bundle) });
     const hostedCall = provider.hosted !== false;
     let result = await runModel<T>(provider, request, { deadlineMs: Math.max(1000, ctx.deadlineMs - Date.now()), budget: hostedCall ? { controller: this.budget, scope: rev.repoRoot } : undefined });
     if (hostedCall && !result.ok && result.error.code === "BUDGET_EXCEEDED") {
       // Feature degradation, not failure: the offline model answers and the person is told why.
       try { this.store.audit(actor(ctx), "budget.exhausted", rev.repoRoot, { purpose: req.purpose, message: result.error.message }); } catch { /* ignore */ }
       note = `The hosted-model budget for this repository is used up (${result.error.message}), so the offline model answered.`;
+      diagnostic("model.fallback", { requestId: ctx.requestId, purpose: req.purpose, reason: result.error, provider: this.offline.name }, "warn");
       provider = this.offline;
       result = await runModel<T>(provider, req, { deadlineMs: Math.max(1000, ctx.deadlineMs - Date.now()) });
     }
     if (provider === this.model) this.modelError = result.ok ? null : result.error.code;
+    diagnostic("model.complete", { requestId: ctx.requestId, purpose: req.purpose, elapsedMs: performance.now() - modelStarted, provider: provider.name, model: provider.model, ok: result.ok, ...(result.ok ? { run: result.run, outputKeys: result.value && typeof result.value === "object" ? Object.keys(result.value) : [] } : { error: result.error }), note }, result.ok ? "debug" : "warn");
     return { result, provider, note };
   }
 
@@ -1367,9 +1387,7 @@ export class Service {
       return ok(ctx, this.jobs.enqueue(ctx, { kind: "index", params: { repoPath }, run: (jctx, control) => this.ingestRepository(jctx, { repoPath }, control) }));
     }
     if (req.kind === "concepts") {
-      const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
-      if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index a repository first", retryable: false });
-      return ok(ctx, this.jobs.enqueue(ctx, { kind: "concepts", params: { revision: rev.id, repoPath: rev.repoRoot }, run: (jctx, control) => this.extractConcepts(jctx, { revision: rev.id }, control) }));
+      return fail(ctx, { code: "NOT_IMPLEMENTED", message: "Concept cards have been retired. Use concept-hierarchy to build concepts.", retryable: false });
     }
     if (req.kind === "concept-hierarchy") {
       const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
@@ -1538,120 +1556,12 @@ export class Service {
 
   // ---------------------------------------------------------------- concept cards
   async extractConcepts(ctx: CallContext, req: { revision?: string }, control?: JobControl): Promise<ApiResult<{ cards: ConceptCard[]; dropped: string[]; provider: string }>> {
-    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
-    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
-    const all: ConceptCard[] = [], dropped: string[] = [], warnings: string[] = [];
-    let providerName = `${this.model.name}/${this.model.model}`;
-    // Incremental invalidation (CE-3, region-level): concept cards whose every member symbol is
-    // textually unchanged since the previous extraction are carried over verbatim (their claim
-    // re-gated against this revision); only regions with changed members are re-extracted.
-    const versions = this.store.conceptVersions(rev.repoRoot);
-    const priorVersion = versions[0]?.version ?? 0;
-    const priorCards = priorVersion ? this.store.conceptVersion(rev.repoRoot, priorVersion) ?? [] : [];
-    const priorRevision = versions[0]?.revision ?? null;
-    const carried: ConceptCard[] = [];
-    let touchedIds: string[] = [];
-    // Symbols present in the previous extraction's revision with identical text: a chunk made only of these needs no new model call.
-    const unchangedSymbols = new Set<string>();
-    if (priorRevision && priorRevision !== rev.id) {
-      const before = new Map(this.store.entities(priorRevision).filter((e) => e.symbolHash).map((e) => [e.entityId, e.symbolHash!]));
-      const now = new Map(this.store.entities(rev.id).filter((e) => e.symbolHash).map((e) => [e.entityId, e.symbolHash!]));
-      for (const [id, h] of now) if (before.get(id) === h) unchangedSymbols.add(id);
-      const memberIds = new Set(priorCards.flatMap((c) => c.members));
-      const changedMembers = [...memberIds].filter((id) => before.get(id) !== now.get(id));
-      const changedSet = new Set(changedMembers);
-      carried.push(...priorCards.filter((c) => c.members.length > 0 && !c.members.some((m) => changedSet.has(m))));
-      touchedIds = [...changedSet];
-    }
-    const carriedIds = new Set(carried.map((c) => c.id));
-    if (carried.length) warnings.push(`Incremental: ${carried.length} concept card(s) carried over; ${touchedIds.length || "no"} changed member symbol(s) force re-extraction only for their regions.`);
-    const carriedMembers = new Set(carried.flatMap((c) => c.members));
-    // Members of prior cards that were not carried over (one of their members changed) are re-read together, so the card is rebuilt whole.
-    const rebuildMembers = new Set(priorCards.filter((c) => !carriedIds.has(c.id)).flatMap((c) => c.members));
-    const touched = new Set(touchedIds);
-    // The entity-id set grounds every chunk's cards; build it once instead of reparsing every entity per chunk.
-    const knownEntityIds = new Set(this.store.entities(rev.id).map((e) => e.entityId));
-    const queue = chunkSymbols(this.store, rev.id);
-    // Claims are written with the cards, in one step at the end, so a cancelled run leaves nothing behind.
-    const pendingClaims: Claim[] = [];
-    let chunksDone = 0;
-    while (queue.length) {
-      control?.checkpoint();
-      await new Promise<void>((r) => setImmediate(r)); // building a bundle is synchronous database work; let requests in between parts
-      control?.progress({ phase: "extracting", done: chunksDone, total: chunksDone + queue.length, message: `Reading the code with the model: part ${chunksDone + 1} of about ${chunksDone + queue.length}` });
-      const whole = queue.shift()!;
-      // Region-level re-extraction: only symbols that changed, are new, or belong to a card that must be rebuilt go to the model.
-      // A chunk with none of those needs no call, and a chunk with a few sends only those few.
-      const ids = priorRevision && priorRevision !== rev.id ? whole.filter((id) => touched.has(id) || !(carriedMembers.has(id) || unchangedSymbols.has(id)) || rebuildMembers.has(id)) : whole;
-      if (ids.length === 0) continue;
-      const bundle = bundleFor(this.store, rev.id, ids, ["concept extraction: deep defect semantic events are excluded from this projection"], { includeDefectSemantics: false });
-      // Keep each request well under the gateway budget: halve a chunk whose evidence is too large.
-      if (bundle.tokenEstimate > chunkTokenBudget() && ids.length > 1) {
-        const mid = Math.ceil(ids.length / 2);
-        queue.unshift(ids.slice(0, mid), ids.slice(mid));
-        continue;
-      }
-      // Each model call gets its own deadline; the request that started a job has long expired by the later chunks.
-      const callCtx = control ? { ...ctx, deadlineMs: Date.now() + 120_000 } : ctx;
-      const asked = this.callModel<ConceptsOutput>(callCtx, rev, { purpose: "EXTRACT", schemaId: SCHEMA_CONCEPTS, question: "Extract concept cards", bundle });
-      const { result, provider, note } = control ? await control.guard(asked) : await asked;
-      chunksDone++;
-      if (note && !warnings.includes(note)) warnings.push(note);
-      providerName = `${provider.name}/${provider.model}`;
-      if (!result.ok) { warnings.push(`extraction failed for a chunk (${result.error.code})`); continue; }
-      const out = cardsFromOutput(this.store, rev.id, result.value, bundle, providerName, result.run, knownEntityIds);
-      pendingClaims.push(...out.claims);
-      all.push(...out.cards); dropped.push(...out.dropped);
-    }
-    // Same-titled cards from different chunks collapse to one.
-    const unique = mergeCards(all, (c, evidenceIds) => {
-      const claim = claimOf(this.store, rev.id, { assertion: `${c.title}: ${c.summary}`, claimClass: "concept-card", evidenceIds, rationaleSummary: `Extracted ${c.kind} in several parts and merged; confidence is the model's own, uncalibrated statement (${c.statedConfidence}).` });
-      pendingClaims.push(claim);
-      return claim.draft.id;
-    });
-    // Carried-over cards are re-anchored to this revision: new claim (re-gated with the same
-    // assertion and evidence), new id, so stored cards always name their own revision.
-    const adopted: ConceptCard[] = [];
-    for (const c of carried) {
-      if (carriedIds.has(`${c.id}`) && unique.some((u) => u.title.toLowerCase() === c.title.toLowerCase() && u.kind === c.kind)) continue; // re-extracted anyway; keep the fresh one
-      const prior = this.store.getClaims([c.claimId])[0] ?? null;
-      const assertion = prior ? prior.draft.assertion : `${c.title}: ${c.summary}`;
-      const rationale = prior ? prior.draft.rationaleSummary : `Carried over from revision ${priorRevision}; extracted ${c.kind}.`;
-      const ev = c.evidenceIds.filter((id) => this.store.evidence(rev.id, id));
-      if (!ev.length) { dropped.push(`${c.title}: carried-over card has no evidence in this revision`); continue; }
-      const claim = claimOf(this.store, rev.id, { assertion, claimClass: "concept-card", evidenceIds: ev, rationaleSummary: rationale });
-      pendingClaims.push(claim);
-      adopted.push({ ...c, id: "card:" + createHash("sha256").update(rev.id + c.kind + c.title).digest("hex").slice(0, 12), revision: rev.id, claimId: claim.draft.id, source: `${c.source} (carried over)` });
-    }
-    const merged = [...unique, ...adopted];
-    control?.commit();
-    this.persist(pendingClaims);
-    const version = this.store.replaceConcepts(rev.id, merged, providerName);
-    this.store.audit(actor(ctx), "concepts.extract", rev.id, { cards: merged.length, carried: adopted.length, dropped: dropped.length, provider: providerName, version });
-    return ok(ctx, { cards: merged, dropped, provider: providerName }, { revision: rev.id, warnings, completeness: dropped.length ? "PARTIAL" : "COMPLETE" });
+    return fail(ctx, { code: "NOT_IMPLEMENTED", message: "Concept cards have been retired. Click “Build concept hierarchy”; it is the only concept-generation mechanism.", retryable: false });
   }
 
   /** The concept store: cards with the claim behind each, the version history, and what changed since the previous version. */
   conceptStore(ctx: CallContext, req: { revision?: string; version?: number }): ApiResult<ConceptStore> {
-    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
-    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
-    const versions = this.store.conceptVersions(rev.repoRoot);
-    const current = versions[0]?.version ?? 0;
-    const want = req.version ?? current;
-    const snapshot = want === current ? this.store.concepts(rev.id, { includeRefuted: true }) : this.store.conceptVersion(rev.repoRoot, want) ?? [];
-    const prior = want > 1 ? this.store.conceptVersion(rev.repoRoot, want - 1) : null;
-    const key = (c: ConceptCard) => `${c.kind}|${c.title.toLowerCase()}`;
-    const priorByKey = new Map((prior ?? []).map((c) => [key(c), c]));
-    const nowKeys = new Set(snapshot.map(key));
-    const changedMembers = (c: ConceptCard, p: ConceptCard) => c.members.length !== p.members.length || c.summary !== p.summary;
-    const diff = prior ? {
-      against: want - 1,
-      added: snapshot.filter((c) => !priorByKey.has(key(c))).map((c) => c.title),
-      removed: [...priorByKey.values()].filter((c) => !nowKeys.has(key(c))).map((c) => c.title),
-      changed: snapshot.filter((c) => priorByKey.has(key(c)) && changedMembers(c, priorByKey.get(key(c))!)).map((c) => c.title),
-    } : null;
-    const claims = Object.fromEntries(this.store.getClaims(snapshot.map((c) => c.claimId)).map((c) => [c.draft.id, c]));
-    return ok(ctx, { version: want, versions, cards: snapshot, claims, diff, statedConfidence: this.statedConfidenceReport(snapshot, claims) }, { revision: rev.id });
+    return fail(ctx, { code: "NOT_IMPLEMENTED", message: "Concept cards have been removed. Use conceptHierarchy.", retryable: false });
   }
 
   /** Does the model's own "high/medium/low" mean anything? Compare it with your verdicts, and abstain until there are enough. */
@@ -1682,13 +1592,14 @@ export class Service {
    * claims/verdicts tables are untouched. `modelVersion` in the cache key keeps names from one model
    * from leaking into another's cache.
    */
-  private namingAdapter(rev: RevisionRow): NamingAdapter {
+  private namingAdapter(rev: RevisionRow, control?: JobControl): NamingAdapter {
     const modelVersion = `${this.model.name}/${this.model.model}`;
     const usage = { model: 0, offline: 0 };
     const notes = new Set<string>();
     return {
       modelVersion, usage, notes,
       name: async (req) => {
+        control?.checkpoint();
         const schemaId = req.purpose === "NAME_ARCH" ? SCHEMA_NAME_ARCH : SCHEMA_NAME_CONCEPT;
         const callCtx: CallContext = {
           requestId: `req-name:${randomUUID()}`, idempotencyKey: `naming:${rev.id}:${randomUUID()}`,
@@ -1696,7 +1607,9 @@ export class Service {
           deadlineMs: Date.now() + 120_000, traceId: `trace-name:${randomUUID()}`,
         };
         const bundle: EvidenceBundle = { id: "naming", revision: rev.id, evidence: [], entities: [], relationships: [], facts: [], coverage: [], unresolved: [], tokenEstimate: 0 };
-        const { result, provider, note } = await this.callModel<NameConceptOutput & NameArchOutput>(callCtx, rev, { purpose: req.purpose, schemaId, question: req.question, bundle });
+        const asked = this.callModel<NameConceptOutput & NameArchOutput>(callCtx, rev, { purpose: req.purpose, schemaId, question: req.question, bundle });
+        const { result, provider, note } = control ? await control.guard(asked) : await asked;
+        control?.checkpoint();
         if (!result.ok) return null;
         // Who actually answered: the gateway swaps in the offline stand-in when a hosted model is not approved or its budget is spent.
         const offline = provider === this.offline || provider.name === "stub";
@@ -1715,7 +1628,7 @@ export class Service {
   async buildConceptHierarchy(ctx: CallContext, req: { revision?: string }, control?: JobControl): Promise<ApiResult<ConceptHierarchyView>> {
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
-    const adapter = this.namingAdapter(rev);
+    const adapter = this.namingAdapter(rev, control);
     const result = await buildHierarchy(this.store, rev.id, { repoRoot: rev.repoRoot, adapter, control, provider: `${this.model.name}/${this.model.model}` });
     control?.commit();
     // Record who really wrote the names, not who was configured to: a hosted model that was not approved did not write them.
@@ -1740,8 +1653,9 @@ export class Service {
     if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
     // A header or button only needs to know whether a build exists and how big it is; the full view can be megabytes.
     if (req.summary === true) {
-      const version = this.store.latestSemanticVersionNumber(rev.repoRoot);
-      return ok(ctx, { revision: rev.id, version, versions: [], concepts: [], invariants: [], arch: [], surfaces: [], entryPoints: [], crossPackage: [], links: [], stats: null, summary: { concepts: version ? this.store.semanticConceptCount(rev.id) : 0 } });
+      const latest = this.store.semanticConceptVersions(rev.repoRoot)[0];
+      return ok(ctx, { revision: latest?.revision ?? rev.id, version: latest?.version ?? 0, versions: [], concepts: [], invariants: [], arch: [], surfaces: [], entryPoints: [], crossPackage: [], links: [], stats: null, summary: { concepts: latest?.concepts ?? 0 } },
+        { revision: rev.id, warnings: latest && latest.revision !== rev.id ? ["The existing concept hierarchy belongs to an older indexed revision. Click “Build concept hierarchy” to update it."] : [] });
     }
     const versions = this.store.semanticConceptVersions(rev.repoRoot);
     const current = versions[0]?.version ?? 0;
@@ -1750,17 +1664,18 @@ export class Service {
       return ok(ctx, { revision: rev.id, version: 0, versions: [], concepts: [], invariants: [], arch: [], surfaces: [], entryPoints: [], crossPackage: [], links: [], stats: null });
     }
     if (want === current) {
-      const snapshot = this.store.latestSemanticVersionSnapshot(rev.id);
+      const hierarchyRevision = versions[0]!.revision;
+      const snapshot = this.store.latestSemanticVersionSnapshot(hierarchyRevision);
       return ok(ctx, {
-        revision: rev.id, version: want, versions,
-        concepts: this.store.semanticConcepts(rev.id),
+        revision: hierarchyRevision, version: want, versions,
+        concepts: this.store.semanticConcepts(hierarchyRevision),
         invariants: (snapshot?.invariants as ConceptHierarchyView["invariants"]) ?? [],
-        arch: this.store.archNodes(rev.id),
+        arch: this.store.archNodes(hierarchyRevision),
         surfaces: (snapshot?.surfaces as ConceptHierarchyView["surfaces"]) ?? [],
         entryPoints: [], crossPackage: (snapshot?.crossPackage as ConceptHierarchyView["crossPackage"]) ?? [],
-        links: this.store.crossAxisLinks(rev.id),
+        links: this.store.crossAxisLinks(hierarchyRevision),
         stats: (snapshot?.stats as ConceptHierarchyView["stats"]) ?? null,
-      });
+      }, { revision: rev.id, warnings: hierarchyRevision !== rev.id ? ["The existing concept hierarchy belongs to an older indexed revision. Click “Build concept hierarchy” to update it."] : [] });
     }
     const snap = this.store.semanticConceptVersion(rev.repoRoot, want);
     if (!snap) return fail(ctx, { code: "NOT_FOUND", message: `no hierarchy version ${want}`, retryable: false });
@@ -1804,18 +1719,105 @@ export class Service {
 
   /** Every question gets both: the picture, and the written answer composed from the same view (after access redaction, so it never says more). */
   async ask(ctx: CallContext, req: Parameters<Service["askView"]>[1]): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
-    const r = await this.askView(ctx, req);
-    if (r.ok) withAnswer(r.value);
-    return r;
+    return withDiagnostics({ requestId: ctx.requestId, traceId: ctx.traceId }, () => this.askInternal(ctx, req));
   }
 
-  private async askView(ctx: CallContext, req: { question: string; route?: ViewRoute; revision?: string; pins?: string[]; seeds?: string[]; overview?: boolean; level?: number; form?: string; kind?: "failure" | "invariant"; subject?: string; lens?: string; chartCode?: string }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
+  private async askInternal(ctx: CallContext, req: Parameters<Service["askView"]>[1]): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
+    const askStarted = performance.now();
+    diagnostic("ask.start", { requestId: ctx.requestId, question: req.question, revision: req.revision, overview: !!req.overview, chartCode: req.chartCode, form: req.form, subject: req.subject, seeds: req.seeds, pins: req.pins });
+    try {
+      const r = await this.askView(ctx, req);
+      if (r.ok) withAnswer(r.value);
+      diagnostic("ask.complete", { requestId: ctx.requestId, elapsedMs: performance.now() - askStarted, ok: r.ok, ...(r.ok ? { form: r.value.view.formId, nodes: r.value.view.nodes.length, edges: r.value.view.edges.length, gaps: r.value.view.gaps, answer: r.value.view.answer, warnings: r.metadata.warnings } : { error: r.error }) });
+      return r;
+    } catch (error) {
+      diagnostic("ask.exception", { requestId: ctx.requestId, elapsedMs: performance.now() - askStarted, error }, "error");
+      const requestedChart = req.chartCode ?? chartCodeForQuestion(req.question ?? "");
+      if (!requestedChart || !Object.hasOwn(CHART_REGISTRY, requestedChart)) return fail(ctx, storageFailure(error));
+      const chartCode = requestedChart as ChartId;
+      const chart = CHART_REGISTRY[chartCode];
+      const revision = req.revision ?? "unknown";
+      const viewId = `view:chart-error:${ctx.requestId}`;
+      const route = req.route ?? this.chosenRoute("GeneratedChart");
+      process.stderr.write(`[chart] ${JSON.stringify({ stage: "request-failed", requestId: ctx.requestId, chartId: chartCode, error: error instanceof Error ? error.message : String(error) })}\n`);
+      const view: ViewSpec = {
+        id: viewId, version: 1, revision, taskId: `task:${viewId}`, formId: "GeneratedChart",
+        caption: `${chart.name} · chart generation failed`, question: req.question, level: 5,
+        nodes: [], edges: [], groups: [], legend: [], cameraPolicy: { behavior: "PRESERVE" },
+        gaps: ["Chart generation failed before it produced a diagram. Diagnostic details were written to the server log for this request."],
+        formReason: `The requested ${chart.name.toLowerCase()} could not be compiled.`, route,
+        meta: { kind: "generated-chart", field: chart.name, subject: chartCode },
+        params: { chartType: chart.name, chartId: chartCode },
+      };
+      withAnswer({ view, claims: [] });
+      return ok(ctx, { view, claims: [] }, { revision, completeness: "PARTIAL", warnings: ["Chart generation failed; see the server log for its request ID."] });
+    }
+  }
+
+  private async answerFromEvidence(ctx: CallContext, rev: RevisionRow, question: string, bundle: EvidenceBundle) {
+    const { result, note } = await this.callModel<SourceOverviewOutput>(ctx, rev, {
+      purpose: "SOURCE_OVERVIEW", schemaId: SCHEMA_SOURCE_OVERVIEW, question, bundle,
+    });
+    const fallback = () => inferSourceOverview(bundle);
+    let output = result.ok ? result.value : fallback();
+    const current = new Map(bundle.evidence.filter((ev) => ev.state === "CURRENT").map((ev) => [ev.id, ev]));
+    const entityIds = new Set(bundle.entities.map((entity) => entity.entityId));
+    const accept = (candidate: SourceOverviewOutput) => candidate.statements.filter((statement) => statement.entityIds.every((id) => entityIds.has(id)) &&
+      statement.evidenceIds.every((id) => current.has(id)) && statement.entityIds.every((id) =>
+        bundle.facts.some((fact) => fact.predicate !== "concept_guidance" && fact.subject === id && fact.evidence.some((ev) => statement.evidenceIds.includes(ev.id))) ||
+        bundle.relationships.some((rel) => (rel.from === id || rel.to === id) && rel.evidence.some((ev) => statement.evidenceIds.includes(ev.id)))));
+    let accepted = accept(output);
+    const usedModel = result.ok && accepted.length > 0;
+    if (!accepted.length) { output = fallback(); accepted = accept(output); }
+    const concepts = bundle.facts.filter((f) => f.predicate === "concept_guidance");
+    const citedSubjects = new Set(accepted.flatMap((s) => s.entityIds));
+    const covered = concepts.filter((f) => ((f.object.value as { members: string[] }).members).some((id) => citedSubjects.has(id)));
+    diagnostic("source-summary.concept_coverage", { requestId: ctx.requestId, suppliedConcepts: concepts.length, coveredConcepts: covered.length,
+      omittedConceptIds: concepts.filter((f) => !covered.includes(f)).map((f) => f.id) });
+    diagnostic("source-summary.accepted", { requestId: ctx.requestId, usedModel, statementCount: accepted.length });
+    const claims = accepted.map((statement) => gateClaim({ assertion: statement.text, claimClass: "source-answer",
+      evidenceIds: statement.evidenceIds, subjects: statement.entityIds,
+      rationaleSummary: "Inferred from production source excerpts and static call relationships; documentation was excluded.",
+    }, bundle, { ...(usedModel && result.ok ? { run: result.run } : {}), store: this.store }));
+    this.persist(claims);
+    const paragraphs = accepted.map((statement, index) => {
+      const ev = current.get(statement.evidenceIds[0]!);
+      const source = ev ? this.resolveEvidence(rev, ev) : null;
+      const citation = source?.state === "CURRENT" ? ` (${source.file}:${source.startLine})` : "";
+      return `${index ? "• " : ""}${statement.text}${citation}`;
+    });
+    return {
+      text: paragraphs.length ? `Inferred from the source code:\n\n${paragraphs.join("\n\n")}${output.limits.length ? `\n\n${output.limits[0]}` : ""}` :
+        undefined,
+      claims, warnings: [...(note ? [note] : []), ...bundle.unresolved, ...(!usedModel ? ["Source answering used the offline fallback."] : [])],
+    };
+  }
+
+  private async askView(ctx: CallContext, req: { question: string; route?: ViewRoute; revision?: string; pins?: string[]; seeds?: string[]; overview?: boolean; level?: number; form?: string; kind?: "failure" | "invariant"; subject?: string; lens?: string; chartCode?: string; scope?: "repository" | "subject" }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
     const question = (req.question ?? "").trim();
     if (!question || question.length > 1000) return fail(ctx, { code: "INVALID_SCHEMA", message: "question must be 1–1000 characters", retryable: false });
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; ingest a repository first", retryable: false });
-    // The form is named explicitly (gallery, or a chip for another reading) or read from the question.
-    let route = req.form ? this.chosenRoute(req.form, req.kind) : req.route ?? await this.readQuestion(question);
+    {
+      const message = conceptRequirement(this.store, rev.id);
+      if (message) {
+        diagnostic("answer.concepts_required", { requestId: ctx.requestId, revision: rev.id });
+        return fail(ctx, { code: "INSUFFICIENT_EVIDENCE", message, retryable: false });
+      }
+    }
+    const chartDefinition = req.chartCode ? CHART_REGISTRY[req.chartCode as ChartId] : undefined;
+    if (req.chartCode && !chartDefinition) {
+      return fail(ctx, { code: "INVALID_SCHEMA", message: `unknown chart id "${req.chartCode}"`, retryable: false });
+    }
+    // A requested chart owns the route unless a caller explicitly selected a visual form.
+    // This keeps a query-intent chart code from being re-routed by a second model call.
+    let route = req.form ? this.chosenRoute(req.form, req.kind) : req.route ?? (chartDefinition ? this.chosenRoute(chartDefinition.form) : await this.readQuestion(question));
+    if (route.form === "GeneratedChart" && req.chartCode) {
+      if (chartDefinition!.compiler === "missing") {
+        return fail(ctx, { code: "NOT_IMPLEMENTED", message: `${chartDefinition!.name} has no chart compiler yet`, retryable: false });
+      }
+    }
+    diagnostic("ask.route", { requestId: ctx.requestId, revision: rev.id, route, chartCode: req.chartCode, overview: !!req.overview, requiredKinds: chartDefinition?.requiredKinds, requiredAcrossRepository: chartDefinition?.requiredAcrossRepository });
     const visual = route.source === "chosen" && route.form === "SemanticMap" ? null : visualByForm(route.form);
     if (visual?.build) {
       this.store.audit(actor(ctx), "ask", rev.id, { form: visual.formId, chars: question.length, route: route.source });
@@ -1843,24 +1845,43 @@ export class Service {
         const modelBundle = retrieveForQuestion(this.store, rev.id, question, { ...fallbackOptions, tokenBudget: req.overview ? undefined : chunkTokenBudget() }).bundle;
         if (modelBundle.entities.length > 0) {
           const cacheKey = chartPlanCacheKey(modelBundle, question, req.chartCode);
-          let plan = this.store.generatedChartPlan(cacheKey, modelBundle.id, question) ?? cachedChartPlan(modelBundle, question);
+          let plan = matchingChartPlan(this.store.generatedChartPlan(cacheKey, modelBundle.id, question) ?? cachedChartPlan(modelBundle, question, req.chartCode), req.chartCode);
           const warnings: string[] = [];
+          let cacheHit = !!plan;
+          let run: ModelRunRef | undefined;
+          const diag: ChartCompileDiag = { cacheHit, schemaValidationPassed: true };
           if (!plan) {
             const generated = await this.callModel<ChartOutput>(ctx, rev, chartCreatorRequest(question, modelBundle, req.chartCode));
             if (generated.note) warnings.push(generated.note);
             if (generated.result.ok) {
               plan = generated.result.value;
+              run = generated.result.run;
+              diag.provider = generated.result.run.provider;
+              diag.model = generated.result.run.model;
               if (req.chartCode) {
                 const idCheck = validateChartIdNotChanged(plan as unknown as ChartOutputV2, req.chartCode);
-                if (!idCheck.ok) { warnings.push(idCheck.warning!); process.stderr.write(`[chart] ${idCheck.warning}\n`); }
+                if (!idCheck.ok) {
+                  warnings.push(idCheck.warning!);
+                  process.stderr.write(`[chart] ${idCheck.warning}\n`);
+                  plan = null;
+                  diag.schemaValidationPassed = false;
+                  diag.fallbackReason = "chart-id-mismatch";
+                }
               }
-              rememberChartPlan(modelBundle, question, plan);
-              this.store.saveGeneratedChartPlan(cacheKey, modelBundle.id, question, plan);
-            } else warnings.push(modelFailureNotice(generated.result.error, generated.provider));
+              if (plan) {
+                rememberChartPlan(modelBundle, question, plan);
+                this.store.saveGeneratedChartPlan(cacheKey, modelBundle.id, question, plan);
+              }
+            } else {
+              warnings.push(modelFailureNotice(generated.result.error, generated.provider));
+              diag.schemaValidationPassed = generated.result.error.code !== "INVALID_SCHEMA";
+              diag.fallbackReason = generated.result.error.code;
+              process.stderr.write(`[chart] ${JSON.stringify({ chartId: req.chartCode ?? "generic", provider: generated.provider.name, model: generated.provider.model, schemaValidationPassed: diag.schemaValidationPassed, error: generated.result.error.code })}\n`);
+            }
           }
-          if (plan?.nodes.length) {
+          if (plan && (plan.nodes.length > 0 || ((plan as unknown as { chartId?: string; classes?: unknown[] }).chartId === "S16" && ((plan as unknown as { classes?: unknown[] }).classes?.length ?? 0) > 0))) {
             const chartRoute = { ...route, form: "GeneratedChart" as const, name: "Evidence-grounded chart" };
-            const chart = compileChartPlan({ plan, bundle: modelBundle, rev, question, route: chartRoute, chartId: req.chartCode });
+            const chart = compileChartPlan({ plan, bundle: modelBundle, rev, question, route: chartRoute, chartId: req.chartCode, run, diag });
             chart.view.formReason = `The native causal analysis found no statically supported path. This chart arranges indexed code elements and relationships; it does not establish runtime payment or top-up outcomes. ${choice.reason}`;
             chart.view.gaps.unshift(...built.view.gaps);
             this.persist(chart.claims);
@@ -1876,32 +1897,101 @@ export class Service {
     }
 
     // Hybrid retrieval: exact names, semantic closeness, concept cards and the graph, over only what this caller may see, cut to the model's budget.
-    const semantic = await semanticScores(this.store, rev.id, question, this.embedder).catch(() => undefined);
-    const retrievalOptions = { overview: req.overview, lens: req.lens, pins: new Set(req.pins ?? []), extraSeeds: [...(req.pins ?? []), ...(req.overview ? overviewSeeds(this.store, rev.id) : req.seeds ?? [])], semantic, access: policyFor(this.store, rev.repoRoot) };
-    const { bundle, tiers, scored, hidden, inaccessible, truncation } = retrieveForQuestion(this.store, rev.id, question, { ...retrievalOptions, tokenBudget: req.overview ? undefined : chunkTokenBudget() });
-    // The model receives bounded evidence; its budget must not erase overview coverage.
-    const modelBundle = req.overview ? retrieveForQuestion(this.store, rev.id, question, { ...retrievalOptions, tokenBudget: chunkTokenBudget() }).bundle : bundle;
+    const semantic = req.overview || req.scope === "repository" ? undefined : await semanticScores(this.store, rev.id, question, this.embedder).catch(() => undefined);
+    const retrievalOptions = { scope: req.scope ?? (req.overview ? "repository" as const : "subject" as const), forModel: true, resolveEvidence: (ev: EvidenceRef) => this.resolveEvidence(rev, ev), overview: req.overview, lens: req.lens, pins: new Set(req.pins ?? []), extraSeeds: [...(req.pins ?? []), ...(req.overview ? overviewSeeds(this.store, rev.id) : req.seeds ?? [])], semantic, access: policyFor(this.store, rev.repoRoot), requireKinds: chartDefinition?.requiredKinds, requireAcrossRepositoryKinds: chartDefinition?.requiredAcrossRepository };
+    const { bundle, tiers, scored, hidden, inaccessible, truncation } = retrieveForQuestion(this.store, rev.id, question, { ...retrievalOptions, tokenBudget: chunkTokenBudget() });
+    const modelBundle = bundle;
+    if (req.chartCode === "S16") {
+      const counts = (entities: { kind: string }[]) => Object.fromEntries(["class", "interface", "enum", "field", "method"].map((kind) => [kind, entities.filter((e) => e.kind === kind).length]));
+      const indexed = this.store.entities(rev.id);
+      const signatureFacts = modelBundle.facts.filter((f) => f.predicate === "signature").length;
+      process.stderr.write(`[uml] ${JSON.stringify({ stage: "retrieval", requestId: ctx.requestId, revision: rev.id, indexed: counts(indexed), bundle: counts(modelBundle.entities), signatureFacts, relationships: modelBundle.relationships.length, evidence: modelBundle.evidence.length, tokenEstimate: modelBundle.tokenEstimate, budget: chunkTokenBudget(), omittedMembers: hidden.filter((h) => h.reason.includes("class-member bundle")).length, truncation: !!truncation })}\n`);
+    }
+    if (req.chartCode === "S23") {
+      const indexed = this.store.entities(rev.id);
+      const byKind = (items: { kind: string }[]) => Object.fromEntries([...new Set(items.map((e) => e.kind))].sort().map((kind) => [kind, items.filter((e) => e.kind === kind).length]));
+      const relationKinds = Object.fromEntries([...new Set(modelBundle.relationships.map((r) => r.kind))].sort().map((kind) => [kind, modelBundle.relationships.filter((r) => r.kind === kind).length]));
+      process.stderr.write(`[chart] ${JSON.stringify({ stage: "retrieval", requestId: ctx.requestId, chartId: "S23", revision: rev.id, indexedFiles: indexed.filter((e) => e.kind === "file").length, bundleFiles: modelBundle.entities.filter((e) => e.kind === "file").length, indexedKinds: byKind(indexed), bundleKinds: byKind(modelBundle.entities), relationKinds, evidence: modelBundle.evidence.length, tokenEstimate: modelBundle.tokenEstimate, budget: chunkTokenBudget(), truncation: !!truncation })}\n`);
+    }
     const diagnostics = rev.diagnostics.filter((d) => d.code === "PARSE_ERRORS").map((d) => d.message);
     let representation: RepresentationOutput | undefined, run;
     const warnings: string[] = [];
     if (route.form === "GeneratedChart") {
+      // Answer the question from the same evidence independently of whether its diagram is renderable.
+      const evidenceAnswer = await this.answerFromEvidence(ctx, rev, question, modelBundle);
+      warnings.push(...evidenceAnswer.warnings);
       const cacheKey = chartPlanCacheKey(modelBundle, question, req.chartCode);
-      let plan = this.store.generatedChartPlan(cacheKey, modelBundle.id, question) ?? cachedChartPlan(modelBundle, question);
+      let plan = matchingChartPlan(this.store.generatedChartPlan(cacheKey, modelBundle.id, question) ?? cachedChartPlan(modelBundle, question, req.chartCode), req.chartCode);
+      diagnostic("chart.cache", { requestId: ctx.requestId, chartId: req.chartCode, cacheKey, hit: !!plan, bundleId: modelBundle.id });
+      let chartRun: ModelRunRef | undefined;
+      const chartDiag: ChartCompileDiag = { cacheHit: !!plan, schemaValidationPassed: true };
       if (!plan && bundle.entities.length > 0) {
         const generated = await this.callModel<ChartOutput>(ctx, rev, chartCreatorRequest(question, modelBundle, req.chartCode));
         if (generated.note) warnings.push(generated.note);
         if (generated.result.ok) {
           plan = generated.result.value;
+          chartRun = generated.result.run;
+          chartDiag.provider = generated.result.run.provider;
+          chartDiag.model = generated.result.run.model;
           if (req.chartCode) {
             const idCheck = validateChartIdNotChanged(plan as unknown as ChartOutputV2, req.chartCode);
-            if (!idCheck.ok) { warnings.push(idCheck.warning!); process.stderr.write(`[chart] ${idCheck.warning}\n`); }
+            if (!idCheck.ok) {
+              warnings.push(idCheck.warning!);
+              process.stderr.write(`[chart] ${idCheck.warning}\n`);
+              plan = null;
+              chartDiag.schemaValidationPassed = false;
+              chartDiag.fallbackReason = "chart-id-mismatch";
+            }
           }
-          rememberChartPlan(modelBundle, question, plan);
-          this.store.saveGeneratedChartPlan(cacheKey, modelBundle.id, question, plan);
-        } else warnings.push(modelFailureNotice(generated.result.error, generated.provider));
+          if (plan) {
+            rememberChartPlan(modelBundle, question, plan);
+            this.store.saveGeneratedChartPlan(cacheKey, modelBundle.id, question, plan);
+          }
+        } else {
+          warnings.push(modelFailureNotice(generated.result.error, generated.provider));
+          chartDiag.schemaValidationPassed = generated.result.error.code !== "INVALID_SCHEMA";
+          chartDiag.fallbackReason = generated.result.error.code;
+        }
+      }
+      // Keep the explicitly requested chart selected when generation fails or retrieval has
+      // no entities. The offline provider returns a typed plan and caption, so this exposes
+      // the evidence gap without inventing chart contents or switching to another view.
+      if (!plan && req.chartCode) {
+        const offlineStarted = performance.now();
+        diagnostic("model.dispatch", { requestId: ctx.requestId, purpose: "CHART", chartId: req.chartCode, provider: this.offline.name, model: this.offline.model, hosted: false, reason: bundle.entities.length ? "chart generation failed or was rejected" : "retrieval returned no entities", bundle: bundleDiagnostics(modelBundle) });
+        const empty = await runModel<ChartOutput>(this.offline, chartCreatorRequest(question, modelBundle, req.chartCode), {
+          deadlineMs: Math.max(1000, ctx.deadlineMs - Date.now()),
+        });
+        diagnostic("model.complete", { requestId: ctx.requestId, purpose: "CHART", chartId: req.chartCode, elapsedMs: performance.now() - offlineStarted, provider: this.offline.name, model: this.offline.model, ok: empty.ok, ...(empty.ok ? { run: empty.run, outputKeys: Object.keys(empty.value) } : { error: empty.error }) }, empty.ok ? "debug" : "warn");
+        if (empty.ok) {
+          plan = empty.value;
+          chartRun = empty.run;
+          chartDiag.provider = empty.run.provider;
+          chartDiag.model = empty.run.model;
+          chartDiag.schemaValidationPassed = true;
+        } else {
+          warnings.push(modelFailureNotice(empty.error, this.offline));
+          chartDiag.schemaValidationPassed = empty.error.code !== "INVALID_SCHEMA";
+          chartDiag.fallbackReason = empty.error.code;
+        }
       }
       if (plan) {
-        const built = compileChartPlan({ plan, bundle: modelBundle, rev, question, route, chartId: req.chartCode });
+        if (req.chartCode === "S16") {
+          const classPlan = plan as ChartOutputV2;
+          const classes = classPlan.chartId === "S16" ? classPlan.classes : [];
+          process.stderr.write(`[uml] ${JSON.stringify({ stage: "plan", requestId: ctx.requestId, chartId: classPlan.chartId, classes: classes.length, attributes: classes.reduce((n, c) => n + c.attributes.length, 0), operations: classes.reduce((n, c) => n + c.operations.length, 0), attributeEvidence: classes.reduce((n, c) => n + c.attributes.filter((x) => x.evidenceIds.length).length, 0), operationEvidence: classes.reduce((n, c) => n + c.operations.filter((x) => x.evidenceIds.length).length, 0), cacheHit: chartDiag.cacheHit, provider: chartDiag.provider, model: chartDiag.model })}\n`);
+        }
+        diagnostic("chart.plan", { requestId: ctx.requestId, chartId: req.chartCode, plan, diagnostics: chartDiag });
+        const built = compileChartPlan({ plan, bundle: modelBundle, rev, question, route, chartId: req.chartCode, run: chartRun, diag: chartDiag });
+        if (evidenceAnswer.text) built.view.answer = evidenceAnswer.text;
+        built.claims.push(...evidenceAnswer.claims);
+        if (!built.view.nodes.length && evidenceAnswer.text) built.view.gaps.push("The evidence supports the written explanation, but does not support the requested diagram.");
+        if (truncation) built.view.gaps.push(`The evidence was cut to fit the model's budget (${truncation.before} → ${truncation.after} estimated tokens): ${truncation.dropped.length} element(s) were dropped after reducing detail.`);
+        built.view.params = { ...built.view.params, overview: retrievalOptions.scope === "repository", ...(req.subject ? { subject: req.subject } : {}), scope: retrievalOptions.scope };
+        diagnostic("chart.compiled", { requestId: ctx.requestId, chartId: req.chartCode, diagnostics: built.diagnostics, nodes: built.view.nodes.length, edges: built.view.edges.length, gaps: built.view.gaps });
+        if (req.chartCode === "S16") process.stderr.write(`[uml] ${JSON.stringify({ stage: "compiled", requestId: ctx.requestId, nodes: built.view.nodes.length, nodesWithMembers: built.view.nodes.filter((n) => (n.notes?.length ?? 0) > 0).length, renderedMembers: built.view.nodes.reduce((n, node) => n + (node.notes?.length ?? 0), 0), edges: built.view.edges.length, gaps: built.view.gaps.length })}\n`);
+        // Structured chart diagnostics (spec §3.4): counts and gaps only — never source contents, secrets or prompts.
+        process.stderr.write(`[chart] ${JSON.stringify(built.diagnostics)}\n`);
         this.persist(built.claims);
         redactBuilt(this.store, rev, built);
         return ok(ctx, built, { revision: rev.id, warnings, completeness: built.view.gaps.length ? "PARTIAL" : "COMPLETE" });
@@ -2041,7 +2131,7 @@ export class Service {
     if (!v) return fail(ctx, { code: "INVALID_SCHEMA", message: "no view", retryable: false });
     const r = v.investigation
       ? await this.investigate(ctx, { trace: v.investigation.trace, revision: v.revision, ignored: v.investigation.ignored })
-      : await this.ask(ctx, { question: v.question, revision: v.revision, form: v.formId, overview: v.params?.overview === true, subject: typeof v.params?.subject === "string" ? v.params.subject : undefined });
+      : await this.ask(ctx, { question: v.question, revision: v.revision, form: v.formId, ...(typeof v.params?.chartId === "string" ? { chartCode: v.params.chartId } : {}), scope: v.params?.scope === "repository" ? "repository" : "subject", overview: v.params?.overview === true, subject: typeof v.params?.subject === "string" ? v.params.subject : undefined });
     if (r.ok) r.value.view.version = v.version + 1;
     return r;
   }
@@ -2408,41 +2498,181 @@ export class Service {
     }, { revision: rev.id });
   }
 
-  // ---------------------------------------------------------------- conversation
+  /** Classifies user input into one of the 34 closed intents. */
+  private async classifyIntent(ctx: CallContext, text: string, view: ViewSpec | null, selected: any[], sessionId?: string, requestedRevision?: string): Promise<{ intent: ChatIntent; label: string | null; because: string }> {
+    const revision = requestedRevision ?? view?.revision ?? this.store.latestRevision()?.id;
+    const session = this.sessionManager.getSession(ctx, sessionId, revision);
+
+    // Current-view actions and pasted traces belong to the existing map interaction
+    // route. Keep them out of the repository-query classifier.
+    const viewAction = /\b(pin|unpin|boost|demote|ignore|restore|why (?:is|are) .{1,100} hidden|why (?:are|is) .{1,100} showing|why does .{1,100} appear|what connects|connected)\b/i.test(text);
+    const zoomAction = /^(?:zoom in|zoom out|go back|go up|show me the overall system again|reset to the top-level architecture)\b/i.test(text.trim());
+    if (looksLikeTrace(text) || (view && viewAction) || zoomAction) {
+      return readText(this.router, text, {
+        hasView: !!view,
+        viewForm: view?.formId,
+        selectionCount: selected.length,
+        looksLikeTrace: looksLikeTrace(text),
+      });
+    }
+
+    if (!this.router || !this.router.classify) {
+      // Fallback to basic readText if classifier is unavailable
+      return readText(this.router, text, {
+        hasView: !!view,
+        viewForm: view?.formId,
+        selectionCount: selected.length,
+        looksLikeTrace: looksLikeTrace(text)
+      });
+    }
+
+    const classificationStarted = performance.now();
+    const navigation = revision ? navigateHierarchy(this.store, revision, text) : undefined;
+    const repoRoot = revision ? this.store.revision(revision)?.repoRoot : undefined;
+    const shareHierarchy = !/(:|-)cloud$/.test(this.router.name) || !!(repoRoot && this.store.allowHosted(repoRoot));
+    const classification = await this.router.classify({
+      question: text,
+      intentMenu: "Closed list of 34 intents",
+      ...(navigation ? { hierarchyContext: { level: navigation.level, conceptIds: shareHierarchy ? navigation.conceptIds : [],
+        nodes: shareHierarchy ? navigation.nodes.filter((n) => !detectSecret(JSON.stringify(n))) : [] } } : {}),
+      referents: session.referentLedger.map(r => ({
+        label: r.label,
+        kind: r.kind,
+        level: r.level,
+        source: r.source
+      })),
+    });
+
+    diagnostic("intent.classified", { requestId: ctx.requestId, revision, router: this.router.name, elapsedMs: performance.now() - classificationStarted, classification, referentCount: session.referentLedger.length });
+    if (!classification) {
+      // Classification is an optional enhancement; retain the established route when
+      // the provider is offline, rejects the schema, or times out.
+      return readText(this.router, text, {
+        hasView: !!view,
+        viewForm: view?.formId,
+        selectionCount: selected.length,
+        looksLikeTrace: looksLikeTrace(text),
+      });
+    }
+
+    if (classification.confidence < INTENT_CONFIDENCE_THRESHOLD || classification.intent_id === "new_intent") {
+      return {
+        intent: {
+          type: "newIntent",
+          detected: classification?.intent ?? "unknown",
+          confidence: classification?.confidence ?? 0,
+          reason: classification && classification.intent_id === "new_intent" ? classification.reason : "Low confidence in intent classification",
+          origin: classification && classification.intent_id === "new_intent" && /ambiguous/i.test(classification.reason) ? "ambiguous-referent" : "unsupported-query"
+        },
+        label: null,
+        because: "The system could not confidently map this request to a known intent.",
+      };
+    }
+
+    const intentId = classification.intent_id;
+    const target = classification.target;
+    session.transitionContext(target, intentId);
+    if (intentId === 32) {
+      return { intent: { type: "zoom", direction: "out" }, label: null, because: "Return to the previous higher-level context." };
+    }
+    if (intentId === 33) {
+      return { intent: { type: "overview" }, label: null, because: "Reset to the top-level architecture." };
+    }
+    return {
+      intent: { type: "query", intentId, confidence: classification.confidence, ...(target ? { target } : {}) },
+      label: null,
+      because: `Matched intent ${intentId}: ${classification.intent}`,
+    };
+  }
+  /** Read the caller's persisted conversation turns for restoring the chat panel. */
+  conversation(ctx: CallContext, req: { sessionId: string }): ApiResult<{ sessionId: string; turns: { seq: number; role: "user" | "assistant"; text: string; at: string }[] }> {
+    const sessionId = typeof req.sessionId === "string" ? req.sessionId.trim() : "";
+    if (!sessionId || sessionId.length > 120) return fail(ctx, { code: "INVALID_SCHEMA", message: "a valid sessionId is required", retryable: false });
+    const session = this.sessionManager.getSession(ctx, sessionId);
+    return ok(ctx, { sessionId, turns: session.turns.filter((turn) => turn.state === "complete").map(({ seq, role, text, at }) => ({ seq, role, text, at })) });
+  }
+  /** Session-scoped entry point: persist the turn envelope before routing, then store its answer. */
+  async converse(ctx: CallContext, req: { text: string; sessionId?: string; view?: ViewSpec | null; selection?: string[]; revision?: string; pins?: string[]; history?: { role: "user" | "assistant"; text: string }[] }): Promise<ApiResult<ConverseResult>> {
+    return withDiagnostics({ requestId: ctx.requestId, traceId: ctx.traceId }, async () => {
+      const started = performance.now();
+      diagnostic("conversation.start", { question: req.text, revision: req.revision, sessionId: req.sessionId, historyTurns: req.history?.length ?? 0, currentView: req.view?.id });
+      try {
+        const result = await this.converseSession(ctx, req);
+        diagnostic("conversation.complete", { elapsedMs: performance.now() - started, ok: result.ok, ...(result.ok ? { kind: result.value.kind, message: result.value.message, metadata: result.metadata } : { error: result.error }) });
+        return result;
+      } catch (error) {
+        diagnostic("conversation.exception", { elapsedMs: performance.now() - started, error }, "error");
+        throw error;
+      }
+    });
+  }
+
+  private async converseSession(ctx: CallContext, req: { text: string; sessionId?: string; view?: ViewSpec | null; selection?: string[]; revision?: string; pins?: string[]; history?: { role: "user" | "assistant"; text: string }[] }): Promise<ApiResult<ConverseResult>> {
+    const sessionId = req.sessionId?.trim() || crypto.randomUUID();
+    const session = this.sessionManager.getSession(ctx, sessionId, req.revision ?? req.view?.revision);
+    const normalized = (req.text ?? "").trim();
+    if (normalized && normalized.length <= 100_000) session.appendTurn("user", normalized);
+    const result = await this.converseInternal(ctx, { ...req, sessionId });
+    if (result.ok) {
+      const answer = result.value.message;
+      const chartCode = result.value.kind === "view" && typeof result.value.view.params?.chartId === "string" ? result.value.view.params.chartId : undefined;
+      session.appendTurn("assistant", answer, chartCode);
+      const activeView = result.value.kind === "view" ? result.value.view
+        : result.value.kind === "analysis" ? result.value.results.findLast((x) => x.view)?.view
+        : undefined;
+      if (activeView) {
+        const revision = this.store.revision(activeView.revision);
+        const mentions = revision ? resolveMentions(this.store, activeView.revision, normalized, policyFor(this.store, revision.repoRoot)) : { resolved: [], unresolved: [] };
+        const uniqueMention = mentions.resolved.length === 1 && mentions.resolved[0]!.matches.length === 1 ? mentions.resolved[0]!.matches[0] : undefined;
+        if (uniqueMention) session.transitionContext(uniqueMention.name, 0);
+        session.updateView(activeView, uniqueMention?.name);
+      }
+    }
+    return result;
+  }
+
   /** One text box: new question, trace → investigation, steering, "why …", or resume. Selection chips are referents. */
-  async converse(ctx: CallContext, req: { text: string; view?: ViewSpec | null; selection?: string[]; revision?: string; pins?: string[]; history?: { role: "user" | "assistant"; text: string }[] }): Promise<ApiResult<ConverseResult>> {
+  private async converseInternal(ctx: CallContext, req: { text: string; sessionId?: string; view?: ViewSpec | null; selection?: string[]; revision?: string; pins?: string[]; history?: { role: "user" | "assistant"; text: string }[] }): Promise<ApiResult<ConverseResult>> {
     const text = (req.text ?? "").trim();
     if (!text) return fail(ctx, { code: "INVALID_SCHEMA", message: "say something", retryable: false });
     if (text.length > 100_000) return fail(ctx, { code: "INVALID_SCHEMA", message: "message is too long", retryable: false });
     const view = req.view ?? null;
+    const revision = req.revision ?? view?.revision;
+    const indexed = revision ? this.store.revision(revision) : this.store.latestRevision();
+    if (indexed) {
+      const required = conceptRequirement(this.store, indexed.id);
+      if (required) return ok(ctx, { kind: "message", message: required }, { revision: indexed.id });
+      const hierarchy = navigateHierarchy(this.store, indexed.id, text, req.pins);
+      diagnostic("conversation.hierarchy", { requestId: ctx.requestId, revision: indexed.id, hierarchyLevel: hierarchy.level,
+        seeds: hierarchy.seeds, conceptIds: hierarchy.conceptIds, nodes: hierarchy.nodes });
+    }
+    const chartCode = explicitChartCode(text);
+    if (chartCode === "S16") process.stderr.write(`[uml] ${JSON.stringify({ stage: "dispatch", requestId: ctx.requestId, route: "chart", chartId: chartCode })}\n`);
+    // Resolve referents (it, this, that) using the session's referent ledger.
+    const session = this.sessionManager.getSession(ctx, req.sessionId, revision);
+    const resolvedReferent = resolveReferent(text, session.referentLedger, view, req.selection);
+    if (resolvedReferent && resolvedReferent !== "ambiguous") {
+      session.updateFocus(resolvedReferent);
+    }
+
+
     const nodeById = new Map((view?.nodes ?? []).map((n) => [n.id, n]));
     const selected = (req.selection ?? []).map((id) => nodeById.get(id)).filter((n): n is NonNullable<typeof n> => !!n);
     const referentCount = selected.length || (req.pins?.length ?? 0);
-    // The same chat entry point can now compose several analyses. Legacy map
-    // controls and stack traces retain their existing handlers.
+
     let plannerWarning: string | undefined;
-    if ((this.router?.converse || this.router?.plan) && !looksLikeTrace(text)) {
-      const revision = view?.revision ?? req.revision;
-      const rev = revision ? this.store.revision(revision) : this.store.latestRevision();
-      if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index a repository first", retryable: false });
-      const history = Array.isArray(req.history) ? req.history.slice(-6).filter((m) => m && ["user", "assistant"].includes(m.role) && typeof m.text === "string").map((m) => ({ role: m.role, text: m.text.slice(0, 1500) })) : [];
-      const files = [...new Set(selected.map((n) => n.file).filter(Boolean))];
-      const subject = files.length === 1 ? files[0] : typeof view?.params?.chatSubject === "string" ? view.params.chatSubject : view?.formId === "TestConfidence" && typeof view.params?.subject === "string" ? view.params.subject : undefined;
-      // A model that can call tools works the question out itself; one that cannot gets a fixed plan (the scripted router, tests).
-      if (this.router.converse) {
-        const answered = await runChatAgent(this, ctx, rev, this.router, { text: text.slice(0, 6000), history, subject, pins: req.pins });
-        if (answered) return answered;
-      } else if (this.router.plan) {
-        let plan = null;
-        try { plan = validateChatPlan(await this.router.plan({ text: text.slice(0, 6000), history, subject })); } catch { /* legacy route remains available */ }
-        if (plan?.steps.length) return executeChatPlan(this, ctx, rev, plan, subject, req.pins);
-        if (!plan) plannerWarning = "The multi-step planner did not return a valid plan; only the single-question route was attempted.";
-      }
-    }
-    const reading = await readText(this.router, text, { hasView: !!view || referentCount >= 1, viewForm: view?.formId, selectionCount: referentCount, looksLikeTrace: looksLikeTrace(text) });
+    const chartName = chartCode ? CHART_REGISTRY[chartCode as ChartId].name : "Generated chart";
+    const chartRoute = chartCode ? {
+      ...this.chosenRoute(CHART_REGISTRY[chartCode as ChartId].form), source: "similarity" as const, confidence: "high" as const,
+      name: chartName, because: `The question explicitly asks for a ${chartName.toLowerCase()}.`,
+    } : undefined;
+    const reading = chartRoute
+      ? { intent: { type: "ask" as const, route: chartRoute }, label: "GeneratedChart", because: chartRoute.because }
+      : await this.classifyIntent(ctx, text, view, selected, req.sessionId, revision);
     const intent = reading.intent;
+    diagnostic("conversation.route", { requestId: ctx.requestId, revision, question: text, explicitChartCode: chartCode, reading, selected: selected.map((n) => n.id), pins: req.pins, resolvedReferent });
+
     const entityIds = selected.flatMap((n) => n.entityRefs);
-    const revision = view?.revision ?? req.revision;
     // A steering turn adjusts the current view, so it does not repeat why that kind of view was chosen.
     const asView = (r: ApiResult<{ view: ViewSpec; claims: Claim[] }>, lead: string, steering = false): ApiResult<ConverseResult> => {
       if (!r.ok) return r as ApiResult<never>;
@@ -2453,6 +2683,26 @@ export class Service {
       r.ok ? ok(ctx, { kind: "explanation", explanation: r.value, message: `${lead}${r.value.summary}`.trim() }, r.metadata) : (r as ApiResult<never>);
     const needsView = () => fail<ConverseResult>(ctx, { code: "INVALID_SCHEMA", message: "Ask a question first, then I can talk about what's on the map.", retryable: false });
 
+    // The conversational agent runs only on the legacy single-view route. A classified query
+    // reaches its selected chart branch below and cannot be replaced by an agent-built map.
+    if (intent.type === "ask" && !chartCode && (this.router?.converse || this.router?.plan) && !looksLikeTrace(text)) {
+      const rev = revision ? this.store.revision(revision) : this.store.latestRevision();
+      if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index a repository first", retryable: false });
+      const history = session.turns.filter((turn) => turn.seq > session.context.openedAtSeq && (turn.role === "user" || turn.role === "assistant")).slice(0, -1).slice(-6).map((turn) => ({ role: turn.role, text: turn.text.slice(0, 1500) }));
+      const files = [...new Set(selected.map((n) => n.file).filter(Boolean))];
+      const subject = files.length === 1 ? files[0] : typeof view?.params?.chatSubject === "string" ? view.params.chatSubject : view?.formId === "TestConfidence" && typeof view.params?.subject === "string" ? view.params.subject : undefined;
+      if (this.router.converse) {
+        const answered = await runChatAgent(this, ctx, rev, this.router, { text: text.slice(0, 6000), history, subject, pins: req.pins });
+        if (answered) return answered;
+      } else if (this.router?.plan) {
+        try {
+          const plan = validateChatPlan(await this.router.plan({ text: text.slice(0, 6000), history, subject }));
+          if (plan?.steps.length) return executeChatPlan(this, ctx, rev, plan, subject, req.pins);
+          if (!plan) plannerWarning = "The multi-step planner did not return a valid plan; only the single-question route was attempted.";
+        } catch { plannerWarning = "The multi-step planner did not return a valid plan; only the single-question route was attempted."; }
+      }
+    }
+
     const overview = async (lead: string, question = text): Promise<ApiResult<ConverseResult>> => {
         const rev = revision ? this.store.revision(revision) : this.store.latestRevision();
         if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index a repository first", retryable: false });
@@ -2460,16 +2710,39 @@ export class Service {
         const profile = projectProfile(this.store, rev.id);
         if (r.ok) { r.value.view.formReason = "Representative code across languages and source modules, grouped by responsibility. Zoom in for detail."; r.value.view.gaps.unshift(profile.text); }
         // The answer to "what is this project" is its profile, then what the map shows.
-        if (r.ok) { r.value.view.answer = undefined; withAnswer(r.value); const lead = [projectDescription(this.store, rev.repoRoot), profile.text].filter(Boolean).join(" "); r.value.view.answer = redactBuilt(this.store, rev, { view: { ...r.value.view, answer: [lead, r.value.view.answer].filter(Boolean).join(" ") }, claims: [] }).view.answer; }
+        if (r.ok) r.value.view.answer = redactBuilt(this.store, rev, { view: { ...r.value.view, answer: [r.value.view.answer, profile.text].filter(Boolean).join("\n\n") }, claims: [] }).view.answer;
         return asView(r, `${lead} ${profile.text}`);
     };
     switch (intent.type) {
+      case "query": {
+        const rev = revision ? this.store.revision(revision) : this.store.latestRevision();
+        if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index a repository first", retryable: false });
+        const mentions = resolveMentions(this.store, rev.id, text, policyFor(this.store, rev.repoRoot));
+        const plan = planQuery(intent.intentId, intent.target, text, mentions);
+        if (!plan) return ok(ctx, { kind: "message", message: `I couldn't resolve the requested subject${intent.target ? ` “${intent.target}”` : ""} in the indexed repository.` });
+        diagnostic("query.plan", { requestId: ctx.requestId, revision: rev.id, plan, overview: plan.scope === "repository", mentions });
+        session.setSubject(plan.subject);
+        const r = await this.ask(ctx, { question: plan.question, revision: rev.id, pins: req.pins, scope: plan.scope, overview: plan.scope === "repository", seeds: plan.seeds, ...(plan.subject ? { subject: plan.subject } : {}), ...(plan.chartCode ? { chartCode: plan.chartCode } : {}), ...(plan.form ? { form: plan.form } : {}) });
+        return asView(r, "");
+      }
+      case "newIntent":
+        return ok(ctx, { kind: "message", message: `${intent.detected}: ${intent.reason}` });
+      case "mapCommand": {
+        const legacy = await readText(this.router, text, { hasView: !!view, viewForm: view?.formId, selectionCount: referentCount, looksLikeTrace: false });
+        if (legacy.intent.type === "ask") return asView(await this.ask(ctx, { question: text, revision, pins: req.pins, route: legacy.intent.route }), "");
+        return ok(ctx, { kind: "message", message: `Map command “${intent.label}” could not be applied to the current view.` });
+      }
       case "investigate": return asView(await this.investigate(ctx, { trace: text, revision }), "Investigating the exception you pasted.");
       case "overview": return overview("You asked about the project as a whole.");
       case "ask": {
-        const r = await this.ask(ctx, { question: text, revision, pins: req.pins, route: intent.route });
+        if (indexed && !chartCode && !req.pins?.length && navigateHierarchy(this.store, indexed.id, text).level === "repository" && !/\b(project|repository|repo|system|codebase|architecture|overview)\b/i.test(text)) {
+          const terms = queryTerms(text), access = policyFor(this.store, indexed.repoRoot);
+          const matches = this.store.entities(indexed.id).some((e) => !access.denied(e.file) && terms.some((term) => `${e.name} ${e.file}`.toLowerCase().includes(term)));
+          if (!matches) return overview("No element of the code matches those words, so here is the project as a whole instead. Name a feature, module or function for something specific.");
+        }
+        const r = await this.ask(ctx, { question: text, revision, pins: req.pins, route: intent.route, ...(chartCode ? { chartCode } : {}) });
         // Nothing matched any word in the question: say so, and show the project instead of an empty map.
-        if (r.ok && r.value.view.nodes.length === 0 && !(req.pins?.length)) return overview("No element of the code matches those words, so here is the project as a whole instead. Name a feature, module or function for something specific.");
+        if (!chartCode && r.ok && r.value.view.nodes.length === 0 && !(req.pins?.length)) return overview("No element of the code matches those words, so here is the project as a whole instead. Name a feature, module or function for something specific.");
         return asView(r, "");
       }
       case "resume": {
@@ -2478,7 +2751,19 @@ export class Service {
         if (!hit) return ok(ctx, { kind: "message", message: intent.name ? `I couldn't find a saved investigation matching “${intent.name}”.` : "There are no saved investigations yet." });
         return ok(ctx, { kind: "resume", workspaceId: hit.id, message: `Resuming “${hit.name}”…` });
       }
-      case "zoom": return ok(ctx, { kind: "zoom", direction: intent.direction, message: intent.direction === "in" ? "Zooming in one level." : intent.direction === "out" ? "Zooming out one level." : "Showing the overview." });
+      case "zoom": {
+        if (!view) return needsView();
+        const session = this.sessionManager.getSession(ctx, req.sessionId, revision);
+        const zoomResult = session.zoom(intent.direction, view);
+
+        return ok(ctx, {
+          kind: "zoom",
+          direction: intent.direction,
+          message: zoomResult.message,
+          breadcrumbs: zoomResult.breadcrumbs
+        });
+      }
+
       case "whyShown": {
         if (!view) return needsView();
         return asExplain(this.whyShown(ctx, { view, nodeId: selected[0].id }), `About “${selected[0].label}”: `);

@@ -153,7 +153,7 @@ export class Collab {
   }
 
   // ------------------------------------------------------------------ shared concepts
-  private cardOf(conceptId: string) { for (const r of this.store.db.prepare("select distinct revision from concepts").all() as any[]) { const c = this.store.concepts(r.revision, { includeRefuted: true }).find((x) => x.id === conceptId); if (c) return c; } return null; }
+  private cardOf(conceptId: string) { for (const r of this.store.db.prepare("select distinct revision from semantic_concepts").all() as any[]) { const c = this.store.concepts(r.revision, { includeRefuted: true }).find((x) => x.id === conceptId); if (c) return c; } return null; }
   private canSeeCard(principal: string, card: { revision: string; members: string[] }): boolean {
     const rev = this.store.revision(card.revision, true);
     const acc = this.access(principal, rev?.repoRoot ?? null);

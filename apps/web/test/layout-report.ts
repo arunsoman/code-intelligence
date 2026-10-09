@@ -6,7 +6,7 @@ import { arrange } from "../src/arrange.ts";
 import { measure } from "../src/layoutmetrics.ts";
 
 const { svc, worker, revision } = await setup(undefined, process.env.REPO ?? demoRepo());
-if (!process.env.REPO) await svc.extractConcepts(ctx(), { revision });
+if (!process.env.REPO) await svc.buildConceptHierarchy(ctx(), { revision });
 const out: string[] = [];
 let totals = { nodeOverlaps: 0, edgeThroughNode: 0, edgeCrossings: 0 };
 for (const v of VISUALS.filter((x) => x.formId !== "ChangeRisk") ) {

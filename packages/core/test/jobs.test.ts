@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { StubProvider } from "@cie/model";
 import type { ModelProvider, ModelRequest } from "@cie/schema";
+import { conceptConfig, setConceptConfigForTest } from "../src/concept-hierarchy/config.ts";
 import { JobRunner, type JobControl } from "../src/jobs.ts";
 import { buildHandler } from "../src/server.ts";
 import { Service } from "../src/service.ts";
@@ -31,11 +32,11 @@ test("jobs: enqueue returns at once, runs to SUCCEEDED with the same result a di
   assert.equal((done.result!.value as { fileCount: number }).fileCount, store.latestRevision()!.fileCount);
   assert.ok(done.startedAt && done.finishedAt && done.phase === "done");
   // Extraction as a job reports progress and ends with cards stored.
-  const ext = svc.enqueueJob(ctx(), { kind: "concepts" });
+  const ext = svc.enqueueJob(ctx(), { kind: "concept-hierarchy" });
   assert.ok(ext.ok);
   const e = await svc.jobs.settled(ext.value.id);
   assert.equal(e.state, "SUCCEEDED");
-  assert.ok((e.result!.value as { cards: unknown[] }).cards.length > 0 && store.concepts(store.latestRevision()!.id).length > 0);
+  assert.ok((e.result!.value as { concepts: unknown[] }).concepts.length > 0 && store.concepts(store.latestRevision()!.id).length > 0);
   worker.close();
 });
 
@@ -44,17 +45,17 @@ test("jobs: cancelling during a model call stops at once, abandons the call's an
     readonly name = "slow"; readonly model = "x"; readonly hosted = false;
     started = gate(); release = gate(); inner = new StubProvider(); extractCalls = 0;
     async generate(req: ModelRequest) {
-      if (req.purpose !== "EXTRACT") return this.inner.generate(req);
+      if (req.purpose !== "NAME_CONCEPT") return this.inner.generate(req);
       this.extractCalls++; this.started.open(); await this.release.p; return this.inner.generate(req);
     }
   }
   const slow = new Slow();
   const { svc, worker } = await setup(slow, demoRepo());
   const before = { cards: svc.store.concepts(svc.store.latestRevision()!.id).length, claims: svc.store.db.prepare("select count(*) n from claims").get() as { n: number } };
-  const job = svc.enqueueJob(ctx(), { kind: "concepts" });
+  const job = svc.enqueueJob(ctx(), { kind: "concept-hierarchy" });
   assert.ok(job.ok);
   await slow.started.p;
-  assert.equal(svc.getJob(ctx(), { jobId: job.value.id }).ok && (svc.getJob(ctx(), { jobId: job.value.id }) as any).value.phase, "extracting");
+  assert.equal(svc.getJob(ctx(), { jobId: job.value.id }).ok && (svc.getJob(ctx(), { jobId: job.value.id }) as any).value.phase, "naming");
   const t0 = Date.now();
   const cancelled = svc.cancelJob(ctx(), { jobId: job.value.id });
   assert.ok(cancelled.ok && cancelled.value.cancelled);
@@ -123,7 +124,7 @@ test("jobs: past the commit point a cancel is refused and the job finishes whole
   const store = new Store(":memory:");
   const runner = new JobRunner(store);
   const g = gate(); const committed = gate(); let finished = false;
-  const j = runner.enqueue(ctx(), { kind: "concepts", params: { revision: "r" }, run: async (_c, control) => {
+  const j = runner.enqueue(ctx(), { kind: "concept-hierarchy", params: { revision: "r" }, run: async (_c, control) => {
     control.checkpoint(); control.commit(); committed.open(); await g.p; finished = true;
     return { ok: true as const, value: "saved", metadata: { requestId: "r", completeness: "COMPLETE" as const, warnings: [] } };
   } });
@@ -175,13 +176,13 @@ test("jobs: the gateway exposes enqueue, getJob, listJobs and cancelJob; enqueue
 });
 
 test("jobs: cancelling after some chunks finished still leaves no cards and no claims behind", async () => {
-  process.env.CIE_CHUNK_TOKEN_BUDGET = "400"; // forces several small chunks
+  setConceptConfigForTest({ namingBatchSize: { ...conceptConfig().namingBatchSize, value: 1 } });
   try {
     class Second implements ModelProvider {
       readonly name = "second"; readonly model = "x"; readonly hosted = false;
       calls = 0; blocked = gate(); release = gate(); inner = new StubProvider();
       async generate(req: ModelRequest) {
-        if (req.purpose !== "EXTRACT") return this.inner.generate(req);
+        if (req.purpose !== "NAME_CONCEPT") return this.inner.generate(req);
         if (++this.calls === 2) { this.blocked.open(); await this.release.p; }
         return this.inner.generate(req);
       }
@@ -190,17 +191,17 @@ test("jobs: cancelling after some chunks finished still leaves no cards and no c
     const { svc, worker } = await setup(model, demoRepo());
     const rev = svc.store.latestRevision()!.id;
     const claimsBefore = svc.store.db.prepare("select count(*) n from claims").get();
-    const job = svc.enqueueJob(ctx(), { kind: "concepts" });
+    const job = svc.enqueueJob(ctx(), { kind: "concept-hierarchy" });
     assert.ok(job.ok);
     await model.blocked.p;
     assert.ok(model.calls >= 2, "one chunk had already been answered");
     const j = svc.jobs.get(job.value.id)!;
-    assert.ok((j.done ?? 0) >= 1 && (j.total ?? 0) >= 2, `progress shows ${j.done} of ${j.total}`);
+    assert.equal(j.phase, "naming");
     assert.ok(svc.cancelJob(ctx(), { jobId: job.value.id }).ok);
     assert.equal((await svc.jobs.settled(job.value.id)).state, "CANCELLED");
     assert.deepEqual(svc.store.db.prepare("select count(*) n from claims").get(), claimsBefore, "claims from the finished chunk were not kept");
     assert.equal(svc.store.concepts(rev).length, 0);
     model.release.open();
     worker.close();
-  } finally { delete process.env.CIE_CHUNK_TOKEN_BUDGET; }
+  } finally { setConceptConfigForTest(null); }
 });

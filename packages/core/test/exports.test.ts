@@ -11,7 +11,7 @@ import { ctx, demoRepo, setup } from "./helpers.ts";
 async function world() {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
-  await svc.extractConcepts(ctx(), { revision });
+  await svc.buildConceptHierarchy(ctx(), { revision });
   const a = await svc.ask(ctx(), { question: "show me everything that could cause a payment to fail", revision });
   const b = await svc.ask(ctx(), { question: "walk me through createPayment", revision });
   assert.ok(a.ok && b.ok);

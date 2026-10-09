@@ -2,7 +2,7 @@
 //! With a provided `ChangeSet` (per-file content hashes of the previously indexed revision) only
 //! changed files are re-parsed; the rest reuse cached parses, and diagnostics report what was reused.
 use crate::frameworks::{FrameworkContext, FrameworkEntityKind};
-use crate::language::{parse_ts, RawFile};
+use crate::language::{multiplicity_of, parse_ts, RawFile};
 use crate::polyglot::{parse_go, parse_java, parse_python};
 use crate::rust_language::parse_rust;
 use crate::source_ir;
@@ -18,7 +18,7 @@ use ignore::WalkBuilder;
 // excludes file are honoured on top of this list by `ignore::WalkBuilder` (same crate ripgrep uses), so a
 // project's own ignore rules — not just this fixed list — keep generated and vendored files out of the index.
 const SKIP_DIRS: &[&str] = &["node_modules", ".git", "dist", "build", "target", ".next", "coverage", "__pycache__", ".venv", "venv", ".gradle", ".idea", "vendor", "site-packages"];
-pub const ANALYZER_VERSION: &str = "worker-0.4.0/tree-sitter-typescript-0.23+rust-0.24+nirdosha-v2+defect-semantic-v1+gitignore-aware-walk";
+pub const ANALYZER_VERSION: &str = "worker-0.5.0/tree-sitter-typescript-0.23+rust-0.24+nirdosha-v2+defect-semantic-v2+ast-metrics-v1+gitignore-aware-walk+uml-class-v1";
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -636,6 +636,78 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>, base: Option<&BaseRe
             }
         }
 
+        // UML heritage is emitted only when the declared target resolves statically.
+        for h in &rec.raw.heritage {
+            let Some(from) = rec.ids.get(h.owner).cloned() else { continue };
+            let in_file = rec.raw.symbols.iter().position(|s| s.qualified == h.target && matches!(s.kind, "class" | "interface" | "enum")).map(|i| rec.ids[i].clone());
+            let to = in_file
+                .or_else(|| bindings.get(&h.target).and_then(|(ti, imported)| {
+                    let name = if imported == "default" || imported == "*" { h.target.as_str() } else { imported };
+                    find_symbol(*ti, name)
+                }))
+                .or_else(|| find_symbol_pkg(fi, &h.target));
+            match to {
+                Some(to) if to != from => add_rel(&mut batch, Relationship {
+                    id: format!("rel:{}:{from}->{to}", h.rel), from, to,
+                    kind: h.rel.to_string(),
+                    evidence: vec![evidence(&rec.rel, &rec.hash, h.start, h.end, "STATIC_RESOLVED")],
+                    resolution: "RESOLVED", label: None,
+                }),
+                Some(_) => {}
+                None => batch.facts.push(Fact {
+                    id: format!("fact:unresolved-{}:{}:{}", h.rel, rec.rel, h.start),
+                    subject: from, predicate: h.rel.to_string(),
+                    object: json!({"kind":"UnknownValue","reason":format!("cannot statically resolve {} target {}", h.rel, h.target)}),
+                    evidence: vec![evidence(&rec.rel, &rec.hash, h.start, h.end, "STATIC_PARSED")],
+                    resolution: "UNRESOLVED",
+                }),
+            }
+        }
+
+        // Field types become associations only when their target is a known symbol.
+        for ft in &rec.raw.field_types {
+            let Some(field_id) = rec.ids.get(ft.field).cloned() else { continue };
+            let Some(field_sym) = rec.raw.symbols.get(ft.field) else { continue };
+            let Some((cls, _)) = field_sym.qualified.split_once('.') else { continue };
+            let from = rec.raw.symbols.iter().position(|s| s.qualified == cls && matches!(s.kind, "class" | "interface")).map(|i| rec.ids[i].clone()).unwrap_or(field_id);
+            let (mult, target) = multiplicity_of(&ft.type_text);
+            if target.is_empty() { continue; }
+            let in_file = rec.raw.symbols.iter().position(|s| s.qualified == target && matches!(s.kind, "class" | "interface" | "enum")).map(|i| rec.ids[i].clone());
+            let to = in_file
+                .or_else(|| bindings.get(&target).and_then(|(ti, imported)| {
+                    let name = if imported == "default" || imported == "*" { target.as_str() } else { imported };
+                    find_symbol(*ti, name)
+                }))
+                .or_else(|| find_symbol_pkg(fi, &target));
+            match to {
+                Some(to) if to != from => add_rel(&mut batch, Relationship {
+                    id: format!("rel:association:{from}->{to}:{mult}"), from, to,
+                    kind: "association".into(),
+                    evidence: vec![evidence(&rec.rel, &rec.hash, ft.start, ft.end, "STATIC_RESOLVED")],
+                    resolution: "RESOLVED", label: Some(mult.to_string()),
+                }),
+                Some(_) => {}
+                None => batch.facts.push(Fact {
+                    id: format!("fact:unresolved-assoc:{}:{}", rec.rel, ft.start),
+                    subject: from, predicate: "association".into(),
+                    object: json!({"kind":"UnknownValue","reason":format!("cannot statically resolve association target {target}")}),
+                    evidence: vec![evidence(&rec.rel, &rec.hash, ft.start, ft.end, "STATIC_PARSED")],
+                    resolution: "UNRESOLVED",
+                }),
+            }
+        }
+
+        for sig in &rec.raw.signatures {
+            if let Some(subject) = rec.ids.get(sig.method) {
+                batch.facts.push(Fact {
+                    id: format!("fact:signature:{subject}"), subject: subject.clone(), predicate: "signature".into(),
+                    object: json!({"kind":"ScalarValue","value":sig.text}),
+                    evidence: vec![evidence(&rec.rel, &rec.hash, sig.start, sig.end, "STATIC_PARSED")],
+                    resolution: "PARSED",
+                });
+            }
+        }
+
         // Behavioral facts: where code can fail, write state, run in a transaction, or cross async boundaries.
         let subject_of = |caller: Option<usize>| match caller {
             Some(i) => rec.ids[i].clone(),
@@ -647,6 +719,15 @@ pub fn index_repo(root: &Path, changes: Option<&ChangeSet>, base: Option<&BaseRe
                 subject: subject_of(event.caller), predicate: "defect.semantic-event.v1".into(),
                 object: event.value.clone(),
                 evidence: vec![evidence(&rec.rel, &rec.hash, event.start, event.end, "STATIC_PARSED")],
+                resolution: "PARSED",
+            });
+        }
+        for metric in &rec.raw.metrics {
+            batch.facts.push(Fact {
+                id: format!("fact:metric:{}:{}", rec.rel, metric.start),
+                subject: subject_of(metric.caller), predicate: "metric_declaration".into(),
+                object: json!({"kind":"ScalarValue","value":metric.name,"metricKind":metric.kind}),
+                evidence: vec![evidence(&rec.rel, &rec.hash, metric.start, metric.end, "STATIC_PARSED")],
                 resolution: "PARSED",
             });
         }
@@ -1025,6 +1106,8 @@ where
     };
 
     fn public_kind(framework: &str, kind: FrameworkEntityKind) -> String {
+        if kind == FrameworkEntityKind::PersistenceEntity { return "table".into(); }
+        if kind == FrameworkEntityKind::PersistenceColumn { return "column".into(); }
         let fw_slug = framework.replace('-', "_");
         let kind_suffix = match kind {
             FrameworkEntityKind::GatewayRoute => "route",
@@ -1063,7 +1146,11 @@ where
                     batch.entities.push(Entity {
                         entity_id: id.clone(),
                         kind: public_kind(m.framework, m.kind),
-                        name: m.name.clone(),
+                        name: match m.kind {
+                            FrameworkEntityKind::PersistenceEntity => m.properties.get("tableName").and_then(|v| v.as_str()).unwrap_or(&m.name).to_string(),
+                            FrameworkEntityKind::PersistenceColumn => m.properties.get("columnName").and_then(|v| v.as_str()).unwrap_or(&m.name).to_string(),
+                            _ => m.name.clone(),
+                        },
                         file: rec.rel.clone(),
                         spans: vec![span(&rec.rel, &rec.hash, m.start, m.end)],
                         symbol_hash: None,
@@ -1096,6 +1183,7 @@ where
                     FrameworkEntityKind::Route => "controller",
                     FrameworkEntityKind::GatewayFilter => "gateway_route",
                     FrameworkEntityKind::MessageListener => "provider",
+                    FrameworkEntityKind::PersistenceColumn => "table",
                     _ => "module",
                 };
                 let key = format!("{}:{}:{}", rec.rel, parent_kind, parent);
@@ -1116,12 +1204,73 @@ where
         }
     }
 
+    // Map Java class symbols to their JPA table entities for cross-file association resolution.
+    let mut persistence_table_by_class: HashMap<String, String> = HashMap::new();
+    for rec in recs {
+        for m in &rec.raw.framework_metadata {
+            if m.kind != FrameworkEntityKind::PersistenceEntity { continue; }
+            let Some(class_id) = m.subject_symbol.and_then(|i| rec.ids.get(i)).cloned() else { continue };
+            if let Some(table_id) = framework_entity_id.get(&format!("{}:table:{}", rec.rel, m.name)) {
+                persistence_table_by_class.insert(class_id, table_id.clone());
+            }
+        }
+    }
+
     // Second pass: emit facts and relationships.
     for (fi, rec) in recs.iter().enumerate() {
         let fid = format!("file:{}", rec.rel);
         for m in &rec.raw.framework_metadata {
             let ev = evidence(&rec.rel, &rec.hash, m.start, m.end, "STATIC_RESOLVED");
             match m.kind {
+                FrameworkEntityKind::PersistenceEntity => {
+                    if let Some(subject) = framework_entity_id.get(&format!("{}:table:{}", rec.rel, m.name)).cloned() {
+                        batch.facts.push(Fact {
+                            id: format!("fact:persistence:table:{}:{}", rec.rel, m.start), subject,
+                            predicate: "persisted_table".into(),
+                            object: json!({"kind":"ScalarValue","value":m.properties.clone()}),
+                            evidence: vec![evidence(&rec.rel, &rec.hash, m.start, m.end, "STATIC_PARSED")], resolution: "PARSED",
+                        });
+                    }
+                }
+                FrameworkEntityKind::PersistenceColumn => {
+                    let column_id = framework_entity_id.get(&format!("{}:column:{}", rec.rel, m.name)).cloned();
+                    if let Some(column_id) = column_id {
+                        batch.facts.push(Fact {
+                            id: format!("fact:persistence:column:{}:{}", rec.rel, m.start), subject: column_id,
+                            predicate: "persisted_column".into(),
+                            object: json!({"kind":"ScalarValue","value":m.properties.clone()}),
+                            evidence: vec![evidence(&rec.rel, &rec.hash, m.start, m.end, "STATIC_PARSED")], resolution: "PARSED",
+                        });
+                    }
+                    let owner_table = m.parent.as_ref().and_then(|parent| framework_entity_id.get(&format!("{}:table:{}", rec.rel, parent))).cloned();
+                    let target_type = m.properties.get("targetType").and_then(|v| v.as_str()).unwrap_or("");
+                    if !target_type.is_empty() {
+                        let target_class = resolve_name(fi, target_type, recs, &class_to_file, &siblings);
+                        let target_table = target_class.as_ref().and_then(|class| persistence_table_by_class.get(class)).cloned();
+                        if let (Some(from), Some(to)) = (owner_table.clone(), target_table) {
+                            if from != to {
+                                let relation_kind = m.properties.get("relationKind").and_then(|v| v.as_str()).unwrap_or("association");
+                                let cardinality = m.properties.get("cardinality").and_then(|v| v.as_str()).unwrap_or("1:N");
+                                batch.relationships.push(Relationship {
+                                    id: format!("rel:persistence:{}:{}->{}", rec.rel, m.start, to), from, to,
+                                    kind: relation_kind.into(),
+                                    evidence: vec![evidence(&rec.rel, &rec.hash, m.start, m.end, "STATIC_PARSED")],
+                                    resolution: "PARSED",
+                                    label: Some(m.properties.get("joinColumn").and_then(|v| v.as_str()).map(|fk| format!("{cardinality} · {fk}")).unwrap_or_else(|| cardinality.to_string())),
+                                });
+                            }
+                        } else if m.properties.get("relationKind").is_some() {
+                            if let Some(from) = owner_table {
+                                batch.facts.push(Fact {
+                                    id: format!("fact:unresolved-persistence:{}:{}", rec.rel, m.start), subject: from,
+                                    predicate: "persistence_association".into(),
+                                    object: json!({"kind":"UnknownValue","reason":format!("cannot resolve JPA target entity {target_type}")}),
+                                    evidence: vec![evidence(&rec.rel, &rec.hash, m.start, m.end, "STATIC_PARSED")], resolution: "UNRESOLVED",
+                                });
+                            }
+                        }
+                    }
+                }
                 FrameworkEntityKind::Route => {
                     let subject = framework_entity_id.get(&format!("{}:route:{}", rec.rel, m.name)).cloned().unwrap_or_else(|| fid.clone());
                     let method = m.properties.get("method").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -1334,6 +1483,36 @@ mod tests {
         let (a, b) = (fixture(), fixture());
         assert!(a.relationships.iter().all(|r| !r.evidence.is_empty()));
         assert_eq!(a.revision, b.revision);
+    }
+
+    #[test]
+    fn extracts_uml_fields_enums_heritage_signatures_and_associations() {
+        let dir = std::env::temp_dir().join(format!("cie-uml-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("outbox.ts"), r#"
+export class OutboxEntry { constructor(public id: string) {} }
+export interface Sink { deliver(e: OutboxEntry): void; }
+export enum OutboxState { Pending, Failed }
+export abstract class BaseOutbox { protected entries: OutboxEntry[] = []; }
+export class OutboxService extends BaseOutbox implements Sink {
+  private state: OutboxState = OutboxState.Pending;
+  private dead: OutboxEntry | null = null;
+  markFailed(entry: OutboxEntry): void { this.state = OutboxState.Failed; }
+}
+"#).unwrap();
+        let b = index_repo(&dir, None, None).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(b.entities.iter().any(|e| e.kind == "field" && e.name == "BaseOutbox.entries"));
+        assert!(b.entities.iter().any(|e| e.kind == "field" && e.name == "OutboxService.dead"));
+        assert!(b.entities.iter().any(|e| e.kind == "enum" && e.name == "OutboxState"));
+        assert!(b.relationships.iter().any(|r| r.kind == "extends" && r.from.ends_with("#OutboxService") && r.to.ends_with("#BaseOutbox")));
+        assert!(b.relationships.iter().any(|r| r.kind == "implements" && r.from.ends_with("#OutboxService") && r.to.ends_with("#Sink")));
+        assert!(b.relationships.iter().any(|r| r.kind == "association" && r.label.as_deref() == Some("0..*") && r.from.ends_with("#BaseOutbox") && r.to.ends_with("#OutboxEntry")));
+        assert!(b.relationships.iter().any(|r| r.kind == "association" && r.label.as_deref() == Some("0..1") && r.to.ends_with("#OutboxEntry")));
+        assert!(b.relationships.iter().any(|r| r.kind == "association" && r.label.as_deref() == Some("1") && r.from.ends_with("#OutboxService") && r.to.ends_with("#OutboxState")));
+        assert!(b.facts.iter().any(|f| f.predicate == "signature" && f.subject.ends_with("#OutboxService.markFailed") && f.object.to_string().contains("markFailed(entry: OutboxEntry): void")));
     }
 }
 

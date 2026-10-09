@@ -8,13 +8,73 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { VISUALS } from "../../../packages/core/src/visuals.ts";
 import { ctx, demoRepo, setup, traceFor } from "../../../packages/core/test/helpers.ts";
-import { arrange } from "../src/arrange.ts";
-import { basePositions, effectiveView, render } from "../src/graph.ts";
+import { arrange, arrangeElk, usesElk } from "../src/arrange.ts";
+import ElkConstructor from "elkjs/lib/elk.bundled.js";
+import type { ELK as ElkEngine } from "elkjs/lib/elk-api.js";
+import { basePositions, effectiveView, render, type Rendered } from "../src/graph.ts";
 import { callDepth, columnFlow, forceLayout, geometricCrossings, gutterRoutes, laneBands, layered, marginArcs, orderColumns, pathClear, routeEdges, separate, wrapColumns, type Item } from "../src/layout.ts";
 import { SIZES, measure, measureLegibility } from "../src/layoutmetrics.ts";
 
 const item = (id: string, x: number, y: number, w = 150, h = 28): Item => ({ id, x, y, w, h });
+const ELK = ElkConstructor as unknown as { new(): ElkEngine };
 const overlapping = (items: Item[], gap = 0) => { let n = 0; for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) { const a = items[i], b = items[j]; if (Math.abs(a.x - b.x) < (a.w + b.w) / 2 + gap && Math.abs(a.y - b.y) < (a.h + b.h) / 2 + gap) n++; } return n; };
+
+const domainGraph = (): Rendered => ({
+  nodes: Array.from({ length: 9 }, (_, i) => ({ id: `d${i}`, label: `Domain ${i}`, kind: "agg", members: [`source${i}`], count: 1, displayMode: "FACT", tier: "RELEVANT", pos: { x: 0, y: i * 200 }, stale: false })),
+  edges: [{ id: "connection", from: "d7", to: "d8", kind: "imports", label: "imports", count: 1, edgeIds: ["original"], evidenceIds: ["proof"], displayMode: "FACT", stale: false }],
+  groups: [],
+});
+
+test("ELK packs disconnected domains compactly and adapts to a narrow canvas", async () => {
+  const source = domainGraph(), before = structuredClone(source), elk = new ELK();
+  const wide = await arrangeElk(source, elk, { width: 1000, height: 600 });
+  const narrow = await arrangeElk(source, elk, { width: 340, height: 1000 });
+  for (const r of [wide, narrow]) {
+    assert.equal(measure(r).nodeOverlaps, 0);
+    assert.equal(measure(r).edgeThroughNode, 0);
+    const height = Math.max(...r.nodes.map((n) => n.pos.y)) - Math.min(...r.nodes.map((n) => n.pos.y));
+    assert.ok(height < 900, `disconnected domains span ${height}px`);
+    assert.deepEqual(r.nodes.map(({ pos, ...n }) => n), source.nodes.map(({ pos, ...n }) => n));
+    assert.deepEqual(r.edges.map(({ via, ...e }) => e), source.edges);
+  }
+  assert.ok(new Set(wide.nodes.map((n) => n.pos.x)).size > 1, "wide canvas uses multiple columns");
+  assert.ok(narrow.nodes[8].pos.y > narrow.nodes[7].pos.y, "narrow canvas flows downward");
+  assert.deepEqual(source, before, "input geometry and provenance are untouched");
+  assert.deepEqual(await arrangeElk(source, elk, { width: 1000, height: 600 }), wide, "deterministic layout");
+});
+
+test("ELK routes cyclic, parallel and self edges without deleting evidence", async () => {
+  const source = domainGraph();
+  source.edges = [["d0", "d1"], ["d1", "d2"], ["d2", "d0"], ["d0", "d1"], ["d2", "d2"]].map(([from, to], i) => ({ ...source.edges[0], id: `e${i}`, from, to }));
+  const result = await arrangeElk(source, new ELK(), { width: 1000, height: 600 });
+  assert.equal(result.edges.length, 5);
+  assert.ok(result.edges.every((e) => e.via?.length));
+  assert.equal(measure(result).nodeOverlaps, 0);
+  assert.equal(measure(result).edgeThroughNode, 0);
+});
+
+test("ELK preserves nested groups and translates routes across group boundaries", async () => {
+  const source = domainGraph();
+  source.groups = [{ id: "outer", label: "System", kind: "cluster" }, { id: "inner", label: "Worker", kind: "cluster", parent: "outer" }];
+  source.nodes[7].parent = "inner";
+  source.nodes[8].parent = "outer";
+  const result = await arrangeElk(source, new ELK(), { width: 1000, height: 600 });
+  assert.deepEqual(result.groups, source.groups);
+  assert.equal(result.nodes[7].parent, "inner");
+  assert.equal(measure(result).nodeOverlaps, 0);
+  assert.equal(measure(result).edgeThroughNode, 0);
+});
+
+test("ELK selection keeps sequence, swimlanes and event bands on their notation layouts", () => {
+  const source = domainGraph();
+  assert.equal(usesElk(source, "DependencyAtlas"), true);
+  for (const form of ["RaceWindow", "Archaeology", "SemanticDiff", "TransactionJourney"]) assert.equal(usesElk(source, form), false);
+  source.nodes = source.nodes.map((n) => ({ ...n, kind: "node" }));
+  assert.equal(usesElk(source, "GeneratedChart", "S1"), true);
+  for (const chart of ["S2", "S5", "S7", "S8", "S28"]) assert.equal(usesElk(source, "GeneratedChart", chart), false);
+  source.groups = [{ id: "lane", label: "Lane", kind: "lane" }];
+  assert.equal(usesElk(source, "GeneratedChart", "S1"), false);
+});
 
 test("generated chart arrangement preserves its requested columns and rows", () => {
   const node = (id: string, x: number, y: number) => ({
@@ -137,7 +197,7 @@ const EDGE_LABEL_CEILING: Record<string, number> = { PolicyMap: 2, TestConfidenc
 test("every form at every level: no node overlaps and no edge through an unrelated node; crossings stay under the form's ceiling", async () => {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
-  await svc.extractConcepts(ctx(), { revision });
+  await svc.buildConceptHierarchy(ctx(), { revision });
   for (let i = 0; i < 3; i++) svc.reportException(ctx(), { trace: traceFor(repo), source: "api" });
   const views: { form: string; view: any; claims: any[] }[] = [];
   for (const v of VISUALS.filter((x) => x.formId !== "ChangeRisk" && x.formId !== "HypothesisGraph" && x.formId !== "SemanticDiff")) {
@@ -154,6 +214,7 @@ test("every form at every level: no node overlaps and no edge through an unrelat
   execFileSync("git", ["-C", repo, "-c", "user.name=Sam", "-c", "user.email=s@x", "commit", "-qam", "add freeze"]);
   const r2 = await svc.ingestRepository(ctx(), { repoPath: repo });
   assert.ok(r2.ok);
+  await svc.buildConceptHierarchy(ctx(), { revision: r2.value.id });
   const diff = await svc.ask(ctx(), { question: "what changed since the last index", revision: r2.value.id } as any);
   assert.ok(diff.ok);
   views.push({ form: "SemanticDiff", view: diff.value.view, claims: diff.value.claims });
@@ -166,7 +227,10 @@ test("every form at every level: no node overlaps and no edge through an unrelat
     const claims = Object.fromEntries(cs.map((c: any) => [c.draft.id, c]));
     const { view, stale } = effectiveView(raw, claims);
     for (const level of [0, 1, 2, 3, 4, 5, 6]) {
-      const drawn = arrange(render(view, level, basePositions(view), stale), view, level);
+      const initial = arrange(render(view, level, basePositions(view), stale), view, level, true);
+      const drawn = usesElk(initial, view.formId, typeof view.params?.chartId === "string" ? view.params.chartId : undefined)
+        ? await arrangeElk(initial, new ELK(), { width: 1000, height: 700 })
+        : arrange(initial, view, level);
       const m = measure(drawn);
       const lg = measureLegibility(drawn);
       if (m.nodeOverlaps) problems.push(`${form} L${level}: ${m.nodeOverlaps} overlap(s) ${m.detail.join("; ")}`);

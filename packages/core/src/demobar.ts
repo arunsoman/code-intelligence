@@ -111,7 +111,7 @@ export async function runDemoBar(opts: { provider?: ModelProvider; dir?: string;
     need(ing.ok, "index failed");
     const revision = ing.ok ? ing.value.id : "";
     if (provider.hosted) { svc.setEgress(ctx(), { repoRoot: repo, allow: true }); }
-    await svc.extractConcepts(ctx(), { revision });
+    await svc.buildConceptHierarchy(ctx(), { revision });
 
     // The auth map is shown on the small auth fixture so step 1 can be compared with the payments views.
     const authSvc = new Service(new Store(":memory:"), new WorkerClient(), provider);

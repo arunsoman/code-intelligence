@@ -3,7 +3,7 @@ import { buttonFeedback } from "./button.ts";
 import type { ChatAnalysisResult } from "@cie/schema";
 
 /** One alternative view the router considered for the same question. */
-export interface MessageAlt { form: string; kind?: string; name: string; question: string; prompt?: string }
+export interface MessageAlt { form: string; kind?: string; chartCode?: string; name: string; question: string; prompt?: string }
 
 export interface Message {
   id?: string; role: "user" | "assistant"; text: string; at: string; error?: boolean; results?: ChatAnalysisResult[];
@@ -16,6 +16,7 @@ export interface Message {
 interface Props {
   messages: Message[]; referents: { id: string; label: string; source?: "map" | "editor" | "cell" }[]; busy: boolean; canAsk: boolean;
   examples: string[]; onSend: (text: string) => void; onDropReferent: (id: string) => void;
+  onNewContext: () => void;
   /** Seeded from other panels (e.g. "ask about this finding"); a new `n` replaces the composer's text. */
   seed?: { text: string; n: number };
   onShowResult?: (result: ChatAnalysisResult) => void;
@@ -24,7 +25,7 @@ interface Props {
   onShowAlt?: (alt: MessageAlt) => void;
 }
 
-export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend, onDropReferent, seed, onShowResult, onCreateProvider, onShowAlt }: Props) {
+export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend, onDropReferent, onNewContext, seed, onShowResult, onCreateProvider, onShowAlt }: Props) {
   const [text, setText] = useState("");
   const [referentsExpanded, setReferentsExpanded] = useState(false);
   const end = useRef<HTMLDivElement>(null);
@@ -35,7 +36,7 @@ export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend,
   const sendFb = buttonFeedback({ busy });
   return (
     <section className="chat" aria-label="Conversation">
-      <h2>Conversation</h2>
+      <div className="between"><h2>Conversation</h2><button className="link small" onClick={onNewContext} disabled={busy} aria-label="Start a new conversation context">＋ New context</button></div>
       <div className="messages" role="log" aria-live="polite" aria-label="Conversation history" tabIndex={0}>
         {messages.length === 0 && (
           <div className="muted">

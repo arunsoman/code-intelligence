@@ -45,7 +45,7 @@ test("the empty-state copy is gated by the canvas phase, not shown whenever ther
 test("panels that fetch on open draw a skeleton rather than a bare loading line", () => {
   const skeleton = read("../src/Skeleton.tsx");
   assert.match(skeleton, /role="status" aria-busy="true" aria-label=\{label\}/, "the shared skeleton names its busy region");
-  for (const [file, label] of [["VisualsGallery.tsx", "visuals catalogue"], ["ConceptBrowser.tsx", "concept cards"], ["InsightsPanel.tsx", "tab"], ["InvestigationPanel.tsx", "evidence"], ["DefectPanel.tsx", "findings"]] as const) {
+  for (const [file, label] of [["VisualsGallery.tsx", "visuals catalogue"], ["InsightsPanel.tsx", "tab"], ["InvestigationPanel.tsx", "evidence"], ["DefectPanel.tsx", "findings"]] as const) {
     const src = read(`../src/${file}`);
     assert.match(src, /<Loading pending=/, `${file} shows a skeleton`);
     assert.match(src, new RegExp(`label=[^>]*${label}`, "i"), `${file} names what is loading`);

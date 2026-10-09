@@ -96,6 +96,16 @@ export function basePositions(view: ViewSpec): Map<string, Pos> {
   const pos = new Map<string, Pos>();
   // Forms with their own layout (swim lanes, timelines, two-axis maps, before/after) carry explicit positions.
   if (view.nodes.length > 0 && view.nodes.every((n) => n.pos)) { for (const n of view.nodes) pos.set(n.id, { ...n.pos! }); return pos; }
+  // UML class boxes include their members, so give them a grid with enough room for the compartments.
+  if (view.params?.chartId === "S16") {
+    const nodes = [...view.nodes].sort((a, b) => a.label.localeCompare(b.label));
+    const columns = 3, xGap = 370, yGap = 300;
+    nodes.forEach((n, i) => {
+      const col = i % columns, row = Math.floor(i / columns);
+      pos.set(n.id, { x: (col - (columns - 1) / 2) * xGap, y: (row - (Math.ceil(nodes.length / columns) - 1) / 2) * yGap });
+    });
+    return pos;
+  }
   if (view.formId === "SemanticMap") {
     // Concept groups are columns (wrapped), file groups stack in a column, symbols stack in a file.
     const fileGroups = view.groups.filter((g) => g.kind === "file" && g.childNodeIds.length);

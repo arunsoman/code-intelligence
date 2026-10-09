@@ -10,7 +10,7 @@ const ev = (store: any, s: string, e: ContextEvent, at?: () => string) => { cons
 test("All six salience factors: each is reported for every element, with a reason, and each one moves a score when its signal is present", async () => {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
-  await svc.extractConcepts(ctx(), { revision });
+  await svc.buildConceptHierarchy(ctx(), { revision });
   svc.reportException(ctx(), { trace: traceFor(repo), source: "api-server" });
   svc.setOverride(ctx(), { revision, entityId: FRAUD, mode: "pin" });
   const r = await svc.ask(ctx(), { question: "how do fraud checks and payments work", revision });

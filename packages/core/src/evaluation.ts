@@ -61,9 +61,9 @@ export const SEEDED_CONCEPTS: Suite = {
   id: "seeded-concepts", version: 1, title: "Seeded business concepts", synthetic: false,
   async run(svc) {
     const rev = svc.store.latestRevision()!;
-    const r = await svc.extractConcepts({ requestId: "eval", idempotencyKey: "eval-" + Math.random(), actor: { principalId: "eval", tenantId: "t", sessionId: "s" }, deadlineMs: Date.now() + 120_000, traceId: "eval" }, { revision: rev.id });
-    const cards = r.ok ? r.value.cards : [];
-    return SEED_CONCEPTS.map((s) => ({ id: s.id, expected: s.present, predicted: cards.some((c) => c.kind === s.kind && s.title.test(c.title)) }));
+    const r = await svc.buildConceptHierarchy({ requestId: "eval", idempotencyKey: "eval-" + Math.random(), actor: { principalId: "eval", tenantId: "t", sessionId: "s" }, deadlineMs: Date.now() + 120_000, traceId: "eval" }, { revision: rev.id });
+    const cards = r.ok ? r.value.concepts : [];
+    return SEED_CONCEPTS.map((s) => ({ id: s.id, expected: s.present, predicted: cards.some((c) => c.kind === s.kind && s.title.test(c.label ?? c.kind)) }));
   },
 };
 
@@ -178,11 +178,11 @@ const pct = (i: Interval) => (i.value === null ? "n/a" : `${Math.round(i.value *
 
 /** A deliberately worse model, for proving the regression check catches a degraded one: it drops what it was asked to find. */
 export class DegradedProvider implements ModelProvider {
-  readonly name = "degraded"; readonly model = "drops-cards"; readonly hosted = false;
+  readonly name = "degraded"; readonly model = "drops-names"; readonly hosted = false;
   private inner = new StubProvider();
   async generate(req: Parameters<ModelProvider["generate"]>[0]) {
     const out: any = await this.inner.generate(req);
-    if (req.schemaId === "concepts.v1") out.cards = out.cards.filter((_: unknown, i: number) => i % 3 === 0);
+    if (req.purpose === "NAME_CONCEPT") out.names = out.names.filter((_: unknown, i: number) => i % 3 === 0);
     return out;
   }
 }

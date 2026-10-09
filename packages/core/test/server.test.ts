@@ -3,10 +3,11 @@ import { createServer, request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { buildHandler } from "../src/server.ts";
-import { setup, FIXTURE } from "./helpers.ts";
+import { ctx, setup, FIXTURE } from "./helpers.ts";
 
 async function withServer(fn: (base: string) => Promise<void>) {
-  const { svc, worker } = await setup();
+  const { svc, worker, revision } = await setup();
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
   const srv = createServer(buildHandler(svc));
   await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
   try { await fn(`http://127.0.0.1:${(srv.address() as AddressInfo).port}`); } finally { srv.close(); worker.close(); }

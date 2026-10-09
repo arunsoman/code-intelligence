@@ -38,10 +38,9 @@ test("button feedback: the work-starting buttons use the convention", () => {
   }
   // Index, Extract concepts and Save in App; Send in the chat; Re-index in the insights drawer.
   assert.ok([...app.matchAll(/buttonFeedback\(/g)].length >= 3, "App covers its three slow buttons");
-  assert.match(app, /Index<\/button>/);
+  assert.match(app, /"Update index" : "Index"/);
   // The concept button's label depends on the chosen method, so it comes from MODE_INFO; the convention still has to wrap it.
-  assert.match(app, /extractFb\.spinner && <span className="spinner" aria-hidden="true" \/>\}\{MODE_INFO\[conceptMode\]\.button/, "the concept button shows the spinner and the label of the chosen method");
-  assert.match(read("../src/concept-hierarchy-view.ts"), /button: "Extract concepts"/, "the cards method keeps its label");
+  assert.match(app, /extractFb\.spinner && <span className="spinner" aria-hidden="true" \/>\}\{MODE_INFO\.hierarchy\.button/, "the concept button shows the spinner and the hierarchy button label");
   assert.match(read("../src/concept-hierarchy-view.ts"), /button: "Build concept hierarchy"/);
   assert.match(app, /Save investigation/);
   assert.match(chat, /Send<\/button>/);

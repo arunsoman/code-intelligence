@@ -7,28 +7,40 @@ import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { migrate } from "./migrations.ts";
 import { clearHistoryCache } from "./gitinfo.ts";
-import { ChartOutput, type AnalysisBatch, type ChartOutput as ChartPlan, type Claim, type ConceptCard, type Entity, type EvidenceRef, type Fact, type JobView, type Relationship, type Verdict } from "@cie/schema";
+import { ChartOutput, ChartOutputV2, type AnalysisBatch, type ChartOutput as ChartPlan, type ChartOutputV2 as ChartPlanV2, type Claim, type ConceptCard, type Entity, type EvidenceRef, type Fact, type JobView, type Relationship, type Verdict } from "@cie/schema";
 
 export interface RevisionRow { id: string; repoRoot: string; gitHead: string | null; createdAt: string; analyzerVersion: string; diagnostics: AnalysisBatch["diagnostics"]; fileCount: number }
 
 export class DeltaBaseError extends Error {}
+
+/** A saved generated plan may be chart.v1 (generic) or chart.v2 (typed per chart id); each is validated by its own contract. */
+export type StoredChartPlan = ChartPlan | ChartPlanV2;
+
+function validateStoredChartPlan(raw: unknown): StoredChartPlan | null {
+  if (raw && typeof raw === "object" && (raw as { contractVersion?: unknown }).contractVersion === "chart.v2") {
+    const parsed = ChartOutputV2.safeParse(raw);
+    return parsed.success ? parsed.data : null;
+  }
+  const parsed = ChartOutput.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
 
 export class Store {
   readonly db: DatabaseSync;
   readonly path: string;
 
   /** Reuse a validated generated layout only for the exact evidence bundle and question. */
-  generatedChartPlan(cacheKey: string, bundleId: string, question: string): ChartPlan | null {
+  generatedChartPlan(cacheKey: string, bundleId: string, question: string): StoredChartPlan | null {
     const row = this.db.prepare("select plan_json from generated_chart_plans where cache_key = ? and bundle_id = ? and question = ?").get(cacheKey, bundleId, question) as { plan_json: string } | undefined;
     if (!row) return null;
-    try { const parsed = ChartOutput.safeParse(JSON.parse(row.plan_json)); return parsed.success ? parsed.data : null; } catch { return null; }
+    try { return validateStoredChartPlan(JSON.parse(row.plan_json)); } catch { return null; }
   }
 
-  saveGeneratedChartPlan(cacheKey: string, bundleId: string, question: string, plan: ChartPlan): void {
-    const parsed = ChartOutput.safeParse(plan);
-    if (!parsed.success) return;
+  saveGeneratedChartPlan(cacheKey: string, bundleId: string, question: string, plan: StoredChartPlan): void {
+    const parsed = validateStoredChartPlan(plan);
+    if (!parsed) return;
     this.db.prepare("insert into generated_chart_plans(cache_key, bundle_id, question, plan_json, created_at) values (?,?,?,?,?) on conflict(cache_key) do update set bundle_id=excluded.bundle_id, question=excluded.question, plan_json=excluded.plan_json, created_at=excluded.created_at")
-      .run(cacheKey, bundleId, question, JSON.stringify(parsed.data), new Date().toISOString());
+      .run(cacheKey, bundleId, question, JSON.stringify(parsed), new Date().toISOString());
   }
 
   constructor(path = process.env.CIE_DB ?? ".cie/cie.db") {
@@ -51,8 +63,6 @@ export class Store {
       create table if not exists workspaces(id text primary key, name text not null, version integer not null, revision text, updated_at text not null, json text not null);
       create table if not exists journal(seq integer primary key autoincrement, resource_id text not null, command_id text not null, type text not null, payload text not null, actor text not null, ts text not null);
       create table if not exists idempotency(key text primary key, payload_hash text not null, receipt text not null);
-      create table if not exists concepts(revision text not null, id text not null, kind text not null, json text not null, primary key(revision, id));
-      create table if not exists concept_versions(repo_root text not null, version integer not null, revision text not null, created_at text not null, provider text not null, json text not null, primary key(repo_root, version));
       create table if not exists claims(id text primary key, revision text not null, version integer not null, state text not null, claim_class text not null, json text not null);
       create table if not exists verdicts(id text primary key, claim_id text not null, actor text not null, verdict text not null, explanation text not null, ts text not null, evidence text not null);
       create index if not exists verdicts_claim on verdicts(claim_id);
@@ -241,31 +251,18 @@ export class Store {
   }
 
   // ---- concepts (current set per revision + immutable versions per repository) ----
-  replaceConcepts(rev: string, cards: ConceptCard[], provider = "unknown"): number {
-    return this.tx(() => {
-      this.db.prepare("delete from concepts where revision = ?").run(rev);
-      const ins = this.db.prepare("insert into concepts values (?,?,?,?)");
-      for (const c of cards) ins.run(rev, c.id, c.kind, JSON.stringify(c));
-      const root = (this.db.prepare("select repo_root from revisions where id = ?").get(rev) as any)?.repo_root ?? "";
-      const last = Number((this.db.prepare("select max(version) as v from concept_versions where repo_root = ?").get(root) as any)?.v ?? 0);
-      this.db.prepare("insert into concept_versions values (?,?,?,?,?,?)").run(root, last + 1, rev, new Date().toISOString(), provider, JSON.stringify(cards));
-      return last + 1;
-    });
+  /** Legacy writes are refused; hierarchy generation is the only writer of concepts. */
+  replaceConcepts(_rev: string, _cards: ConceptCard[], _provider = "unknown"): number {
+    throw new Error("Concept cards have been removed. Build the concept hierarchy instead.");
   }
-  /** Cards for a revision. By default refuted cards are excluded, so a card you rejected stops influencing ranking. */
-  concepts(rev: string, opts: { includeRefuted?: boolean } = {}): ConceptCard[] {
-    const cards = (this.db.prepare("select json from concepts where revision = ?").all(rev) as any[]).map((r) => JSON.parse(r.json) as ConceptCard);
-    if (opts.includeRefuted) return cards;
-    return cards.filter((c) => this.getClaim(c.claimId)?.state !== "REFUTED");
+  /** Compatibility projection for existing views; these are structural hierarchy concepts, never model-generated cards. */
+  concepts(rev: string, _opts: { includeRefuted?: boolean } = {}): ConceptCard[] {
+    return this.semanticConcepts(rev).map((c) => ({ id: c.id, revision: rev, kind: "domain-concept", title: c.label ?? c.kind,
+      summary: c.soundness?.basis ?? c.kind, members: c.members, evidenceIds: c.evidenceIds, claimId: "",
+      statedConfidence: "low", source: "structural-hierarchy" }));
   }
-  conceptVersions(repoRoot: string): { version: number; revision: string; createdAt: string; provider: string; cards: number }[] {
-    return (this.db.prepare("select version, revision, created_at, provider, json from concept_versions where repo_root = ? order by version desc").all(repoRoot) as any[])
-      .map((r) => ({ version: r.version, revision: r.revision, createdAt: r.created_at, provider: r.provider, cards: (JSON.parse(r.json) as unknown[]).length }));
-  }
-  conceptVersion(repoRoot: string, version: number): ConceptCard[] | null {
-    const r = this.db.prepare("select json from concept_versions where repo_root = ? and version = ?").get(repoRoot, version) as any;
-    return r ? JSON.parse(r.json) : null;
-  }
+  conceptVersions(_repoRoot: string): { version: number; revision: string; createdAt: string; provider: string; cards: number }[] { return []; }
+  conceptVersion(_repoRoot: string, _version: number): ConceptCard[] | null { return null; }
 
   // ---- concept hierarchy (dual-axis): graphs, semantic concepts, architecture, links, name cache ----
   pdgs(rev: string): any[] {

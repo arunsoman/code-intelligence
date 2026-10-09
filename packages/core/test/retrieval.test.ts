@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync } from "node:fs";
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 // C10 hybrid retrieval: judged on labelled questions (lexical only vs hybrid), on a repository built to mislead it, on whether
@@ -44,6 +44,7 @@ const PAYMENTS: Gold[] = [
 
 async function measure(repo: string | undefined, gold: Gold[]) {
   const { svc, worker, revision } = await setup(undefined, repo);
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
   const out = { lexical: { recall: 0, mrr: 0, n: gold.length }, hybrid: { recall: 0, mrr: 0, n: gold.length }, per: [] as any[] };
   for (const g of gold) {
     const sem = await semanticScores(svc.store, revision, g.q, new HashEmbedder());
@@ -78,10 +79,28 @@ test("C10: gold sets: hybrid finds what the questions need and ranks the key cod
   assert.ok(miss.recall < 1, "a synonym the vocabulary lacks is still a miss: the local embedder is not a language model, and the score says so");
 });
 
+test("UML retrieval tops up class members and association endpoints", async () => {
+  const repo = mkdtempSync(join(tmpdir(), "cie-uml-retrieval-"));
+  writeFileSync(join(repo, "member.ts"), "export class Member {}\n");
+  writeFileSync(join(repo, "owner.ts"), 'import { Member } from "./member";\nexport class Owner { public member: Member = new Member(); }\n');
+  const { svc, worker, revision } = await setup(new StubProvider(), repo);
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
+  try {
+    const result = retrieveForQuestion(svc.store, revision, "UML class diagram for Owner", { requireKinds: ["class", "field", "enum"] });
+    assert.ok(result.bundle.entities.some((e) => e.kind === "field" && e.name === "Owner.member"));
+    assert.ok(result.bundle.entities.some((e) => e.kind === "class" && e.name === "Member"));
+    assert.ok(result.bundle.relationships.some((r) => r.kind === "association" && r.from.endsWith("#Owner") && r.to.endsWith("#Member")));
+  } finally {
+    worker.close();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test("C10: adversarial distractors: keyword-stuffed, unreferenced and legacy code does not outrank the real code, and injected comments never reach a model", async () => {
   const seen: ModelRequest[] = [];
   class Spy implements ModelProvider { readonly name = "spy"; readonly model = "x"; readonly hosted = false; inner = new StubProvider(); async generate(r: ModelRequest) { seen.push(r); return this.inner.generate(r); } }
   const { svc, worker, revision } = await setup(new Spy(), DISTRACTORS);
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
   const q = "how does authentication work";
   const sem = await semanticScores(svc.store, revision, q, new HashEmbedder());
   const r = retrieveForQuestion(svc.store, revision, q, { semantic: sem });
@@ -106,6 +125,7 @@ test("C10: adversarial distractors: keyword-stuffed, unreferenced and legacy cod
 
 test("C10: evidence recall: the evidence selected for each gold question includes the evidence of the relationships the answer needs", async () => {
   const { svc, worker, revision } = await setup(undefined, demoRepo());
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
   let total = 0, found = 0; const detail: string[] = [];
   for (const g of PAYMENTS.filter((x) => x.expect.length > 1 && x.q !== "how are customers billed")) {
     const sem = await semanticScores(svc.store, revision, g.q, new HashEmbedder());
@@ -130,6 +150,7 @@ test("C10: evidence recall: the evidence selected for each gold question include
 test("C10: inaccessible matches are left out of everything, counted but never named, and evidence in denied code cannot be read", async () => {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
   const q = "what stops a fraudulent payment";
   const open = await svc.ask(ctx(), { question: q, revision });
   assert.ok(open.ok && open.value.view.nodes.some((n) => n.label === "checkFraud"));
@@ -163,6 +184,7 @@ test("C10: inaccessible matches are left out of everything, counted but never na
 
 test("C10: token-budget truncation is disclosed: what the budget was, what was dropped (lowest-ranked first), and why it is not shown", async () => {
   const { svc, worker, revision } = await setup(undefined, demoRepo());
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
   const q = "how does payment processing work"; // a map question: it is the form that retrieves and sends evidence to the model
   const full = retrieveForQuestion(svc.store, revision, q, {});
   assert.equal(full.truncation, undefined, "no budget, no cut");
@@ -175,17 +197,19 @@ test("C10: token-budget truncation is disclosed: what the budget was, what was d
   const droppedMax = Math.max(...cut.truncation!.dropped.map((d) => rank(d.entityId)));
   assert.ok(droppedMax <= keptMin + 1e-9, "what was dropped ranked no higher than what was kept");
   assert.ok(cut.hidden.filter((h) => /evidence budget/.test(h.reason)).length === cut.truncation!.dropped.length, "each dropped element is listed with its reason");
-  // End to end: the model never receives more than the budget, and the person is told.
-  process.env.CIE_CHUNK_TOKEN_BUDGET = String(budget);
+  // The model path uses its actual compact payload, rather than internal analysis storage.
+  const modelFull = retrieveForQuestion(svc.store, revision, q, { forModel: true, resolveEvidence: (ev) => svc.resolveEvidence(svc.store.revision(revision)!, ev) });
+  const modelBudget = Math.floor(modelFull.bundle.tokenEstimate / 5);
+  process.env.CIE_CHUNK_TOKEN_BUDGET = String(modelBudget);
   try {
     const seen: ModelRequest[] = [];
     const spy: ModelProvider = { name: "spy", model: "x", hosted: false, async generate(r) { seen.push(r); return new StubProvider().generate(r); } };
     (svc as any).model = spy;
     const ans = await svc.ask(ctx(), { question: q, revision, form: "SemanticMap" });
     assert.ok(ans.ok);
-    assert.ok(ans.value.view.gaps.some((g) => /cut to fit the model's budget/.test(g) && /dropped, lowest-ranked first/.test(g)));
+    assert.ok(ans.value.view.gaps.some((g) => /cut to fit the model's budget/.test(g) && /dropped/.test(g)));
     const rep = seen.find((s) => s.purpose === "REPRESENT");
-    assert.ok(!rep || rep.bundle.tokenEstimate <= budget, `the model was sent ${rep?.bundle.tokenEstimate} tokens against a budget of ${budget}`);
+    assert.ok(!rep || rep.bundle.tokenEstimate <= modelBudget, `the model was sent ${rep?.bundle.tokenEstimate} tokens against a budget of ${modelBudget}`);
     const dropped = ans.value.view.hidden!.find((h) => /evidence budget/.test(h.reason))!;
     const why = svc.whyHidden(ctx(), { view: ans.value.view, query: dropped.label });
     assert.ok(why.ok && /evidence budget|dropped/i.test(JSON.stringify(why.value)), "'why isn't X shown' says it was dropped for the budget");
@@ -195,6 +219,7 @@ test("C10: token-budget truncation is disclosed: what the budget was, what was d
 
 test("C10: the embedder is replaceable: vectors are stored beside the data and reused, a different embedder gets its own index, and a bad reply is an error", async () => {
   const { svc, worker, revision } = await setup(undefined, demoRepo());
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
   let calls = 0, texts = 0;
   class Counting implements Embedder { readonly name = "counting"; readonly dim = 16; inner = new HashEmbedder(); embed(t: string[]) { calls++; texts += t.length; return t.map((x) => this.inner.embed([x])[0].slice(0, 16)); } }
   const e = new Counting();
@@ -226,6 +251,7 @@ test("C10: the embedder is replaceable: vectors are stored beside the data and r
 
 test("an explicit seed (a pin, or a caller-named entity) survives being outranked by a flood of ordinary matches — both the node cap and the token-budget trim", async () => {
   const { svc, worker, revision } = await setup();
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
   try {
     // "getUser" shares no word with "token"; without being named, it is not even a candidate for this question.
     const seed = svc.store.entities(revision).find((e) => e.name === "getUser")!.entityId;

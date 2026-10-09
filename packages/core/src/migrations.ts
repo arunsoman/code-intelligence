@@ -958,6 +958,30 @@ export const MIGRATIONS: Migration[] = [
       primary key(request_id, principal));`),
     down: (db) => db.exec("drop table if exists feature_decision_approvals;"),
   },
+  {
+    // Versions 40–42 have already shipped in existing databases. Keep this additive
+    // migration above them; reusing 40 silently skips it on those installations.
+    version: 43, name: "conversation-sessions",
+    up: (db) => db.exec(`
+      create table if not exists chat_sessions(
+        session_id text not null, actor_principal text not null, tenant_id text not null,
+        state text not null, seq integer not null, created_at text not null, last_active_at text not null,
+        context_json text not null, turns_json text not null,
+        primary key(session_id, actor_principal, tenant_id));
+      create index if not exists chat_sessions_owner on chat_sessions(actor_principal, tenant_id, last_active_at desc);`),
+    down: (db) => db.exec("drop index if exists chat_sessions_owner; drop table if exists chat_sessions;"),
+  },
+  {
+    version: 44, name: "remove-model-concept-cards",
+    up: (db) => db.exec(`
+      delete from verdicts where claim_id in (select id from claims where claim_class = 'concept-card');
+      delete from claim_events where claim_id in (select id from claims where claim_class = 'concept-card');
+      delete from eval_labels where claim_class = 'concept-card';
+      delete from claims where claim_class = 'concept-card';
+      delete from jobs where kind = 'concepts';
+      drop table if exists concepts;
+      drop table if exists concept_versions;`),
+  },
 ];
 export function currentVersion(db: DatabaseSync): number {
   db.exec("create table if not exists schema_version(version integer not null, name text not null, applied_at text not null)");

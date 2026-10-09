@@ -52,6 +52,8 @@ pub enum FrameworkEntityKind {
     GatewayFilter,
     GatewayPredicate,
     ConfigValue,
+    PersistenceEntity,
+    PersistenceColumn,
 }
 
 impl FrameworkEntityKind {
@@ -71,6 +73,8 @@ impl FrameworkEntityKind {
             FrameworkEntityKind::GatewayFilter => "gateway_filter",
             FrameworkEntityKind::GatewayPredicate => "gateway_predicate",
             FrameworkEntityKind::ConfigValue => "config_value",
+            FrameworkEntityKind::PersistenceEntity => "table",
+            FrameworkEntityKind::PersistenceColumn => "column",
         }
     }
 }

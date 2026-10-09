@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ApiResult, AuditEvent, JobView, ChangesSince, Claim, ConceptCard, ConverseResult, EditorContext, ExplainResult, MapOverlays, MatrixAxis, MatrixCell, ResolvedEvidence, RevisionInfo, SavedState, StatusInfo, VerdictKind, ViewNode, ViewSpec, WorkspaceOpen } from "@cie/schema";
+import type { ApiResult, AuditEvent, JobView, ChangesSince, Claim, ConverseResult, EditorContext, ExplainResult, MapOverlays, MatrixAxis, MatrixCell, ResolvedEvidence, RevisionInfo, SavedState, StatusInfo, VerdictKind, ViewNode, ViewSpec, WorkspaceOpen } from "@cie/schema";
+import { CHART_REGISTRY, type ChartId } from "@cie/schema";
 import { call } from "./api.ts";
+import { selectedChartId } from "./chart-selection.ts";
+import type { ChatAnalysisResult } from "@cie/schema";
 import { RepositoryGit } from "./RepositoryGit.tsx";
 import type { RepositoryGitInfo } from "@cie/schema";
 import { buttonFeedback } from "./button.ts";
@@ -10,9 +13,8 @@ import { ModelMenu } from "./ModelMenu.tsx";
 import { CanvasSkeleton, Loading } from "./Skeleton.tsx";
 import { COMPOSING_CAPTION, EMPTY_NO_INDEX, canvasPhase, emptyStageCopy } from "./loading.ts";
 import { ClaimCard } from "./ClaimCard.tsx";
-import { ConceptBrowser } from "./ConceptBrowser.tsx";
 import { ConceptHierarchyBrowser } from "./ConceptHierarchyBrowser.tsx";
-import { MODE_INFO, browserStorage, hierarchySummary, readConceptMode, writeConceptMode, type ConceptMode } from "./concept-hierarchy-view.ts";
+import { MODE_INFO, hierarchySummary } from "./concept-hierarchy-view.ts";
 import type { ConceptHierarchyView } from "@cie/schema";
 import { Outline } from "./Outline.tsx";
 import { Consequences } from "./Consequences.tsx";
@@ -79,6 +81,20 @@ export function App() {
   const [drawer, setDrawer] = useState<Drawer>(null);
   const [code, setCode] = useState<{ title: string; file: string; startLine: number; snippet: string } | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [chatSessionId, setChatSessionId] = useState(() => {
+    try { return localStorage.getItem("cie-chat-session") || uuid(); } catch { return uuid(); }
+  });
+  const chatRestoreGeneration = useRef(0);
+  useEffect(() => { try { localStorage.setItem("cie-chat-session", chatSessionId); } catch { /* The active tab still keeps its session. */ } }, [chatSessionId]);
+  useEffect(() => {
+    let active = true;
+    const generation = chatRestoreGeneration.current;
+    void call<{ sessionId: string; turns: { seq: number; role: "user" | "assistant"; text: string; at: string }[] }>("C15", "conversation", { sessionId: chatSessionId }).then((r) => {
+      if (!active || generation !== chatRestoreGeneration.current || !r.ok) return;
+      setMessages(r.value.turns.map((turn) => ({ id: `turn-${turn.seq}`, role: turn.role, text: turn.text, at: turn.at })));
+    });
+    return () => { active = false; };
+  }, [chatSessionId]);
   const [events, setEvents] = useState<SavedState["events"]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   // Gaps and left-out candidates open in a popover above the footer, so reading them cannot resize the canvas. (#52)
@@ -92,7 +108,6 @@ export function App() {
   const [changes, setChanges] = useState<ChangesSince | null>(null);
   const [picking, setPicking] = useState(false);
   const [boxSelect, setBoxSelect] = useState(false);
-  const [cards, setCards] = useState<ConceptCard[]>([]);
   const [editorFocus, setEditorFocus] = useState<{ entityId: string; label: string }[]>([]);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [fitTick, setFitTick] = useState(0);
@@ -129,10 +144,6 @@ export function App() {
   // UX-12: view controls collapsible
   const [viewCtrlOpen, setViewCtrlOpen] = useState(true);
   const [exceptions, setExceptions] = useState<ExceptionRow[]>([]);
-  const [browsingCards, setBrowsingCards] = useState(false);
-  // Two ways to discover concepts; the choice is remembered. They keep separate stores and never overwrite each other.
-  const [conceptMode, setConceptModeState] = useState<ConceptMode>(() => readConceptMode(browserStorage()));
-  const setConceptMode = (m: ConceptMode) => { setConceptModeState(m); writeConceptMode(m, browserStorage()); };
   const [browsingHierarchy, setBrowsingHierarchy] = useState(false);
   const [hierarchyConcepts, setHierarchyConcepts] = useState(0);
   const [jobsOpen, setJobsOpen] = useState(false);
@@ -156,7 +167,6 @@ export function App() {
     setInsightsOpen(false);
     setInvestigationsOpen(false);
     setJobsOpen(false);
-    setBrowsingCards(false);
     setBrowsingHierarchy(false);
     setOutlineOpen(false);
     setAudit(null);
@@ -188,15 +198,10 @@ export function App() {
           selectedRepoRef.current = rev.repoRoot;
           setRepoPath(rev.repoRoot);
         }
-        const [c, h] = await Promise.all([
-          call<ConceptCard[]>("C11", "listConcepts", { revision: rev.id }),
-          call<ConceptHierarchyView>("C11", "conceptHierarchy", { revision: rev.id, summary: true }),
-        ]);
+        const h = await call<ConceptHierarchyView>("C11", "conceptHierarchy", { revision: rev.id, summary: true });
         if (selectedRepoRef.current !== rev.repoRoot) return;
-        setCards(c.ok ? c.value : []);
         setHierarchyConcepts(h.ok && h.value.version > 0 ? (h.value.summary?.concepts ?? 0) : 0);
       } else {
-        setCards([]);
         setHierarchyConcepts(0);
       }
     } else setError(s.error.message);
@@ -208,7 +213,7 @@ export function App() {
     repoGeneration.current += 1;
     setBusy(null); setError(null);
     setView(null); setClaimMap({}); setSelection([]); setCellSel([]); setLevel(DEFAULT_LEVEL);
-    setCards([]); setHierarchyConcepts(0); setMessages([]); setEvents([]); setDrawer(null); setCode(null);
+    setHierarchyConcepts(0); setMessages([]); setEvents([]); setDrawer(null); setCode(null);
     setStale(null); setChanges(null); setCardPins(null); setEditorFocus([]); setDismissed(new Set());
     setWs({ version: 0 }); setWsName(""); setExceptions([]); setReplay(null); setOverlays(null);
     setInfo((current) => current ? { ...current, revision: null, concepts: 0, tests: null, allowHosted: false } : null);
@@ -254,7 +259,7 @@ export function App() {
   const rendered = useMemo(() => {
     if (!eff) return { nodes: [], edges: [], groups: [] };
     const staleSet = new Set([...eff.stale, ...changedIds]);
-    return arrange(render(eff.view, level, positions, staleSet), eff.view, level);
+    return arrange(render(eff.view, level, positions, staleSet), eff.view, level, true);
   }, [eff, level, positions, changedIds]);
   const selectedRender = useMemo(() => selectedAggregates(rendered, selection), [rendered, selection]);
   const nodeById = useMemo(() => new Map((view?.nodes ?? []).map((n) => [n.id, n])), [view]);
@@ -309,7 +314,7 @@ export function App() {
   const jobActive = jobs.some((j) => j.state === "QUEUED" || j.state === "RUNNING");
   const runningJob = (kind: string) => jobs.some((j) => j.kind === kind && (j.state === "QUEUED" || j.state === "RUNNING"));
   const indexFb = buttonFeedback({ busy: runningJob("index") });
-  const extractFb = buttonFeedback({ className: "secondary", busy: runningJob(MODE_INFO[conceptMode].jobKind) });
+  const extractFb = buttonFeedback({ className: "secondary", busy: runningJob(MODE_INFO.hierarchy.jobKind) });
   const saveFb = buttonFeedback({ busy: (busy ?? "").startsWith("Saving") });
   const onJobDone = async (j: JobView) => {
     if (j.state === "SUCCEEDED") {
@@ -327,12 +332,6 @@ export function App() {
           setNotice(incremental ?? `Indexed ${v.fileCount} files at ${v.id}${warnings.length ? ` — ${warnings.length} warning(s)` : ""}`);
         }
         log("INDEX", v.id);
-      } else if (j.kind === "concepts") {
-        if (j.params.revision !== info?.revision?.id) { await refresh(); return; }
-        const v = j.result!.value as { cards: ConceptCard[]; dropped: string[]; provider: string };
-        setCards(v.cards);
-        setNotice(`Extracted ${v.cards.length} concept card(s) with ${v.provider}${v.dropped.length ? `; ${v.dropped.length} dropped (ungrounded)` : ""}.${warnings.length ? ` ${warnings[0]}` : ""}`);
-        log("CONCEPTS", String(v.cards.length));
       } else if (j.kind === "concept-hierarchy") {
         if (j.params.revision !== info?.revision?.id) { await refresh(); return; }
         const v = j.result!.value as ConceptHierarchyView;
@@ -368,7 +367,7 @@ export function App() {
     const t = setInterval(() => void syncJobs(), 700);
     return () => clearInterval(t);
   }); // eslint-disable-line react-hooks/exhaustive-deps
-  const startJob = async (kind: "index" | "concepts" | "concept-hierarchy") => {
+  const startJob = async (kind: "index" | "concept-hierarchy") => {
     setError(null); setNotice(null);
     if (kind === "index") setNotice(info?.revision?.repoRoot === selectedRepoRef.current && !!selectedRepoRef.current ? "Checking the repository for file changes; unchanged parses will be reused…" : "Building an initial index for this repository…");
     const r = await call<JobView>("C07", "enqueue", kind === "index" ? { kind, repoPath: repoPath.trim() } : { kind, revision: info?.revision?.id }, uuid());
@@ -382,7 +381,7 @@ export function App() {
     await syncJobs();
   };
   const index = () => void startJob("index");
-  const extract = () => void startJob(MODE_INFO[conceptMode].jobKind);
+  const extract = () => void startJob(MODE_INFO.hierarchy.jobKind);
   const toggleHosted = async (allow: boolean) => {
     const root = info?.revision?.repoRoot;
     if (!root) return;
@@ -409,15 +408,19 @@ export function App() {
   type ChatChartOption = { code: string; formId: string; name: string; blurb: string; example: string; needs: string[] };
   const availableChatCharts = (catalog: CatalogEntry[]): ChatChartOption[] => {
     const testsAvailable = catalog.some((entry) => entry.formId === "TestConfidence" && entry.available);
-    const system = SYSTEM_CHARTS.filter((chart) => chart.formId !== "TestConfidence" || testsAvailable);
+    const system = SYSTEM_CHARTS.filter((chart) => CHART_REGISTRY[chart.code as ChartId]?.compiler !== "missing" && (chart.formId !== "TestConfidence" || testsAvailable));
     const byCode = new Map<string, ChatChartOption>();
-    for (const chart of [...system, ...catalog.filter((entry) => entry.available)]) byCode.set(chart.code, chart);
+    for (const chart of [...system, ...catalog.filter((entry) => entry.available)]) {
+      const canonical = /^S\d+$/.test(chart.code) ? CHART_REGISTRY[chart.code as ChartId]?.name : undefined;
+      byCode.set(chart.code, canonical ? { ...chart, name: canonical } : chart);
+    }
     return [...byCode.values()];
   };
 
-  const displayAlternatives = (question: string, routeAlternatives: { form: string; kind?: string; name: string }[] = [], charts: ChatChartOption[] = SYSTEM_CHARTS) => {
+  const displayAlternatives = (question: string, routeAlternatives: { form: string; kind?: string; name: string }[] = [], charts: ChatChartOption[] = []) => {
     const presets = charts.map((chart) => ({
       form: chart.formId,
+      ...(selectedChartId(chart) ? { chartCode: selectedChartId(chart) } : {}),
       name: chart.name,
       question,
       prompt: `${question}\n\nRender this same topic as a ${chart.name}. ${chart.example}`,
@@ -430,7 +433,7 @@ export function App() {
   const appendChartMessage = (question: string, response: string, message: Omit<Message, "role" | "alternatives">, routeAlternatives: { form: string; kind?: string; name: string }[] = []) => {
     const id = uuid();
     const alternatives = displayAlternatives(question, routeAlternatives);
-    setMessages((current) => [...current, { ...message, id, role: "assistant", alternatives }].slice(-200));
+    setMessages((current) => [...current, { ...message, id, role: "assistant" as const, alternatives }].slice(-200));
     const generation = repoGeneration.current;
     const revision = info?.revision?.id;
     void call<CatalogEntry[]>("C19", "visuals", { revision }).then(async (catalogResult) => {
@@ -440,8 +443,6 @@ export function App() {
         return;
       }
       const charts = availableChatCharts(catalogResult.value);
-      const fallback = displayAlternatives(question, routeAlternatives, charts);
-      setMessages((current) => current.map((item) => item.id === id ? { ...item, alternatives: fallback } : item));
       const result = await call<{ codes: string[]; source: "llm" | "unavailable"; model: string | null; reason?: string }>("C19", "recommendCharts", {
         question, response, revision,
         options: charts.map((chart) => ({ code: chart.code, name: chart.name, description: chart.blurb, form: chart.formId, example: chart.example, needs: chart.needs })),
@@ -455,18 +456,19 @@ export function App() {
       const byCode = new Map(charts.map((chart) => [chart.code, chart]));
       const ranked = result.value.codes.flatMap((code) => {
         const chart = byCode.get(code);
-        return chart ? [{ form: chart.formId, name: chart.name, question, prompt: `${question}\n\nRender this same topic as a ${chart.name}. ${chart.example}` }] : [];
+        return chart ? [{ form: chart.formId, ...(selectedChartId(chart) ? { chartCode: selectedChartId(chart) } : {}), name: chart.name, question, prompt: `${question}\n\nRender this same topic as a ${chart.name}. ${chart.example}` }] : [];
       });
       if (ranked.length) setMessages((current) => current.map((item) => item.id === id ? { ...item, alternatives: ranked } : item));
     });
   };
 
   const send = async (text: string) => {
+    chatRestoreGeneration.current++;
     const generation = repoGeneration.current;
     say("user", text);
     setBusy("Thinking…"); setError(null); setNotice(null);
     try {
-      const r = await call<ConverseResult>("C15", "converse", { text, view, selection, revision: info?.revision?.id, pins, history: messages.slice(-6).map(({ role, text }) => ({ role, text })) });
+      const r = await call<ConverseResult>("C15", "converse", { text, sessionId: chatSessionId, view, selection, revision: info?.revision?.id, pins });
       if (generation !== repoGeneration.current) return;
       if (!r.ok) { say("assistant", failMsg(r), true); return; }
       const v = r.value;
@@ -677,16 +679,12 @@ export function App() {
   return (
     <div className="app">
       {picking && <FolderPicker initialPath={repoPath} onClose={() => setPicking(false)} onPick={(p) => { selectRepository(p, true); setPicking(false); log("PICK_REPO", p); }} />}
-      {galleryOpen && <VisualsGallery revision={info?.revision?.id} onClose={() => setGalleryOpen(false)} onShow={(it: CatalogEntry, q: string) => { setGalleryOpen(false); void askForm(q, it.formId, undefined, undefined, undefined, undefined, it.code); }} />}
+      {galleryOpen && <VisualsGallery revision={info?.revision?.id} onClose={() => setGalleryOpen(false)} onShow={(it: CatalogEntry, q: string) => { setGalleryOpen(false); void askForm(q, it.formId, undefined, undefined, undefined, undefined, selectedChartId(it)); }} />}
       {providerWizardOpen && <ProviderWizard revision={info?.revision?.id} onClose={() => setProviderWizardOpen(false)} />}
       {outlineOpen && <Outline rendered={rendered} level={level} onClose={() => setOutlineOpen(false)} onPick={(id) => { const n = rendered.nodes.find((x) => x.id === id); setOutlineOpen(false); if (n) void inspectNode(n); }} />}
       {browsingHierarchy && (
         <ConceptHierarchyBrowser revision={info?.revision?.id} jobs={jobs} onShowJobs={() => openDialog(() => setJobsOpen(true))} onClose={() => { setBrowsingHierarchy(false); void refresh(); }}
           onAsk={(p) => { setCardPins(p); setBrowsingHierarchy(false); say("assistant", `Referring to “${p.title}” (${p.ids.length} element(s)). Ask your question; they are in the context.`); }} />
-      )}
-      {browsingCards && (
-        <ConceptBrowser revision={info?.revision?.id} jobs={jobs} onShowJobs={() => openDialog(() => setJobsOpen(true))} onClose={() => { setBrowsingCards(false); void refresh(); }} onVerdict={verdict}
-          onAsk={(c) => { setCardPins({ title: c.title, ids: c.members.slice(0, 8) }); setBrowsingCards(false); say("assistant", `Referring to “${c.title}” (${c.members.length} element(s)). Ask your question; they are in the context.`); }} />
       )}
       {jobsOpen && (
         <Modal title="Background work" onClose={() => setJobsOpen(false)} actions={<><span className="muted small">Indexing and extraction run in the background; nothing is saved from a cancelled or interrupted run.</span><button onClick={() => setJobsOpen(false)}>Done</button></>}>
@@ -707,8 +705,8 @@ export function App() {
       <header>
         {defectsOpen && revision && <DefectPanel revision={revision} onClose={() => setDefectsOpen(false)} />}
         {prOpen && repoPath && <PrPanel repoPath={repoPath} onClose={() => setPrOpen(false)} />}
-        {profilesOpen && <ProfilePanel revision={revision} onClose={() => setProfilesOpen(false)} />}
-        {tasksOpen && <TaskPanel revision={revision} onClose={() => setTasksOpen(false)} />}
+        {profilesOpen && <ProfilePanel revision={revision ?? null} onClose={() => setProfilesOpen(false)} />}
+        {tasksOpen && <TaskPanel revision={revision ?? null} onClose={() => setTasksOpen(false)} />}
         {buildOpen && (
           <BuildFeature
             key={buildContext?.requestId ?? buildContext?.releaseId ?? "default"}
@@ -735,7 +733,6 @@ export function App() {
         <h1>Code Intelligence</h1>
         <ModelMenu current={info?.model ?? null} hosted={!!info?.hosted} call={call} onChanged={refresh} />
         {info?.revision && <span className="chip mono" title={info.revision.repoRoot}>rev {info.revision.id} · {info.revision.fileCount} files</span>}
-        {info && info.concepts > 0 && <span className="chip">{info.concepts} concept cards</span>}
         {hierarchyConcepts > 0 && <span className="chip">{hierarchyConcepts} hierarchy concepts</span>}
         {info?.tests && <span className="chip" title={`Loaded from ${info.tests.found.join(", ")}${info.tests.staleness.length ? `. ${info.tests.staleness.join("; ")}` : ""}`}>tests: {info.tests.tests.passed} pass · {info.tests.tests.failed} fail{info.tests.coverageLinePercent !== null ? ` · ${info.tests.coverageLinePercent}% covered` : ""}{info.tests.staleness.length ? " ⚠" : ""}</span>}
         {busy && <span className="chip busy" role="status">{busy}</span>}
@@ -812,12 +809,7 @@ export function App() {
             <button className="secondary" onClick={() => openDialog(() => setPicking(true))} disabled={!!busy || jobActive}>Browse…</button>
             <button onClick={index} disabled={!repoPath.trim() || !!busy || jobActive} className={indexFb.className} aria-busy={indexFb["aria-busy"]} title={info?.revision?.repoRoot === selectedRepoRef.current ? "Incrementally update the selected repository index" : "Build an initial index for the selected repository"}>{indexFb.spinner && <span className="spinner" aria-hidden="true" />}{info?.revision?.repoRoot === selectedRepoRef.current ? "Update index" : "Index"}</button>
           </div>
-          <div className="segmented" role="radiogroup" aria-label="How to discover concepts">
-            {(["hierarchy", "cards"] as const).map((m) => (
-              <button key={m} type="button" role="radio" aria-checked={conceptMode === m} className={conceptMode === m ? "on" : ""} disabled={jobActive} title={MODE_INFO[m].help} onClick={() => setConceptMode(m)}>{MODE_INFO[m].label}</button>
-            ))}
-          </div>
-          <button className={extractFb.className} onClick={extract} disabled={!info?.revision || !!busy || jobActive} aria-busy={extractFb["aria-busy"]} title={MODE_INFO[conceptMode].help}>{extractFb.spinner && <span className="spinner" aria-hidden="true" />}{MODE_INFO[conceptMode].button}{conceptMode === "cards" ? (cards.length ? ` (${cards.length})` : "") : (hierarchyConcepts ? ` (${hierarchyConcepts})` : "")}</button>
+          <button className={extractFb.className} onClick={extract} disabled={!info?.revision || !!busy || jobActive} aria-busy={extractFb["aria-busy"]} title={MODE_INFO.hierarchy.help}>{extractFb.spinner && <span className="spinner" aria-hidden="true" />}{MODE_INFO.hierarchy.button}{hierarchyConcepts ? ` (${hierarchyConcepts})` : ""}</button>
           {info?.hosted && info.revision && (
             <div className="egress">
               <label><input type="checkbox" checked={info.allowHosted} onChange={(e) => void toggleHosted(e.target.checked)} /> Allow the hosted model for this repo</label>
@@ -827,7 +819,6 @@ export function App() {
             </div>
           )}
           {hierarchyConcepts > 0 && <button className="secondary" onClick={() => openDialog(() => setBrowsingHierarchy(true))}>Browse concept hierarchy</button>}
-          {cards.length > 0 && <button className="secondary" onClick={() => openDialog(() => setBrowsingCards(true))}>Browse concept cards</button>}
           </div>
         </section>
 
@@ -955,11 +946,18 @@ export function App() {
               onPick={(id) => { const vn = view.nodes.find((n) => n.id === id); if (vn) { setSelection([id]); void openNodeDrawer(vn); } }}
               onToggle={(id) => setSelection((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]))} />
           ) : (
-          <Canvas rendered={rendered} replayNodes={replayNodes} overlayNodes={overlayNodes} viewKey={viewKey} level={level} fitTick={fitTick} semanticLevels={levelsApply} formId={view?.formId} selected={selectedRender} boxSelect={boxSelect} caption={view?.caption ?? ""}
+          <Canvas rendered={rendered} replayNodes={replayNodes} overlayNodes={overlayNodes} viewKey={viewKey} level={level} fitTick={fitTick} semanticLevels={levelsApply} formId={view?.formId} chartId={typeof view?.params?.chartId === "string" ? view.params.chartId : undefined} selected={selectedRender} boxSelect={boxSelect} caption={view?.caption ?? ""}
             onSelectNodes={(ids) => setSelection([...new Set(rendered.nodes.filter((n) => ids.includes(n.id)).flatMap((n) => n.members))])}
             onTapNode={inspectNode} onTapEdge={inspectEdge} onExpand={expand} onZoomLevel={setLevel}
             onToggleNode={(n) => setSelection((sel) => (n.members.every((m) => sel.includes(m)) ? sel.filter((x) => !n.members.includes(x)) : [...new Set([...sel, ...n.members])]))}
             onStepLevel={stepLevel} onClear={() => setSelection([])} onOpenOutline={() => openDialog(() => setOutlineOpen(true))} announce={setAnnouncement} />
+          )}
+          {view && ["GeneratedChart", "RouteMap"].includes(view.formId) && rendered.nodes.length === 0 && rendered.edges.length === 0 && (
+            <div className="empty-chart-state" role="status" aria-live="polite">
+              <strong>{view.caption || "No diagram elements to display"}</strong>
+              <p>{view.gaps[0] ?? "No current indexed evidence supports elements for this diagram."}</p>
+              {view.gaps.length > 1 && <ul>{view.gaps.slice(1, 4).map((gap, index) => <li key={index}>{gap}</li>)}</ul>}
+            </div>
           )}
           {view && view.nodes.length > 0 && !view.terrain && !(view.matrix && drawMode === "matrix") && (
             <div className="toolbar" role="toolbar" aria-label="Canvas tools">
@@ -994,7 +992,7 @@ export function App() {
       </main>
 
       <aside className="right" data-has-evidence={code || drawer ? "true" : "false"}>
-        <ChatPanel onShowResult={showChatResult} onShowAlt={(alt) => void askForm(alt.prompt ?? alt.question, alt.form, undefined, alt.kind, `Show as ${alt.name}`, alt.question)} onCreateProvider={() => openDialog(() => setProviderWizardOpen(true))} messages={messages} referents={referents} busy={!!busy} canAsk={!!info?.revision} examples={EXAMPLES} seed={chatSeed ?? undefined} onSend={(t) => void send(t)} onDropReferent={(id) => (id.startsWith("cell:") ? setCellSel(cellSel.filter((x) => x !== id)) : id === "card:pins" ? setCardPins(null) : id.startsWith("editor:") ? setDismissed(new Set([...dismissed, id.slice(7)])) : setSelection(selection.filter((x) => x !== id)))} />
+        <ChatPanel onNewContext={() => { chatRestoreGeneration.current++; setChatSessionId(uuid()); setMessages([]); setError(null); setNotice("Started a new conversation context."); }} onShowResult={showChatResult} onShowAlt={(alt) => void askForm(alt.prompt ?? alt.question, alt.form, undefined, alt.kind, `Show as ${alt.name}`, alt.question, alt.chartCode)} onCreateProvider={() => openDialog(() => setProviderWizardOpen(true))} messages={messages} referents={referents} busy={!!busy} canAsk={!!info?.revision} examples={EXAMPLES} seed={chatSeed ?? undefined} onSend={(t) => void send(t)} onDropReferent={(id) => (id.startsWith("cell:") ? setCellSel(cellSel.filter((x) => x !== id)) : id === "card:pins" ? setCardPins(null) : id.startsWith("editor:") ? setDismissed(new Set([...dismissed, id.slice(7)])) : setSelection(selection.filter((x) => x !== id)))} />
         <section className="drawer" aria-label="Evidence">
           {code && (
             <div className="codecard">

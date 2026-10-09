@@ -13,22 +13,21 @@ const concept = (over: Partial<SemanticConcept>): SemanticConcept => ({
 const job = (over: Partial<JobView>): JobView => ({ id: "j1", kind: "concept-hierarchy", state: "RUNNING", cancelRequested: false, committing: false, phase: "motifs", message: "", params: { revision: "r1" }, createdAt: "2026-01-01T00:00:00.000Z", ...over }) as JobView;
 const memory = (init: Record<string, string> = {}): ModeStorage & { data: Record<string, string> } => ({ data: init, getItem(k) { return k in init ? init[k] : null; }, setItem(k, v) { init[k] = v; } });
 
-test("the method toggle remembers its choice, starts on the structural hierarchy, and survives storage that throws", () => {
+test("only the hierarchy is available, including when an old cards preference is stored", () => {
   assert.equal(readConceptMode(undefined), "hierarchy", "no storage at all");
   assert.equal(readConceptMode(memory()), "hierarchy", "nothing remembered yet");
-  assert.equal(readConceptMode(memory({ [CONCEPT_MODE_KEY]: "cards" })), "cards");
+  assert.equal(readConceptMode(memory({ [CONCEPT_MODE_KEY]: "cards" })), "hierarchy");
   assert.equal(readConceptMode(memory({ [CONCEPT_MODE_KEY]: "nonsense" })), "hierarchy", "an unknown value is not trusted");
-  const s = memory(); writeConceptMode("cards", s);
-  assert.equal(readConceptMode(s), "cards");
+  const s = memory(); writeConceptMode("hierarchy", s);
+  assert.equal(readConceptMode(s), "hierarchy");
   const blocked: ModeStorage = { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("blocked"); } };
   assert.equal(readConceptMode(blocked), "hierarchy");
-  assert.doesNotThrow(() => writeConceptMode("cards", blocked));
+  assert.doesNotThrow(() => writeConceptMode("hierarchy", blocked));
 });
 
-test("each method starts its own kind of job, so the two never write to each other's store", () => {
+test("only the structural hierarchy job can be selected", () => {
   assert.equal(MODE_INFO.hierarchy.jobKind, "concept-hierarchy");
-  assert.equal(MODE_INFO.cards.jobKind, "concepts");
-  assert.notEqual(MODE_INFO.hierarchy.button, MODE_INFO.cards.button);
+  assert.deepEqual(Object.keys(MODE_INFO), ["hierarchy"]);
 });
 
 test("a build in progress, waiting or failed is reported for its own revision only", () => {

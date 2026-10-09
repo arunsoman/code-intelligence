@@ -1,4 +1,8 @@
 import cytoscape from "cytoscape";
+import ElkConstructor from "elkjs/lib/elk-api.js";
+import type { ELK as ElkEngine, ELKConstructorArguments } from "elkjs/lib/elk-api.js";
+import elkWorkerUrl from "elkjs/lib/elk-worker.min.js?url";
+import { arrangeElk, usesElk } from "./arrange.ts";
 import { useEffect, useRef, useState } from "react";
 import { describeNode, MAX_LEVEL, nextByDirection, viaToSegments, type Dir, type RenderEdge, type RenderNode, type Rendered } from "./graph.ts";
 import type { OverlayMark } from "./mapoverlays.ts";
@@ -26,6 +30,7 @@ interface Props {
   /** Bumps when the level was chosen explicitly (stepper, chat); the camera then fits the new rendering. */
   fitTick: number;
   formId?: string;
+  chartId?: string;
   policy?: DetailPolicy;
   onToggleNode: (n: RenderNode) => void;
   onStepLevel: (delta: number) => void;
@@ -37,6 +42,8 @@ interface Props {
 }
 
 const DWELL_MS = 120; // short: labels must not stay unreadable while a switch waits (below the hard minimum it is immediate)
+// elkjs publishes a CommonJS constructor; NodeNext treats its default declaration as a module namespace.
+const ELK = ElkConstructor as unknown as { new(options?: ELKConstructorArguments): ElkEngine };
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
 function style(): cytoscape.StylesheetJson {
@@ -67,13 +74,73 @@ function style(): cytoscape.StylesheetJson {
     { selector: "node[role = 'test']", style: { shape: "cut-rectangle", "border-color": ok } },
     { selector: "node[role = 'behavior'], node[role = 'concept']", style: { shape: "round-rectangle", width: 200, height: 52, "border-width": 4, "font-weight": 700, "text-max-width": "180px" } },
     { selector: "node[role = 'external']", style: { shape: "tag" } },
+    // ── Chart notation roles (S1–S15): shape and line style carry the notation, not color alone ──
+    { selector: "node[role = 'table']", style: { shape: "round-rectangle", width: 210, height: 56, "border-width": 3, "font-weight": 700, "text-max-width": "190px", "text-valign": "center" } },
+    { selector: "node[role = 'start-event']", style: { shape: "ellipse", width: 90, height: 40, "border-width": 4 } },
+    { selector: "node[role = 'end-event']", style: { shape: "ellipse", width: 90, height: 40, "border-width": 6 } },
+    { selector: "node[role = 'intermediate-event']", style: { shape: "ellipse", width: 110, height: 42, "border-style": "dashed", "border-width": 3 } },
+    { selector: "node[role = 'gateway-xor']", style: { shape: "diamond", width: 110, height: 54, "border-width": 3, "text-max-width": "90px" } },
+    { selector: "node[role = 'gateway-and']", style: { shape: "diamond", width: 110, height: 54, "border-width": 6, "text-max-width": "90px" } },
+    { selector: "node[role = 'task']", style: { shape: "round-rectangle", width: 170, height: 44 } },
+    { selector: "node[role = 'compensation-task'], node[role = 'compensation-step']", style: { shape: "round-rectangle", width: 170, height: 44, "border-style": "dashed", "border-color": inf, "border-width": 3 } },
+    { selector: "node[role = 'forward-step'], node[role = 'retry-step']", style: { shape: "round-rectangle", width: 170, height: 44, "border-width": 3 } },
+    { selector: "node[role = 'command']", style: { shape: "round-tag", width: 170, height: 44, "font-weight": 700 } },
+    { selector: "node[role = 'domain-event']", style: { shape: "ellipse", width: 180, height: 50, "text-max-width": "160px" } },
+    { selector: "node[role = 'policy']", style: { shape: "diamond", width: 150, height: 60, "text-max-width": "110px" } },
+    { selector: "node[role = 'aggregate']", style: { shape: "round-rectangle", width: 180, height: 50, "border-width": 5, "font-weight": 700 } },
+    { selector: "node[role = 'read-model']", style: { shape: "rhomboid", width: 180, height: 46 } },
+    { selector: "node[role = 'external-system'], node[role = 'external-entity']", style: { shape: "tag", width: 160, height: 36, "border-style": "dashed", "border-color": muted } },
+    { selector: "node[role = 'process']", style: { shape: "ellipse", width: 170, height: 56, "text-max-width": "140px" } },
+    { selector: "node[role = 'data-store']", style: { shape: "barrel", width: 150, height: 48 } },
+    { selector: "node[role = 'writer'], node[role = 'poller'], node[role = 'consumer']", style: { shape: "round-rectangle", width: 170, height: 44, "border-width": 3 } },
+    { selector: "node[role = 'outbox-store']", style: { shape: "barrel", width: 150, height: 48, "border-width": 4 } },
+    { selector: "node[role = 'dead-letter']", style: { shape: "octagon", width: 150, height: 44, "border-style": "dashed", "border-color": hyp, "border-width": 3 } },
+    { selector: "node[role = 'interface']", style: { shape: "round-tag", width: 170, height: 44, "border-color": inf } },
+    { selector: "node[role = 'factory']", style: { shape: "cut-rectangle", width: 170, height: 44 } },
+    { selector: "node[role = 'rule'], node[role = 'operation']", style: { shape: "round-tag", width: 170, height: 44 } },
+    // ── Chart notation roles (S16–S28): shape and line style carry the notation, not color alone ──
+    { selector: "node[role = 'uml-class'], node[role = 'uml-abstract'], node[role = 'uml-interface']", style: { shape: "round-rectangle", width: 270, height: "mapData(umlLines, 1, 10, 76, 238)", "border-width": 3, "font-weight": 700, "text-max-width": "246px", "font-size": 10, "text-valign": "center" } },
+    { selector: "node[role = 'uml-abstract']", style: { "border-style": "dashed" } },
+    { selector: "node[role = 'uml-interface']", style: { "border-style": "double" } },
+    { selector: "node[role = 'uml-enum']", style: { shape: "round-rectangle", width: 270, height: "mapData(umlLines, 1, 10, 76, 238)", "border-width": 3, "text-max-width": "246px", "font-size": 10, "text-valign": "center" } },
+    { selector: "node[role = 'package']", style: { shape: "round-tag", width: 180, height: 46, "border-width": 3, "text-max-width": "160px" } },
+    { selector: "node[role = 'module'], node[role = 'crate']", style: { shape: "round-rectangle", width: 170, height: 44, "border-width": 2, "border-style": "dashed" } },
+    { selector: "node[role = 'participant'], node[role = 'component']", style: { shape: "round-rectangle", width: 180, height: 46, "border-width": 3, "font-weight": 700 } },
+    { selector: "node[role = 'lifeline']", style: { shape: "ellipse", width: 130, height: 36, "border-width": 4, "font-weight": 700 } },
+    { selector: "node[role = 'message'], node[role = 'async-message'], node[role = 'return-message']", style: { shape: "round-tag", width: 190, height: 40, "font-size": 10, "text-max-width": "180px" } },
+    { selector: "node[role = 'async-message'], node[role = 'return-message']", style: { "border-style": "dashed" } },
+    { selector: "node[role = 'interaction-ref']", style: { shape: "round-rectangle", width: 190, height: 50, "border-width": 5, "text-max-width": "170px" } },
+    { selector: "node[role = 'crc-card']", style: { shape: "cut-rectangle", width: 200, height: 52, "border-width": 3, "font-weight": 700, "text-max-width": "180px" } },
+    { selector: "node[role = 'function'], node[role = 'method']", style: { shape: "round-rectangle", width: 170, height: 42 } },
+    { selector: "node[role = 'method']", style: { "border-style": "dotted", "border-width": 2 } },
+    { selector: "node[role = 'failure-mode']", style: { shape: "octagon", width: 180, height: 46, "border-color": warn, "border-width": 3 } },
+    { selector: "node[role = 'metric']", style: { shape: "round-tag", width: 190, height: 44 } },
+    { selector: "node[role = 'c4-person']", style: { shape: "ellipse", width: 170, height: 46, "border-width": 3, "font-weight": 700 } },
+    { selector: "node[role = 'c4-system']", style: { shape: "round-rectangle", width: 220, height: 60, "border-width": 5, "font-weight": 700, "text-max-width": "200px" } },
     { selector: "node[group = 'lane']", style: { "border-style": "solid", "border-width": 1, "border-color": muted, "background-opacity": 0.05, "text-halign": "left", "text-valign": "top", "font-size": 12, "font-weight": 700, color: ink, padding: "26px" } },
     { selector: "node[group = 'region']", style: { "border-style": "solid", "border-width": 3, "border-color": ink, "background-opacity": 0.04, "font-size": 12, "font-weight": 700, color: ink, padding: "30px" } },
     { selector: "edge[ghost = 1]", style: { "line-style": "dashed", opacity: 0.6, "line-color": muted, "target-arrow-color": muted } },
     { selector: "edge[kind = 'escape route'], edge[kind = 'can reach'], edge[kind = 'interleaves'], edge[kind = 'may-explain'][display = 'HYPOTHESIS']", style: { "line-color": hyp, "target-arrow-color": hyp, color: hyp } },
     { selector: "edge[ret = 1]", style: { "curve-style": "unbundled-bezier", "control-point-distances": [-60], "control-point-weights": [0.5], "line-style": "dotted" } },
+    // Chart flow kinds: sequence vs message vs forbidden vs unresolved stay distinguishable in form and words.
+    { selector: "edge[kind = 'message-flow']", style: { "line-style": "dashed", "target-arrow-shape": "circle" } },
+    { selector: "edge[kind = 'forbidden-transition']", style: { "line-style": "dashed", "line-color": warn, "target-arrow-color": warn, "target-arrow-shape": "tee", color: warn } },
+    { selector: "edge[kind = 'unresolved-binding']", style: { "line-style": "dotted", "line-color": fog, "target-arrow-color": fog } },
+    { selector: "edge[kind = 'async-flow'], edge[kind = 'produces'], edge[kind = 'consumes'], edge[kind = 'reacts']", style: { "line-style": "dashed" } },
+    { selector: "edge[kind = 'failure'], edge[kind = 'deadLetter']", style: { "line-color": warn, "target-arrow-color": warn, color: warn } },
+    { selector: "edge[kind = 'compensation']", style: { "line-color": inf, "target-arrow-color": inf, color: inf } },
+    // UML relation kinds (S16–S28): the arrowhead carries the UML meaning.
+    { selector: "edge[kind = 'inheritance']", style: { "target-arrow-shape": "triangle", "target-arrow-fill": "hollow", width: 2 } },
+    { selector: "edge[kind = 'realization']", style: { "line-style": "dashed", "target-arrow-shape": "triangle", "target-arrow-fill": "hollow" } },
+    { selector: "edge[kind = 'dependency'], edge[kind = 'package-dependency']", style: { "line-style": "dashed", "target-arrow-shape": "vee" } },
+    { selector: "edge[kind = 'aggregation']", style: { "source-arrow-shape": "diamond", "source-arrow-fill": "hollow", "source-arrow-color": fact } },
+    { selector: "edge[kind = 'composition']", style: { "source-arrow-shape": "diamond", "source-arrow-fill": "filled", "source-arrow-color": fact } },
+    { selector: "edge[kind = 'async-message'], edge[kind = 'return-message']", style: { "line-style": "dashed", "target-arrow-shape": "vee" } },
+    { selector: "edge[kind = 'reading-order']", style: { "line-style": "dotted", "line-color": muted, "target-arrow-color": muted, "target-arrow-shape": "vee", width: 1 } },
     { selector: "node[kind = 'agg']", style: { width: 190, height: 44, "border-width": 3, "font-weight": 700, "text-max-width": "170px", "background-color": panel } },
     { selector: "node[detail = 1][kind = 'node']", style: { height: 46, "text-wrap": "wrap", "font-size": 10 } },
+    // Detail mode normally shortens every node; retain the UML member compartments instead of clipping them.
+    { selector: "node[detail = 1][role = 'uml-class'], node[detail = 1][role = 'uml-abstract'], node[detail = 1][role = 'uml-interface'], node[detail = 1][role = 'uml-enum']", style: { width: 270, height: "mapData(umlLines, 1, 10, 76, 238)", "text-wrap": "wrap", "text-max-width": "246px", "font-size": 10 } },
     { selector: "node.stale", style: { opacity: 0.45, "border-style": "dotted", "border-color": muted } },
     { selector: ":parent", style: { "text-valign": "top", "text-halign": "center", "background-opacity": 0.06, "background-color": ink, "border-width": 1, "border-style": "solid", "border-color": muted, "font-size": 11, color: muted, padding: "14px", shape: "round-rectangle", "font-weight": 400 } },
     { selector: "node[group = 'concept']", style: { "border-style": "dashed", "border-color": inf, "background-color": inf, "background-opacity": 0.06, "font-size": 12 } },
@@ -158,7 +225,13 @@ function captureAnchor(c: cytoscape.Core, rendered: Rendered, selected: Set<stri
   return { ids: mid.node ? byId.get(mid.node.id())?.members ?? [] : [], screen: centre };
 }
 
-export function Canvas(p: Props) {
+export function Canvas(input: Props) {
+  const [aspect, setAspect] = useState(1);
+  const [layout, setLayout] = useState<{ source: Rendered; aspect: number; result: Rendered; engine: "elk" | "fallback" } | null>(null);
+  const engine = useRef<InstanceType<typeof ELK> | null>(null);
+  const automatic = usesElk(input.rendered, input.formId, input.chartId);
+  const layoutReady = !automatic || (layout?.source === input.rendered && layout.aspect === aspect);
+  const p = { ...input, rendered: automatic && layoutReady ? layout!.result : input.rendered };
   const host = useRef<HTMLDivElement>(null);
   const cy = useRef<cytoscape.Core | null>(null);
   const cb = useRef(p);
@@ -175,8 +248,35 @@ export function Canvas(p: Props) {
   const lockZoom = useRef<number | null>(null);
   const timer = useRef<number | null>(null);
   const lastViewKey = useRef("");
+  const lastLayoutAspect = useRef(aspect);
   const focusId = useRef<string | null>(null);
   const refreshRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    if (!automatic) return;
+    let live = true;
+    const started = performance.now();
+    try { engine.current ??= new ELK({ workerUrl: elkWorkerUrl }); }
+    catch (error) {
+      console.warn("[graph-layout] worker unavailable", error);
+      setLayout({ source: input.rendered, aspect, result: input.rendered, engine: "fallback" });
+      return;
+    }
+    void arrangeElk(input.rendered, engine.current, {
+      width: host.current?.clientWidth || 800, height: host.current?.clientHeight || 600,
+    }).then((result) => {
+      if (!live) return;
+      console.info("[graph-layout]", { engine: "elk-layered", nodes: result.nodes.length, edges: result.edges.length, aspect, elapsedMs: Math.round(performance.now() - started) });
+      setLayout({ source: input.rendered, aspect, result, engine: "elk" });
+    }).catch((error) => {
+      if (!live) return;
+      console.warn("[graph-layout] using fallback", error);
+      setLayout({ source: input.rendered, aspect, result: input.rendered, engine: "fallback" });
+    });
+    return () => { live = false; };
+  }, [input.rendered, automatic, aspect]);
+
+  useEffect(() => () => { engine.current?.terminateWorker(); engine.current = null; }, []);
 
   useEffect(() => {
     if (!host.current) return;
@@ -231,7 +331,12 @@ export function Canvas(p: Props) {
       if (move === "coarser" && fontPx(z) < POLICY.hardMinPx) go(); else timer.current = window.setTimeout(go, DWELL_MS);
     });
     // The stage can be resized after mount (caption wraps, panels resize); keep cytoscape's measurements current.
-    const ro = new ResizeObserver(() => c.resize());
+    const ro = new ResizeObserver(() => {
+      c.resize();
+      // Bucket the aspect ratio to avoid repeatedly laying out during a panel drag.
+      const ratio = Math.max(0.25, Math.min(4, c.width() / Math.max(1, c.height())));
+      setAspect(Math.round(ratio * 4) / 4);
+    });
     ro.observe(host.current);
     return () => { ro.disconnect(); if (timer.current) window.clearTimeout(timer.current); if (raf) cancelAnimationFrame(raf); c.destroy(); cy.current = null; };
   }, []);
@@ -281,8 +386,12 @@ export function Canvas(p: Props) {
   // verdicts keep it exactly where the user left it (cameraPolicy PRESERVE).
   useEffect(() => {
     const c = cy.current;
-    if (!c) return;
+    if (!c || !layoutReady) return;
     const { rendered, level } = p;
+    if (p.chartId === "S16") {
+      const umlNodes = rendered.nodes.filter((n) => ["uml-class", "uml-abstract", "uml-interface", "uml-enum"].includes(n.role ?? ""));
+      console.info("[uml-canvas]", { viewKey: p.viewKey, level, classes: umlNodes.length, classesWithMembers: umlNodes.filter((n) => (n.node?.notes?.length ?? 0) > 0).length, members: umlNodes.reduce((sum, n) => sum + (n.node?.notes?.length ?? 0), 0) });
+    }
     syncing.current = true;
     c.elements().remove();
     const nodePos = new Map(rendered.nodes.map((n) => [n.id, n.pos]));
@@ -290,9 +399,13 @@ export function Canvas(p: Props) {
       ...rendered.groups.map((g) => ({ data: { id: g.id, label: g.label, group: g.kind, parent: g.parent && rendered.groups.some((x) => x.id === g.parent) ? g.parent : undefined } })),
       ...rendered.nodes.map((n) => {
         const bd = n.node?.badge;
-        const detail = level >= 6 && n.node ? `${n.label}\n${[n.role === "symbol" ? n.node.kind : n.role, n.node.notes?.length ? `${n.node.notes.length} note(s)` : "", n.node.unresolvedCalls ? `${n.node.unresolvedCalls} unresolved calls` : ""].filter(Boolean).join(" · ")}` : n.label;
+        const uml = !!n.node && ["uml-class", "uml-abstract", "uml-interface", "uml-enum"].includes(n.role ?? "");
+        const umlNotes = uml ? (n.node?.notes ?? []).slice(0, 8) : [];
+        const umlKind = n.role === "uml-interface" ? "«interface»" : n.role === "uml-enum" ? "«enumeration»" : n.role === "uml-abstract" ? "«abstract»" : "«class»";
+        const umlLabel = uml ? `${umlKind}\n${n.label}\n────────────────────${umlNotes.length ? `\n${umlNotes.join("\n")}` : ""}${(n.node?.notes?.length ?? 0) > umlNotes.length ? `\n… ${n.node!.notes!.length - umlNotes.length} more members` : ""}` : "";
+        const detail = uml ? umlLabel : level >= 6 && n.node ? `${n.label}\n${[n.role === "symbol" ? n.node.kind : n.role, n.node.notes?.length ? `${n.node.notes.length} note(s)` : "", n.node.unresolvedCalls ? `${n.node.unresolvedCalls} unresolved calls` : ""].filter(Boolean).join(" · ")}` : n.label;
         const labelText = level === 3 && n.unresolvedCalls ? `${detail}\n${n.unresolvedCalls} unresolved calls` : bd && level < 6 ? `${n.label}\n${bd}` : detail;
-        return { data: { id: n.id, label: labelText, hasBadge: bd ? 1 : 0, heatv: n.node?.heat ? n.node.heat.value : -1, ghost: n.node?.ghost ? 1 : 0, inTx: n.inTx ? 1 : 0, detail: level >= 6 ? 1 : 0, testOverlaySize: 0, runtimeOverlaySize: 0, tier: n.tier, display: n.displayMode, role: n.role ?? "", kind: n.kind, parent: n.parent }, position: { ...n.pos }, classes: n.stale ? "stale" : "" };
+        return { data: { id: n.id, label: labelText, umlLines: uml ? 2 + umlNotes.length + ((n.node?.notes?.length ?? 0) > umlNotes.length ? 1 : 0) : 1, hasBadge: bd ? 1 : 0, heatv: n.node?.heat ? n.node.heat.value : -1, ghost: n.node?.ghost ? 1 : 0, inTx: n.inTx ? 1 : 0, detail: level >= 6 ? 1 : 0, testOverlaySize: 0, runtimeOverlaySize: 0, tier: n.tier, display: n.displayMode, role: n.role ?? "", kind: n.kind, parent: n.parent }, position: { ...n.pos }, classes: n.stale ? "stale" : "" };
       }),
       ...rendered.edges.map((e) => {
         const at = (id: string) => nodePos.get(id);
@@ -302,17 +415,21 @@ export function Canvas(p: Props) {
       }),
     ];
     c.add(els);
+    // Apply routed edge geometry as a bypass after insertion. Cytoscape's element
+    // insertion does not reliably install the style object from an element definition.
+    for (const element of els) if (element.style) c.getElementById(element.data.id!).style(element.style);
     const pend = pending.current;
     if (pend && pend.kind === "switch") {
       pending.current = null;
       settleLevelChange(c, rendered, pend);
-    } else if (p.viewKey !== lastViewKey.current || pend?.kind === "fit") {
+    } else if (p.viewKey !== lastViewKey.current || pend?.kind === "fit" || (automatic && aspect !== lastLayoutAspect.current)) {
       lastViewKey.current = p.viewKey;
       pending.current = null;
-      quietly(c, () => fitReadable(c, !cb.current.semanticLevels));
+      const canCoarsen = cb.current.semanticLevels && cb.current.formId !== "GeneratedChart";
+      quietly(c, () => fitReadable(c, !canCoarsen));
       lockZoom.current = null;
       // A new view starts at the finest level that fits with readable labels: if these are too small, try the next coarser level (the effect runs again).
-      if (cb.current.semanticLevels && fontPx(c.zoom()) < POLICY.aggregateBelowPx && p.level > 0) {
+      if (canCoarsen && fontPx(c.zoom()) < POLICY.aggregateBelowPx && p.level > 0) {
         pending.current = { kind: "fit", move: "coarser", ids: [], screen: null };
         levelRef.current = p.level - 1;
         window.setTimeout(() => cb.current.onZoomLevel(p.level - 1), 0);
@@ -323,7 +440,8 @@ export function Canvas(p: Props) {
     focusEdges(c, focusId.current);
     syncing.current = false;
     refreshRef.current();
-  }, [p.rendered, p.viewKey]); // eslint-disable-line react-hooks/exhaustive-deps
+    lastLayoutAspect.current = aspect;
+  }, [p.rendered, p.viewKey, layoutReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Replay decorates existing elements without moving the camera or changing provenance styles.
   useEffect(() => {
@@ -367,7 +485,7 @@ export function Canvas(p: Props) {
   const lastFit = useRef(p.fitTick);
   useEffect(() => {
     const c = cy.current;
-    if (!c || p.fitTick === lastFit.current) return;
+    if (!c || !layoutReady || p.fitTick === lastFit.current) return;
     lastFit.current = p.fitTick;
     const policy = p.policy ?? (p.formId ? detailPolicyFor(p.formId as Parameters<typeof detailPolicyFor>[0]) : undefined);
     if (policy?.aggregationSupported && p.semanticLevels) {
@@ -394,7 +512,7 @@ export function Canvas(p: Props) {
       lockZoom.current = c.zoom();
     }
     refreshRef.current();
-  }, [p.fitTick, p.rendered]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [p.fitTick, p.rendered, layoutReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const c = cy.current;
@@ -422,6 +540,7 @@ export function Canvas(p: Props) {
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!layoutReady) return;
     const c = cy.current; if (!c || e.altKey || e.ctrlKey || e.metaKey) return;
     const nodes = cb.current.rendered.nodes;
     const dirs: Record<string, Dir> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
@@ -449,10 +568,11 @@ export function Canvas(p: Props) {
 
   return (
     <>
-    <div className="canvas" ref={host} tabIndex={0} role="application" aria-label={`Map. ${p.caption || "Empty."}`} aria-describedby="canvas-help" onKeyDown={onKeyDown}
+    <div className="canvas" ref={host} tabIndex={0} role="application" aria-busy={!layoutReady} data-layout-engine={automatic ? layoutReady ? layout!.engine : "pending" : "notation"} aria-label={`Map. ${p.caption || "Empty."}`} aria-describedby="canvas-help" onKeyDown={onKeyDown}
       onMouseDown={() => host.current?.focus()}
-      onFocus={() => { if (!focusId.current && cb.current.rendered.nodes.length) { const c = cy.current!; const first = [...cb.current.rendered.nodes].sort((a, b) => { const qa = c.getElementById(a.id).position(), qb = c.getElementById(b.id).position(); return qa.x - qb.x || qa.y - qb.y; })[0]; setFocus(first.id); } }} />
-    {(hint.off > 0 || hint.labelsHidden) && (
+      onFocus={() => { if (layoutReady && !focusId.current && cb.current.rendered.nodes.length) { const c = cy.current!; const first = [...cb.current.rendered.nodes].sort((a, b) => { const qa = c.getElementById(a.id).position(), qb = c.getElementById(b.id).position(); return qa.x - qb.x || qa.y - qb.y; })[0]; setFocus(first.id); } }} />
+    {!layoutReady && <div className="canvas-hint" role="status">Arranging graph…</div>}
+    {layoutReady && (hint.off > 0 || hint.labelsHidden) && (
       <div className="canvas-hint" role="status">
         {hint.off > 0 && <span>{hint.off} of {hint.total} element{hint.total === 1 ? "" : "s"} off-screen <button type="button" className="tool" onClick={bringIntoView}>Bring into view</button></span>}
         {hint.labelsHidden && <span>Labels are hidden at this zoom: zoom in, or open the text outline (O).</span>}

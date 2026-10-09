@@ -4,24 +4,19 @@ import type { ArchConcept, ConceptHierarchyView, HierarchyStats, Invariant, JobV
 import { conceptTitle } from "@cie/schema/concept-tree";
 import { providerInfo } from "./concept-status.ts";
 
-/** Two ways to discover concepts. They write to different stores and never overwrite each other. */
-export type ConceptMode = "cards" | "hierarchy";
+/** The structural hierarchy is the only concept-generation mechanism. */
+export type ConceptMode = "hierarchy";
 export const CONCEPT_MODE_KEY = "cie-concept-mode";
 export interface ModeStorage { getItem(key: string): string | null; setItem(key: string, value: string): void }
 
-export const MODE_INFO: Record<ConceptMode, { label: string; jobKind: "concepts" | "concept-hierarchy"; button: string; help: string }> = {
+export const MODE_INFO: Record<ConceptMode, { label: string; jobKind: "concept-hierarchy"; button: string; help: string }> = {
   hierarchy: {
     label: "Structural hierarchy",
     jobKind: "concept-hierarchy",
     button: "Build concept hierarchy",
     help: "Reads the code's shape (control and data flow), groups functions that do the same kind of thing, finds guarded values, and lays the result over the package tree. A model only suggests names.",
   },
-  cards: {
-    label: "Concept cards",
-    jobKind: "concepts",
-    button: "Extract concepts",
-    help: "A model reads the code and proposes capabilities, failure modes, invariants and workflows as cards you can judge. Each extraction is versioned.",
-  },
+
 };
 
 /** The browser's storage, or nothing when it is blocked (reading the property itself can throw). */
@@ -29,7 +24,7 @@ export function browserStorage(): ModeStorage | undefined { try { return globalT
 
 /** The remembered choice. Storage can be off or throw (private windows); the default then stands. */
 export function readConceptMode(storage?: ModeStorage): ConceptMode {
-  try { const v = storage?.getItem(CONCEPT_MODE_KEY); return v === "cards" || v === "hierarchy" ? v : "hierarchy"; } catch { return "hierarchy"; }
+  return "hierarchy";
 }
 export function writeConceptMode(mode: ConceptMode, storage?: ModeStorage): void {
   try { storage?.setItem(CONCEPT_MODE_KEY, mode); } catch { /* the choice still holds for this session */ }

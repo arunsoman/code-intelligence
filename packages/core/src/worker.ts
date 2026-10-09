@@ -1,3 +1,4 @@
+import { diagnostic } from "./diagnostics.ts";
 // Supervisor/client for the Rust worker (contracts §10): length-prefixed JSON over stdio.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
@@ -67,6 +68,7 @@ export class WorkerClient {
 
   private start() {
     const gen = ++this.generation;
+    diagnostic("worker.start", { executable: this.path, generation: gen, restarts: this.restarts, rssLimitMb: this.rssLimitMb });
     this.buf = Buffer.alloc(0);
     this.dead = null;
     this.child = spawn(this.path, [], { stdio: ["pipe", "pipe", "pipe"] });
@@ -124,6 +126,7 @@ export class WorkerClient {
     try { return await this.call(op, params, timeoutMs); }
     catch (e) {
       if (this.closed || !/worker exited|EPIPE|write after end|ERR_STREAM/.test((e as Error).message)) throw e;
+      diagnostic("worker.retry", { operation: op, error: e, restarts: this.restarts }, "warn");
       this.revive();
       return await this.call(op, params, timeoutMs);
     }
@@ -139,7 +142,9 @@ export class WorkerClient {
     if (payload.length > MAX_FRAME) return Promise.reject(new Error("request exceeds frame limit"));
     const hdr = Buffer.alloc(4);
     hdr.writeUInt32BE(payload.length);
-    return new Promise((resolve, reject) => {
+    const started = performance.now();
+    diagnostic("worker.call.start", { operation: op, workerCallId: id, timeoutMs, payloadBytes: payload.length, pendingCalls: this.pending.size, parameterKeys: params && typeof params === "object" ? Object.keys(params) : [] });
+    return new Promise<any>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new WorkerError({ code: "DEADLINE_EXCEEDED", message: `worker op ${op} timed out`, retryable: true }));
@@ -147,6 +152,13 @@ export class WorkerClient {
       // Not unref'd: an in-flight request must keep the process alive. It is cleared as soon as the reply arrives.
       this.pending.set(id, { resolve, reject, timer });
       this.child.stdin.write(Buffer.concat([hdr, payload]));
+    }).then((reply) => {
+      const result = reply?.result ?? reply;
+      diagnostic("worker.call.complete", { operation: op, workerCallId: id, elapsedMs: performance.now() - started, error: reply?.error, resultKeys: result && typeof result === "object" ? Object.keys(result) : [], counts: result && typeof result === "object" ? Object.fromEntries(Object.entries(result).filter(([, v]) => Array.isArray(v)).map(([k, v]) => [k, (v as unknown[]).length])) : {} });
+      return reply;
+    }, (error) => {
+      diagnostic("worker.call.failed", { operation: op, workerCallId: id, elapsedMs: performance.now() - started, error }, "error");
+      throw error;
     });
   }
 

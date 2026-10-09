@@ -1,13 +1,13 @@
 # Chart rendering requirements
 
-**Status:** requirements for bringing the System-design charts gallery (S1–S15) up to its published descriptions.  
-**Scope:** chart selection, evidence-backed chart data, notation-specific rendering, and verification. This is based on the current catalogue in `apps/web/src/VisualsGallery.tsx` and the chart pipeline in `packages/core/src/chart-creator.ts`.
+**Status:** implementation requirements for the original system-design chart family (S1–S15). The gallery has since expanded to S1–S28; the current chart-by-chart parity map is in [`chart-parity-and-completion.md`](chart-parity-and-completion.md).
+**Scope:** chart selection, evidence-backed chart data, notation-specific rendering, and verification. This document's detailed chart requirements cover S1–S15 and remain useful for checking those charts; the expanded S16–S28 contracts and renderers are covered by the parity map and their chart-specific code/tests.
 
 ## 1. Problem and goal
 
-The gallery currently exposes fifteen system-design chart choices. Two choices use existing native views: S2 uses `TransactionJourney`, and S5 uses `TestConfidence`. The other choices use `GeneratedChart`, which currently compiles an LLM plan into the same generic node-and-edge canvas. Its schema has five general node shapes and no chart-specific structures for table columns, key constraints, transition guards, BPMN event types, decision rules, or similar notation.
+The original S1–S15 gallery had two native views: S2 used `TransactionJourney`, and S5 used `TestConfidence`; the remaining charts shared a generic node-and-edge canvas. The chart pipeline has since added typed chart.v2 contracts and notation-specific compilation/rendering paths across much of S1–S28, and the offline stub now preserves the requested chart type while returning chart-specific evidence or an explicit limitation.
 
-As a result, a chart title can promise a particular notation while the drawing only shows code entities connected by arrows. In addition, the offline model stub always produces a call-flow plan, so it cannot satisfy chart-specific requests. These limitations must be visible and must not be described to users as a complete ERD, BPMN diagram, or other formal chart.
+The existence of a typed contract and renderer does not establish full notation parity. Some chart types remain approximations, and offline output may be empty when the fixture lacks evidence. The limitation must stay visible; a chart title must not be presented as proof that all semantics of a formal ERD, BPMN diagram, or other standard are implemented. See the parity map for current scope and remaining work.
 
 The goal is for every gallery choice to:
 

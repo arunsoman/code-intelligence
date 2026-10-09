@@ -78,10 +78,10 @@ export function catalog(store: Store, rev: RevisionRow | null, git: boolean): Ca
     exceptions: store.exceptions(false).length > 0, "two revisions": rev ? !!store.previousRevision(rev.id) : false, "stack trace": true,
     profiles: (store.db.prepare("select count(*) as n from profile_artifacts").get() as { n: number }).n > 0,
   } as Record<Need, boolean>;
-  const why: Record<Need, string> = { git: "needs a git repository", concepts: "needs concept cards (Extract concepts)", tests: "needs a test results file", coverage: "needs a coverage report", exceptions: "needs reported exceptions", "two revisions": "needs two indexed revisions (change something and re-index)", "stack trace": "", profiles: "needs an imported profile (Profiles panel)" };
-  const staleCards = !!rev && !have.concepts && store.conceptVersions(rev.repoRoot).length > 0;
+  const why: Record<Need, string> = { git: "needs a git repository", concepts: "needs a concept hierarchy (Build concept hierarchy)", tests: "needs a test results file", coverage: "needs a coverage report", exceptions: "needs reported exceptions", "two revisions": "needs two indexed revisions (change something and re-index)", "stack trace": "", profiles: "needs an imported profile (Profiles panel)" };
+  const staleCards = !!rev && !have.concepts && store.semanticConceptVersions(rev.repoRoot).length > 0;
   return VISUALS.map((v) => {
     const missing = v.needs.find((n) => !have[n]);
-    return { code: v.code, formId: v.formId, name: v.name, blurb: v.blurb, example: v.example, needs: v.needs, available: !!rev && !missing, reason: !rev ? "index a repository first" : missing === "concepts" && staleCards ? "concept cards are from an older revision (Extract concepts again)" : missing ? why[missing] : undefined };
+    return { code: v.code, formId: v.formId, name: v.name, blurb: v.blurb, example: v.example, needs: v.needs, available: !!rev && !missing, reason: !rev ? "index a repository first" : missing === "concepts" && staleCards ? "concept hierarchy is from an older revision (Build concept hierarchy again)" : missing ? why[missing] : undefined };
   }).sort((a, b) => Number(a.code.slice(1)) - Number(b.code.slice(1)));
 }

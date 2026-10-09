@@ -188,7 +188,7 @@ test("C31: deletion propagation: deleting a repository removes every row derived
   const store = svc.store;
   assert.ok((await svc.ingestRepository(ctx(), { repoPath: b })).ok);
   const revA = store.latestRevision(a)!;
-  await svc.extractConcepts(ctx(), { revision: revA.id });
+  await svc.buildConceptHierarchy(ctx(), { revision: revA.id });
   await svc.ask(ctx(), { question: "walk me through createPayment", revision: revA.id });
   svc.setOverride(ctx(), { revision: revA.id, entityId: store.entities(revA.id)[0].entityId, mode: "pin" });
   svc.setEgress(ctx(), { repoRoot: a, allow: false });

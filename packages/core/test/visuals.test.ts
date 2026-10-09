@@ -247,7 +247,7 @@ test("V14 concept atlas: concepts pinned onto the code that implements them, sca
   const { svc, worker, revision } = await setup(undefined, demoRepo());
   const none = await ask(svc, revision, "Show the implicit concepts in this code");
   assert.match(none.view.caption, /no concept cards yet/i);
-  assert.ok((await svc.extractConcepts(ctx(), { revision })).ok);
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
   const { view: v, claims } = await ask(svc, revision, "Show the implicit concepts in this code");
   assert.equal(v.formId, "ConceptAtlas");
   const concepts = v.nodes.filter((n) => n.role === "concept");

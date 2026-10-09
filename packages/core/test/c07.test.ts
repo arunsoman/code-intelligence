@@ -12,7 +12,7 @@ const edit = (dir: string, rel: string, f: (s: string) => string) => writeFileSy
 const reindex = async (svc: any, dir: string) => { const r = await svc.ingestRepository(ctx(), { repoPath: dir }); assert.ok(r.ok, JSON.stringify(r.error)); return r.value.id as string; };
 async function world(dir = copyFixture()) {
   const t = await setup(undefined, dir);
-  await t.svc.extractConcepts(ctx(), { revision: t.revision });
+  await t.svc.buildConceptHierarchy(ctx(), { revision: t.revision });
   const q = await t.svc.ask(ctx(), { question: "how does login and token signing work", revision: t.revision });
   assert.ok(q.ok);
   const ws = t.svc.workspaceLog.create("a", { name: "w", revision: t.revision }) as any;

@@ -7,7 +7,7 @@ import { ctx, demoRepo, setup, traceFor } from "./helpers.ts";
 async function world(repoPath?: string) {
   const repo = repoPath ?? demoRepo();
   const t = await setup(undefined, repo);
-  await t.svc.extractConcepts(ctx(), { revision: t.revision });
+  await t.svc.buildConceptHierarchy(ctx(), { revision: t.revision });
   const ix = new Interactions(t.svc);
   const r = await t.svc.ask(ctx(), { question: "how do fraud checks and payments work", revision: t.revision });
   assert.ok(r.ok);
