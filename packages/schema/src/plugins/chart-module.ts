@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { AnalysisBatch, FormId, ChartId, ChartOutputV2, ChartDiagnostics, Claim, EvidenceBundle, ModelRunRef, ViewRoute, ViewSpec } from "../index.ts";
 export const CONCERNS = ["Structure", "Behavior", "Data", "State and rules", "Reliability", "Concurrency", "Quality", "Other views"] as const;
 export type Concern = typeof CONCERNS[number];
-export type RendererId = "view-spec" | "sequence" | "er" | "state";
+export type RendererId = "view-spec" | "sequence" | "er" | "state" | "activity";
 /** Declared retrieval vocabulary, not a worker coverage or proof guarantee. */
 export const RETRIEVAL_KINDS = ["class", "interface", "enum", "field", "method", "function", "module", "package", "crate", "workspace", "table", "column"] as const;
 export type RetrievalKind = typeof RETRIEVAL_KINDS[number];
@@ -10,7 +10,7 @@ export const ChartDescriptorSchema = z.object({
   id: z.string().min(1), name: z.string().min(1), form: z.string().min(1), version: z.number().int().positive(),
   compiler: z.enum(["standard", "specialized", "projected", "missing"]), offline: z.enum(["derived", "gap"]),
   aliases: z.array(z.string()), requiredKinds: z.array(z.enum(RETRIEVAL_KINDS)), requiredAcrossRepository: z.array(z.enum(RETRIEVAL_KINDS)),
-  concern: z.enum(CONCERNS), renderer: z.enum(["view-spec", "sequence", "er", "state"]), questionAnswered: z.string().min(1),
+  concern: z.enum(CONCERNS), renderer: z.enum(["view-spec", "sequence", "er", "state", "activity"]), questionAnswered: z.string().min(1),
   description: z.string(), example: z.string(), needs: z.array(z.string()),
 }).strict();
 export type ChartDescriptor<K extends ChartId = ChartId> = Omit<z.infer<typeof ChartDescriptorSchema>, "id" | "form" | "aliases" | "requiredKinds" | "requiredAcrossRepository" | "needs"> & {

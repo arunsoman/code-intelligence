@@ -102,6 +102,10 @@ function style(): cytoscape.StylesheetJson {
     { selector: "node[role = 'factory']", style: { shape: "cut-rectangle", width: 170, height: 44 } },
     { selector: "node[role = 'rule'], node[role = 'operation']", style: { shape: "round-tag", width: 170, height: 44 } },
     // ── Chart notation roles (S16–S28): shape and line style carry the notation, not color alone ──
+    { selector: "node[role ^= 'activity-']", style: { shape: "round-rectangle", width: 220, height: 72, "text-wrap": "wrap", "text-max-width": "200px", "font-size": 12, "border-width": 2 } },
+    { selector: "node[role = 'activity-decision']", style: { shape: "diamond", width: 240, height: 120, "text-max-width": "120px" } },
+    { selector: "node[role = 'activity-event']", style: { shape: "round-tag" } },
+    { selector: "node[role = 'activity-external']", style: { shape: "tag", "border-style": "dashed" } },
     { selector: "node[role = 'lifecycle-state'], node[role = 'lifecycle-initial'], node[role = 'lifecycle-final']", style: { shape: "round-rectangle", width: 220, height: 72, "text-max-width": "200px", "text-wrap": "wrap", "font-size": 12, "border-width": 2 } },
     { selector: "node[role = 'lifecycle-initial']", style: { "border-width": 4 } },
     { selector: "node[role = 'lifecycle-final']", style: { "border-style": "double", "border-width": 6 } },
@@ -148,6 +152,8 @@ function style(): cytoscape.StylesheetJson {
     { selector: "node[detail = 1][kind = 'node']", style: { height: 46, "text-wrap": "wrap", "font-size": 10 } },
     // Detail mode normally shortens every node; retain the UML member compartments instead of clipping them.
     { selector: "node[detail = 1][role = 'uml-class'], node[detail = 1][role = 'uml-abstract'], node[detail = 1][role = 'uml-interface'], node[detail = 1][role = 'uml-enum']", style: { width: 270, height: "mapData(umlLines, 1, 10, 76, 238)", "text-wrap": "wrap", "text-max-width": "246px", "font-size": 10 } },
+    { selector: "node[detail = 1][role ^= 'activity-']", style: { width: 220, height: 72, "text-max-width": "200px", "font-size": 12 } },
+    { selector: "node[detail = 1][role = 'activity-decision']", style: { width: 240, height: 120, "text-max-width": "120px" } },
     { selector: "node[detail = 1][role ^= 'lifecycle-']", style: { width: 220, height: 72, "text-max-width": "200px", "font-size": 12 } },
     { selector: "node[detail = 1][role = 'er-entity']", style: { width: 320, height: "mapData(erRows, 0, 13, 68, 328)", "font-size": 12, "text-max-width": "296px" } },
     { selector: "edge[kind = 'er-declared'], edge[kind = 'er-inferred']", style: { "target-arrow-shape": "none", "source-arrow-shape": "none", "source-label": "data(sourceLabel)", "target-label": "data(targetLabel)", "source-text-offset": 24, "target-text-offset": 24, "source-text-rotation": "none", "target-text-rotation": "none", "font-size": 11 } },

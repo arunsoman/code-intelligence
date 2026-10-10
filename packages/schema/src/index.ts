@@ -1,3 +1,5 @@
+import type { ActivitySpec } from "./activity.ts";
+export { ActivitySpecSchema, type ActivitySpec } from "./activity.ts";
 import type { StateSpec } from "./state.ts";
 export { StateSpecSchema, stateTransitionLabel, type StateSpec } from "./state.ts";
 import type { ErSpec } from "./er.ts";
@@ -233,6 +235,7 @@ export interface ViewSpec {
   sequence?: SequenceSpec;
   er?: ErSpec;
   state?: StateSpec;
+  activity?: ActivitySpec;
   /** Parameters that produced this view, shown to the user and used to refresh it. */
   params?: Record<string, string | number | boolean>;
   /** Whole-system summary for level 0: the system itself and the external packages it depends on. */

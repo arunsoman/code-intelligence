@@ -11,5 +11,5 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: node --test packages/core/test/state-compiler.test.ts apps/web/test/state-renderer.test.ts packages/core/test/er-compiler.test.ts apps/web/test/er-renderer.test.ts packages/core/test/sequence-compiler.test.ts apps/web/test/sequence-renderer.test.ts packages/core/test/answer-workflow.test.ts packages/core/test/plugin-architecture.test.ts apps/web/test/fisheye.test.ts apps/web/test/response-workspace.test.ts
+      - run: node --test packages/core/test/activity-compiler.test.ts apps/web/test/activity-renderer.test.ts packages/core/test/state-compiler.test.ts apps/web/test/state-renderer.test.ts packages/core/test/er-compiler.test.ts apps/web/test/er-renderer.test.ts packages/core/test/sequence-compiler.test.ts apps/web/test/sequence-renderer.test.ts packages/core/test/answer-workflow.test.ts packages/core/test/plugin-architecture.test.ts apps/web/test/fisheye.test.ts apps/web/test/response-workspace.test.ts
       - run: npm run web:build

@@ -343,23 +343,6 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
           </section>
         </div>
 
-        <div className="bf-foot">
-          <button className="secondary" disabled={at === 0} onClick={() => move(STAGES[at - 1].id)}>← {at > 0 ? STAGES[at - 1].label : "Back"}</button>
-          <span className="bf-grow" />
-          <details className="bf-details bf-menu">
-            <summary className="secondary" style={{ cursor: "pointer", padding: "5px 12px", border: "1px solid var(--line)", borderRadius: 6 }}>More actions ▾</summary>
-            <div className="bf-pop up right" role="region" aria-label="Actions that change things">
-              <p className="muted" style={{ margin: 0 }}>Each of these changes something, so each is its own button. Moving between stages never runs them.</p>
-              {actionReasons(ws).map((a) => (
-                <div className="bf-act" key={a.action}>
-                  <button className="secondary small" aria-disabled={!a.enabled} aria-describedby={`why-${a.action}`} onClick={(e) => { if (!a.enabled) e.preventDefault(); }}>{a.action}</button>
-                  <p id={`why-${a.action}`}>{a.enabled ? "Ready." : `Not available yet: ${a.reason}`}</p>
-                </div>
-              ))}
-            </div>
-          </details>
-          <button disabled={primaryDisabled} title={primary.kind === "ANALYSE" ? primary.disabledReason ?? undefined : undefined} onClick={runPrimary}>{primary.label}</button>
-      </div>
     </Modal>
   );
 }

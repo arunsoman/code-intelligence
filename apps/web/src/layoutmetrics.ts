@@ -18,6 +18,7 @@ export const SIZES: Record<string, [number, number]> = {
   writer: [170, 44], poller: [170, 44], consumer: [170, 44], "outbox-store": [150, 48], "dead-letter": [150, 44],
 };
 export const nodeSize: Sizer = (n) => {
+  if (n.role?.startsWith("activity-")) return n.role === "activity-decision" ? { w: 240, h: 120 } : { w: 220, h: 72 };
   if (n.role?.startsWith("lifecycle-")) return { w: 220, h: 72 };
   if (n.role === "er-entity") {
     const notes = n.node?.notes?.length ?? 0;

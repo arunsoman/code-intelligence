@@ -12,7 +12,7 @@ import { columnFlow } from "./layout.ts";
 import type { ElkNode, ELK } from "elkjs/lib/elk-api.js";
 
 // Automatic topology layouts must not erase time, bands or swim-lane ordering.
-const TOPOLOGY_CHARTS = new Set(["S1", "S3", "S4", "S6", "S9", "S10", "S13", "S15", "S16", "S17", "S21", "S23", "S26", "S27"]);
+const TOPOLOGY_CHARTS = new Set(["S1", "S2", "S3", "S4", "S6", "S9", "S10", "S13", "S15", "S16", "S17", "S21", "S23", "S26", "S27"]);
 export function usesElk(r: Rendered, formId?: string, chartId?: string): boolean {
   if (!r.nodes.length || r.groups.some((g) => g.kind === "lane")) return false;
   if (["RaceWindow", "Archaeology", "SemanticDiff", "TransactionJourney"].includes(formId ?? "")) return false;
@@ -139,7 +139,10 @@ export function arrange(r: Rendered, view: ViewSpec, level: number, deferTopolog
   for (const g of view.groups) if (g.kind === "lane") for (const c of g.childNodeIds) laneOf.set(c, g.id);
   let via = new Map<string, Pos[]>();
 
-  if (view.formId === "GeneratedChart") {
+  if (view.activity && laneOf.size > 0) {
+    laneGrid(items, laneOf, links);
+    separate(items, 14);
+  } else if (view.formId === "GeneratedChart") {
     // The chart plan supplies explicit column/row positions for its chosen notation.
     // Running columnFlow here used to replace those positions with a generic call-graph
     // layout, which erased the model's requested layout (including ER and state charts).

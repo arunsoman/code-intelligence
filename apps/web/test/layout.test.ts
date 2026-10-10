@@ -71,9 +71,11 @@ test("ELK selection keeps sequence, swimlanes and event bands on their notation 
   for (const form of ["RaceWindow", "Archaeology", "SemanticDiff", "TransactionJourney"]) assert.equal(usesElk(source, form), false);
   source.nodes = source.nodes.map((n) => ({ ...n, kind: "node" }));
   assert.equal(usesElk(source, "GeneratedChart", "S1"), true);
-  for (const chart of ["S2", "S5", "S7", "S8", "S28"]) assert.equal(usesElk(source, "GeneratedChart", chart), false);
+  for (const chart of ["S5", "S7", "S8", "S28"]) assert.equal(usesElk(source, "GeneratedChart", chart), false);
+  assert.equal(usesElk(source, "GeneratedChart", "S2"), true, "activity without lanes uses ELK topology");
   source.groups = [{ id: "lane", label: "Lane", kind: "lane" }];
   assert.equal(usesElk(source, "GeneratedChart", "S1"), false);
+  assert.equal(usesElk(source, "GeneratedChart", "S2"), false, "activity with lanes uses lane layout, not ELK");
 });
 
 test("generated chart arrangement preserves its requested columns and rows", () => {

@@ -45,7 +45,8 @@ test("index.html declares a language, a title and a viewport", () => {
 test("a11y audit: view-dependent controls follow the dialog/toolbar/toggle conventions in source", () => {
   const app = readFileSync(join(webRoot, "src/App.tsx"), "utf8");
   const canvas = readFileSync(join(webRoot, "src/Canvas.tsx"), "utf8");
-  assert.match(app, /role="dialog"\s*aria-modal="true"/);
+  const modal = readFileSync(join(webRoot, "src/Modal.tsx"), "utf8");
+  assert.match(modal, /role="dialog"\s*aria-modal="true"/);
   assert.match(app, /role="toolbar" aria-label="Canvas tools"/);
   assert.match(app, /role="group" aria-label="Level of detail"/);
   assert.match(app, /aria-pressed=/);

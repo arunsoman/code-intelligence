@@ -1,3 +1,4 @@
+import { ActivitySpecSchema, type ActivitySpec } from "@cie/schema";
 import { stateTransitionLabel, type StateSpec } from "@cie/schema";
 import { erColumnLabel, type ErSpec } from "@cie/schema";
 // CIE chart creator: the model chooses a visual arrangement, but returns a bounded plan over
@@ -1076,7 +1077,7 @@ export function compileLegacyChartPlan(o: { plan: ChartPlan | ChartPlanV2; bundl
     const valid = new Set(rel.evidence.map((e) => e.id));
     const evidenceIds = spec.evidenceIds.filter((id) => valid.has(id) && evidence.has(id));
     if (evidenceIds.length === 0) { gaps.push("A generated chart connection without supporting current evidence was omitted."); continue; }
-    edges.push({ id: `ge:${rel.id}`, fromNodeId: byEntity.get(rel.from)!, toNodeId: byEntity.get(rel.to)!, kind: rel.kind, relationshipId: rel.id, label: spec.label || rel.label, evidenceIds, displayMode: "FACT" });
+    edges.push({ id: o.chartId === "S2" ? `ge:activity:${edges.length}:${rel.id}` : `ge:${rel.id}`, fromNodeId: byEntity.get(rel.from)!, toNodeId: byEntity.get(rel.to)!, kind: rel.kind, relationshipId: rel.id, label: spec.label || rel.label, evidenceIds, displayMode: "FACT" });
   }
   if (plan.nodes.length > 0 && nodes.length === 0) gaps.push("The requested chart could not be grounded in this revision's indexed evidence.");
   if (plan.nodes.length === 0) gaps.push("The chart creator found no useful code elements in the available evidence.");
@@ -1100,6 +1101,16 @@ export function compileLegacyChartPlan(o: { plan: ChartPlan | ChartPlanV2; bundl
     meta: { kind: "generated-chart", field: chartType, subject: chartId },
     params: { chartType, chartLayout: plan.layout, chartId },
   };
+
+  if (chartId === "S2") {
+    const semantic: ActivitySpec = { schemaVersion: "activity.v1", basis: "inferred-static", steps: nodes.map(n => ({ nodeId: n.id, shape: plan.nodes.find(s => s.entityId === n.entityRefs[0])?.shape ?? "process", ...(n.lane ? { lane: n.lane } : {}) })), links: edges.map(e => ({ edgeId: e.id, relationshipKind: e.kind ?? "unknown", ...(e.label ? { annotation: e.label } : {}) })) };
+    view.activity = semantic;
+    view.nodes = nodes.map(n => ({ ...n, displayMode: "INFERENCE" }));
+    view.edges = edges.map(e => ({ ...e, displayMode: "INFERENCE" }));
+    if (laneNames.length) view.groups = laneNames.map(name => ({ id: `g:lane:${name}`, label: name, kind: "lane", childNodeIds: nodes.filter(n => n.lane === name).map(n => n.id), level: 1, evidenceIds: [...new Set(nodes.filter(n => n.lane === name).flatMap(n => n.evidenceIds))], displayMode: "INFERENCE" }));
+    if (nodes.length) gaps.push("Activity roles, lanes, ordering and branch annotations are static plan interpretations. Indexed calls do not prove control-flow exclusivity, runtime timing or parallel execution.");
+    view.legend = [{ label: "Interpreted activity", displayMode: "INFERENCE", description: "Roles and branch annotations are interpretations; inspect each indexed relationship for its actual kind." }];
+  }
 
   const diagnostics: ChartDiagnostics = {
     chartId,
