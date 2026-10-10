@@ -11,7 +11,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readlinkSync, readdirSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join, resolve, sep } from "node:path";
-import type { AnalyzerRecord, ChangedFile, CoverageEvidence, DetectorFinding, GateConditionResult, GateEvidence, OracleEvidence, PrAnalysisView, PrFinding, TestSummaryInfo, WaiverRecord } from "@cie/schema";
+import type { AnalyzerRecord, ChangedFile, CoverageEvidence, DetectorFinding, GateConditionResult, GateEvidence, ImpactReport, OracleEvidence, PrAnalysisView, PrFinding, TestSummaryInfo, WaiverRecord } from "@cie/schema";
 import type { Store } from "./store.ts";
 import type { ChangeSet, History } from "./history.ts";
 import type { Registry } from "./registry.ts";
@@ -20,6 +20,11 @@ import { dependents } from "./graph.ts";
 import { detectIndexedDefects } from "./defect-indexed.ts";
 import { parseIstanbul, parseJUnit, parseJestJson, parseLcov, type CoverageFile } from "./testartifacts.ts";
 import { evaluate, findingFingerprint, hashId, matchBaselines, normalizeAnchor, policyHashOf, validatePolicy, validateWaiver } from "./pr-gate.ts";
+import { buildImpactReport, impactReportHash } from "./impact-report.ts";
+import { buildPrSummary, finalizeSummaryBudget } from "./pr-summary.ts";
+import { applyFeedback, FeedbackStore } from "./feedback.ts";
+import { resolveMentions } from "./mentions.ts";
+import { policyFor } from "./access.ts";
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
@@ -62,6 +67,23 @@ export interface ResolvedPr {
   changedFiles: ChangedFile[];
   /** The added lines of each changed path, from unified=0 hunks (coverage on changed lines maps onto these). */
   changedLineRanges: Map<string, number[]>;
+}
+
+/**
+ * F13 §7.5: best-effort fetch of the PR title and body for the description-versus-change check. Attacker-controlled
+ * and untrusted; it is only ever shown escaped inside a quoted block labelled unverified, never interpolated into a
+ * sentence template, and never executed or passed to a model (§10.3–10.5). Absent `gh`, a detached head or any
+ * failure yields null — the section then says "no description to compare", which is a true statement.
+ */
+export function fetchPrDescription(root: string, prNumber: number): string | null {
+  try {
+    const out = execFileSync("gh", ["pr", "view", String(prNumber), "--json", "title,body"], { cwd: root, encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "ignore"] });
+    const v = JSON.parse(out) as { title?: string; body?: string | null };
+    if (!v.title && !v.body) return null;
+    return `${v.title ?? ""}\n\n${v.body ?? ""}`.trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 /** Resolve a PR into base, head and merge base plus changed files. Network fetch is only ever `refs/pull/N/head` (§10.1). */
@@ -366,6 +388,7 @@ export class PrAnalysis {
         this.store.db.prepare("update pr_analyses set state = 'SUPERSEDED', superseded_by = ?, updated_at = ? where id = ?").run(id, new Date().toISOString(), o.id);
         this.store.db.prepare("update gate_decisions set superseded = 1, revoked_reason = ? where analysis_id = ? and superseded = 0").run("a newer commit was pushed", o.id);
         this.store.db.prepare("update check_publications set state = 'SUPERSEDED', updated_at = ? where decision_id in (select decision_id from gate_decisions where analysis_id = ?)").run(new Date().toISOString(), o.id);
+        this.store.db.prepare("update impact_reports set state = 'SUPERSEDED', updated_at = ? where analysis_id = ?").run(new Date().toISOString(), o.id);
         supersededIds.push(o.id);
       }
       this.store.db.prepare("insert into pr_analyses values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(
@@ -481,6 +504,9 @@ export class PrAnalysis {
       control?.progress({ phase: "compare", message: "Comparing the two revisions…" });
       const cs = this.history.compare(baseRev.id, headRev.id);
       assertA();
+      // F11 (slice S1): the ChangeSet used to be discarded after the gate evaluation. Keep it: the impact report
+      // and the review view's populated `changes` are built from exactly these bytes.
+      this.store.db.prepare("insert or replace into pr_change_sets values (?,?,?)").run(analysisId, JSON.stringify(cs), new Date().toISOString());
       const depth = Math.min(4, Math.max(1, this.opts.neighbourhoodDepth ?? 2));
       const analysedFiles = new Set(resolved.changedFiles.filter((f) => f.status !== "removed").map((f) => f.path));
       for (const t of cs.entities) {
@@ -605,8 +631,112 @@ export class PrAnalysis {
       control?.checkpoint();
       control?.commit();
       this.setState(analysisId, "DECIDED");
+      // F11 (slice S2): assemble, rank and store the cited impact report behind the blast-radius comment.
+      this.buildAndStoreImpactReport(analysisId, resolved, cs, coverageEvidence, analyzers, headRev.id, headCo.dir, req.repoRoot, req.prNumber);
     } finally { baseCo.dispose(); headCo.dispose(); }
   }
+  // ------------------------------------------------------------------ F11: the retained ChangeSet and impact report
+
+  /** The ChangeSet stored at compare time (slice S1); null for analyses that predate the table. */
+  changeSetOf(analysisId: string): ChangeSet | null {
+    const row = this.store.db.prepare("select json from pr_change_sets where analysis_id = ?").get(analysisId) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as ChangeSet : null;
+  }
+
+  /** The CURRENT impact report for an analysis; superseded heads return null (F11-A1). */
+  impactReportOf(analysisId: string): ImpactReport | null {
+    const row = this.store.db.prepare("select json from impact_reports where analysis_id = ? and state = 'CURRENT'").get(analysisId) as { json: string } | undefined;
+    return row ? JSON.parse(row.json) as ImpactReport : null;
+  }
+
+  /**
+   * Build and persist the impact report (§7.1). Everything it needs was already computed for the gate; the only
+   * extra inputs are the unresolved dynamic-call count (a Fog input) and an evidence-id → citation resolver that
+   * converts stored byte spans to line numbers against the head checkout. Stored with its hash: the publisher's
+   * idempotency key binds a saying to exactly this report (F11-A13).
+   */
+  private buildAndStoreImpactReport(analysisId: string, resolved: { headHash: string; baseHash: string }, cs: ChangeSet, coverage: CoverageEvidence | null, analyzers: AnalyzerRecord[], headRevId: string, headDir: string, repoRoot: string, prNumber: number): void {
+    const unresolvedRow = this.store.db.prepare("select count(*) n from relationships where revision = ? and json like ?").get(headRevId, '%"resolution":"UNRESOLVED"%') as { n: number };
+    const incompleteReasons = analyzers.filter((a) => a.state !== "COMPLETE").map((a) => `analyzer ${a.id}@${a.version} states ${a.state}: ${(a.reason ?? "findings in files it did not analyse are not claimed").slice(0, 120)}`);
+    const lineTableOf = (path: string): number[] | null => {
+      try {
+        const bytes = readFileSync(join(headDir, path));
+        const starts = [0];
+        for (let i = 0; i < bytes.length; i++) if (bytes[i] === 0x0a) starts.push(i + 1);
+        return starts;
+      } catch { return null; }
+    };
+    const lineOf = (starts: number[] | null, byte: number): number | null => {
+      if (!starts) return null;
+      let lo = 0, hi = starts.length - 1;
+      while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (starts[mid] <= byte) lo = mid; else hi = mid - 1; }
+      return lo + 1;
+    };
+    const evidenceLocation = (evidenceId: string): { path: string; startLine: number; endLine: number } | null => {
+      const ev = this.store.evidence(headRevId, evidenceId);
+      const loc = ev?.location as { kind?: string; span?: { sourceId: string; startByte: number; endByteExclusive: number } } | undefined;
+      if (loc?.kind !== "CodeLocation" || !loc.span) return null;
+      const starts = lineTableOf(loc.span.sourceId);
+      const startLine = lineOf(starts, loc.span.startByte);
+      const endLine = lineOf(starts, Math.max(loc.span.startByte, loc.span.endByteExclusive - 1));
+      if (startLine === null) return null;
+      return { path: loc.span.sourceId, startLine, endLine: endLine ?? startLine };
+    };
+    const report = buildImpactReport({
+      analysisId, baseHash: resolved.baseHash, headHash: resolved.headHash, cs,
+      coverage, analyzers, unresolvedDynamicCalls: Number(unresolvedRow?.n ?? 0),
+      incomplete: analyzers.some((a) => a.state !== "COMPLETE"), incompleteReasons,
+      evidenceLocation,
+    });
+    // F13: the deterministic summary/walkthrough rides in the same stored report (§5). It is built from exactly
+    // the bytes the gate already computed; the description check resolves names against the head index with the
+    // denied-path policy applied (§7.5). A description that cannot be fetched yields "no description to compare".
+    report.summary = this.buildPrSummary(cs, headRevId, repoRoot, prNumber, Number(unresolvedRow?.n ?? 0), analyzers);
+    // F15: reviewer feedback (mutes + kind weights) applies inside the ranking step as inputs, recorded in the
+    // report's rank.factors and footer (§5) — a muted kind appears as factor MUTE, so why-not can explain a
+    // suppression. The stored report pins the feedback state it was ranked under (§11).
+    const feedback = new FeedbackStore(this.store);
+    const feedbackRepository = this.row(analysisId)?.repository_id ?? repoRoot;
+    const mutes = feedback.mutes(feedbackRepository).active;
+    const weights = feedback.weights(feedbackRepository);
+    const fbState = feedback.state(feedbackRepository);
+    // No feedback yet still records the default footer, so every comment states its ranking status (§7.6).
+    const withFeedback = applyFeedback(report, {
+      mutes, weights,
+      labelSummary: { total: fbState.labels.total, principals: fbState.labels.principals },
+      logHash: feedback.logHash(repoRoot),
+    });
+    report.surfaced = withFeedback.surfaced;
+    report.muted = withFeedback.muted;
+    report.feedback = withFeedback.feedback;
+    const now = new Date().toISOString();
+    this.store.db.prepare(`insert into impact_reports values (?,?,?,?,?,?)
+      on conflict(analysis_id) do update set json = excluded.json, report_hash = excluded.report_hash, state = 'CURRENT', updated_at = excluded.updated_at`)
+      .run(analysisId, JSON.stringify(report), impactReportHash(report), "CURRENT", now, now);
+  }
+
+  /**
+   * F13 (§7): build the PrSummary from the retained ChangeSet. Every lookup is store-backed and deterministic;
+   * the reading order is omitted when the call graph did not finish (unresolved dynamic calls or an incomplete
+   * analyzer — §9), because a wrong order is worse than none.
+   */
+  private buildPrSummary(cs: ChangeSet, headRevId: string, repoRoot: string, prNumber: number, unresolvedDynamicCalls: number, analyzers: AnalyzerRecord[]) {
+    const access = policyFor(this.store, repoRoot);
+    const headEntities = new Map(this.store.entities(headRevId).map((e) => [e.entityId, e]));
+    const routeSubjects = new Set(this.store.factsByPredicate(headRevId, "route").map((f) => f.subject));
+    return finalizeSummaryBudget(buildPrSummary({
+      cs,
+      access,
+      graphComplete: unresolvedDynamicCalls === 0 && analyzers.every((a) => a.state === "COMPLETE"),
+      descriptionText: fetchPrDescription(repoRoot, prNumber),
+      resolveDescription: (text) => resolveMentions(this.store, headRevId, text, access),
+      entityFile: (id) => headEntities.get(id)?.file ?? null,
+      dependentsOf: (id) => { try { return dependents(this.store, headRevId, id, { maxDepth: 2 }).nodes.map((n) => n.id); } catch { return []; } },
+      isEntryPoint: (id) => routeSubjects.has(id),
+      changeSize: (id) => (headEntities.get(id)?.spans ?? []).reduce((a, s) => a + Math.max(0, s.endByteExclusive - s.startByte), 0),
+    }));
+  }
+
   // ------------------------------------------------------------------ findings (WP-04)
 
   /** Rule findings whose evidence spans files in scope. The whole-repository rule (R-POLICY-MISSING) is never scoped away (§7.5). */
@@ -1004,6 +1134,9 @@ export class PrAnalysis {
     const drow = this.lastDecisionRow(analysisId);
     const dj = drow ? JSON.parse(drow.json) as StoredDecision : null;
     const te = loadRevisionTestEvidence(this.store, r.head_revision ?? "");
+    // F11 (slice S1): the retained ChangeSet populates `changes`; its derived impact report rides along when built.
+    const cs = this.changeSetOf(analysisId);
+    const impact = this.impactReportOf(analysisId);
     return {
       analysisId,
       pr: { repositoryId: r.repository_id, forge: r.forge, prNumber: r.pr_number },
@@ -1012,7 +1145,13 @@ export class PrAnalysis {
       policyId: r.policy_id, policyHash: r.policy_hash, analyzerSetHash: r.analyzer_set_hash,
       state: r.state as PrAnalysisView["state"], ...(r.superseded_by ? { supersededBy: r.superseded_by } : {}),
       ...(job ? { job: { id: job.id, kind: job.kind, state: job.state, phase: job.phase, message: job.message } } : {}),
-      changes: { files, consequences: [], blastRadius: [], testImpact: [], gaps: [] },
+      changes: {
+        files,
+        consequences: cs ? cs.consequences.map((c) => ({ id: c.id, text: c.text, kind: c.kind })) : [],
+        blastRadius: cs?.blastRadius ?? [],
+        testImpact: cs?.testImpact ?? [],
+        gaps: cs?.gaps ?? [],
+      },
       findings: {
         introduced: visible.filter((f) => f.introduced && f.kind === "SECURITY"),
         existing: visible.filter((f) => !f.introduced && f.kind === "SECURITY" && f.disposition !== "RESOLVED_BY_CHANGE"),
@@ -1032,6 +1171,7 @@ export class PrAnalysis {
       waivers: this.listWaivers(r.repo_root),
       unresolved: { dynamicCalls: dj?.unresolvedDynamic ?? 0, runtimeData: false },
       disclosure: this.disclosureOf(r, dj, te, withheld, findings.length),
+      ...(impact ? { impact } : {}),
       ...(drow && dj ? {
         decision: {
           decisionId: drow.decision_id, status: drow.status, bindingHash: drow.binding_hash,

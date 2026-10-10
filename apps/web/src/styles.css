@@ -833,3 +833,21 @@ main { overflow: auto; }
 .race-station:focus-visible rect, .race-station:hover rect { stroke-width: 2; }
 .race-table table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
 .race-table th, .race-table td { border: 1px solid var(--border, #334155); padding: 4px 8px; text-align: left; }
+
+/* One analysis context across the PR review workspace. */
+.pr-panel { width: min(1440px, 96vw); max-width: 96vw; }
+.pr-panel [hidden] { display: none !important; }
+.pr-tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--border, #3a4050); }
+.pr-tabs button[aria-current="page"] { outline: 2px solid var(--accent, #7ca7ff); outline-offset: 1px; }
+.pr-summary { position: sticky; top: 0; z-index: 2; background: var(--panel, #18202c); padding: 10px; }
+.pr-metrics, .pr-fix-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.pr-metrics > div { display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--border, #3a4050); border-radius: 8px; }
+.pr-metrics strong { font-size: 1.7rem; }
+.pr-impact-card { border: 1px solid var(--border, #3a4050); border-radius: 8px; padding: 14px; margin: 12px 0; min-width: 0; }
+.pr-diff-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.pr-review-workspace pre { overflow: auto; max-height: 360px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pr-review-workspace code { overflow-wrap: anywhere; }
+.pr-thread { max-height: 50vh; overflow: auto; }
+.pr-thread article { border-bottom: 1px solid var(--border, #3a4050); padding: 12px 0; }
+.pr-review-workspace input { flex: 1; min-width: 160px; }
+@media (max-width: 720px) { .pr-diff-grid { grid-template-columns: 1fr; } .pr-panel .pr-table { display: block; overflow: auto; } }

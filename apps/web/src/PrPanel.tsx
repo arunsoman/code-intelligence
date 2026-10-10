@@ -1,3 +1,4 @@
+import { PrReviewWorkspace, REVIEW_TABS, type ReviewTab } from "./PrReviewWorkspace.tsx";
 import { useEffect, useRef, useState } from "react";
 import type { JobView, PrAnalysisView, PublicationReceipt } from "@cie/schema";
 import { call } from "./api.ts";
@@ -12,6 +13,7 @@ import { Modal } from "./Modal.tsx";
 export function PrPanel({ repoPath, onClose }: { repoPath: string; onClose: () => void }) {
   type HistoryRow = { analysisId: string; headHash: string; state: string; createdAt: string; supersededBy?: string };
   const [prNumberText, setPrNumberText] = useState("");
+  const [tab, setTab] = useState<ReviewTab>("overview");
   const [view, setView] = useState<PrAnalysisView | null>(null);
   const [history, setHistory] = useState<HistoryRow[]>([]);
   type PanelJob = NonNullable<PrAnalysisView["job"]>;
@@ -23,14 +25,17 @@ export function PrPanel({ repoPath, onClose }: { repoPath: string; onClose: () =
   const [waiverRationale, setWaiverRationale] = useState("");
   const [waiverExpiry, setWaiverExpiry] = useState(() => new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10));
   const live = useRef(true);
+  const refreshEpoch = useRef(0);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
 
   const prNumber = Number(prNumberText);
+  const handleError = (error: unknown) => { if (live.current) { setError(String(error)); setBusy(false); } };
 
   const refresh = async (n = prNumber) => {
     if (!n) return;
+    const epoch = ++refreshEpoch.current;
     const r = await call<{ analysis: PrAnalysisView; history: { analysisId: string; headHash: string; state: string; createdAt: string; supersededBy?: string }[] }>("C23", "getPrAnalysis", { repoPath, prNumber: n });
-    if (!live.current) return;
+    if (!live.current || epoch !== refreshEpoch.current) return;
     if (r.ok) {
       setView(r.value.analysis);
       setHistory((r.value.history ?? []) as never as HistoryRow[]);
@@ -45,7 +50,7 @@ export function PrPanel({ repoPath, onClose }: { repoPath: string; onClose: () =
   const pollTick = useRef(0);
   useEffect(() => {
     if (!job || !["QUEUED", "RUNNING"].includes(job.state)) return;
-    const t = setInterval(() => { pollTick.current++; void refresh(); }, 2000);
+    const t = setInterval(() => { pollTick.current++; void refresh().catch(handleError); }, 2000);
     return () => clearInterval(t);
   }, [job?.state, pollTick.current]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -59,7 +64,7 @@ export function PrPanel({ repoPath, onClose }: { repoPath: string; onClose: () =
     const j = r.value;
     setJob({ id: j.id, kind: "pr-analysis", state: j.state, phase: j.phase, message: j.message });
     setNotice("analysing in the background; this panel updates while it runs");
-    void refresh(prNumber);
+    void refresh(prNumber).catch(handleError);
   };
 
   const publish = async (kind: "STATUS" | "COMMENT") => {
@@ -86,21 +91,21 @@ export function PrPanel({ repoPath, onClose }: { repoPath: string; onClose: () =
     setBusy(false);
     setWaiverFor(null); setWaiverRationale("");
     if (!r.ok) setError(r.error.message);
-    else { setNotice(`disposition recorded; the gate was re-evaluated${r.value.decisionId ? "" : " (no decision to re-evaluate)"}`); void refresh(); }
+    else { setNotice(`disposition recorded; the gate was re-evaluated${r.value.decisionId ? "" : " (no decision to re-evaluate)"}`); void refresh().catch(handleError); }
   };
 
   const d = view?.decision;
   const statusChip = d ? (d.status === "PASS" ? "chip pass" : d.status === "FAIL" ? "chip fail" : "chip incomplete") : "chip";
 
   return (
-    <Modal title="Pull request review" onClose={onClose} className="pr-panel">
+    <Modal title="Pull request review" onClose={onClose} className={`pr-panel pr-tab-${tab}`}>
 
         <section className="pr-controls" aria-label="Open a pull request">
           <label htmlFor="pr-num">Pull-request number</label>
           <span className="row">
-            <input id="pr-num" inputMode="numeric" value={prNumberText} onChange={(e) => setPrNumberText(e.target.value.replace(/[^0-9]/g, ""))} placeholder="e.g. 42" />
-            <button onClick={() => void analyze()} disabled={!prNumber || busy} title="Index the merge base and head, analyse the changed code, evaluate the gate">Analyze</button>
-            <button className="secondary" onClick={() => void refresh()} disabled={!prNumber}>Refresh</button>
+            <input id="pr-num" disabled={busy} inputMode="numeric" value={prNumberText} onChange={(e) => { refreshEpoch.current++; setPrNumberText(e.target.value.replace(/[^0-9]/g, "")); setView(null); setJob(null); setHistory([]); setWaiverFor(null); setNotice(null); setError(null); }} placeholder="e.g. 42" />
+            <button onClick={() => void analyze().catch(handleError)} disabled={!prNumber || busy} title="Index the merge base and head, analyse the changed code, evaluate the gate">Analyze</button>
+            <button className="secondary" onClick={() => void refresh().catch(handleError)} disabled={!prNumber || busy}>Refresh</button>
           </span>
           {repoPath && <p className="muted small mono" style={{ margin: 0 }}>{repoPath}</p>}
         </section>
@@ -126,8 +131,10 @@ export function PrPanel({ repoPath, onClose }: { repoPath: string; onClose: () =
               )}
             </section>
 
+            <nav className="pr-tabs" aria-label="Review views">{REVIEW_TABS.map(t => <button key={t.id} aria-current={tab === t.id ? "page" : undefined} onClick={() => setTab(t.id)}>{t.label}</button>)}</nav>
+            <PrReviewWorkspace key={`${view.analysisId}:${view.headHash}`} view={view} tab={tab} onNavigate={setTab} />
             {d && (
-              <section aria-label="Gate conditions">
+              <section hidden={tab !== "overview"} aria-label="Gate conditions">
                 <h3>Gate conditions</h3>
                 <table className="pr-table">
                   <thead><tr><th scope="col">Condition</th><th scope="col">Outcome</th><th scope="col">Blocking</th><th scope="col">Evidence</th><th scope="col">Why</th></tr></thead>
@@ -146,7 +153,7 @@ export function PrPanel({ repoPath, onClose }: { repoPath: string; onClose: () =
               </section>
             )}
 
-            <section aria-label="Findings">
+            <section hidden={tab !== "findings"} aria-label="Findings">
               <h3>Findings ({view.findings.introduced.length} introduced · {view.findings.existing.length} existing · {view.findings.resolvedByChange.length} resolved by this change)</h3>
               {[["Introduced by this PR", view.findings.introduced], ["Already present at the base", view.findings.existing], ["Resolved by this change", view.findings.resolvedByChange]].map(([label, rows]) => (
                 (rows as PrAnalysisView["findings"]["introduced"]).length > 0 && (
@@ -195,7 +202,7 @@ export function PrPanel({ repoPath, onClose }: { repoPath: string; onClose: () =
               )}
             </section>
 
-            <section aria-label="Analyzers">
+            <section hidden={tab !== "history"} aria-label="Analyzers">
               <h3>Analyzers and their coverage</h3>
               <table className="pr-table">
                 <thead><tr><th scope="col">Analyzer</th><th scope="col">State</th><th scope="col">Coverage</th><th scope="col">Why not everything</th></tr></thead>
@@ -213,14 +220,14 @@ export function PrPanel({ repoPath, onClose }: { repoPath: string; onClose: () =
               <p className="muted small">Baseline {view.baseline.mode === "REUSED" ? "reused the cached merge-base analysis" : "was re-analysed at the merge base"}.</p>
             </section>
 
-            <section aria-label="What this does not tell you">
+            <section hidden={tab !== "history"} aria-label="What this does not tell you">
               <h3>What this does not tell you</h3>
               <ul className="pr-disclosure">
                 {view.disclosure.map((line, i) => <li key={i}>{line}</li>)}
               </ul>
             </section>
 
-            <section aria-label="Waivers">
+            <section hidden={tab !== "history"} aria-label="Waivers">
               <h3>Waivers ({view.waivers.length})</h3>
               {view.waivers.length > 0 && (
                 <table className="pr-table">
@@ -244,23 +251,23 @@ export function PrPanel({ repoPath, onClose }: { repoPath: string; onClose: () =
                 <label className="row">Rationale (required): <input value={waiverRationale} onChange={(e) => setWaiverRationale(e.target.value)} style={{ width: "100%" }} /></label>
                 <label className="row">Waiver valid until: <input type="date" value={waiverExpiry} onChange={(e) => setWaiverExpiry(e.target.value)} /></label>
                 <span className="row">
-                  <button disabled={busy || waiverRationale.trim().length < 3 || !waiverExpiry} onClick={() => void dispose(waiverFor, "WAIVED")} title="Record a time-bounded waiver; the gate is re-evaluated with it">Waive until date</button>
-                  <button disabled={busy || waiverRationale.trim().length < 3} onClick={() => void dispose(waiverFor, "DISMISSED_FALSE_POSITIVE")}>Dismiss as false positive</button>
+                  <button disabled={busy || waiverRationale.trim().length < 3 || !waiverExpiry} onClick={() => void dispose(waiverFor, "WAIVED").catch(handleError)} title="Record a time-bounded waiver; the gate is re-evaluated with it">Waive until date</button>
+                  <button disabled={busy || waiverRationale.trim().length < 3} onClick={() => void dispose(waiverFor, "DISMISSED_FALSE_POSITIVE").catch(handleError)}>Dismiss as false positive</button>
                   <button className="secondary" onClick={() => { setWaiverFor(null); setWaiverRationale(""); }}>Cancel</button>
                 </span>
                 <p className="muted small">A waiver is stored with its scope (this finding's fingerprint), its approver and its expiry; the decision that relied on it dies at the same time.</p>
               </section>
             )}
 
-            <div className="row push" style={{ paddingBottom: 12 }}>
-              <button disabled={busy || !view} onClick={() => void publish("STATUS")}>Publish status to GitHub</button>
-              <button disabled={busy || !view} onClick={() => void publish("COMMENT")}>Publish/update comment</button>
+            <div hidden={tab !== "overview"} className="row push" style={{ paddingBottom: 12 }}>
+              <button disabled={busy || !view} onClick={() => void publish("STATUS").catch(handleError)}>Publish status to GitHub</button>
+              <button disabled={busy || !view} onClick={() => void publish("COMMENT").catch(handleError)}>Publish/update comment</button>
             </div>
           </>
         )}
 
         {history.length > 1 && (
-          <section aria-label="Analysis history">
+          <section hidden={tab !== "history"} aria-label="Analysis history">
             <h3>History</h3>
             <ul className="small muted">
               {history.slice(0, 10).map((hRow) => (

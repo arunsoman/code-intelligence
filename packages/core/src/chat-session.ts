@@ -56,10 +56,14 @@ export interface ModelContext {
 type SessionState = { session: ChatSession; context: ActiveChartContext; turns: ChatTurn[] };
 
 export class ChatSessionManager {
+  private ownedTurns = new WeakSet<CallContext>();
+  bindTurn(ctx: CallContext) { this.ownedTurns.add(ctx); }
   private sessions = new Map<string, SessionState>();
 
   private store: Store;
   constructor(store: Store) { this.store = store; }
+
+  forget(ctx: CallContext, sessionId: string) { this.sessions.delete(`${ctx.actor.tenantId}\u0000${ctx.actor.principalId}\u0000${sessionId}`); }
 
   getSession(ctx: CallContext, requestedSessionId?: string, revision?: RevisionId) {
     const principalId = ctx.actor.principalId;
@@ -115,6 +119,7 @@ export class ChatSessionManager {
     state.session.lastActiveAt = new Date().toISOString();
     this.sessions.set(key, state);
     const persist = () => {
+      if (this.ownedTurns.has(ctx) && !this.store.db.prepare("select 1 from conversation_actions where tenant_id=? and principal_id=? and session_id=? and owner=? and state='pending' and lease_until>?").get(tenantId,principalId,sessionId,ctx.requestId,Date.now())) throw new Error("A completed or recovered conversation turn cannot change context.");
       this.store.db.prepare(`insert into chat_sessions(session_id, actor_principal, tenant_id, state, seq, created_at, last_active_at, context_json, turns_json)
         values (?, ?, ?, ?, ?, ?, ?, ?, ?)
         on conflict(session_id, actor_principal, tenant_id) do update set state=excluded.state, seq=excluded.seq,
@@ -127,12 +132,20 @@ export class ChatSessionManager {
       get context() { return state!.context; },
       get turns() { return state!.turns; },
       get referentLedger() { return state!.context.referents; },
-      appendTurn: (role: ChatTurn["role"], text: string, chartCode?: string) => {
-        const turn: ChatTurn = { sessionId, seq: ++state!.session.seq, role, text, state: "complete", attempt: 1, ...(chartCode ? { chartCode } : {}), at: new Date().toISOString() };
+      appendTurn: (role: ChatTurn["role"], text: string, chartCode?: string, turnState: ChatTurn["state"] = "complete") => {
+        const turn: ChatTurn = { sessionId, seq: ++state!.session.seq, role, text, state: turnState, attempt: 1, ...(chartCode ? { chartCode } : {}), at: new Date().toISOString() };
         state!.turns.push(turn);
         state!.session.lastActiveAt = turn.at;
         persist();
         return turn;
+      },
+      completePending: () => { for (const turn of state!.turns) if (turn.state === "pending") turn.state = "complete"; persist(); },
+      updateChart: (chart: { revision: string; chartCode?: string; level: number; entities: {entityId:string;name:string;kind:string}[] }) => {
+        state!.context.chartCode=chart.chartCode;
+        state!.context.level=Math.max(0,Math.min(5,chart.level)) as ActiveChartContext["level"];
+        state!.context.subject=chart.entities.length===1?chart.entities[0].name:undefined;
+        state!.context.referents=chart.entities.map(entity=>({entityId:entity.entityId,label:entity.name,kind:entity.kind,level:state!.context.level,turnSeq:state!.session.seq,rev:chart.revision,source:"view-render" as const})).slice(-12);
+        persist();
       },
       updateFocus: (referent: ReferentRecord) => {
         state!.context.referents = [

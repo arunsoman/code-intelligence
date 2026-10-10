@@ -164,10 +164,14 @@ export function App() {
   const [cardPins, setCardPins] = useState<{ title: string; ids: string[] } | null>(null);
   const [audit, setAudit] = useState<{ events: AuditEvent[]; chain: { ok: boolean } } | null>(null);
 
+  const chartFocusQueue=useRef(Promise.resolve());
   const responseWorkspace = useResponseWorkspace({
+    sessionId:chatSessionId,revision:info?.revision?.id,
     currentView: view,
     snapshot: () => ({ selection, cellSelection: cellSel, level, drawMode, terrainWeights, canvas: canvasSnapshot.current }),
     show: (next, claims, ui) => {
+      const focus={sessionId:chatSessionId,revision:next.revision,chartCode:typeof next.params?.chartId==="string"?next.params.chartId:undefined,form:next.formId,entityIds:[...new Set(next.nodes.flatMap(node=>node.entityRefs))].slice(0,80)};
+      chartFocusQueue.current=chartFocusQueue.current.then(async()=>{const result=await call("C15","focus",focus);if(!result.ok)setNotice(`Conversation focus: ${result.error.message}`);}).catch(()=>{});
       adoptView(next, claims, false);
       canvasSnapshot.current = ui?.canvas; setCanvasRestore(ui?.canvas);
       if (ui) { setSelection(ui.selection); setCellSel(ui.cellSelection); setLevel(ui.level); setDrawMode(ui.drawMode); setTerrainWeights(ui.terrainWeights); }
@@ -489,6 +493,7 @@ export function App() {
     say("user", text);
     setBusy("Thinking…"); setError(null); setNotice(null);
     try {
+      await chartFocusQueue.current;
       const r = await call<ConverseResult>("C15", "converse", { text, sessionId: chatSessionId, view, selection, revision: info?.revision?.id, pins });
       if (generation !== repoGeneration.current || responseToken !== responseGeneration.current) return;
       if (!r.ok) { say("assistant", failMsg(r), true); return; }

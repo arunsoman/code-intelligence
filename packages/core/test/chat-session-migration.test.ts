@@ -13,11 +13,11 @@ test("conversation schema upgrades an existing version-42 database without chang
   for (const [version, name] of [[40, "pr-impact-reports"], [41, "pr-chat-replies"], [42, "reviewer-feedback"]] as const) {
     db.prepare("insert into schema_version values (?,?,?)").run(version, name, "existing");
   }
-  assert.deepEqual(migrate(db), [43]);
+  assert.deepEqual(migrate(db, MIGRATIONS, 43), [43]);
   assert.equal(currentVersion(db), 43);
   assert.equal((db.prepare("select name from schema_version where version=40").get() as { name: string }).name, "pr-impact-reports");
   assert.ok(db.prepare("select name from sqlite_master where name='chat_sessions'").get());
-  assert.deepEqual(migrate(db), []);
+  assert.deepEqual(migrate(db, MIGRATIONS, 43), []);
 });
 
 test("the correction preserves sessions created with the earlier version-40 migration", (t) => {
@@ -26,7 +26,7 @@ test("the correction preserves sessions created with the earlier version-40 migr
   const owner = ctx();
   new ChatSessionManager(store).getSession(owner, "existing-session").appendTurn("user", "keep this transcript");
   store.db.prepare("update schema_version set version=40 where name='conversation-sessions'").run();
-  assert.deepEqual(migrate(store.db), [43]);
+  assert.deepEqual(migrate(store.db), []);
   assert.equal(new ChatSessionManager(store).getSession(owner, "existing-session").turns[0]?.text, "keep this transcript");
   assert.equal(new Set(MIGRATIONS.map((m) => m.version)).size, MIGRATIONS.length);
 });

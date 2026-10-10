@@ -17,6 +17,8 @@ import { VISUALS } from "./visuals.ts";
 
 export interface ToolEnv {
   svc: Service; ctx: CallContext; rev: RevisionRow; access: AccessPolicy; pins?: string[]; currentSubject?: string;
+  /** F14 §7.3: inside a PR, "this"/"the change"/"it" resolve to the changed entity set; revision defaults to the PR head. */
+  prScope?: import("./pr-chat.ts").PrScope;
   /** Code elements some tool has shown the model; an answer may cite only these. */
   seen: Map<string, { name: string; file: string }>;
   /** Analyses with a view, in call order, for the "Show …" buttons. */

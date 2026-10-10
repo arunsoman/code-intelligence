@@ -5,7 +5,7 @@ import { CHAT_TOOLS, checkArgs, toolByName } from "../src/chat-tools.ts";
 import type { AgentMessage, AgentReply, AgentToolSpec, RouterModel } from "../src/llm-router.ts";
 import { resolveMentions, within } from "../src/mentions.ts";
 import { policyFor } from "../src/access.ts";
-import { copyFixture, ctx, setup } from "./helpers.ts";
+import { copyFixture, ctx, setup as ingest } from "./helpers.ts";
 
 /** A tool-calling model that plays a script: each turn is a function of what it has been told so far. */
 function scripted(turns: ((messages: AgentMessage[], tools: AgentToolSpec[]) => AgentReply | null)[]): RouterModel & { calls: { messages: AgentMessage[]; tools: AgentToolSpec[] }[] } {
@@ -39,6 +39,7 @@ test("mentions leave out what the caller may not see", async () => {
   const { svc, worker, revision } = await setup(undefined, repo);
   try {
     svc.store.denyPath(repo, "src/auth");
+    await svc.buildConceptHierarchy(ctx(), { revision });
     const r = resolveMentions(svc.store, revision, "what is AuthService", policyFor(svc.store, repo));
     assert.deepEqual(r.resolved, []); assert.deepEqual(r.unresolved, ["AuthService"]);
     svc.router = scripted([() => call("read_code", { id: "class:src/auth/service.ts#AuthService" }), (m) => {
@@ -166,3 +167,10 @@ test("a model that stops mid-way gets a reply listing what was looked at, not an
     assert.equal(r.metadata.completeness, "PARTIAL");
   } finally { worker.close(); }
 });
+
+async function setup(...args: Parameters<typeof ingest>) {
+ const fixture=await ingest(...args);
+ const hierarchy=await fixture.svc.buildConceptHierarchy(ctx(),{revision:fixture.revision});
+ assert.ok(hierarchy.ok,"analysis tests require the current concept hierarchy");
+ return fixture;
+}

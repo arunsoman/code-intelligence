@@ -1,3 +1,4 @@
+import { encodeCheckpoint, decodeCheckpoint } from "./workspace-checkpoint.ts";
 import { GenerationQueue } from "./generation-queue.ts";
 import { emptyNavigation, extendNavigation, jumpNavigation, navigationCrumbs, type NavigationHistory } from "./exploration-navigation.ts";
 import { useEffect, useRef, useState } from "react";
@@ -8,6 +9,7 @@ import { acceptCompletion, activateTab, closeTab, createWorkspace, perspectiveSt
 
 /** Only the active renderer is mounted. Semantic specs and local UI state survive tab switches. */
 export function useResponseWorkspace(p: {
+  sessionId: string; revision?: string;
   snapshot: () => TabState; currentView: ViewSpec | null;
   show: (view: ViewSpec, claims: Claim[], ui?: TabState) => void;
 }) {
@@ -19,6 +21,26 @@ export function useResponseWorkspace(p: {
   const [requests] = useState(() => new GenerationQueue<ApiResult<{view:ViewSpec;claims:Claim[]}>>());
   const latest = useRef(p); latest.current = p;
   const epoch = useRef(0);
+  const checkpointOwner=useRef({sessionId:p.sessionId,revision:p.revision});
+  const storageKey=p.revision?`cie-response:${p.sessionId}:${p.revision}`:undefined;
+  const restoredKey=useRef<string|undefined>(undefined);
+  const persist=() => {
+    const w=current.current;if(!storageKey||!w||w.manifest.revision!==latest.current.revision||checkpointOwner.current.sessionId!==latest.current.sessionId||checkpointOwner.current.revision!==latest.current.revision)return;
+    const active=w.tabs.find(t=>t.id===w.activeId);
+    const snapshot=active?.view?.id===latest.current.currentView?.id?updateTab(w,w.activeId,{ui:latest.current.snapshot()}):w;
+    try {const text=encodeCheckpoint(snapshot,history.current);if(text)sessionStorage.setItem(storageKey,text);else sessionStorage.removeItem(storageKey);}catch{/* In-memory navigation remains usable when storage is unavailable. */}
+  };
+  useEffect(()=>{persist();},[workspace,navigation,storageKey]);
+  useEffect(()=>{const save=()=>persist();window.addEventListener("pagehide",save);window.addEventListener("beforeunload",save);return()=>{window.removeEventListener("pagehide",save);window.removeEventListener("beforeunload",save);};},[storageKey]);
+  useEffect(()=>{
+    if(!storageKey||restoredKey.current===storageKey)return;
+    restoredKey.current=storageKey;
+    if(current.current?.manifest.revision===p.revision&&checkpointOwner.current.sessionId===p.sessionId&&checkpointOwner.current.revision===p.revision)return;
+    cancel();set(null);setHistory(emptyNavigation());checkpointOwner.current={sessionId:p.sessionId,revision:p.revision};
+    let saved:ReturnType<typeof decodeCheckpoint>;
+    try {const text=sessionStorage.getItem(storageKey);if(text)saved=decodeCheckpoint(text,p.revision!);if(text&&!saved)sessionStorage.removeItem(storageKey);}catch{return;}
+    if(saved){cancel();setHistory(saved.navigation);set(saved.workspace);void generate(saved.workspace.activeId);}
+  },[storageKey]);
   useEffect(() => () => { epoch.current++; requests.cancelAll(); }, []);
   const set = (next: ResponseWorkspace | null) => { current.current = next; setWorkspace(next); };
   const stash = () => {
@@ -34,8 +56,9 @@ export function useResponseWorkspace(p: {
     const w = current.current;
     if (w) set({ ...w, tabs: w.tabs.map((t) => (t.status === "generating" || t.status === "queued") ? { ...t, status: "available", reason: "Generation cancelled. Select this view to retry.", attempt: t.attempt + 1 } : t) });
   };
-  const reset = () => { cancel(); set(null); setHistory(emptyNavigation()); };
+  const reset = () => { try {if(storageKey)sessionStorage.removeItem(storageKey);}catch{} cancel(); set(null); setHistory(emptyNavigation()); };
   const begin = (manifest: ResponseManifest, built: { view: ViewSpec; claims: Claim[] }[], explorationLabel?: string) => {
+    checkpointOwner.current={sessionId:latest.current.sessionId,revision:latest.current.revision};
     stash(); const parent=current.current;
     let next={...createWorkspace(manifest,built),...(explorationLabel ? {navigationLabel:explorationLabel} : {})};
     const initial=next.tabs.find(t=>t.id===next.activeId);
@@ -63,7 +86,7 @@ export function useResponseWorkspace(p: {
     const token = { responseId: w.manifest.responseId, revision: w.manifest.revision, tabId: id, attempt };
     const taskEpoch = epoch.current;
     set(updateTab(w, id, { status: "queued", reason: "Waiting for a generation slot. This view will start automatically.", attempt }));
-    const outcome = await requests.enqueue(id, signal => call<{ view: ViewSpec; claims: Claim[] }>("C19", "ask", {
+    const outcome = await requests.enqueue(id, signal => call<{ view: ViewSpec; claims: Claim[]; manifest?: ResponseManifest }>("C19", "ask", {
       question: tab!.questionAnswered, revision: token.revision, form: tab!.form,
       subject: tab!.subject, scope: tab!.scope, seeds: tab!.seeds,
       ...(tab!.code.startsWith("S") ? { chartCode: tab!.code } : {}),
@@ -76,7 +99,11 @@ export function useResponseWorkspace(p: {
     if(outcome.status === "failed") { set(updateTab(current.current!,id,{status:"failed",reason:outcome.message})); return; }
     const result=outcome.value;
     if (!result.ok) { set(updateTab(current.current!, id, { status: "failed", reason: result.error.message })); return; }
-    const next = acceptCompletion(current.current!, token, result.value); set(next);
+    let next = acceptCompletion(current.current!, token, result.value);
+    const fresh = (result.value as { manifest?: ResponseManifest }).manifest;
+    if (fresh?.revision === token.revision && next.tabs.find(t => t.id === id)?.view?.id === result.value.view.id)
+      next = { ...next, manifest: { ...next.manifest, sections: fresh.sections, limitations: fresh.limitations, interpretation: fresh.interpretation } };
+    set(next);
     const completed = next.tabs.find((t) => t.id === id);
     if (next.activeId === id && completed?.view) latest.current.show(completed.view, completed.claims, completed.ui);
   };

@@ -6,7 +6,7 @@ import { validateChatPlan, type ChatPlan, type ChatPlanRequest } from "../src/ch
 import { moduleTests } from "../src/module-tests.ts";
 import { ScriptRouter } from "../src/llm-router.ts";
 import { projectDescription } from "../src/profile.ts";
-import { copyFixture, ctx, setup } from "./helpers.ts";
+import { copyFixture, ctx, setup as ingest } from "./helpers.ts";
 
 const QUESTION = "Explain this project, identify its riskiest module, and show me the tests covering it.";
 const PLAN: ChatPlan = { steps: [
@@ -98,8 +98,8 @@ test("follow-up chat carries bounded history and uses the current risk subject",
     const r = await svc.converse(ctx(), { text: "And its tests?", view: risk.view, history: Array.from({ length: 12 }, () => ({ role: "user", text: "x".repeat(2000) })) });
     assert.ok(r.ok && r.value.kind === "analysis");
     assert.equal(r.value.results[0].subject, risk.subject);
-    assert.equal(seen!.history.length, 6);
-    assert.equal(seen!.history[0].text.length, 1500);
+    assert.equal(seen!.history.length, 2, "persisted transcript takes precedence over client-supplied history");
+    assert.equal(seen!.history[0].text, QUESTION);
   } finally { worker.close(); }
 });
 
@@ -115,8 +115,7 @@ test("invalid planning falls back visibly and deadline prevents tool execution",
     assert.ok(r.value.message.startsWith(r.value.view.answer!), "the chat message leads with the answer");
     svc.router = new ScriptRouter({ [QUESTION]: PLAN });
     const expired = await svc.converse({ ...ctx(), deadlineMs: Date.now() - 1 }, { text: QUESTION, revision });
-    assert.ok(expired.ok && expired.value.kind === "analysis");
-    assert.ok(expired.value.results.every((s) => s.status === "skipped" && !s.view));
+    assert.ok(!expired.ok && expired.error.code === "DEADLINE_EXCEEDED");
   } finally { worker.close(); }
 });
 
@@ -145,9 +144,17 @@ test("new analysis results respect denied files and attribute README description
     svc.store.denyPath(repo, "README.md");
     assert.equal(projectDescription(svc.store, repo), null);
     svc.store.denyPath(repo, "src/auth");
+    await svc.buildConceptHierarchy(ctx(), { revision });
     svc.router = new ScriptRouter({ [QUESTION]: PLAN });
     const r = await svc.converse(ctx(), { text: QUESTION, revision });
     assert.ok(r.ok && r.value.kind === "analysis");
     assert.doesNotMatch(JSON.stringify(r.value), /src\/auth\//);
   } finally { worker.close(); }
 });
+
+async function setup(...args: Parameters<typeof ingest>) {
+ const fixture=await ingest(...args);
+ const hierarchy=await fixture.svc.buildConceptHierarchy(ctx(),{revision:fixture.revision});
+ assert.ok(hierarchy.ok,"analysis tests require the current concept hierarchy");
+ return fixture;
+}

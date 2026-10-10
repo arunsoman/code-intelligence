@@ -16,6 +16,31 @@ const T2 = [
 
 export interface TierResult { tier: Tier; reasons: string[] }
 
+/**
+ * F13: every changed path that hits a high-impact pattern, with the pattern id (the index into the pattern table
+ * classifyTier uses). The deletion reason has no pattern id and is not reported here; the summary wants patterns.
+ */
+export function highImpactHits(changes: readonly ChangedPath[]): { patternId: number; path: string; kind: ChangedPath["kind"] }[] {
+  const out: { patternId: number; path: string; kind: ChangedPath["kind"] }[] = [];
+  for (const c of changes) {
+    const hit = T2.findIndex((re) => re.test(c.path));
+    if (hit >= 0) out.push({ patternId: hit, path: c.path, kind: c.kind });
+  }
+  return out;
+}
+
+/** F13: one reader-facing label per pattern id (§7.3 — the mapping lives in this one table). */
+export const PATTERN_LABEL: Record<number, string> = {
+  0: "access control & security", 1: "access control & security", 2: "access control & security", 3: "access control & security",
+  4: "access control & security", 5: "access control & security", 6: "access control & security", 7: "access control & security",
+  8: "access control & security", 9: "access control & security",
+  10: "database & schema", 11: "database & schema", 12: "database & schema",
+  13: "dependencies & lockfiles", 14: "dependencies & lockfiles", 15: "dependencies & lockfiles", 16: "dependencies & lockfiles",
+  17: "runtime configuration",
+  18: "CI & infrastructure",
+  19: "configuration files",
+};
+
 /** T0 only when every path is documentation; T2 when any path matches a high-impact pattern; otherwise T1. Empty change is T0. */
 export function classifyTier(changes: readonly ChangedPath[]): TierResult {
   const reasons: string[] = [];

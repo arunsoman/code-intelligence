@@ -3,7 +3,7 @@ import type { LensState } from "./fisheye.ts";
 
 export interface CanvasState { zoom: number; pan: { x: number; y: number }; lens: LensState }
 export interface TabState {
-  selection: string[]; cellSelection: string[]; level: number; drawMode: "matrix" | "graph";
+  selection: string[]; selectionRefs?: string[]; cellSelection: string[]; level: number; drawMode: "matrix" | "graph";
   terrainWeights: Record<string, number>; canvas?: CanvasState;
 }
 export interface WorkspaceTab extends ResponseView {
@@ -38,7 +38,10 @@ export function acceptCompletion(workspace: ResponseWorkspace, token: { response
   if (workspace.manifest.responseId !== token.responseId || workspace.manifest.revision !== token.revision || built.view.revision !== token.revision || tab?.attempt !== token.attempt) return workspace;
   if (tab.code.startsWith("S") && built.view.params?.chartId !== tab.code) return updateTab(workspace, tab.id, { status: "failed", reason: "The requested notation was not returned. Choose another view explicitly." });
   if (!tab.code.startsWith("S") && built.view.formId !== tab.form) return updateTab(workspace, tab.id, { status: "failed", reason: "The requested view was unavailable; its fallback was not substituted." });
-  return updateTab(workspace, tab.id, { view: built.view, claims: built.claims, status: built.view.gaps.length ? "partial" : "ready", reason: built.view.gaps[0] });
+  const ui = tab.ui ? { ...tab.ui, selection: tab.ui.selectionRefs
+    ? built.view.nodes.filter(n => n.entityRefs.some(ref => tab.ui!.selectionRefs!.includes(ref))).map(n => n.id)
+    : tab.ui.selection.filter(id => built.view.nodes.some(n => n.id === id)), cellSelection: [] } : undefined;
+  return updateTab(workspace, tab.id, { ...(ui ? { ui } : {}), view: built.view, claims: built.claims, status: built.view.gaps.length ? "partial" : "ready", reason: built.view.gaps[0] });
 }
 
 export function projectSelection(from: ViewSpec | undefined, selection: string[], to: ViewSpec): string[] {
