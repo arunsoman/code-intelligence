@@ -2,7 +2,7 @@ import { TableSpecSchema, type RendererModule } from "@cie/schema";
 import { render, type Rendered } from "../../graph.ts";
 export const id = "table" as const;
 export default {
- id, description: "Native decision, state-transition and failure tables with cell-level evidence.",
+ id, description: "Native rule, reliability, responsibility and metric tables with cell-level evidence.",
  render(view, _level, positions, stale) {
   const parsed=TableSpecSchema.safeParse(view.table);
   const base=render(view,5,positions,stale);

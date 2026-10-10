@@ -763,7 +763,7 @@ export function compileDecisionTableV2(o: { plan: ChartPlanDecisionTable; bundle
   return compileTableChartV2(o);
 }
 
-function compileTableChartV2(o: { plan: ChartPlanDecisionTable | ChartPlanStateTransitionTable | ChartPlanFmeaMatrix | ChartPlanIdempotencyMatrix; bundle: EvidenceBundle; rev: RevisionRow; question: string; route: ViewRoute; run?: ModelRunRef; diag?: ChartCompileDiag }) {
+function compileTableChartV2(o: { plan: ChartPlanDecisionTable | ChartPlanStateTransitionTable | ChartPlanFmeaMatrix | ChartPlanIdempotencyMatrix | ChartPlanCrcCards | ChartPlanMetricsMap; bundle: EvidenceBundle; rev: RevisionRow; question: string; route: ViewRoute; run?: ModelRunRef; diag?: ChartCompileDiag }) {
   const evidence = new Map(o.bundle.evidence.filter(e => e.state === "CURRENT").map(e => [e.id,e]));
   const current = (ids: string[]) => [...new Set(ids.filter(id => evidence.has(id)))];
   const gaps: string[] = [];
@@ -813,39 +813,73 @@ function compileTableChartV2(o: { plan: ChartPlanDecisionTable | ChartPlanStateT
     const unique = <T extends {id:string;label:string;evidenceIds:string[]}>(items:T[]) => {
       const seen=new Set<string>();return items.filter(x=>{if(seen.has(x.id)){gaps.push(`Duplicate axis ${x.id} was omitted.`);return false;}seen.add(x.id);return true;});
     };
-    const states=unique(plan.states);
+    const groundedAxis = <T extends {id:string;label:string;evidenceIds:string[]}>(items:T[], kind:string) => unique(items).filter(item => {
+      if (current(item.evidenceIds).length) return true;
+      gaps.push(`${kind} ${item.label} was omitted because its declaration lacks current evidence.`); return false;
+    });
+    const states=groundedAxis(plan.states,"State");
     const events=unique(plan.events).filter(e=>{
-      if(current([...e.evidenceIds,...plan.cells.filter(c=>c.eventId===e.id).flatMap(c=>c.evidenceIds)]).length)return true;
+      if(current(e.evidenceIds).length)return true;
       gaps.push(`Event ${e.label} was omitted because it lacks current evidence.`);return false;
     });
     table.columns=events.map(e=>({id:e.id,label:e.label}));
     for(const state of states){
       const cells=events.map(event=>{
         const matches=plan.cells.filter(c=>c.stateId===state.id&&c.eventId===event.id&&current(c.evidenceIds).length);
-        const alternatives=matches.map(c=>{
+        const alternatives=matches.flatMap(c=>{
           const target=states.find(s=>s.id===c.nextStateId);
-          if(!target){gaps.push(`Transition ${state.label} / ${event.label} has an unknown target.`);return cell(event.id,undefined,[]);}
-          return cell(event.id,`${c.isForbidden?"FORBIDDEN? · ":""}${target.label}${c.guard?` · guard: ${c.guard}`:""}`,c.evidenceIds);
+          if(!target){gaps.push(`Transition ${state.label} / ${event.label} has an unknown target or a target without current declaration evidence.`);return [];}
+          return [cell(event.id,`${c.isForbidden?"FORBIDDEN? · ":""}${target.label}${c.guard?` · guard: ${c.guard}`:""}`,c.evidenceIds)];
         });
         if(!alternatives.length)return cell(event.id,undefined,[]);
         const texts=[...new Set(alternatives.map(c=>c.text))];
         return {columnId:event.id,text:texts.join(" / "),status:texts.length>1?"conflict" as const:alternatives[0].status,evidenceIds:[...new Set(alternatives.flatMap(c=>c.evidenceIds))]};
       });
-      row(state.id,state.label,[...state.evidenceIds,...plan.cells.filter(c=>c.stateId===state.id).flatMap(c=>c.evidenceIds)],cells);
+      row(state.id,state.label,state.evidenceIds,cells);
     }
     for(const c of plan.cells)if(!states.some(s=>s.id===c.stateId)||!events.some(e=>e.id===c.eventId))gaps.push("A transition references a missing state or event axis.");
+  } else if(plan.chartId==="S20" || plan.chartId==="S26") {
+    // Each list entry has its own citation boundary. A parent declaration cannot
+    // lend evidence to a responsibility, collaborator or emitter.
+    const listCell = (columnId:string, entries:{text:string;evidenceIds:string[]}[], context:string): Cell => {
+      const supported = entries.filter(entry => {
+        if(entry.text.trim() && current(entry.evidenceIds).length) return true;
+        gaps.push(`${context}: an entry was omitted because it lacks current evidence or text.`); return false;
+      });
+      return cell(columnId, supported.length ? [...new Set(supported.map(entry => entry.text.trim()))].join("\n") : undefined, supported.flatMap(entry => entry.evidenceIds));
+    };
+    if(plan.chartId==="S20") {
+      table.rowTitle="Class";table.columns=[{id:"responsibilities",label:"Responsibilities"},{id:"collaborators",label:"Collaborators"}];
+      for(const card of plan.cards) row(card.className,card.className,card.evidenceIds,[
+        listCell("responsibilities",card.responsibilities,`${card.className} responsibilities`),
+        listCell("collaborators",card.collaborators.map(c=>({text:c.className,evidenceIds:c.evidenceIds})),`${card.className} collaborators`),
+      ]);
+      gaps.push("An empty responsibility or collaborator cell means unknown; it does not establish that the class has none. Collaboration entries do not prove execution order.");
+    } else {
+      table.rowTitle="Metric";table.columns=[{id:"meaning",label:"Meaning interpretation"},{id:"emitters",label:"Declared emitters"}];
+      for(const metric of plan.metrics) row(metric.id,metric.name,metric.evidenceIds,[
+        cell("meaning",metric.meaning,metric.evidenceIds),
+        listCell("emitters",metric.emitters.map(e=>({text:e.label,evidenceIds:e.evidenceIds})),`${metric.name} emitters`),
+      ]);
+      nodes.forEach(node => node.notes!.push("Declared metric metadata only; no live values, samples, units or alert thresholds are supplied."));
+      gaps.push("Declared metric metadata only: this view contains no live values, runtime samples or measured rates. Meaning and emitter attribution are static interpretations.");
+    }
   } else {
     table.rowTitle="Failure";table.columns=[{id:"impact",label:"Impact"},{id:"compensation",label:"Compensation"}];
-    for(const f of plan.failures)row(f.id,f.label,f.evidenceIds,[cell("impact",f.impact?.text,f.impact?.evidenceIds??[]),cell("compensation",f.compensation?.text,f.compensation?.evidenceIds??[])]);
+    for(const f of plan.failures){
+      row(f.id,f.label,f.evidenceIds,[cell("impact",f.impact?.text,f.impact?.evidenceIds??[]),cell("compensation",f.compensation?.text,f.compensation?.evidenceIds??[])]);
+      if(!f.compensation?.text?.trim() || !current(f.compensation.evidenceIds).length) gaps.push(`${f.label} has no current evidence-backed compensation; absence is not proof of irreversibility.`);
+    }
     gaps.push("Severity, occurrence, detection and risk-priority scores are not supplied by this contract.");
   }
+  if(!table.columns.length)gaps.push("No columns have current declaration evidence; row declarations do not establish the missing combinations.");
   gaps.push("Cells are static plan interpretations. Unknown does not mean forbidden, safe, or covered; citations do not establish runtime behavior.");
   const unknown=table.rows.flatMap(r=>r.cells).filter(c=>c.status==="unknown").length;
   if(unknown)gaps.push(`${unknown} cells have no current evidence-backed value.`);
   const chartType=CHART_REGISTRY[plan.chartId].name;
   const id=`view:generated:${createHash("sha256").update(`${o.bundle.id}|${o.question}`).digest("hex").slice(0,12)}`;
   const view:ViewSpec={id,version:1,revision:o.rev.id,taskId:`task:${id}`,formId:"GeneratedChart",caption:`${chartType} · ${modelText(plan.caption,"Static table interpretation").text}`,question:o.question,level:5,nodes,edges:[],groups:[],table,legend:[{label:"Interpretation",displayMode:"INFERENCE",description:"Cell values are model interpretations with current citations, not runtime proof."}],cameraPolicy:{behavior:"PRESERVE"},gaps,formReason:`Typed ${chartType} table`,route:o.route,meta:{kind:"generated-chart",field:chartType,subject:plan.chartId},params:{chartType,chartLayout:plan.layout,chartId:plan.chartId}};
-  const total=plan.chartId==="S11"?plan.rules.length:plan.chartId==="S24"?plan.states.length:plan.chartId==="S14"?plan.operations.length:plan.failures.length;
+  const total=plan.chartId==="S11"?plan.rules.length:plan.chartId==="S24"?plan.states.length:plan.chartId==="S14"?plan.operations.length:plan.chartId==="S20"?plan.cards.length:plan.chartId==="S26"?plan.metrics.length:plan.failures.length;
   return {view,claims:[] as Claim[],diagnostics:{chartId:plan.chartId,contractVersion:"chart.v2" as const,provider:o.diag?.provider??o.run?.provider??"",model:o.diag?.model??o.run?.model??"",cacheHit:o.diag?.cacheHit??false,schemaValidationPassed:o.diag?.schemaValidationPassed??true,suppliedEntities:o.bundle.entities.length,suppliedRelationships:o.bundle.relationships.length,suppliedEvidence:o.bundle.evidence.length,acceptedNodes:nodes.length,omittedNodes:total-nodes.length,acceptedEdges:0,omittedEdges:0,gaps,...(o.diag?.fallbackReason?{fallbackReason:o.diag.fallbackReason}:{})}};
 }
 
@@ -1047,7 +1081,7 @@ function projectTypedChart(plan: ChartPlanV2, bundle: EvidenceBundle, offline: b
 }
 
 export function compileStructuredChartV2(o: { plan: ChartPlanV2; bundle: EvidenceBundle; rev: RevisionRow; question: string; route: ViewRoute; run?: ModelRunRef; diag?: ChartCompileDiag }): { view: ViewSpec; claims: Claim[]; diagnostics: ChartDiagnostics } {
-  if (o.plan.chartId === "S24" || o.plan.chartId === "S25" || o.plan.chartId === "S14") return compileTableChartV2({...o,plan:o.plan});
+  if (o.plan.chartId === "S24" || o.plan.chartId === "S25" || o.plan.chartId === "S14" || o.plan.chartId === "S20" || o.plan.chartId === "S26") return compileTableChartV2({...o,plan:o.plan});
   const projection = projectTypedChart(o.plan, o.bundle, o.diag?.provider === "stub" || o.run?.provider === "stub");
   const validEvidence = new Map(o.bundle.evidence.filter((e) => e.state === "CURRENT").map((e) => [e.id, e]));
   const gaps: string[] = [...projection.gaps];

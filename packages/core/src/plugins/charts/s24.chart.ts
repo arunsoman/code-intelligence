@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "State transition table",
   "form": "GeneratedChart",
   "compiler": "projected",
-  "version": 4,
+  "version": 5,
   "aliases": [
     "State transition table",
     "state transition table",

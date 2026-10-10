@@ -327,7 +327,7 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
     const pickedFiles = new Set(picked.map((id) => fileOf.get(id)).filter((f): f is string => !!f));
     const topUp: string[] = [];
     for (const e of symbols) {
-      if (pickedSet.has(e.entityId) || !kinds.has(e.kind)) continue;
+      if (pickedSet.has(e.entityId) || (!kinds.has(e.kind) && !acrossRepository.has(e.kind))) continue;
       if (isDenied(e.entityId) || opts.ignored?.has(e.entityId)) continue;
       if (pickedFiles.has(e.file) || acrossRepository.has(e.kind)) { topUp.push(e.entityId); pickedSet.add(e.entityId); }
     }

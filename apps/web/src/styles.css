@@ -807,7 +807,7 @@ main { overflow: auto; }
 .typed-table thead th { position:sticky; top:0; z-index:2; background:var(--panel,#0f172a); text-align:left; min-width:180px; }
 .typed-table tbody th { position:sticky; left:0; z-index:1; background:var(--panel,#0f172a); text-align:left; min-width:160px; }
 .typed-table thead th:first-child { left:0; z-index:3; }
-.table-cell { width:100%; min-width:180px; max-width:360px; min-height:64px; text-align:left; white-space:normal; overflow-wrap:anywhere; border:1px dashed #a78bfa; padding:10px; color:inherit; background:var(--panel,#0f172a); }
+.table-cell { width:100%; min-width:180px; max-width:360px; min-height:64px; text-align:left; white-space:pre-line; overflow-wrap:anywhere; border:1px dashed #a78bfa; padding:10px; color:inherit; background:var(--panel,#0f172a); }
 .table-cell small { display:block; margin-top:8px; color:var(--muted,#94a3b8); }
 .table-cell.unknown { border-style:dotted; border-color:#94a3b8; }
 .table-cell.conflict { border-color:#fbbf24; }

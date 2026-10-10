@@ -497,7 +497,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S20",
     "name": "CRC cards",
     "form": "GeneratedChart",
-    "version": 5,
+    "version": 6,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -508,9 +508,9 @@ export const CHART_DESCRIPTORS = {
     "requiredKinds": [],
     "requiredAcrossRepository": [],
     "concern": "Structure",
-    "renderer": "view-spec",
+    "renderer": "table",
     "questionAnswered": "Which responsibilities and collaborators belong to each type?",
-    "description": "One card per class: its evidenced responsibilities and the classes it collaborates with, rendered as a table plus a collaboration graph. Entries the source does not support are listed as gaps, not invented.",
+    "description": "One card per class: its evidenced responsibilities and the classes it collaborates with, rendered as a source-linked table with responsibility and collaborator cells. Entries the source does not support are listed as gaps, not invented.",
     "example": "Build CRC cards for ReserveService, BalanceService, TransactionStateService and LedgerWriterServiceImpl. List each class's responsibilities and collaborators, citing the code that evidences each entry.",
     "needs": []
   },
@@ -604,7 +604,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S24",
     "name": "State transition table",
     "form": "GeneratedChart",
-    "version": 4,
+    "version": 5,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -625,7 +625,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S25",
     "name": "FMEA / compensation matrix",
     "form": "GeneratedChart",
-    "version": 4,
+    "version": 5,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -653,7 +653,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S26",
     "name": "Metrics / telemetry map",
     "form": "GeneratedChart",
-    "version": 5,
+    "version": 6,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -668,7 +668,7 @@ export const CHART_DESCRIPTORS = {
       "method"
     ],
     "concern": "Quality",
-    "renderer": "view-spec",
+    "renderer": "table",
     "questionAnswered": "Which measurements and monitored components are evidenced?",
     "description": "Metric names as declared in code, with their evidenced meaning and emitters. Declared names only — this chart never reports live values.",
     "example": "List the metrics this component declares (reservation.fast.success, ledger.insert.ignored, …), what each measures based on the code that emits it, and which functions emit them. Do not invent live values.",

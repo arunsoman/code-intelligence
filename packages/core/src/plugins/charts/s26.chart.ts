@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "Metrics / telemetry map",
   "form": "GeneratedChart",
   "compiler": "projected",
-  "version": 5,
+  "version": 6,
   "aliases": [
     "Metrics / telemetry map",
     "metrics telemetry map",
@@ -21,7 +21,7 @@ export const descriptor = {
   ],
   "offline": "gap",
   "concern": "Quality",
-  "renderer": "view-spec",
+  "renderer": "table",
   "questionAnswered": "Which measurements and monitored components are evidenced?",
   "description": "Metric names as declared in code, with their evidenced meaning and emitters. Declared names only \u2014 this chart never reports live values.",
   "example": "List the metrics this component declares (reservation.fast.success, ledger.insert.ignored, \u2026), what each measures based on the code that emits it, and which functions emit them. Do not invent live values.",

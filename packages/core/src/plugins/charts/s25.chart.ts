@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "FMEA / compensation matrix",
   "form": "GeneratedChart",
   "compiler": "projected",
-  "version": 4,
+  "version": 5,
   "aliases": [
     "FMEA / compensation matrix",
     "fmea compensation matrix",

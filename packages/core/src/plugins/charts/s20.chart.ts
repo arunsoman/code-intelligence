@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "CRC cards",
   "form": "GeneratedChart",
   "compiler": "projected",
-  "version": 5,
+  "version": 6,
   "aliases": [
     "CRC cards",
     "crc cards",
@@ -17,9 +17,9 @@ export const descriptor = {
   "requiredAcrossRepository": [],
   "offline": "gap",
   "concern": "Structure",
-  "renderer": "view-spec",
+  "renderer": "table",
   "questionAnswered": "Which responsibilities and collaborators belong to each type?",
-  "description": "One card per class: its evidenced responsibilities and the classes it collaborates with, rendered as a table plus a collaboration graph. Entries the source does not support are listed as gaps, not invented.",
+  "description": "One card per class: its evidenced responsibilities and the classes it collaborates with, rendered as a source-linked table with responsibility and collaborator cells. Entries the source does not support are listed as gaps, not invented.",
   "example": "Build CRC cards for ReserveService, BalanceService, TransactionStateService and LedgerWriterServiceImpl. List each class's responsibilities and collaborators, citing the code that evidences each entry.",
   "needs": []
 } as const satisfies ChartDescriptor<"S20">;

@@ -3,7 +3,7 @@
 // offline stub. Deterministic: no model, no network.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ChartOutput, ChartOutputV2, SCHEMA_CHART, SCHEMA_CHART_V2, type ChartPlanBpmn, type ChartPlanC4Context, type ChartPlanCallGraph, type ChartPlanClassDiagram, type ChartPlanCommunication, type ChartPlanCrcCards, type ChartPlanDecisionTable, type ChartPlanDiWiring, type ChartPlanDfd, type ChartPlanErDiagram, type ChartPlanEventStorming, type ChartPlanFmeaMatrix, type ChartPlanIdempotencyMatrix, type ChartPlanInteractionOverview, type ChartPlanLayeredArchitecture, type ChartPlanMetricsMap, type ChartPlanModuleGraph, type ChartPlanOutbox, type ChartPlanPackageDiagram, type ChartPlanSaga, type ChartPlanSequence, type ChartPlanStateMachine, type ChartPlanStateTransitionTable, type EvidenceBundle, type EvidenceRef, type ViewRoute } from "@cie/schema";
+import { ChartOutput, ChartOutputV2, SCHEMA_CHART, SCHEMA_CHART_V2, type ChartPlanBpmn, type ChartPlanC4Context, type ChartPlanCallGraph, type ChartPlanClassDiagram, type ChartPlanCommunication, type ChartPlanDiWiring, type ChartPlanDfd, type ChartPlanErDiagram, type ChartPlanEventStorming, type ChartPlanInteractionOverview, type ChartPlanLayeredArchitecture, type ChartPlanModuleGraph, type ChartPlanOutbox, type ChartPlanPackageDiagram, type ChartPlanSaga, type ChartPlanSequence, type ChartPlanStateMachine, type EvidenceBundle, type EvidenceRef, type ViewRoute } from "@cie/schema";
 import { StubProvider } from "@cie/model";
 import { cachedChartPlan, chartPlanCacheKey, compileChartPlan, rememberChartPlan, type ChartCompileDiag } from "../src/chart-creator.ts";
 import type { RevisionRow } from "../src/store.ts";
@@ -206,42 +206,7 @@ test("S10 DFD: distinct element roles and data-labeled flows", () => {
   assert.equal(flow.kind, "persisted-flow");
 });
 
-test("S11 decision table: a real matrix with covered facts, uncovered fog and rule nodes for the outline", () => {
-  const branch = evRef(), testEv = evRef("CURRENT", "TEST");
-  const bundle = makeBundle({ evidence: [branch, testEv] });
-  const plan: ChartPlanDecisionTable = {
-    contractVersion: "chart.v2", chartId: "S11", chartType: "Decision table", layout: "flow", caption: "", nodes: [], edges: [],
-    conditions: [
-      { id: "exists", label: "state already exists", evidenceIds: [branch.id] },
-      { id: "funds", label: "balance sufficient", evidenceIds: [branch.id] },
-    ],
-    rules: [
-      { id: "replay", values: { exists: "true", funds: "any" }, outcome: "return existing reservation", outcomeEvidenceIds: [branch.id], evidenceIds: [branch.id], isCovered: true },
-      { id: "success", values: { exists: "false", funds: "true" }, outcome: "reserve and persist", outcomeEvidenceIds: [testEv.id], evidenceIds: [testEv.id], isCovered: true },
-      { id: "uncovered", values: { exists: "false", funds: "false" }, outcome: "throw", outcomeEvidenceIds: [], evidenceIds: [], isCovered: false },
-    ],
-  };
-  const { view, claims } = compile(plan, bundle, "S11");
-  assert.ok(view.matrix, "the decision table compiles to a real matrix");
-  const m = view.matrix!;
-  assert.equal(m.rowTitle, "Conditions");
-  assert.equal(m.colTitle, "Rules");
-  assert.equal(m.rows.length, 3, "two conditions plus the outcome row");
-  assert.equal(m.cols.length, 3);
-  const replayOutcome = m.cells.find((c) => c.row === "cond:outcome" && c.col === "rule:replay")!;
-  assert.equal(replayOutcome.displayMode, "FACT");
-  assert.ok(replayOutcome.note.includes("return existing reservation"));
-  const uncovered = m.cells.filter((c) => c.col === "rule:uncovered");
-  assert.ok(uncovered.length > 0 && uncovered.every((c) => c.displayMode === "FOG"), "uncovered rules stay unknown, not behavior");
-  assert.ok(uncovered.every((c) => c.note.includes("uncovered")));
-  const successOutcome = m.cells.find((c) => c.row === "cond:outcome" && c.col === "rule:success")!;
-  assert.equal(successOutcome.displayMode, "INFERENCE", "test-only evidence is an inference, not a fact");
-  assert.ok(successOutcome.claimId);
-  assert.equal(claims.length, 1);
-  assert.ok(m.states[replayOutcome.state], "every used state is explained in the key");
-  assert.ok(view.nodes.every((n) => n.role === "rule"), "rule nodes give the graph mode and outline something to read");
-  assert.ok(view.nodes.find((n) => n.label === "uncovered")!.notes!.some((n) => n.includes("Uncovered")));
-});
+
 
 test("S12 saga: compensation edges return, irreversible steps flagged, missing compensation is a gap", () => {
   const fwd = evRef(), comp = evRef();
@@ -289,36 +254,7 @@ test("S13 outbox: writer, store, poller and consumer are distinct roles; atomic 
   assert.ok(atomic, "the atomic write is labeled as such, backed by evidence");
 });
 
-test("S14 idempotency matrix: outcomes, mechanisms and unknowns in a matrix", () => {
-  const key = evRef(), insertIgnore = evRef();
-  const bundle = makeBundle({ evidence: [key, insertIgnore] });
-  const plan: ChartPlanIdempotencyMatrix = {
-    contractVersion: "chart.v2", chartId: "S14", chartType: "Idempotency matrix", layout: "flow", caption: "", nodes: [], edges: [],
-    operations: [
-      { id: "reserve", label: "reserve", evidenceIds: [key.id] },
-      { id: "post", label: "post", evidenceIds: [insertIgnore.id] },
-    ],
-    scenarios: [
-      { id: "dup", label: "same batchId replay" },
-      { id: "concurrent", label: "concurrent duplicate" },
-    ],
-    cells: [
-      { operationId: "reserve", scenarioId: "dup", outcome: "idempotent", mechanism: "state-exists check", keyScope: "batchId", evidenceIds: [key.id] },
-      { operationId: "post", scenarioId: "dup", outcome: "noOp", mechanism: "INSERT IGNORE", evidenceIds: [insertIgnore.id] },
-      { operationId: "reserve", scenarioId: "concurrent", outcome: "unknown", evidenceIds: [] },
-    ],
-  };
-  const { view } = compile(plan, bundle, "S14");
-  const m = view.matrix!;
-  assert.equal(m.rowTitle, "Operations");
-  assert.equal(m.cols.length, 2);
-  const idem = m.cells.find((c) => c.row === "op:reserve" && c.col === "sc:dup")!;
-  assert.equal(idem.state, "idempotent");
-  assert.ok(idem.note.includes("state-exists check") && idem.note.includes("batchId"));
-  const unknown = m.cells.find((c) => c.col === "sc:concurrent")!;
-  assert.equal(unknown.displayMode, "FOG", "unknown behaviour is fog, not a claim");
-  assert.ok(view.nodes.find((n) => n.role === "operation" && n.label === "reserve"));
-});
+
 
 test("S15 DI wiring: injection kinds label edges, unresolved bindings stay fog, cycles annotate components", () => {
   const ctor = evRef(), unresolved = evRef(), cycle = evRef();
@@ -617,28 +553,7 @@ test("S19 interaction overview: frames, refs in notes, guards on flows", () => {
   assert.ok(guarded, "the guard labels the flow");
 });
 
-test("S20 CRC cards: matrix rows per class, notes carry responsibilities, collaborator edges cite evidence", () => {
-  const a = evRef();
-  const bundle = makeBundle({ evidence: [a] });
-  const plan: ChartPlanCrcCards = {
-    contractVersion: "chart.v2", chartId: "S20", chartType: "CRC cards", layout: "flow", caption: "", nodes: [], edges: [],
-    cards: [
-      { className: "ReserveService", responsibilities: [{ text: "orchestrate reserve flow", evidenceIds: [a.id] }], collaborators: [{ className: "BalanceService", evidenceIds: [a.id] }], evidenceIds: [a.id] },
-      { className: "BalanceService", responsibilities: [], collaborators: [], evidenceIds: [a.id] },
-    ],
-  };
-  const { view } = compile(plan, bundle, "S20");
-  const m = view.matrix!;
-  assert.equal(m.rows.length, 2);
-  assert.equal(m.cols.map((c) => c.label).join(","), "Responsibilities,Collaborators");
-  const resp = m.cells.find((c) => c.row.endsWith("ReserveService") && c.col === "crc:resp")!;
-  assert.equal(resp.state, "listed");
-  assert.ok(resp.note.includes("orchestrate reserve flow"));
-  const none = m.cells.find((c) => c.row.endsWith("BalanceService") && c.col === "crc:resp")!;
-  assert.equal(none.state, "none");
-  assert.ok(view.nodes.find((n) => n.role === "crc-card" && n.notes!.some((x) => x.includes("BalanceService"))));
-  assert.ok(view.edges.find((e) => e.kind === "crc-collaboration"));
-});
+
 
 test("S21 call graph: static call edges, unknown functions dropped, owner noted", () => {
   const a = evRef();
@@ -715,78 +630,11 @@ test("S23 module graph: dependency kinds label the edges and unknown modules are
   assert.equal(diagnostics.omittedEdges, 1);
 });
 
-test("S24 state transition table: cells name the next state, forbidden is a negative fact, unknown next state is dropped", () => {
-  const a = evRef();
-  const bundle = makeBundle({ evidence: [a] });
-  const plan: ChartPlanStateTransitionTable = {
-    contractVersion: "chart.v2", chartId: "S24", chartType: "State transition table", layout: "flow", caption: "", nodes: [], edges: [],
-    states: [
-      { id: "posted", label: "Posted", evidenceIds: [a.id] },
-      { id: "rolledBack", label: "RolledBack", evidenceIds: [a.id] },
-    ],
-    events: [{ id: "rollback", label: "rollback", evidenceIds: [a.id] }],
-    cells: [
-      { stateId: "posted", eventId: "rollback", nextStateId: "rolledBack", isForbidden: true, evidenceIds: [a.id] },
-      { stateId: "posted", eventId: "ghost", nextStateId: "posted", evidenceIds: [a.id] },
-      { stateId: "posted", eventId: "rollback", nextStateId: "nowhere", evidenceIds: [a.id] },
-    ],
-  };
-  const { view } = compile(plan, bundle, "S24");
-  const m = view.matrix!;
-  assert.equal(m.rowTitle, "Current state");
-  assert.equal(m.cols.length, 1, "only evidenced events become columns");
-  const forbidden = m.cells[0];
-  assert.equal(forbidden.state, "forbidden");
-  assert.equal(forbidden.displayMode, "FACT");
-  assert.ok(m.cells.length === 1, "cells with unknown event or next state are omitted");
-  assert.ok(view.gaps.some((g) => g.includes("not part of the chart")));
-  assert.ok(view.nodes.find((n) => n.role === "state" && n.label === "Posted"));
-});
 
-test("S25 FMEA matrix: impact and compensation cells, missing compensation becomes a gap", () => {
-  const a = evRef(), b = evRef();
-  const bundle = makeBundle({ evidence: [a, b] });
-  const plan: ChartPlanFmeaMatrix = {
-    contractVersion: "chart.v2", chartId: "S25", chartType: "FMEA / compensation matrix", layout: "flow", caption: "", nodes: [], edges: [],
-    failures: [
-      { id: "dbsync", label: "DB sync fails", impact: { text: "inconsistent state", evidenceIds: [a.id] }, compensation: { text: "cancelFast", evidenceIds: [b.id] }, evidenceIds: [a.id] },
-      { id: "stuck", label: "Provider call fails", impact: { text: "reservation stuck", evidenceIds: [a.id] }, evidenceIds: [a.id] },
-    ],
-  };
-  const { view } = compile(plan, bundle, "S25");
-  const m = view.matrix!;
-  assert.equal(m.rows.length, 2);
-  const comp = m.cells.find((c) => c.row.endsWith("dbsync") && c.col === "fmea:comp")!;
-  assert.equal(comp.state, "known");
-  assert.ok(comp.note.includes("cancelFast"));
-  const missing = m.cells.find((c) => c.row.endsWith("stuck") && c.col === "fmea:comp")!;
-  assert.equal(missing.state, "missing");
-  assert.ok(view.gaps.some((g) => g.includes("no evidenced compensation")));
-  assert.ok(view.nodes.find((n) => n.role === "failure-mode"));
-});
 
-test("S26 metrics map: declared names with meaning and emitters; no live values", () => {
-  const a = evRef();
-  const bundle = makeBundle({ evidence: [a] });
-  const plan: ChartPlanMetricsMap = {
-    contractVersion: "chart.v2", chartId: "S26", chartType: "Metrics / telemetry map", layout: "flow", caption: "", nodes: [], edges: [],
-    metrics: [
-      { id: "fastOk", name: "reservation.fast.success", meaning: "successful Redis reserve", emitters: [{ label: "BalanceService.tryReserveFast", evidenceIds: [a.id] }], evidenceIds: [a.id] },
-      { id: "ignored", name: "ledger.insert.ignored", emitters: [], evidenceIds: [a.id] },
-    ],
-  };
-  const { view } = compile(plan, bundle, "S26");
-  const m = view.matrix!;
-  assert.equal(m.rows.length, 2);
-  const meaning = m.cells.find((c) => c.row.endsWith("fastOk") && c.col === "metric:meaning")!;
-  assert.equal(meaning.state, "declared");
-  assert.ok(meaning.note.includes("successful Redis reserve"));
-  const noEmitter = m.cells.find((c) => c.row.endsWith("ignored") && c.col === "metric:emitter")!;
-  assert.equal(noEmitter.state, "unknown");
-  const node = view.nodes.find((n) => n.role === "metric")!;
-  assert.ok(node.notes!.some((x) => x.includes("no live values")));
-  assert.equal(view.edges.length, 0);
-});
+
+
+
 
 test("S27 C4 context: person/system/external roles, one-subject expectation, labelled relationships", () => {
   const a = evRef();

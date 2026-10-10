@@ -617,9 +617,10 @@ function crcCardsOffline(req: ModelRequest): ChartOutputV2 {
       const name = nameOf.get(e.entityId) ?? e.name;
       if (seen.has(name)) continue;
       seen.add(name);
+      if(cards.length===60) break;
       cards.push({
-        className: name.slice(0, 80),
-        responsibilities: [{ text: "responsibility not inferred offline", evidenceIds: evidenceForEntity(bundle, e.entityId) }],
+        className: name.slice(0, 200),
+        responsibilities: [],
         collaborators: [],
         evidenceIds: evidenceForEntity(bundle, e.entityId),
       });
@@ -768,7 +769,7 @@ function fmeaOffline(req: ModelRequest): ChartOutputV2 {
 /** S26 offline: metrics map from indexed symbols. */
 function metricsOffline(req: ModelRequest): ChartOutputV2 {
   const { bundle } = req;
-  const metrics: ChartPlanMetricsMap["metrics"] = bundle.facts.filter((f) => /metric|telemetry/i.test(f.predicate)).slice(0, 60).map((f, i) => {
+  const metrics: ChartPlanMetricsMap["metrics"] = bundle.facts.filter((f) => f.predicate === "metric_declaration" && typeof f.object.value === "string" && f.object.value.trim()).slice(0, 60).map((f, i) => {
     const name = String((f.object as { value?: unknown }).value ?? f.predicate);
     const kind = (f.object as { metricKind?: unknown }).metricKind;
     return { id: `m:${i}`, name: name.slice(0, 200), ...(typeof kind === "string" ? { meaning: `Declared through ${kind}; live emission and runtime values are not established.` } : {}), emitters: [{ label: bundle.entities.find((e) => e.entityId === f.subject)?.name ?? f.subject, evidenceIds: factEvIds(f).slice(0, 20) }], evidenceIds: factEvIds(f).slice(0, 20) };

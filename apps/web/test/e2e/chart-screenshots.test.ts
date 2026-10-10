@@ -24,7 +24,7 @@ import { Browser, CHROME } from "./cdp.ts";
 import { ROOT } from "./harness.ts";
 
 // ── Configuration ───────────────────────────────────────────────────────────────────
-const REPO = join(ROOT, "fixtures/payments-repo");
+const REPO = process.env.CIE_SCREENSHOT_REPO ?? join(ROOT, "fixtures/payments-repo");
 const OUT_DIR = process.env.CIE_SCREENSHOT_DIR ?? join(tmpdir(), "cie-chart-screenshots");
 const RENDER_TIMEOUT = 60_000; // ms to wait for a chart to appear
 const INDEX_TIMEOUT = 90_000;  // ms to wait for the repository to index
@@ -490,28 +490,34 @@ test(
           if (chart.extraWait) await wait(chart.extraWait);
 
           stage="interaction";
-          if(chart.code==="S14" && outcome==="shown") {
+          if(["S11","S14","S20","S24","S25","S26"].includes(chart.code) && outcome==="shown") {
             assert.equal(await b.eval(`!!document.querySelector('[aria-label="Canvas tools"]')`),false,"graph-only tools do not cover table content");
             assert.ok(await b.eval(`document.querySelector('[aria-label="Evidence status summary"]')?.textContent.includes('table cells')`),"evidence summary counts table cells rather than invisible graph rows");
+            assert.ok(await b.eval(`!!document.querySelector('.typed-table table')`), "requested native table is rendered");
+            if(process.env.CIE_REQUIRE_TABLE_ROWS==="1") assert.ok(await b.eval(`document.querySelectorAll('.typed-table tbody tr').length > 0`), "fixture supplies populated native table rows");
+            if(chart.code==="S20") assert.ok(await b.eval(`document.querySelector('.typed-table thead').textContent.includes('Responsibilities') && document.querySelector('.typed-table thead').textContent.includes('Collaborators')`));
+            if(chart.code==="S26") assert.ok(await b.eval(`document.querySelector('.typed-table-key').textContent.includes('No live values') && document.querySelector('.typed-table thead').textContent.includes('Declared emitters')`));
             const contrast=await b.eval<number>(`(()=>{
               const tab=document.querySelector('.response-tab [role=tab][aria-selected=false]');if(!tab)return 21;
               const style=getComputedStyle(tab),lum=color=>{const rgb=color.match(/\\d+/g).slice(0,3).map(v=>Number(v)/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4);return .2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];};
               const a=lum(style.color),z=lum(style.backgroundColor);return (Math.max(a,z)+.05)/(Math.min(a,z)+.05);
             })()`);assert.ok(contrast>=4.5,`inactive tab contrast ${contrast} meets 4.5:1`);
           }
-          if (outcome === "shown" && ["S5", "S14", "V12", "V15", "V16"].includes(chart.code)) {
-            const selector = chart.code === "V16" ? ".terrain" : chart.code === "S14" ? ".typed-table" : ".matrix";
+          if (outcome === "shown" && ["S5", "S11", "S14", "S20", "S24", "S25", "S26", "V12", "V15", "V16"].includes(chart.code)) {
+            const selector = chart.code === "V16" ? ".terrain" : ["S11", "S14", "S20", "S24", "S25", "S26"].includes(chart.code) ? ".typed-table" : ".matrix";
             const before = await b.eval(`(() => {
               const host = document.querySelector('${selector}');
               const cells = [...host.querySelectorAll('.mcell, .table-cell, .terrain-svg g.cell')];
               return cells.map((n) => { const r = n.getBoundingClientRect(); return {x:r.x,y:r.y,w:r.width,h:r.height,text:n.textContent}; });
             })()`);
+            if(before.length) {
             const point = await b.eval<{x: number; y: number}>(`(() => { const cells = [...document.querySelectorAll('${selector} .mcell, ${selector} .table-cell, ${selector} .terrain-svg g.cell')]; const cell = cells.find((n) => {const r=n.getBoundingClientRect();return r.x > 0 && r.y > 0 && r.bottom < innerHeight && r.x < innerWidth-350}) || cells[0]; const r = cell.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
             await b.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
             await b.waitFor(() => `document.querySelector('${selector}').dataset.lensActive === 'true' && Number(document.querySelector('${selector}').dataset.lensChildren) > 0`, 5000, "shared lens expands a hovered cell automatically");
             assert.equal(await b.eval(`getComputedStyle(document.querySelector('${selector}')).backgroundColor`), "rgb(11, 15, 23)");
             assert.deepEqual(await b.eval(`(() => { const host = document.querySelector('${selector}'); return [...host.querySelectorAll('.mcell, .table-cell, .terrain-svg g.cell')].map((n) => {const r=n.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,text:n.textContent};}); })()`), before, "lens never changes source cell geometry");
             await wait(300);
+            } else assert.ok(await b.eval(`/No (rows|columns) with current evidence/.test(document.querySelector('${selector}').textContent)`), "empty tables explain missing evidence");
           }
 
           stage="capture";
