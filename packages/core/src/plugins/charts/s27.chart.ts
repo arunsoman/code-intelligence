@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "System context",
   "form": "GeneratedChart",
   "compiler": "projected",
-  "version": 4,
+  "version": 5,
   "aliases": [
     "C4 context diagram",
     "c4 context diagram",

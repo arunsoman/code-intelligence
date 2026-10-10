@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "UML package diagram",
   "form": "GeneratedChart",
   "compiler": "projected",
-  "version": 4,
+  "version": 5,
   "aliases": [
     "UML package diagram",
     "package diagram",

@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "Call graph",
   "form": "GeneratedChart",
   "compiler": "projected",
-  "version": 4,
+  "version": 5,
   "aliases": [
     "Call graph",
     "call graph"

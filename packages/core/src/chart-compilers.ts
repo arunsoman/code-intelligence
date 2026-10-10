@@ -796,7 +796,7 @@ function compileTableChartV2(o: { plan: ChartPlanDecisionTable | ChartPlanStateT
 }
 
 type PlanObject = Record<string, unknown>;
-type ProjectedNode = { id: string; label: string; kind: string; entityRefs: string[]; evidenceIds: string[]; notes: string[]; inferred: boolean };
+type ProjectedNode = { id: string; label: string; kind: string; entityRefs: string[]; evidenceIds: string[]; notes: string[]; inferred: boolean; badge?: string };
 type ProjectedEdge = { from: string; to: string; kind: string; label?: string; evidenceIds: string[] };
 
 function planObject(value: unknown): PlanObject | null {
@@ -819,12 +819,13 @@ function planEvidence(value: unknown): string[] {
   return [...found];
 }
 
-function planNotes(value: unknown): string[] {
+function planNotes(value: unknown, currentEvidence?: Set<string>): string[] {
   const out = new Set<string>();
   const walk = (v: unknown, prefix = "") => {
     if (Array.isArray(v)) { for (const item of v) walk(item, prefix); return; }
     const obj = planObject(v);
     if (obj) {
+      if (currentEvidence && Array.isArray(obj.evidenceIds) && !obj.evidenceIds.some(id => typeof id === "string" && currentEvidence.has(id))) return;
       for (const [key, child] of Object.entries(obj)) {
         if (["id", "entityId", "evidenceIds", "outcomeEvidenceIds", "from", "to", "fromTable", "toTable", "operationId", "scenarioId", "stateId", "eventId", "nextStateId", "parentId", "layerId", "componentIds"].includes(key) || key.endsWith("EvidenceIds")) continue;
         walk(child, key.replace(/([A-Z])/g, " $1").toLowerCase());
@@ -840,11 +841,13 @@ function planNotes(value: unknown): string[] {
 }
 
 /** Normalize typed chart-specific plan fields into the interactive evidence-linked canvas model. */
-function projectTypedChart(plan: ChartPlanV2, bundle: EvidenceBundle, offline: boolean): { nodes: ProjectedNode[]; edges: ProjectedEdge[] } {
+function projectTypedChart(plan: ChartPlanV2, bundle: EvidenceBundle, offline: boolean): { nodes: ProjectedNode[]; edges: ProjectedEdge[]; gaps: string[]; omittedNodes: number } {
   const raw = plan as unknown as PlanObject;
   const list = (key: string): PlanObject[] => Array.isArray(raw[key]) ? (raw[key] as unknown[]).map(planObject).filter((x): x is PlanObject => !!x) : [];
   const nodes = new Map<string, ProjectedNode>();
   const edges: ProjectedEdge[] = [];
+  const gaps: string[] = [];
+  let omittedNodes = 0;
   const currentEvidence = new Set(bundle.evidence.filter((e) => e.state === "CURRENT").map((e) => e.id));
   const evidenceForEntities = (ids: Set<string>) => [...new Set([
     ...bundle.relationships.filter((r) => ids.has(r.from) || ids.has(r.to)).flatMap((r) => r.evidence.map((e) => e.id)),
@@ -864,17 +867,23 @@ function projectTypedChart(plan: ChartPlanV2, bundle: EvidenceBundle, offline: b
     const id = typeof idValue === "string" ? idValue : typeof item.id === "string" ? item.id : undefined;
     const label = typeof labelValue === "string" ? labelValue : typeof item.label === "string" ? item.label : typeof item.name === "string" ? item.name : typeof item.className === "string" ? item.className : undefined;
     if (!id || !label) return;
-    let evidenceIds = [...new Set(evidenceOverride ?? planEvidence(item))].filter((id) => currentEvidence.has(id));
+    if (nodes.has(id)) { gaps.push(`Duplicate chart element ${id} was omitted; the first declaration is retained.`); omittedNodes++; return; }
+    const citedEvidence = evidenceOverride ?? (Array.isArray(item.evidenceIds) ? item.evidenceIds.filter((id): id is string => typeof id === "string") : []);
+    let evidenceIds = [...new Set(citedEvidence)].filter((id) => currentEvidence.has(id));
     const matched = sourceMatches(label);
     // Identity is linked only when the match is unambiguous (or a deliberate package grouping).
     const entityRefs = matched.length === 1 || ["S17", "S22", "S23"].includes(plan.chartId) ? matched.map((e) => e.entityId) : [];
     let inferred = offline || item.isInferred === true;
-    if (!evidenceIds.length) {
+    if (!evidenceIds.length && !citedEvidence.length && offline) {
       evidenceIds = evidenceForEntities(new Set(matched.map((e) => e.entityId)));
       inferred ||= evidenceIds.length > 0;
     }
-    const kind = typeof item.kind === "string" ? item.kind : "element";
-    nodes.set(id, { id, label: label.slice(0, 200), kind, entityRefs, evidenceIds, notes: [...planNotes(item), ...(inferred ? ["Offline classification is inferred from matching indexed source; the source does not establish the chart role by itself."] : [])], inferred });
+    const defaultRoles: Partial<Record<ChartId, string>> = { S17: "package", S18: "participant", S20: "crc-card", S21: "function", S26: "metric" };
+    const aliases: Record<string, string> = { outboxStore: "outbox-store", deadLetter: "dead-letter", initial: "start", final: "end", interaction: "interaction-ref" };
+    const rawKind = typeof item.kind === "string" ? item.kind : defaultRoles[plan.chartId] ?? "element";
+    const c4Roles: Record<string, string> = { person: "c4-person", softwareSystem: "c4-system", externalSystem: "c4-external" };
+    const kind = plan.chartId === "S27" ? c4Roles[rawKind] ?? rawKind : plan.chartId === "S12" ? `${rawKind}-step` : aliases[rawKind] ?? rawKind;
+    nodes.set(id, { id, label: label.slice(0, 200), kind, entityRefs, evidenceIds, notes: [...planNotes(item, currentEvidence), ...(inferred ? ["Chart classification is inferred; the source does not establish the chart role by itself."] : [])], inferred, ...(item.isIrreversible === true ? { badge: "irreversible?" } : {}) });
   };
   const addNodes = (key: string, labelKey?: string, idPrefix = "") => {
     for (const item of list(key)) addNode(item, typeof item.id === "string" ? item.id : `${idPrefix}${String(item[labelKey ?? "label"] ?? "")}`, item[labelKey ?? "label"] ?? item.name ?? item.className);
@@ -893,18 +902,18 @@ function projectTypedChart(plan: ChartPlanV2, bundle: EvidenceBundle, offline: b
     case "S15": addNodes("components"); break;
     case "S17": addNodes("packages"); break;
     case "S18": addNodes("participants"); break;
-    case "S28": {
-      addNodes("participants");
-      for (const fragment of list("fragments")) {
-        const label = [fragment.kind, fragment.condition].filter((x): x is string => typeof x === "string" && !!x).join(": ");
-        addNode(fragment, fragment.id, label || fragment.kind);
-      }
-      break;
-    }
+    case "S28": addNodes("participants"); break;
     case "S19": addNodes("frames"); break;
     case "S20": for (const x of list("cards")) addNode(x, `card:${String(x.className ?? "")}`, x.className); break;
     case "S21": addNodes("functions"); break;
-    case "S22": { addNodes("layers"); addNodes("components"); break; }
+    case "S22": {
+      const layers = new Set(list("layers").map(layer => layer.id));
+      for (const component of list("components")) {
+        if (!layers.has(component.layerId)) { gaps.push(`Component ${String(component.label)} was omitted because its layer is not part of the chart.`); omittedNodes++; continue; }
+        addNode(component);
+      }
+      break;
+    }
     case "S23": addNodes("modules"); break;
     case "S24": {
       const cells = list("cells");
@@ -925,8 +934,16 @@ function projectTypedChart(plan: ChartPlanV2, bundle: EvidenceBundle, offline: b
       const item = planObject(entry);
       if (!item || typeof item.from !== "string" || typeof item.to !== "string") continue;
       const evidenceIds = planEvidence(item);
-      const detail = [...new Set([typeof item.label === "string" ? item.label : "", ...planNotes(item)])].filter(Boolean).join(" · ");
-      edges.push({ from: item.from, to: item.to, kind: typeof item.kind === "string" ? item.kind : key, ...(detail ? { label: detail.slice(0, 200) } : {}), evidenceIds });
+      const linkKinds: Record<string, string> = { calls: "call", dependencies: "depends-on", bindings: "injects", flows: "flow", messages: "message" };
+      let kind = linkKinds[key] ?? (typeof item.kind === "string" ? item.kind : key);
+      let detail = [typeof item.label === "string" ? item.label : "", typeof item.guard === "string" ? `[${item.guard}]` : "", typeof item.triggerCondition === "string" ? item.triggerCondition : ""].filter(Boolean).join(" · ");
+      if (plan.chartId === "S27") detail = [detail, item.technology].filter(Boolean).join(" · ");
+      if (plan.chartId === "S23") detail = [item.kind, detail].filter(Boolean).join(" · ");
+      if (plan.chartId === "S15") { kind = item.isUnresolved ? "unresolved-binding" : "injects"; detail = [item.injectionKind, item.qualifier, item.scope, item.isUnresolved ? "unresolved" : ""].filter(Boolean).join(" · "); }
+      if (plan.chartId === "S13") { kind = String(item.kind); detail = `${kind}${item.isAtomic === true ? " · atomic? (plan interpretation)" : ""}`; }
+      if (plan.chartId === "S18") { kind = item.kind === "async" ? "async-flow" : item.kind === "return" ? "return" : "sync-flow"; detail = `${item.order}. ${detail}`; }
+      if (plan.chartId === "S22" && item.kind === "async") kind = "async-flow";
+      edges.push({ from: item.from, to: item.to, kind, ...(detail ? { label: detail.slice(0, 200) } : {}), evidenceIds });
     }
   }
   const nodeIds = new Set(nodes.keys());
@@ -952,29 +969,34 @@ function projectTypedChart(plan: ChartPlanV2, bundle: EvidenceBundle, offline: b
       if (from && to) edges.push({ from, to, kind: "collaborates", label: "collaborates", evidenceIds: planEvidence(c) });
     }
   }
-  if (plan.chartId === "S22") {
-    for (const component of list("components")) if (typeof component.id === "string" && typeof component.layerId === "string") edges.push({ from: component.layerId, to: component.id, kind: "contains", label: "member of layer", evidenceIds: planEvidence(component) });
-  }
+
   if (plan.chartId === "S21") {
-    for (const fn of list("functions")) if (typeof fn.id === "string" && typeof fn.parentId === "string" && nodeIds.has(fn.parentId)) edges.push({ from: fn.parentId, to: fn.id, kind: "contains", label: "owned by", evidenceIds: planEvidence(fn) });
+    for (const fn of list("functions")) {
+      const owner = nodes.get(String(fn.parentId)), node = nodes.get(String(fn.id));
+      if (node && owner) node.notes = [`Owner: ${owner.label} (plan interpretation)`, ...node.notes];
+      else if (node && fn.parentId) gaps.push(`Owner ${String(fn.parentId)} is not part of the chart.`);
+    }
   }
   if (plan.chartId === "S15") {
     for (const cycle of list("cycles")) for (const id of Array.isArray(cycle.componentIds) ? cycle.componentIds : []) {
       const node = nodes.get(String(id));
-      if (node) {
-        node.evidenceIds = [...new Set([...node.evidenceIds, ...planEvidence(cycle)])];
+      if (node && node.evidenceIds.length && planEvidence(cycle).some(id => currentEvidence.has(id))) {
         node.notes = [...node.notes, "participates in a dependency cycle"];
       }
     }
   }
-  return { nodes: [...nodes.values()], edges };
+  if (plan.chartId === "S18") {
+    const orders = list("messages").map(m => m.order);
+    if (new Set(orders).size !== orders.length) gaps.push("Duplicate message order numbers are retained; their relative order is ambiguous.");
+  }
+  return { nodes: [...nodes.values()], edges, gaps, omittedNodes };
 }
 
 export function compileStructuredChartV2(o: { plan: ChartPlanV2; bundle: EvidenceBundle; rev: RevisionRow; question: string; route: ViewRoute; run?: ModelRunRef; diag?: ChartCompileDiag }): { view: ViewSpec; claims: Claim[]; diagnostics: ChartDiagnostics } {
   if (o.plan.chartId === "S24" || o.plan.chartId === "S25" || o.plan.chartId === "S14") return compileTableChartV2({...o,plan:o.plan});
   const projection = projectTypedChart(o.plan, o.bundle, o.diag?.provider === "stub" || o.run?.provider === "stub");
   const validEvidence = new Map(o.bundle.evidence.filter((e) => e.state === "CURRENT").map((e) => [e.id, e]));
-  const gaps: string[] = [];
+  const gaps: string[] = [...projection.gaps];
   const nodeMap = new Map<string, string>();
   const nodes: ViewSpec["nodes"] = [];
   for (const spec of projection.nodes.slice(0, 80)) {
@@ -982,7 +1004,7 @@ export function compileStructuredChartV2(o: { plan: ChartPlanV2; bundle: Evidenc
     if (!evidenceIds.length) { gaps.push(`"${spec.label}" was omitted because its typed chart element has no current evidence.`); continue; }
     const id = `n:typed:${o.plan.chartId}:${spec.id}`;
     nodeMap.set(spec.id, id);
-    nodes.push({ id, entityRefs: spec.entityRefs, label: spec.label, kind: spec.kind, file: validEvidence.get(evidenceIds[0])?.sourceId ?? "", claimIds: [], evidenceIds: [...new Set(evidenceIds)], tier: nodes.length ? "RELEVANT" : "CRITICAL", displayMode: spec.inferred ? "INFERENCE" : "FACT", unresolvedCalls: 0, role: spec.kind, notes: spec.notes.slice(0, 12), pos: { x: 0, y: nodes.length * 110 } });
+    nodes.push({ id, entityRefs: spec.entityRefs, label: spec.label, kind: spec.kind, file: validEvidence.get(evidenceIds[0])?.sourceId ?? "", claimIds: [], evidenceIds: [...new Set(evidenceIds)], tier: nodes.length ? "RELEVANT" : "CRITICAL", displayMode: spec.inferred ? "INFERENCE" : "FACT", unresolvedCalls: 0, role: spec.kind, ...(spec.badge ? { badge: spec.badge } : {}), notes: spec.notes.slice(0, 12), pos: { x: 0, y: nodes.length * 110 } });
   }
   const edges: ViewSpec["edges"] = [];
   for (const spec of projection.edges.slice(0, 160)) {
@@ -1006,6 +1028,19 @@ export function compileStructuredChartV2(o: { plan: ChartPlanV2; bundle: Evidenc
     meta: { kind: "generated-chart", field: chartType, subject: o.plan.chartId }, params: { chartType, chartLayout: o.plan.layout, chartId: o.plan.chartId },
   };
   gaps.push("Chart roles and connections are static plan interpretations; citations do not prove execution order, concurrency, atomicity, delivery guarantees or replay safety.");
+  if (o.plan.chartId === "S22") {
+    const layers = [...o.plan.layers].sort((a, b) => a.order - b.order);
+    const seen = new Set<string>();
+    for (const [row, layer] of layers.entries()) {
+      if (seen.has(layer.id)) { gaps.push(`Duplicate layer ${layer.id} was omitted.`); continue; }
+      seen.add(layer.id);
+      const members = o.plan.components.filter(c => c.layerId === layer.id).flatMap(c => { const id = nodeMap.get(c.id); return id ? [id] : []; });
+      members.forEach((id, column) => { const node = nodes.find(n => n.id === id)!; node.pos = { x: column * 260, y: row * 160 }; });
+      const evidenceIds = [...new Set(layer.evidenceIds.filter(id => validEvidence.has(id)))];
+      if (!members.length || !evidenceIds.length) { gaps.push(`Layer ${layer.label} has no current evidence or grounded members; its region was omitted.`); continue; }
+      view.groups.push({ id: `g:layer:${layer.id}`, label: layer.label, kind: "region", childNodeIds: [...new Set(members)], level: 1, evidenceIds, displayMode: "INFERENCE" });
+    }
+  }
   if (o.plan.chartId === "S28") {
     const plan = o.plan;
     const participantIds = [...new Set(plan.participants.map(p => nodeMap.get(p.id)).filter((id): id is string => !!id))];
@@ -1039,7 +1074,7 @@ export function compileStructuredChartV2(o: { plan: ChartPlanV2; bundle: Evidenc
     chartId: o.plan.chartId, contractVersion: "chart.v2", provider: o.diag?.provider ?? o.run?.provider ?? "", model: o.diag?.model ?? o.run?.model ?? "",
     cacheHit: o.diag?.cacheHit ?? false, schemaValidationPassed: o.diag?.schemaValidationPassed ?? true,
     suppliedEntities: o.bundle.entities.length, suppliedRelationships: o.bundle.relationships.length, suppliedEvidence: o.bundle.evidence.length,
-    acceptedNodes: view.nodes.length, omittedNodes: projection.nodes.length - view.nodes.length, acceptedEdges: view.edges.length,
+    acceptedNodes: view.nodes.length, omittedNodes: projection.omittedNodes + projection.nodes.length - view.nodes.length, acceptedEdges: view.edges.length,
     omittedEdges: projection.edges.length - edges.length, gaps,
     ...(o.diag?.fallbackReason ? { fallbackReason: o.diag.fallbackReason } : {}),
   };

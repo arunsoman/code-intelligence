@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "Saga / compensation graph",
   "form": "GeneratedChart",
   "compiler": "projected",
-  "version": 4,
+  "version": 5,
   "aliases": [
     "Saga / compensation graph",
     "saga graph",

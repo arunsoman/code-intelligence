@@ -17,6 +17,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:net";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { Browser, CHROME } from "./cdp.ts";
@@ -45,7 +46,17 @@ function ensureDist() {
 
 /** Start a CIE server on a random port with a temp database. Returns the child process and base URL. */
 async function startServer(): Promise<{ proc: ChildProcess; url: string }> {
-  const port = 4800 + Math.floor(Math.random() * 100);
+  // Ask the OS for an unused port rather than reusing a small random pool.
+  const reservation = createServer();
+  const port = await new Promise<number>((resolve, reject) => {
+    reservation.once("error", reject);
+    reservation.listen(0, "127.0.0.1", () => {
+      const address = reservation.address();
+      if (!address || typeof address === "string") { reservation.close(); reject(new Error("No test port allocated")); return; }
+      resolve(address.port);
+    });
+  });
+  await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
   const dbPath = join(mkdtempSync(join(tmpdir(), "cie-shots-")), "shots.db");
   const proc = spawn(
     process.execPath,
@@ -59,16 +70,21 @@ async function startServer(): Promise<{ proc: ChildProcess; url: string }> {
         CIE_ROUTER: "off",      // router is bypassed; we use the gallery
         NODE_OPTIONS: "",
       },
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
     },
   );
+  let startup = "", listening = false, launchError: Error | undefined;
+  proc.on("error", error => { launchError = error; });
+  proc.stdout?.on("data", data => { startup = (startup + data.toString()).slice(-8000); listening ||= startup.includes(`cie listening on http://127.0.0.1:${port}`); });
+  proc.stderr?.on("data", data => { startup = (startup + data.toString()).slice(-8000); });
   const url = `http://127.0.0.1:${port}`;
   for (let i = 0; i < 120; i++) {
-    try { if ((await fetch(`${url}/healthz`)).ok) return { proc, url }; } catch { /* not up yet */ }
+    if (launchError || proc.exitCode !== null) throw new Error(`Capture server failed to start: ${launchError?.message ?? startup}`);
+    try { if (listening && (await fetch(`${url}/healthz`)).ok) return { proc, url }; } catch { /* not up yet */ }
     await wait(100);
   }
   proc.kill();
-  throw new Error("server did not start within 12 s");
+  throw new Error(`Capture server did not start within 12 s: ${startup}`);
 }
 
 /** Click a <button> whose trimmed text starts with `label`. */

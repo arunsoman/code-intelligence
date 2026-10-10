@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "Dependency / module graph",
   "form": "GeneratedChart",
   "compiler": "projected",
-  "version": 4,
+  "version": 5,
   "aliases": [
     "Dependency / module graph",
     "dependency module graph",

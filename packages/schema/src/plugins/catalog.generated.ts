@@ -266,7 +266,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S12",
     "name": "Saga / compensation graph",
     "form": "GeneratedChart",
-    "version": 4,
+    "version": 5,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -290,7 +290,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S13",
     "name": "Outbox pattern topology",
     "form": "GeneratedChart",
-    "version": 4,
+    "version": 5,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -337,7 +337,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S15",
     "name": "DI wiring diagram",
     "form": "GeneratedChart",
-    "version": 4,
+    "version": 5,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -390,7 +390,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S17",
     "name": "UML package diagram",
     "form": "GeneratedChart",
-    "version": 4,
+    "version": 5,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -425,7 +425,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S18",
     "name": "UML communication diagram",
     "form": "GeneratedChart",
-    "version": 4,
+    "version": 5,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -449,7 +449,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S19",
     "name": "UML interaction overview",
     "form": "GeneratedChart",
-    "version": 4,
+    "version": 5,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -473,7 +473,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S20",
     "name": "CRC cards",
     "form": "GeneratedChart",
-    "version": 4,
+    "version": 5,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -494,7 +494,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S21",
     "name": "Call graph",
     "form": "GeneratedChart",
-    "version": 4,
+    "version": 5,
     "compiler": "projected",
     "offline": "derived",
     "aliases": [
@@ -517,7 +517,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S22",
     "name": "Layered architecture",
     "form": "GeneratedChart",
-    "version": 4,
+    "version": 5,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -539,7 +539,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S23",
     "name": "Dependency / module graph",
     "form": "GeneratedChart",
-    "version": 4,
+    "version": 5,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -629,7 +629,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S26",
     "name": "Metrics / telemetry map",
     "form": "GeneratedChart",
-    "version": 4,
+    "version": 5,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -654,7 +654,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S27",
     "name": "System context",
     "form": "GeneratedChart",
-    "version": 4,
+    "version": 5,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -681,7 +681,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S28",
     "name": "UML sequence diagram",
     "form": "GeneratedChart",
-    "version": 5,
+    "version": 6,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [

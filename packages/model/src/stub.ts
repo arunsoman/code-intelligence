@@ -647,9 +647,9 @@ function layeredArchitectureOffline(req: ModelRequest): ChartOutputV2 {
     evidenceIds: evidenceForDirectory(bundle, dir),
   }));
   const layerIndex = new Map([...byDir.keys()].slice(0, 6).map((dir, i) => [dir, `layer:${i}`]));
-  const components: ChartPlanLayeredArchitecture["components"] = [...byDir.entries()].slice(0, 20).map(([dir, members], i) => ({
+  const components: ChartPlanLayeredArchitecture["components"] = [...byDir.entries()].filter(([dir]) => layerIndex.has(dir)).map(([dir], i) => ({
     id: `comp:${i}`, label: dir.slice(0, 80),
-    layerId: layerIndex.get(dir) ?? `layer:0`,
+    layerId: layerIndex.get(dir)!,
     kind: "component",
     evidenceIds: evidenceForDirectory(bundle, dir),
   }));

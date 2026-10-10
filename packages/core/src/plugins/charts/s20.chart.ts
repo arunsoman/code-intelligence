@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "CRC cards",
   "form": "GeneratedChart",
   "compiler": "projected",
-  "version": 4,
+  "version": 5,
   "aliases": [
     "CRC cards",
     "crc cards",
