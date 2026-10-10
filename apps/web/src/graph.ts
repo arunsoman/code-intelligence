@@ -149,7 +149,7 @@ export interface RenderNode {
   tier: ViewNode["tier"]; pos: Pos; node?: ViewNode; role?: string; parent?: string; rank?: number; stale: boolean; inTx?: boolean; unresolvedCalls?: number;
 }
 export interface RenderEdge { sourceLabel?: string; targetLabel?: string; id: string; kind?: string; from: string; to: string; displayMode: DisplayMode; label: string; count: number; edgeIds: string[]; evidenceIds: string[]; stale: boolean; ghost?: boolean; ret?: boolean; via?: Pos[]; ambient?: boolean }
-export interface Rendered { table?: import("@cie/schema").TableSpec; sequence?: import("./sequence-layout.ts").SequenceScene; nodes: RenderNode[]; edges: RenderEdge[]; groups: { id: string; label: string; kind: "file" | "concept" | "cluster" | "lane" | "region"; parent?: string }[] }
+export interface Rendered { race?: import("./race-layout.ts").RaceScene; table?: import("@cie/schema").TableSpec; sequence?: import("./sequence-layout.ts").SequenceScene; nodes: RenderNode[]; edges: RenderEdge[]; groups: { id: string; label: string; kind: "file" | "concept" | "cluster" | "lane" | "region"; parent?: string }[] }
 
 const MODE_RANK: Record<DisplayMode, number> = { HIDDEN: 0, FACT: 1, INFERENCE: 2, FOG: 3, HYPOTHESIS: 4 };
 const TIER_RANK = { HIDDEN: 0, CONTEXT: 1, RELEVANT: 2, CRITICAL: 3 } as const;

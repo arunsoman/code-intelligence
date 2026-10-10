@@ -68,6 +68,7 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
     "C22/conclude": { mutating: false, run: (c, b) => svc.c22Legacy.conclude(c, b) },
     "C27/evaluateScenario": { mutating: false, run: (c, b) => svc.evaluateScenario(c, b) },
     "C27/compareScenarios": { mutating: false, run: (c, b) => svc.compareScenarios(c, b) },
+    "C27/replayClaim": { mutating: false, run: (c, b) => svc.replayClaim(c, b) },
     "C24/reportException": { mutating: false, run: (c, b) => svc.reportException(c, b) },
     "C24/listExceptions": { mutating: false, run: (c, b) => svc.listExceptions(c, b) },
     "C24/dismissException": { mutating: true, run: (c, b) => svc.dismissException(c, b) },

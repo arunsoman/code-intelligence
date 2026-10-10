@@ -13,6 +13,9 @@ export interface KernelOptions {
   /** Requests that arrive before warm-up end are excluded from the reported metrics. */
   warmupMs?: number;
   maxCompletions?: number;
+  /** Opt-in per-request span collection for replay timelines. Bounded; nothing is collected when absent.
+   *  With `requestIds`, exactly those requests are collected (they must be admitted); otherwise the first N admitted. */
+  collectSpans?: { maxRequests: number; requestIds?: string[] };
 }
 
 export interface SimulationMetrics {
@@ -29,6 +32,8 @@ export interface SimulationOutcome extends SimulationMetrics {
   perStationCompletions: Record<string, number>;
   /** Per-request terminal results, for building an outcomes artifact. */
   perRequest: { requestId: string; outcome: "SUCCESS" | "ERROR" | "TIMEOUT" | "CANCELLED"; latencyMs: number; retries: number }[];
+  /** Present only when options.collectSpans was set: sampled station-visit spans in simulated time. */
+  spans?: { requestId: string; stationId: string; attempt: number; startMs: number; endMs: number; waitMs: number; event: "SERVICE" | "TIMEOUT" | "FAULT" }[];
 }
 
 type EventKind = "ARRIVE" | "DEPART" | "TIMEOUT" | "FAULT";
@@ -37,6 +42,8 @@ interface RequestState {
   requestId: string; operation: string; attributes: Record<string, string>;
   stationId: string; visit: number; attempt: number; startedAtMs: number; arrivalAtMs: number; heldResource: string | null;
   outcome: "SUCCESS" | "ERROR" | "TIMEOUT" | null;
+  /** Wait this request served immediately before the current station visit began; 0 when it never queued. */
+  lastWaitMs?: number;
 }
 interface Queued { requestId: string; stationId: string; visit: number; attempt: number; enqueuedAtMs: number }
 
@@ -141,15 +148,16 @@ export function simulate(spec: TwinModelSpec, arrivals: Arrival[], options: Kern
       const request = requests.get(next.requestId)!;
       const station = stationById.get(next.stationId)!;
       request.heldResource = resourceId;
+      request.lastWaitMs = Math.max(0, simTime - next.enqueuedAtMs);
       scheduleService(request, station, inUse.get(resourceId)! - 1);
     }
   };
 
   const enqueue = (request: RequestState, station: ModelStation) => {
-    if (!station.resourceId) { scheduleService(request, station, 0); return; }
+    if (!station.resourceId) { request.lastWaitMs = 0; scheduleService(request, station, 0); return; }
     const resource = resourceById.get(station.resourceId)!;
     const used = inUse.get(resource.id)!;
-    if (used < resource.capacity) { inUse.set(resource.id, used + 1); request.heldResource = resource.id; scheduleService(request, station, used); return; }
+    if (used < resource.capacity) { inUse.set(resource.id, used + 1); request.heldResource = resource.id; request.lastWaitMs = 0; scheduleService(request, station, used); return; }
     const q = queues.get(resource.id)!;
     if (q.length >= resource.queueLimit) { bounded.queueExhausted = true; complete(request, "ERROR"); dropped++; return; }
     q.push({ requestId: request.requestId, stationId: station.id, visit: request.visit, attempt: request.attempt, enqueuedAtMs: simTime });
@@ -185,6 +193,11 @@ export function simulate(spec: TwinModelSpec, arrivals: Arrival[], options: Kern
     push({ atMs: a.atMs, kind: "ARRIVE", requestId: a.requestId, stationId: spec.entryStationId, visit: 0, attempt: 0 });
   }
 
+  // Replay timelines opt in to sampled spans. Collection is bounded — the first admitted requests, or an explicit id list — so cost stays O(sample), not O(run).
+  const requested = options.collectSpans?.requestIds;
+  const collectIds = options.collectSpans ? new Set(requested && requested.length ? requested.filter((id) => requests.has(id)) : admitted.slice(0, Math.max(0, options.collectSpans.maxRequests))) : null;
+  const spans: NonNullable<SimulationOutcome["spans"]> = [];
+
   while (heap.length) {
     const e = pop()!;
     if (e.atMs < simTime) throw new Error(`kernel time went backwards: ${e.atMs} < ${simTime}`);
@@ -196,6 +209,9 @@ export function simulate(spec: TwinModelSpec, arrivals: Arrival[], options: Kern
     const request = requests.get(e.requestId)!;
     if (request.outcome) continue;
     const station = stationById.get(e.stationId)!;
+    if (collectIds?.has(e.requestId) && e.kind !== "ARRIVE") {
+      spans.push({ requestId: e.requestId, stationId: e.stationId, attempt: e.attempt, startMs: request.startedAtMs, endMs: e.atMs, waitMs: request.lastWaitMs ?? 0, event: e.kind === "DEPART" ? "SERVICE" : e.kind });
+    }
     if (e.kind === "ARRIVE") { request.stationId = e.stationId; request.visit = e.visit; request.attempt = e.attempt; enqueue(request, station); continue; }
     if (e.kind === "TIMEOUT" || e.kind === "FAULT") { retryOrFail(request, station, e.kind === "TIMEOUT" ? "TIMEOUT" : "ERROR"); continue; }
     // DEPART: route onward, or finish.
@@ -232,6 +248,7 @@ export function simulate(spec: TwinModelSpec, arrivals: Arrival[], options: Kern
     allRequestsP95: percentile(allLatencies, 0.95),
     utilisation, peakQueue,
     eventsProcessed, bounded, perStationCompletions, perRequest,
+    ...(collectIds ? { spans: spans.sort((a, b) => a.startMs - b.startMs || a.requestId.localeCompare(b.requestId)) } : {}),
   };
 }
 

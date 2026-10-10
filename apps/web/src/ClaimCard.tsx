@@ -21,9 +21,9 @@ export function confidenceLine(c: Claim): string {
   return `Confidence not estimated — ${cal?.reasons[0] ?? "no labelled verdicts yet"}`;
 }
 
-interface Props { claim: Claim; onVerdict: (claim: Claim, verdict: VerdictKind, explanation: string) => Promise<string | null> }
+interface Props { claim: Claim; onVerdict: (claim: Claim, verdict: VerdictKind, explanation: string) => Promise<string | null>; onOpenReplay?: (claim: Claim) => void }
 
-export function ClaimCard({ claim, onVerdict }: Props) {
+export function ClaimCard({ claim, onVerdict, onOpenReplay }: Props) {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState<VerdictKind | null>(null);
   const [text, setText] = useState("");
@@ -42,6 +42,9 @@ export function ClaimCard({ claim, onVerdict }: Props) {
       <p>{claim.draft.assertion}</p>
       <small className="muted">{claim.draft.rationaleSummary}</small>
       <p className="conf">{confidenceLine(claim)}</p>
+      {onOpenReplay && claim.draft.claimClass === "runtime-replay" && (
+        <p><button className="secondary small" onClick={() => onOpenReplay(claim)} aria-label={`Open the replay timeline behind this claim: ${claim.draft.assertion.slice(0, 60)}`}>▶ Open replay timeline</button></p>
+      )}
       {claim.counterArgument && <p className="counter"><strong>Counter-argument:</strong> {claim.counterArgument}</p>}
       {last && <p className="muted small">{last.verdict.toLowerCase()}ed by {last.actorId}: “{last.explanation}”</p>}
       <button className="link" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? "hide checks" : "show the 5 checks"}</button>

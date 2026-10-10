@@ -816,7 +816,18 @@ function c4ContextOffline(req: ModelRequest): ChartOutputV2 {
   };
 }
 
-/** S28 offline: UML sequence diagram from indexed symbols. */
+/** R1 offline: propose a bounded replay scenario; core's twin kernel produces the measured content deterministically. */
+function raceOffline(req: ModelRequest): ChartOutputV2 {
+  // The offline replay proposes the scenario; the twin kernel in core supplies the measured content deterministically.
+  const subject = req.bundle.entities.find((e) => e.kind !== "file")?.name ?? "checkout";
+  return {
+    contractVersion: "chart.v2", chartId: "R1", chartType: CHART_NAMES.R1, layout: "timeline",
+    caption: `Offline replay of the ${subject} flow on the pinned reference twin model. ${OFFLINE_LIMIT}`,
+    nodes: [], edges: [],
+    subject, scenario: "timeout", arrivalRatePerSec: 80, durationSec: 30, timeoutMs: 14, faultProbability: 0.05, seed: "stub-r1",
+  };
+}
+
 function sequenceOffline(req: ModelRequest): ChartOutputV2 {
   const { bundle } = req;
   const nameOf = new Map(bundle.entities.map((e) => [e.entityId, e.name]));
@@ -950,6 +961,7 @@ function chartV2(req: ModelRequest, chartId: string): ChartOutputV2 {
     case "S26": return metricsOffline(req) as ChartOutputV2;
     case "S27": return c4ContextOffline(req) as ChartOutputV2;
     case "S28": return sequenceOffline(req) as ChartOutputV2;
+    case "R1": return raceOffline(req) as ChartOutputV2;
     default: {
       // generic: the standard nodes/edges fields, honestly labeled.
       const { nodes, edges } = callFlowParts(req);

@@ -73,6 +73,8 @@ import { SearchEngine, type ApiFail } from "./search.ts";
 import { HistoryEngine, PolicyError, inspectHead, normalizePolicy, policyHash } from "./hotspots.ts";
 import { ChangeEngine, ChangeError, type ChangeProposal, type DragResult, type Intent } from "./changes.ts";
 import { compareScenarios, evaluateScenario, ScenarioError, type AssumptionInput, type CapacityData, type Scenario, type ScenarioResult } from "./scenarios.ts";
+import { raceReplayByRunId } from "./twin-replay.ts";
+import type { ChartPlanRaceTimeline } from "@cie/schema";
 import { policyFor } from "./access.ts";
 import { redactBuilt } from "./redact.ts";
 import { HashEmbedder, semanticScores, type Embedder } from "./embeddings.ts";
@@ -1131,6 +1133,38 @@ export class Service {
   }
   compareScenarios(ctx: CallContext, req: { a: ScenarioResult; b: ScenarioResult }): ApiResult<ReturnType<typeof compareScenarios>> {
     try { return ok(ctx, compareScenarios(req.a, req.b)); } catch (e) { if (e instanceof ScenarioError) return fail(ctx, { code: "INVALID_SCHEMA", message: e.message, retryable: false }); throw e; }
+  }
+  /** Re-create the replay timeline behind a runtime-replay claim. The run is deterministic per its seed,
+   *  so reopening a claim yields exactly the timeline that produced it — or an honest expiry, never a re-narration. */
+  replayClaim(ctx: CallContext, req: { revision?: string; claimId: string }): ApiResult<{ view: ViewSpec; claims: Claim[] }> {
+    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
+    const claim = this.store.getClaim(req.claimId);
+    if (!claim || claim.draft.claimClass !== "runtime-replay") return fail(ctx, { code: "NOT_FOUND", message: `claim "${req.claimId}" is not a runtime replay claim`, retryable: false });
+    const runId = claim.draft.modelRun?.provider === "twin-kernel" ? claim.draft.modelRun.runId : claim.draft.rationaleSummary.match(/run:[0-9a-f]{24}/)?.[0];
+    const replayed = runId ? raceReplayByRunId(runId) : null;
+    if (!replayed) return fail(ctx, { code: "NOT_FOUND", message: "this replay run has expired from the replay cache; re-run the scenario from the chart to recreate it", retryable: true });
+    const p = replayed.spec.params;
+    const plan: ChartPlanRaceTimeline = {
+      contractVersion: "chart.v2", chartId: "R1", chartType: CHART_REGISTRY.R1.name, layout: "timeline",
+      caption: claim.draft.assertion, nodes: [], edges: [],
+      subject: replayed.spec.subject, scenario: replayed.spec.scenario,
+      arrivalRatePerSec: p.arrivalRatePerSec, durationSec: p.durationSec,
+      ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
+      ...(p.faultProbability !== undefined ? { faultProbability: p.faultProbability } : {}),
+      seed: replayed.spec.seed,
+    };
+    try {
+      // Compile through the chart facade (chart-creator → discovered R1 adapter), never the compiler module directly.
+      const result = compileChartPlan({
+        plan, bundle: { id: `replay:${rev.id}`, revision: rev.id, evidence: [], entities: [], relationships: [], facts: [], coverage: [], unresolved: [], tokenEstimate: 0 },
+        rev, question: claim.draft.assertion,
+        route: { source: "chosen", confidence: "high", form: "RaceWindow", name: "Replay timeline", because: "reopened from a replay claim", alternatives: [] },
+        chartId: "R1",
+      });
+      this.store.audit(actor(ctx), "scenario.replay", rev.id, { claimId: req.claimId, runId: replayed.spec.runId });
+      return ok(ctx, result, { revision: rev.id });
+    } catch (e) { return fail(ctx, storageFailure(e)); }
   }
 
   // ---------------------------------------------------------------- C28 visual intent and change proposals

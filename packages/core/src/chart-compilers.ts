@@ -1,6 +1,8 @@
 import { ActivitySpecSchema, type ActivitySpec } from "@cie/schema";
 import { stateTransitionLabel, type StateSpec } from "@cie/schema";
 import { erColumnLabel, type ErSpec } from "@cie/schema";
+import type { ChartPlanRaceTimeline } from "@cie/schema";
+import { cachedRaceReplay, type ReplayParams } from "./twin-replay.ts";
 // CIE chart creator: the model chooses a visual arrangement, but returns a bounded plan over
 // indexed entities and relationships. Plans are compiled to ViewSpec, never executed as source.
 import { createHash } from "node:crypto";
@@ -252,9 +254,61 @@ function legendEntriesForChartId(chartId: string): ViewSpec["legend"] {
         { label: "Async message", displayMode: "INFERENCE", description: "An asynchronous message." },
         { label: "Alt fragment", displayMode: "INFERENCE", description: "An alternative fragment." },
       ];
+    case "R1": // twin replay timeline
+      return [
+        { label: "Model prediction", displayMode: "INFERENCE", description: "Positions and outcomes come from a deterministic twin run in simulated time — never observed production timing." },
+        { label: "Queued wait", displayMode: "INFERENCE", description: "The hatched lead-in before a block: time spent waiting for a resource rather than being served." },
+        { label: "Timeout / fault", displayMode: "INFERENCE", description: "A station visit that ended in timeout or fault; retries are drawn as further attempts on the same row." },
+      ];
     default:
       return [];
   }
+}
+
+/** R1 twin replay: the model proposed what to replay; the deterministic kernel supplies the measured content.
+ *  Everything drawn is simulated-model time and labelled MODEL_PREDICTION — an honest experiment, not an observation. */
+export function compileRaceTimelineV2(o: { plan: ChartPlanRaceTimeline; bundle: EvidenceBundle; rev: RevisionRow; question: string; route: ViewRoute; run?: ModelRunRef; diag?: ChartCompileDiag; chartId?: string }): { view: ViewSpec; claims: Claim[]; diagnostics: ChartDiagnostics } {
+  const params: ReplayParams = {
+    subject: o.plan.subject,
+    scenario: o.plan.scenario,
+    arrivalRatePerSec: o.plan.arrivalRatePerSec,
+    durationSec: o.plan.durationSec,
+    ...(o.plan.timeoutMs !== undefined ? { timeoutMs: o.plan.timeoutMs } : {}),
+    ...(o.plan.faultProbability !== undefined ? { faultProbability: o.plan.faultProbability } : {}),
+    ...(o.plan.seed ? { seed: o.plan.seed } : {}),
+  };
+  const { spec, claims: replayed } = cachedRaceReplay(params);
+  const claims = replayed.map((c) => ({ ...c, draft: { ...c.draft, revision: o.rev.id } }));
+  const claimsByStation = new Map<string, string[]>();
+  for (const c of spec.claims) if (c.stationId) claimsByStation.set(c.stationId, [...(claimsByStation.get(c.stationId) ?? []), c.claimId]);
+  const nodes: ViewSpec["nodes"] = spec.stationIds.map((id, i) => ({
+    id: `n:race:${id}`, entityRefs: [], label: id, kind: "station", file: "", claimIds: claimsByStation.get(id) ?? [], evidenceIds: [],
+    tier: i === 0 ? "CRITICAL" as const : "RELEVANT" as const, displayMode: "INFERENCE" as DisplayMode, unresolvedCalls: 0,
+    role: "station", pos: { x: 40 + i * 230, y: 30 }, badge: o.plan.scenario === "baseline" ? undefined : o.plan.scenario,
+  }));
+  // Routing is drawn by the race scene as lane order, not as graph edges: a replay has no evidence-backed relationships.
+  const edges: ViewSpec["edges"] = [];
+  const runHash = spec.runId.slice(4, 16);
+  const viewId = `view:race:${runHash}`;
+  const chartType = CHART_REGISTRY.R1.name;
+  const view: ViewSpec = {
+    id: viewId, version: 1, revision: o.rev.id, taskId: `task:${viewId}`, formId: "RaceWindow",
+    caption: `${chartType} · ${o.plan.subject} · ${o.plan.scenario} (twin model run, ${spec.resultClass.replaceAll("_", " ").toLowerCase()})`,
+    question: o.question, level: 5, nodes, edges, groups: [], race: spec,
+    legend: legendEntriesForChartId("R1"),
+    cameraPolicy: { behavior: "PRESERVE" }, gaps: spec.gaps,
+    formReason: `Replayed the ${o.plan.scenario} scenario on the pinned reference twin model; the kernel is deterministic for a given seed.`,
+    route: o.route, meta: { kind: "replay", subject: o.plan.subject },
+    params: { chartType, chartLayout: "timeline", chartId: "R1", runId: spec.runId, scenario: o.plan.scenario, subject: o.plan.subject },
+  };
+  const diagnostics: ChartDiagnostics = {
+    chartId: "R1", contractVersion: "chart.v2", provider: o.diag?.provider ?? o.run?.provider ?? "twin-kernel", model: o.diag?.model ?? o.run?.model ?? "workflow.twin.model.v1",
+    cacheHit: o.diag?.cacheHit ?? false, schemaValidationPassed: o.diag?.schemaValidationPassed ?? true,
+    suppliedEntities: o.bundle.entities.length, suppliedRelationships: o.bundle.relationships.length, suppliedEvidence: o.bundle.evidence.length,
+    acceptedNodes: nodes.length, omittedNodes: 0, acceptedEdges: 0, omittedEdges: 0, gaps: spec.gaps,
+    ...(o.diag?.fallbackReason ? { fallbackReason: o.diag.fallbackReason } : {}),
+  };
+  return { view, claims, diagnostics };
 }
 
 export function compileClassDiagramV2(o: { plan: ChartPlanV2; bundle: EvidenceBundle; rev: RevisionRow; question: string; route: ViewRoute; run?: ModelRunRef; diag?: ChartCompileDiag }): { view: ViewSpec; claims: Claim[]; diagnostics: ChartDiagnostics } {
@@ -1103,6 +1157,7 @@ export function compileLegacyChartPlan(o: { plan: ChartPlan | ChartPlanV2; bundl
     if (o.plan.chartId === "S8") return compileEventStormingV2({ ...o, plan: o.plan });
     if (o.plan.chartId === "S10") return compileDfdV2({ ...o, plan: o.plan });
     if (o.plan.chartId === "S11") return compileDecisionTableV2({ ...o, plan: o.plan });
+    if (o.plan.chartId === "R1") return compileRaceTimelineV2({ ...o, plan: o.plan });
     if (o.plan.chartId === "S16") return compileClassDiagramV2({ ...o, plan: o.plan });
     if (chartId && CHART_REGISTRY[chartId as ChartId]?.compiler === "projected" && o.plan.chartId === chartId) return compileStructuredChartV2({ ...o, plan: o.plan });
     throw new Error(`No compiler registered for selected chart ${chartId ?? o.plan.chartId}`);

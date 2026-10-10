@@ -8,6 +8,8 @@ import type { ErSpec } from "./er.ts";
 export { ErSpecSchema, erColumnLabel, type ErSpec } from "./er.ts";
 import type { SequenceSpec } from "./sequence.ts";
 export { SequenceSpecSchema, type SequenceSpec } from "./sequence.ts";
+import { RaceScenarioSchema, type RaceSpec } from "./race.ts";
+export { RaceSpecSchema, RaceScenarioSchema, RACE_RESULT_CLASSES, type RaceResultClass, type RaceSpec } from "./race.ts";
 import { CHART_DESCRIPTORS } from "./plugins/catalog.generated.ts";
 export { CHART_DESCRIPTORS };
 export * from "./plugins/chart-module.ts";
@@ -239,6 +241,8 @@ export interface ViewSpec {
   er?: ErSpec;
   state?: StateSpec;
   activity?: ActivitySpec;
+  /** Deterministic twin replay of a scenario; simulated-model time, never observed production timing. */
+  race?: RaceSpec;
   /** Parameters that produced this view, shown to the user and used to refresh it. */
   params?: Record<string, string | number | boolean>;
   /** Whole-system summary for level 0: the system itself and the external packages it depends on. */
@@ -324,6 +328,7 @@ export type ChartId =
   | "S11" | "S12" | "S13" | "S14" | "S15"
   | "S16" | "S17" | "S18" | "S19" | "S20" | "S21" | "S22" | "S23" | "S24" | "S25"
   | "S26" | "S27" | "S28" | "S29"
+  | "R1"
   | "generic";
 
 
@@ -800,6 +805,20 @@ const ChartOutputV2Sequence = z.object({
   }).strict()).max(20),
 }).strict();
 
+/** R1 replay: the model proposes WHAT to replay; the deterministic twin kernel produces the measured content. */
+const ChartOutputV2RaceTimeline = z.object({
+  ...chartV2Base,
+  chartId: z.literal("R1"),
+  layout: z.literal("timeline"),
+  subject: z.string().min(1).max(200),
+  scenario: RaceScenarioSchema,
+  arrivalRatePerSec: z.number().positive().max(1000),
+  durationSec: z.number().positive().max(300),
+  timeoutMs: z.number().positive().max(60000).optional(),
+  faultProbability: z.number().min(0).max(1).optional(),
+  seed: z.string().max(64).optional(),
+}).strict();
+
 export const ChartOutputV2 = z.discriminatedUnion("chartId", [
   ChartOutputV2Generic,
   ChartOutputV2StateMachine,
@@ -826,6 +845,7 @@ export const ChartOutputV2 = z.discriminatedUnion("chartId", [
   ChartOutputV2C4Context,
   ChartOutputV2Sequence,
   ChartOutputV2Cfg,
+  ChartOutputV2RaceTimeline,
   ChartOutputV2GenericFallback("S1"),
   ChartOutputV2GenericFallback("S2"),
   ChartOutputV2GenericFallback("S5"),
@@ -858,6 +878,7 @@ export type ChartPlanFmeaMatrix = z.infer<typeof ChartOutputV2FmeaMatrix>;
 export type ChartPlanMetricsMap = z.infer<typeof ChartOutputV2MetricsMap>;
 export type ChartPlanC4Context = z.infer<typeof ChartOutputV2C4Context>;
 export type ChartPlanSequence = z.infer<typeof ChartOutputV2Sequence>;
+export type ChartPlanRaceTimeline = z.infer<typeof ChartOutputV2RaceTimeline>;
 
 /** Canonical display names for the gallery's system charts: the rendered title and legend must name the selected type. */
 export const CHART_NAMES = Object.fromEntries(Object.values(CHART_DESCRIPTORS).map((d) => [d.id, d.name])) as Record<ChartId | (string & {}), string>;

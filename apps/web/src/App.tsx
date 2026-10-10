@@ -622,6 +622,16 @@ export function App() {
     return null;
   };
   const claimsFor = (ids: string[]) => ids.map((id) => claimMap[id]).filter((c): c is Claim => !!c);
+  /** Open the replay timeline behind a runtime-replay claim: the deterministic twin run is re-created, never re-narrated. */
+  const openReplay = (claim: Claim) => void withBusy("Replaying scenario…", async () => {
+    const generation = repoGeneration.current;
+    const r = await call<{ view: ViewSpec; claims: Claim[] }>("C27", "replayClaim", { revision: info?.revision?.id, claimId: claim.draft.id });
+    if (!r.ok) { say("assistant", `Replay unavailable: ${r.error.message}`, true); return; }
+    if (generation !== repoGeneration.current) return;
+    mergeClaims(r.value.claims);
+    adoptView(r.value.view, r.value.claims, false);
+    log("REPLAY", claim.draft.id);
+  });
 
   // ------------------------------------------------------------ investigations
   const save = () => withBusy("Saving…", async () => {
@@ -1049,7 +1059,7 @@ export function App() {
             <>
               <h2>Explanation</h2>
               <p>{drawer.data.summary}</p>
-              {drawer.data.claims.map((c) => <ClaimCard key={c.draft.id} claim={claimMap[c.draft.id] ?? c} onVerdict={verdict} />)}
+              {drawer.data.claims.map((c) => <ClaimCard key={c.draft.id} claim={claimMap[c.draft.id] ?? c} onVerdict={verdict} onOpenReplay={openReplay} />)}
               <h3>Evidence</h3>
               {drawer.data.evidence.map((e) => <EvidenceCard key={e.id} e={e} />)}
             </>
@@ -1068,7 +1078,7 @@ export function App() {
               {drawer.members && <ul className="memberlist">{drawer.members.slice(0, 12).map((m, i) => <li key={i}>{m}</li>)}{drawer.members.length > 12 && <li className="muted">+{drawer.members.length - 12} more</li>}</ul>}
               {drawer.notes.map((n, i) => <p key={i} className="note">{n}</p>)}
               {drawer.factors && <details><summary>Why it is shown (6 factors)</summary><table className="gates"><tbody>{drawer.factors.map((f) => <tr key={f.factor}><th scope="row">{f.factor.replace(/_/g, " ").toLowerCase()}</th><td>{f.normalizedScore.toFixed(2)}</td><td>{f.reason}</td></tr>)}</tbody></table></details>}
-              {claimsFor(drawer.claimIds).map((c) => <ClaimCard key={c.draft.id} claim={c} onVerdict={verdict} />)}
+              {claimsFor(drawer.claimIds).map((c) => <ClaimCard key={c.draft.id} claim={c} onVerdict={verdict} onOpenReplay={openReplay} />)}
               {drawer.evidence.map((e) => <EvidenceCard key={e.id} e={e} />)}
             </>
           ) : !code && <p className="muted">Click an element or edge to see exactly where it comes from. Hover with the lens to expand an element; pin it to inspect its members.</p>}

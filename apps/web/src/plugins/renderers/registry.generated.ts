@@ -3,15 +3,17 @@ import type { RendererId, RendererModule } from "@cie/schema";
 import type { Rendered } from "../../graph.ts";
 import r0 from "./activity.renderer.ts";
 import r1 from "./er.renderer.ts";
-import r2 from "./sequence.renderer.ts";
-import r3 from "./state.renderer.ts";
-import r4 from "./table.renderer.ts";
-import r5 from "./view-spec.renderer.ts";
+import r2 from "./race-timeline.renderer.ts";
+import r3 from "./sequence.renderer.ts";
+import r4 from "./state.renderer.ts";
+import r5 from "./table.renderer.ts";
+import r6 from "./view-spec.renderer.ts";
 export const RENDERERS = {
   "activity": r0,
   "er": r1,
-  "sequence": r2,
-  "state": r3,
-  "table": r4,
-  "view-spec": r5,
+  "race-timeline": r2,
+  "sequence": r3,
+  "state": r4,
+  "table": r5,
+  "view-spec": r6,
 } satisfies { [K in RendererId]: RendererModule<K, Rendered> };
