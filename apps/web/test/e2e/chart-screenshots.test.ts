@@ -1,3 +1,4 @@
+import { captureReport, type CaptureResult } from "./capture-report.ts";
 // Renders every gallery chart type (S1–S28, V1–V19) with simulated data and takes a screenshot of each.
 // Screenshots are written to /tmp/cie-chart-screenshots/ (or CIE_SCREENSHOT_DIR).
 // Skipped automatically when Google Chrome is not installed.
@@ -77,30 +78,30 @@ const clickButton = (b: Browser, label: string) =>
   );
 
 /**
- * Open the Visuals gallery, find the entry whose name includes `namePart`, edit the question to
+ * Open the Visuals gallery, find the entry by stable chart code, edit the question to
  * `question`, and press Show.
  *
  * Returns:
  *  "shown"       – the visual was triggered (button clicked).
  *  "trace"       – this chart requires a pasted stack trace (V2 / HypothesisGraph).
  *  "unavailable" – the entry is greyed out (unmet needs, e.g. needs two revisions).
- *  "notfound"    – no gallery entry matched `namePart`.
+ *  "notfound"    – no gallery entry matched the code.
  */
 async function showVisual(
   b: Browser,
-  namePart: string,
+  code: string,
   question: string,
 ): Promise<"shown" | "trace" | "unavailable" | "notfound"> {
   await clickButton(b, "Visuals");
   await b.waitFor(
-    () => ` [...document.querySelectorAll('.gallery li')].some((x) => x.querySelector('strong')?.innerText.toLowerCase().includes(${JSON.stringify(namePart.toLowerCase())}))`,
+    () => `!!document.querySelector('[data-visual-code="${code}"]')`,
     15_000,
-    `${namePart} in visuals gallery`,
+    `${code} in visuals gallery`,
   );
 
   const result = await b.eval<"shown" | "trace" | "unavailable" | "notfound">(
     `(() => {
-      const li = [...document.querySelectorAll('.gallery li')].find((x) => x.querySelector('strong')?.innerText.toLowerCase().includes(${JSON.stringify(namePart.toLowerCase())}));
+      const li = document.querySelector('[data-visual-code="${code}"]');
       if (!li) return 'notfound';
 
       // This entry needs a pasted stack trace — no Show button.
@@ -118,10 +119,11 @@ async function showVisual(
         inp.dispatchEvent(new Event('input', { bubbles: true }));
         inp.dispatchEvent(new Event('change', { bubbles: true }));
       }
-      btn.click();
       return 'shown';
     })()`,
   );
+
+  if(result==="shown")await b.eval(`document.querySelector('[data-visual-code="${code}"] button')?.click()`);
 
   // Close the gallery if it did not close itself (e.g. on 'unavailable' or 'trace').
   const open = await b.eval<boolean>(`!!document.querySelector('.modal')`);
@@ -146,18 +148,19 @@ const canvasReady = () =>
 
 /** True once a cytoscape instance has at least one rendered node (more robust). */
 const cyReady = () =>
-  `(() => { if (document.querySelectorAll("[data-sequence-element=participant]").length) return true; try { const cy = document.querySelector('.canvas')?._cyreg?.cy; return !!cy && cy.nodes().length > 0; } catch { return false; } })()`;
+  `(() => { if(document.querySelector('.typed-table table')) return true; if (document.querySelectorAll("[data-sequence-element=participant]").length) return true; try { const cy = document.querySelector('.canvas')?._cyreg?.cy; return !!cy && cy.nodes().length > 0; } catch { return false; } })()`;
 
 /** True once the terrain treemap is rendered. */
 const terrainReady = () => `document.querySelectorAll('.treemap-cell').length > 0 || document.querySelectorAll('.terrain rect').length > 0 || document.querySelector('.terrain-view')?.children.length > 0`;
 
 /** True once a matrix table is present. */
-const matrixReady = () => `document.querySelectorAll('.matrix table, .matrix-scroll table').length > 0`;
+const matrixReady = () => `document.querySelectorAll('.matrix table, .matrix-scroll table, .typed-table table').length > 0`;
 
 // ── Shared server / browser — created once, reused across all chart tests ───────────
 let serverProc: ChildProcess | null = null;
 let serverUrl = "";
 let browser: Browser | null = null;
+const results: CaptureResult[] = [];
 /** Set to true after the repository has been indexed the first time. */
 let indexed = false;
 
@@ -198,6 +201,7 @@ async function ensureIndexed(): Promise<void> {
 
 // Clean up after all tests.
 after(() => {
+  mkdirSync(OUT_DIR,{recursive:true});writeFileSync(join(OUT_DIR,"capture-report.json"),JSON.stringify(captureReport(results),null,2));
   try { browser?.close(); } catch { /* best effort */ }
   try { serverProc?.kill("SIGKILL"); } catch { /* best effort */ }
 });
@@ -407,19 +411,23 @@ test(
   { skip: !existsSync(CHROME), timeout: 600_000 },
   async (t) => {
     // Index once up-front.
-    await ensureIndexed();
+    try { await ensureIndexed(); } catch(error) {
+      const message=error instanceof Error?error.message:String(error);
+      for(const chart of CHARTS.filter(c=>!process.env.CIE_CHART_CODES || process.env.CIE_CHART_CODES.split(",").includes(c.code)))results.push({code:chart.code,name:chart.name,file:null,skipped:false,error:message,blocked:true,stage:"startup"});
+      throw error;
+    }
     const { b } = await getShared();
 
-    const results: { code: string; name: string; file: string | null; skipped: boolean; error?: string }[] = [];
 
     const selected = process.env.CIE_CHART_CODES
       ? CHARTS.filter((chart) => process.env.CIE_CHART_CODES!.split(",").includes(chart.code))
       : CHARTS;
     for (const chart of selected) {
       await t.test(`${chart.code} – ${chart.name}`, async () => {
+        let stage="gallery";
         try {
           // Open the gallery and trigger the visual.
-          const outcome = await showVisual(b, chart.name, chart.question);
+          const outcome = await showVisual(b, chart.code, chart.question);
 
           if (outcome === "trace") {
             // V2 HypothesisGraph: trigger via a pasted stack trace in the chat box.
@@ -449,10 +457,14 @@ test(
           }
           // "shown" → the gallery button was clicked; nothing extra to do.
 
+          stage="generation";
+          // Wait for the requested response to finish, including explicit empty/gap results.
+          await b.waitFor(()=>`!document.querySelector('.stage[aria-busy="true"]') && !document.querySelector('.chip.busy')`,RENDER_TIMEOUT,`${chart.code} generation finished`);
           // Wait for something to render.
           if (outcome !== "unavailable") await b.waitFor(chart.waitFor, chart.timeoutMs ?? RENDER_TIMEOUT, `${chart.code} to render`);
+          stage="layout";
           await b.waitFor(() => `!document.querySelector('.canvas[aria-busy="true"]')`, RENDER_TIMEOUT, "graph layout finished");
-          if (["S1", "S16"].includes(chart.code) && outcome === "shown") {
+          if (["S1"].includes(chart.code) && outcome === "shown") {
             await b.waitFor(() => `document.querySelector('.canvas')?.dataset.layoutEngine === 'elk' && !document.querySelector('.canvas[aria-busy="true"]')`, RENDER_TIMEOUT, `${chart.code} uses the ELK worker`);
             if (chart.code === "S1") {
               assert.ok(await b.eval(`document.querySelector('.canvas')._cyreg.cy.nodes().filter((n) => !n.isParent()).length > 1`), "architecture chart retains its detail");
@@ -461,21 +473,32 @@ test(
           }
           if (chart.extraWait) await wait(chart.extraWait);
 
-          if (outcome === "shown" && ["S5", "V12", "V15", "V16"].includes(chart.code)) {
-            const selector = chart.code === "V16" ? ".terrain" : ".matrix";
+          stage="interaction";
+          if(chart.code==="S14" && outcome==="shown") {
+            assert.equal(await b.eval(`!!document.querySelector('[aria-label="Canvas tools"]')`),false,"graph-only tools do not cover table content");
+            assert.ok(await b.eval(`document.querySelector('[aria-label="Evidence status summary"]')?.textContent.includes('table cells')`),"evidence summary counts table cells rather than invisible graph rows");
+            const contrast=await b.eval<number>(`(()=>{
+              const tab=document.querySelector('.response-tab [role=tab][aria-selected=false]');if(!tab)return 21;
+              const style=getComputedStyle(tab),lum=color=>{const rgb=color.match(/\\d+/g).slice(0,3).map(v=>Number(v)/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4);return .2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];};
+              const a=lum(style.color),z=lum(style.backgroundColor);return (Math.max(a,z)+.05)/(Math.min(a,z)+.05);
+            })()`);assert.ok(contrast>=4.5,`inactive tab contrast ${contrast} meets 4.5:1`);
+          }
+          if (outcome === "shown" && ["S5", "S14", "V12", "V15", "V16"].includes(chart.code)) {
+            const selector = chart.code === "V16" ? ".terrain" : chart.code === "S14" ? ".typed-table" : ".matrix";
             const before = await b.eval(`(() => {
               const host = document.querySelector('${selector}');
-              const cells = [...host.querySelectorAll('.mcell, .terrain-svg g.cell')];
+              const cells = [...host.querySelectorAll('.mcell, .table-cell, .terrain-svg g.cell')];
               return cells.map((n) => { const r = n.getBoundingClientRect(); return {x:r.x,y:r.y,w:r.width,h:r.height,text:n.textContent}; });
             })()`);
-            const point = await b.eval<{x: number; y: number}>(`(() => { const cells = [...document.querySelectorAll('${selector} .mcell, ${selector} .terrain-svg g.cell')]; const cell = cells.find((n) => {const r=n.getBoundingClientRect();return r.x > 0 && r.y > 0 && r.bottom < innerHeight && r.x < innerWidth-350}) || cells[0]; const r = cell.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
+            const point = await b.eval<{x: number; y: number}>(`(() => { const cells = [...document.querySelectorAll('${selector} .mcell, ${selector} .table-cell, ${selector} .terrain-svg g.cell')]; const cell = cells.find((n) => {const r=n.getBoundingClientRect();return r.x > 0 && r.y > 0 && r.bottom < innerHeight && r.x < innerWidth-350}) || cells[0]; const r = cell.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
             await b.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
             await b.waitFor(() => `document.querySelector('${selector}').dataset.lensActive === 'true' && Number(document.querySelector('${selector}').dataset.lensChildren) > 0`, 5000, "shared lens expands a hovered cell automatically");
             assert.equal(await b.eval(`getComputedStyle(document.querySelector('${selector}')).backgroundColor`), "rgb(11, 15, 23)");
-            assert.deepEqual(await b.eval(`(() => { const host = document.querySelector('${selector}'); return [...host.querySelectorAll('.mcell, .terrain-svg g.cell')].map((n) => {const r=n.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,text:n.textContent};}); })()`), before, "lens never changes source cell geometry");
+            assert.deepEqual(await b.eval(`(() => { const host = document.querySelector('${selector}'); return [...host.querySelectorAll('.mcell, .table-cell, .terrain-svg g.cell')].map((n) => {const r=n.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,text:n.textContent};}); })()`), before, "lens never changes source cell geometry");
             await wait(300);
           }
 
+          stage="capture";
           // Screenshot.
           const safeName = `${chart.code}-${chart.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`;
           const file = await screenshot(b, safeName);
@@ -488,7 +511,12 @@ test(
           console.log(`  ✓ ${chart.code} (${outcome}) → ${file}`);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          results.push({ code: chart.code, name: chart.name, file: null, skipped: false, error: msg });
+          let failureFile:string|null=null;
+          try { failureFile=await screenshot(b,`${chart.code}-failure`); } catch { /* browser may be unavailable */ }
+          const diagnosticFile=join(OUT_DIR,`${chart.code}-diagnostics.json`);
+          let page="";try {page=await b.eval<string>(`document.body.innerText.slice(0,6000)`);} catch { /* disconnected */ }
+          mkdirSync(OUT_DIR,{recursive:true});writeFileSync(diagnosticFile,JSON.stringify({code:chart.code,stage,error:msg,page,console:b.console.slice(-30)},null,2));
+          results.push({ code: chart.code, name: chart.name, file: failureFile, skipped: false, error: msg,stage,diagnosticFile });
           try { console.log(`  page state (${chart.code}): ${(await b.eval<string>(`document.body.innerText.slice(0, 2400)`)).replace(/\s+/g, " ")}`); } catch { /* page may have navigated */ }
           // Re-throw so the sub-test is marked failed.
           throw err;

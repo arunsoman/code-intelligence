@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "UML sequence diagram",
   "form": "GeneratedChart",
   "compiler": "projected",
-  "version": 4,
+  "version": 5,
   "aliases": [
     "UML sequence diagram",
     "uml sequence diagram",

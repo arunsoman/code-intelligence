@@ -289,7 +289,7 @@ export function attachFisheye(host: HTMLElement, options: LensOptions): LensEngi
     ctx.restore();
   }
   const hit = (point: Point) => [...drawnNodes].reverse().find((n) => !n.group && contains(n, point));
-  const ignored = (e: Event) => !!(e.target as Element)?.closest?.(".lens-controls, input, textarea, select, button:not(.mcell), a, [contenteditable=true]") || options.interactive?.() === false;
+  const ignored = (e: Event) => !!(e.target as Element)?.closest?.(".lens-controls, input, textarea, select, button:not(.mcell):not(.table-cell), a, [contenteditable=true]") || options.interactive?.() === false;
   const sourceHit = (point: Point) => {
     const scene = options.scene();
     const node = scene.nodes.filter((n) => !n.group && contains(n, point)).sort((a, b) => a.width * a.height - b.width * b.height)[0];
@@ -388,7 +388,7 @@ export function attachElementFisheye(host: HTMLElement, selector: string): LensE
       const bounds = host.getBoundingClientRect();
       return { edges: [], nodes: [...host.querySelectorAll(selector)].map((element, index) => {
         const box = element.getBoundingClientRect(), description = element.getAttribute("aria-label") ?? element.textContent ?? "";
-        const terrain = element.matches(".terrain-svg g.cell"), label = terrain ? description.split(", risk ")[0] : element.textContent?.trim() || description.split(",")[0];
+        const terrain = element.matches(".terrain-svg g.cell"), label = element.getAttribute("data-lens-label") ?? (terrain ? description.split(", risk ")[0] : element.textContent?.trim() || description.split(",")[0]);
         const displayMode = element.classList.contains("m-hypothesis") ? "HYPOTHESIS" : element.classList.contains("m-inference") ? "INFERENCE" : element.classList.contains("m-fog") || element.querySelector(".fogmask") ? "FOG" : "FACT";
         return { id: `cell:${index}`, element, compact: true, displayMode, label, details: terrain ? description.split(", ").slice(1) : [description], color: chartColor(description), x: box.left - bounds.left + box.width / 2, y: box.top - bounds.top + box.height / 2, width: box.width, height: box.height, selected: element.getAttribute("aria-pressed") === "true" || element.closest("[aria-selected=true]") != null };
       }) };

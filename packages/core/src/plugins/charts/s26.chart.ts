@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "Metrics / telemetry map",
   "form": "GeneratedChart",
   "compiler": "projected",
-  "version": 3,
+  "version": 4,
   "aliases": [
     "Metrics / telemetry map",
     "metrics telemetry map",

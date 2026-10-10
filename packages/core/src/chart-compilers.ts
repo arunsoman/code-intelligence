@@ -709,7 +709,7 @@ export function compileDecisionTableV2(o: { plan: ChartPlanDecisionTable; bundle
   return compileTableChartV2(o);
 }
 
-function compileTableChartV2(o: { plan: ChartPlanDecisionTable | ChartPlanStateTransitionTable | ChartPlanFmeaMatrix; bundle: EvidenceBundle; rev: RevisionRow; question: string; route: ViewRoute; run?: ModelRunRef; diag?: ChartCompileDiag }) {
+function compileTableChartV2(o: { plan: ChartPlanDecisionTable | ChartPlanStateTransitionTable | ChartPlanFmeaMatrix | ChartPlanIdempotencyMatrix; bundle: EvidenceBundle; rev: RevisionRow; question: string; route: ViewRoute; run?: ModelRunRef; diag?: ChartCompileDiag }) {
   const evidence = new Map(o.bundle.evidence.filter(e => e.state === "CURRENT").map(e => [e.id,e]));
   const current = (ids: string[]) => [...new Set(ids.filter(id => evidence.has(id)))];
   const gaps: string[] = [];
@@ -737,6 +737,23 @@ function compileTableChartV2(o: { plan: ChartPlanDecisionTable | ChartPlanStateT
     });
     table.columns=[...conditions.map(c=>({id:`condition:${c.id}`,label:c.label})),{id:"outcome",label:"Outcome"},{id:"coverage",label:"Coverage interpretation"}];
     plan.rules.forEach((r,i)=>row(r.id,`Rule ${i+1}`,r.evidenceIds,[...conditions.map(c=>cell(`condition:${c.id}`,r.values[c.id],[...r.evidenceIds,...c.evidenceIds])),cell("outcome",r.outcome,r.outcomeEvidenceIds),cell("coverage",r.isCovered?"Covered?":"Not covered?",r.evidenceIds)]));
+  } else if(plan.chartId==="S14") {
+    table.rowTitle="Operation";
+    const seen=new Set<string>();
+    const scenarios=plan.scenarios.filter(s=>{if(seen.has(s.id)){gaps.push(`Duplicate scenario ${s.id} was omitted.`);return false;}seen.add(s.id);return true;});
+    table.columns=scenarios.map(s=>({id:s.id,label:s.label}));
+    for(const op of plan.operations){
+      const cells=scenarios.map(scenario=>{
+        const matches=plan.cells.filter(c=>c.operationId===op.id&&c.scenarioId===scenario.id&&c.outcome!=="unknown"&&current(c.evidenceIds).length);
+        if(!matches.length)return cell(scenario.id,undefined,[]);
+        const alternatives=matches.map(c=>cell(scenario.id,`${c.outcome==="noOp"?"No-op?":c.outcome==="idempotent"?"Idempotent?":"Rejected?"}${c.mechanism?` · mechanism: ${c.mechanism}`:""}${c.keyScope?` · key scope: ${c.keyScope}`:""}`,c.evidenceIds));
+        const texts=[...new Set(alternatives.map(c=>c.text))];
+        return {columnId:scenario.id,text:texts.join(" / "),status:texts.length>1?"conflict" as const:"interpreted" as const,evidenceIds:[...new Set(alternatives.flatMap(c=>c.evidenceIds))]};
+      });
+      row(op.id,op.label,op.evidenceIds,cells);
+    }
+    for(const c of plan.cells)if(!plan.operations.some(op=>op.id===c.operationId)||!scenarios.some(s=>s.id===c.scenarioId))gaps.push("An idempotency cell references a missing operation or scenario.");
+    gaps.push("Static citations do not prove replay safety or concurrent duplicate handling.");
   } else if(plan.chartId==="S24") {
     table.rowTitle="State";
     const unique = <T extends {id:string;label:string;evidenceIds:string[]}>(items:T[]) => {
@@ -774,7 +791,7 @@ function compileTableChartV2(o: { plan: ChartPlanDecisionTable | ChartPlanStateT
   const chartType=CHART_REGISTRY[plan.chartId].name;
   const id=`view:generated:${createHash("sha256").update(`${o.bundle.id}|${o.question}`).digest("hex").slice(0,12)}`;
   const view:ViewSpec={id,version:1,revision:o.rev.id,taskId:`task:${id}`,formId:"GeneratedChart",caption:`${chartType} · ${modelText(plan.caption,"Static table interpretation").text}`,question:o.question,level:5,nodes,edges:[],groups:[],table,legend:[{label:"Interpretation",displayMode:"INFERENCE",description:"Cell values are model interpretations with current citations, not runtime proof."}],cameraPolicy:{behavior:"PRESERVE"},gaps,formReason:`Typed ${chartType} table`,route:o.route,meta:{kind:"generated-chart",field:chartType,subject:plan.chartId},params:{chartType,chartLayout:plan.layout,chartId:plan.chartId}};
-  const total=plan.chartId==="S11"?plan.rules.length:plan.chartId==="S24"?plan.states.length:plan.failures.length;
+  const total=plan.chartId==="S11"?plan.rules.length:plan.chartId==="S24"?plan.states.length:plan.chartId==="S14"?plan.operations.length:plan.failures.length;
   return {view,claims:[] as Claim[],diagnostics:{chartId:plan.chartId,contractVersion:"chart.v2" as const,provider:o.diag?.provider??o.run?.provider??"",model:o.diag?.model??o.run?.model??"",cacheHit:o.diag?.cacheHit??false,schemaValidationPassed:o.diag?.schemaValidationPassed??true,suppliedEntities:o.bundle.entities.length,suppliedRelationships:o.bundle.relationships.length,suppliedEvidence:o.bundle.evidence.length,acceptedNodes:nodes.length,omittedNodes:total-nodes.length,acceptedEdges:0,omittedEdges:0,gaps,...(o.diag?.fallbackReason?{fallbackReason:o.diag.fallbackReason}:{})}};
 }
 
@@ -851,7 +868,7 @@ function projectTypedChart(plan: ChartPlanV2, bundle: EvidenceBundle, offline: b
     const matched = sourceMatches(label);
     // Identity is linked only when the match is unambiguous (or a deliberate package grouping).
     const entityRefs = matched.length === 1 || ["S17", "S22", "S23"].includes(plan.chartId) ? matched.map((e) => e.entityId) : [];
-    let inferred = offline;
+    let inferred = offline || item.isInferred === true;
     if (!evidenceIds.length) {
       evidenceIds = evidenceForEntities(new Set(matched.map((e) => e.entityId)));
       inferred ||= evidenceIds.length > 0;
@@ -954,7 +971,7 @@ function projectTypedChart(plan: ChartPlanV2, bundle: EvidenceBundle, offline: b
 }
 
 export function compileStructuredChartV2(o: { plan: ChartPlanV2; bundle: EvidenceBundle; rev: RevisionRow; question: string; route: ViewRoute; run?: ModelRunRef; diag?: ChartCompileDiag }): { view: ViewSpec; claims: Claim[]; diagnostics: ChartDiagnostics } {
-  if (o.plan.chartId === "S24" || o.plan.chartId === "S25") return compileTableChartV2({...o,plan:o.plan});
+  if (o.plan.chartId === "S24" || o.plan.chartId === "S25" || o.plan.chartId === "S14") return compileTableChartV2({...o,plan:o.plan});
   const projection = projectTypedChart(o.plan, o.bundle, o.diag?.provider === "stub" || o.run?.provider === "stub");
   const validEvidence = new Map(o.bundle.evidence.filter((e) => e.state === "CURRENT").map((e) => [e.id, e]));
   const gaps: string[] = [];
@@ -973,7 +990,7 @@ export function compileStructuredChartV2(o: { plan: ChartPlanV2; bundle: Evidenc
     if (!fromNodeId || !toNodeId) { gaps.push("A typed chart connection was omitted because one endpoint is missing."); continue; }
     const evidenceIds = [...new Set(spec.evidenceIds.filter((id) => validEvidence.has(id)))];
     if (!evidenceIds.length) { gaps.push("A typed chart connection was omitted because it has no current evidence."); continue; }
-    edges.push({ id: `ge:typed:${o.plan.chartId}:${edges.length}`, fromNodeId, toNodeId, kind: spec.kind, ...(spec.label ? { label: spec.label } : {}), evidenceIds, displayMode: o.diag?.provider === "stub" ? "INFERENCE" : "FACT" });
+    edges.push({ id: `ge:typed:${o.plan.chartId}:${edges.length}`, fromNodeId, toNodeId, kind: spec.kind, ...(spec.label ? { label: spec.label } : {}), evidenceIds, displayMode: "INFERENCE" });
   }
   if (!projection.nodes.length) gaps.push("The chart plan contains no chart-specific elements; the offline model may not support this notation.");
   else if (!nodes.length) gaps.push("The chart plan's elements could not be grounded in current evidence.");
@@ -984,10 +1001,11 @@ export function compileStructuredChartV2(o: { plan: ChartPlanV2; bundle: Evidenc
     id: viewId, version: 1, revision: o.rev.id, taskId: `task:${viewId}`, formId: "GeneratedChart",
     caption: `${chartType} · ${modelText(o.plan.caption, "Arranged from typed chart evidence.").text}`,
     question: o.question, level: 5, nodes, edges, groups: [],
-    legend: [{ label: "Chart element", displayMode: "FACT", description: "Element is included with current evidence from the selected chart plan." }, ...legendEntriesForChartId(o.plan.chartId)],
+    legend: [{ label: "Source citation", displayMode: "FACT", description: "A current source location is available; the citation alone does not establish the modeled semantics." }, {label:"Modeled connection",displayMode:"INFERENCE",description:"Connections, ordering, concurrency and reliability properties are static plan interpretations."}],
     cameraPolicy: { behavior: "PRESERVE" }, gaps, formReason: `Generated ${chartType} from its typed chart plan.`, route: o.route,
     meta: { kind: "generated-chart", field: chartType, subject: o.plan.chartId }, params: { chartType, chartLayout: o.plan.layout, chartId: o.plan.chartId },
   };
+  gaps.push("Chart roles and connections are static plan interpretations; citations do not prove execution order, concurrency, atomicity, delivery guarantees or replay safety.");
   if (o.plan.chartId === "S28") {
     const plan = o.plan;
     const participantIds = [...new Set(plan.participants.map(p => nodeMap.get(p.id)).filter((id): id is string => !!id))];

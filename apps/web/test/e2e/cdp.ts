@@ -1,11 +1,11 @@
 // A very small Chrome DevTools Protocol driver (no dependencies): enough to open a page, press keys, and read what a person (or a
 // screen reader's accessibility tree) would see. Only keyboard input is exposed on purpose: the tests that use it cannot cheat with a mouse.
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-export const CHROME = "/usr/bin/google-chrome-stable";
+export const CHROME = process.env.CIE_CHROME ?? ["/usr/bin/google-chrome-stable", "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"].find(existsSync) ?? "/usr/bin/google-chrome-stable";
 type Pending = { resolve: (v: any) => void; reject: (e: Error) => void };
 
 export class Browser {
@@ -22,10 +22,13 @@ export class Browser {
     const b = new Browser();
     const port = 9300 + Math.floor(Math.random() * 600);
     b.profile = mkdtempSync(join(tmpdir(), "cie-chrome-"));
-    b.proc = spawn(CHROME, ["--headless=new", `--remote-debugging-port=${port}`, `--user-data-dir=${b.profile}`, "--no-sandbox", "--disable-gpu", "--window-size=1400,900", "--no-first-run", "about:blank"], { stdio: "ignore" });
+    b.proc = spawn(CHROME, ["--headless=new", `--remote-debugging-port=${port}`, `--user-data-dir=${b.profile}`, "--no-sandbox", "--disable-gpu", "--window-size=1400,900", "--no-first-run", "about:blank"], { stdio: ["ignore","ignore","pipe"] });
+    let startupError="";
+    b.proc.stderr?.on("data",chunk=>{startupError=(startupError+String(chunk)).slice(-8000);});
+    b.proc.on("error",error=>{startupError=error.message;});
     let version: any = null;
     for (let i = 0; i < 100 && !version; i++) { try { version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json(); } catch { await new Promise((r) => setTimeout(r, 100)); } }
-    if (!version) { b.proc.kill(); throw new Error("Chrome did not start"); }
+    if (!version) { b.proc.kill(); rmSync(b.profile,{recursive:true,force:true}); throw new Error(`Chrome did not start (${CHROME}): ${startupError.slice(-2000) || "no startup diagnostic"}`); }
     b.ws = new WebSocket(version.webSocketDebuggerUrl);
     await new Promise<void>((res, rej) => { b.ws.onopen = () => res(); b.ws.onerror = () => rej(new Error("CDP connection failed")); });
     b.ws.onmessage = (ev) => {

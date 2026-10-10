@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "Layered architecture",
   "form": "GeneratedChart",
   "compiler": "projected",
-  "version": 3,
+  "version": 4,
   "aliases": [
     "Layered architecture",
     "layered architecture",

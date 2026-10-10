@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "Idempotency matrix",
   "form": "GeneratedChart",
   "compiler": "projected",
-  "version": 3,
+  "version": 4,
   "aliases": [
     "Idempotency matrix",
     "idempotency matrix"
@@ -19,7 +19,7 @@ export const descriptor = {
   "requiredAcrossRepository": [],
   "offline": "gap",
   "concern": "Reliability",
-  "renderer": "view-spec",
+  "renderer": "table",
   "questionAnswered": "Which mechanisms handle duplicate requests?",
   "description": "Each operation (reserve, post, rollback) crossed with its duplicate-call scenario, showing whether the result is idempotent and what mechanism enforces it (batchId lookup, INSERT IGNORE, Redis idempotency key). Missing guarantees are gaps.",
   "example": "Build an idempotency matrix for reserve, post and rollback. For each operation, show what happens on a duplicate call with the same batchId, which code mechanism enforces idempotency (state-exists check, INSERT IGNORE, Redis key), and cite the evidence. Mark any operation where idempotency is not evidenced as a gap.",

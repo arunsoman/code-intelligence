@@ -1,3 +1,4 @@
+import { layoutDeadline } from "./layout-deadline.ts";
 import { TableCanvas } from "./TableCanvas.tsx";
 import { SequenceCanvas } from "./SequenceCanvas.tsx";
 import cytoscape from "cytoscape";
@@ -279,18 +280,21 @@ function GraphCanvas(input: CanvasProps) {
       setLayout({ source: input.rendered, aspect, result: input.rendered, engine: "fallback" });
       return;
     }
-    void arrangeElk(input.rendered, engine.current, {
+    const jobEngine=engine.current;
+    const job=layoutDeadline(arrangeElk(input.rendered, jobEngine, {
       width: host.current?.clientWidth || 800, height: host.current?.clientHeight || 600,
-    }).then((result) => {
+    }));
+    void job.promise.then((result) => {
       if (!live) return;
       console.info("[graph-layout]", { engine: "elk-layered", nodes: result.nodes.length, edges: result.edges.length, aspect, elapsedMs: Math.round(performance.now() - started) });
       setLayout({ source: input.rendered, aspect, result, engine: "elk" });
     }).catch((error) => {
       if (!live) return;
       console.warn("[graph-layout] using fallback", error);
+      jobEngine.terminateWorker();if(engine.current===jobEngine)engine.current=null;
       setLayout({ source: input.rendered, aspect, result: input.rendered, engine: "fallback" });
     });
-    return () => { live = false; };
+    return () => { live = false;job.cancel();jobEngine.terminateWorker();if(engine.current===jobEngine)engine.current=null; };
   }, [input.rendered, automatic, aspect]);
 
   useEffect(() => () => { engine.current?.terminateWorker(); engine.current = null; }, []);
@@ -557,8 +561,9 @@ function GraphCanvas(input: CanvasProps) {
       <button type="button" aria-pressed={!lensState.enabled} onClick={() => lens.current?.configure({ enabled: !lensState.enabled })}>{lensState.enabled ? "Pause hover expansion" : "Resume hover expansion"}</button>
       <span>Hover: expand · E: focused element · Esc: dismiss · L: pause · [ / ]: pages</span>
     </div>
-    {layoutReady && (hint.off > 0 || hint.labelsHidden) && (
+    {layoutReady && (hint.off > 0 || hint.labelsHidden || (automatic && layout?.engine === "fallback")) && (
       <div className="canvas-hint" role="status">
+        {automatic && layout?.engine === "fallback" && <span>Automatic arrangement unavailable; showing the source layout.</span>}
         {hint.off > 0 && <span>{hint.off} of {hint.total} element{hint.total === 1 ? "" : "s"} off-screen <button type="button" className="tool" onClick={bringIntoView}>Bring into view</button></span>}
         {hint.labelsHidden && <span>Hover with the lens to read details, or open the text outline (O).</span>}
       </div>

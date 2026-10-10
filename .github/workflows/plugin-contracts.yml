@@ -11,5 +11,31 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: node --test apps/web/test/generation-queue.test.ts packages/core/test/response-ranking.test.ts packages/core/test/table-compiler.test.ts apps/web/test/table-renderer.test.ts apps/web/test/content-aware-links.test.ts apps/web/test/exploration-navigation.test.ts apps/web/test/exploration-choices.test.ts packages/core/test/activity-compiler.test.ts apps/web/test/activity-renderer.test.ts packages/core/test/state-compiler.test.ts apps/web/test/state-renderer.test.ts packages/core/test/er-compiler.test.ts apps/web/test/er-renderer.test.ts packages/core/test/sequence-compiler.test.ts apps/web/test/sequence-renderer.test.ts packages/core/test/answer-workflow.test.ts packages/core/test/plugin-architecture.test.ts apps/web/test/fisheye.test.ts apps/web/test/response-workspace.test.ts
+      - run: node --test apps/web/test/layout-deadline.test.ts packages/core/test/visual-contract-cleanup.test.ts apps/web/test/capture-report.test.ts apps/web/test/generation-queue.test.ts packages/core/test/response-ranking.test.ts packages/core/test/table-compiler.test.ts apps/web/test/table-renderer.test.ts apps/web/test/content-aware-links.test.ts apps/web/test/exploration-navigation.test.ts apps/web/test/exploration-choices.test.ts packages/core/test/activity-compiler.test.ts apps/web/test/activity-renderer.test.ts packages/core/test/state-compiler.test.ts apps/web/test/state-renderer.test.ts packages/core/test/er-compiler.test.ts apps/web/test/er-renderer.test.ts packages/core/test/sequence-compiler.test.ts apps/web/test/sequence-renderer.test.ts packages/core/test/answer-workflow.test.ts packages/core/test/plugin-architecture.test.ts apps/web/test/fisheye.test.ts apps/web/test/response-workspace.test.ts
       - run: npm run web:build
+  browser-smoke:
+    needs: architecture
+    runs-on: ubuntu-latest
+    env:
+      CIE_SCREENSHOT_DIR: /tmp/cie-chart-smoke
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - run: cargo build --release
+      - run: npm run web:build
+      - name: Require a headless-capable browser
+        run: test -n "$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser)"
+      - name: Capture previously missing views and verify canvas focus
+        env:
+          CIE_CHART_CODES: S1,S2,S9,S10,S14,S27,V15
+        run: node --test --test-concurrency=1 apps/web/test/e2e/chart-screenshots.test.ts apps/web/test/e2e/canvas-space.test.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: visualization-smoke
+          path: /tmp/cie-chart-smoke

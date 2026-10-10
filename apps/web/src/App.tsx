@@ -1,3 +1,4 @@
+import { tableEvidenceElements } from "./table-cell.ts";
 import { ExplorationPanel } from "./ExplorationPanel.tsx";
 import { explorationChoices, explorationTarget, explorationQuestion, explorationShortcut, type ExplorationEdge } from "./exploration-choices.ts";
 import { rendererForView } from "./plugins/renderers/index.ts";
@@ -1002,7 +1003,7 @@ export function App() {
               {view.gaps.length > 1 && <ul>{view.gaps.slice(1, 4).map((gap, index) => <li key={index}>{gap}</li>)}</ul>}
             </div>
           )}
-          {!responseWorkspace.waiting && view && view.nodes.length > 0 && !view.terrain && !(view.matrix && drawMode === "matrix") && (
+          {!responseWorkspace.waiting && view && view.nodes.length > 0 && !view.terrain && !rendered.table && !(view.matrix && drawMode === "matrix") && (
             <div className="toolbar" role="toolbar" aria-label="Canvas tools">
               <button className={`tool ${boxSelect ? "on" : ""}`} aria-pressed={boxSelect} onClick={() => setBoxSelect(!boxSelect)}>{boxSelect ? "Box select: drag to select (click to stop)" : "Box select"}</button>
               <button className="tool" onClick={() => setOutlineOpen(true)} title="The whole map as text (shortcut: O)">Text outline</button>
@@ -1017,9 +1018,9 @@ export function App() {
         </div>
         <footer hidden={responseWorkspace.waiting}>
           {eff && <EpistemicSummary
-            elements={view?.matrix && drawMode === "matrix" ? eff.view.matrix!.cells : view?.terrain ? eff.view.nodes.filter((n) => n.tier !== "HIDDEN") : [...rendered.nodes, ...rendered.edges]}
-            scope={view?.matrix && drawMode === "matrix" ? "matrix cells" : view?.terrain ? "view nodes" : "drawn nodes and edges"}
-            stale={view?.matrix && drawMode === "matrix" ? eff.view.matrix!.cells.filter((c) => eff.stale.has(cellKey(c))).length : view?.terrain ? eff.view.nodes.filter((n) => eff.stale.has(n.id) || changedIds.has(n.id)).length : [...rendered.nodes, ...rendered.edges].filter((n) => n.stale).length} />}
+            elements={rendered.table ? tableEvidenceElements(rendered.table) : view?.matrix && drawMode === "matrix" ? eff.view.matrix!.cells : view?.terrain ? eff.view.nodes.filter((n) => n.tier !== "HIDDEN") : [...rendered.nodes, ...rendered.edges]}
+            scope={rendered.table ? "table cells" : view?.matrix && drawMode === "matrix" ? "matrix cells" : view?.terrain ? "view nodes" : "drawn nodes and edges"}
+            stale={rendered.table ? rendered.table.rows.flatMap(row=>rendered.nodes.find(n=>n.id===row.nodeId)?.stale ? row.cells.filter(c=>c.status!=="unknown") : []).length : view?.matrix && drawMode === "matrix" ? eff.view.matrix!.cells.filter((c) => eff.stale.has(cellKey(c))).length : view?.terrain ? eff.view.nodes.filter((n) => eff.stale.has(n.id) || changedIds.has(n.id)).length : [...rendered.nodes, ...rendered.edges].filter((n) => n.stale).length} />}
           <ul className="legend">
             {(view?.legend ?? []).map((l) => <li key={l.label}><span className={`swatch ${dm(l.displayMode)}`} aria-hidden /> <strong>{l.label}</strong> — {l.description}</li>)}
           </ul>

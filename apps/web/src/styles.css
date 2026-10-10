@@ -813,3 +813,12 @@ main { overflow: auto; }
 .table-cell.conflict { border-color:#fbbf24; }
 .table-cell:focus-visible { outline:3px solid #60a5fa; outline-offset:2px; }
 .typed-table .selected th { box-shadow:inset 4px 0 #60a5fa; }
+
+/* Tabs sit on a light workspace strip, independently of dark chart surfaces. */
+.response-tab [role=tab] { color:var(--ink,#172033); background:var(--panel,#fff); }
+.response-tab [role=tab][aria-selected=true] { color:#fff; background:#1e3a5f; }
+.response-tab .tab-close { color:#475569; background:#f1f5f9; }
+.typed-table-key { display:flex; gap:10px; align-items:center; min-height:54px; padding-right:200px; flex-wrap:wrap; flex-shrink:0; }
+.typed-table-key button { flex-shrink:0; color:inherit; background:transparent; border:1px solid #475569; }
+.typed-table caption details { color:inherit; }
+.typed-table caption summary { cursor:pointer; font-weight:600; }

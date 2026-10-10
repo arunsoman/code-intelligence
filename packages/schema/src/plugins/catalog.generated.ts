@@ -266,7 +266,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S12",
     "name": "Saga / compensation graph",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -290,7 +290,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S13",
     "name": "Outbox pattern topology",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -314,7 +314,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S14",
     "name": "Idempotency matrix",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -327,7 +327,7 @@ export const CHART_DESCRIPTORS = {
     ],
     "requiredAcrossRepository": [],
     "concern": "Reliability",
-    "renderer": "view-spec",
+    "renderer": "table",
     "questionAnswered": "Which mechanisms handle duplicate requests?",
     "description": "Each operation (reserve, post, rollback) crossed with its duplicate-call scenario, showing whether the result is idempotent and what mechanism enforces it (batchId lookup, INSERT IGNORE, Redis idempotency key). Missing guarantees are gaps.",
     "example": "Build an idempotency matrix for reserve, post and rollback. For each operation, show what happens on a duplicate call with the same batchId, which code mechanism enforces idempotency (state-exists check, INSERT IGNORE, Redis key), and cite the evidence. Mark any operation where idempotency is not evidenced as a gap.",
@@ -337,7 +337,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S15",
     "name": "DI wiring diagram",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -390,7 +390,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S17",
     "name": "UML package diagram",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -425,7 +425,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S18",
     "name": "UML communication diagram",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -449,7 +449,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S19",
     "name": "UML interaction overview",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -473,7 +473,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S20",
     "name": "CRC cards",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -494,7 +494,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S21",
     "name": "Call graph",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "projected",
     "offline": "derived",
     "aliases": [
@@ -517,7 +517,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S22",
     "name": "Layered architecture",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -539,7 +539,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S23",
     "name": "Dependency / module graph",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -629,7 +629,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S26",
     "name": "Metrics / telemetry map",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -654,7 +654,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S27",
     "name": "System context",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -681,7 +681,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S28",
     "name": "UML sequence diagram",
     "form": "GeneratedChart",
-    "version": 4,
+    "version": 5,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [

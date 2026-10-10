@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "Outbox pattern topology",
   "form": "GeneratedChart",
   "compiler": "projected",
-  "version": 3,
+  "version": 4,
   "aliases": [
     "Outbox pattern topology",
     "outbox diagram",

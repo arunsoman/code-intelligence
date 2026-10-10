@@ -17,7 +17,11 @@ export function VisualsGallery({ revision, onClose, onShow }: Props) {
   // Shared editable-question state for both system charts and built-in visuals, keyed by chart code.
   const [text, setText] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => { void call<CatalogEntry[]>("C19", "visuals", { revision }).then((r) => (r.ok ? setItems(r.value) : setError(r.error.message))); }, [revision]);
+  useEffect(() => {
+    const controller=new AbortController();setItems(null);setError(null);
+    void call<CatalogEntry[]>("C19","visuals",{revision},undefined,"v1",controller.signal).then(r=>{if(controller.signal.aborted)return;r.ok?setItems(r.value):setError(r.error.message);});
+    return ()=>controller.abort();
+  },[revision]);
 
   return (
     <Modal title="Visuals" onClose={onClose} className="wide tall"
@@ -28,7 +32,7 @@ export function VisualsGallery({ revision, onClose, onShow }: Props) {
       {/* ── System-design charts (S1–S28) ────────────────────────────────────────────── */}
       <div className="gallery-section-header">
         <h3>System-design charts</h3>
-        <p className="muted small">Focused views for exploring a codebase's structure, behavior and data: architecture, sequences, state machines, event flows, ER diagrams, DFDs, decision tables, saga graphs, outbox topology, idempotency guarantees, DI wiring, class/package/communication/interaction-overview diagrams, CRC cards, call and module graphs, layered views, transition tables, FMEA and metrics maps, system context and sequence notation. Each renders on the interactive canvas with zoom, click-to-inspect, and evidence links. All 35 standard diagram types are covered by S1–S28 here and by the built-in V1–V19 visuals below (types like the race-condition timeline, threat model, test traceability and profiling views live in the built-ins).</p>
+        <p className="muted small">Focused views for exploring a codebase's structure, behavior and data: architecture, sequences, state machines, event flows, ER diagrams, DFDs, decision tables, saga graphs, outbox topology, idempotency guarantees, DI wiring, class/package/communication/interaction-overview diagrams, CRC cards, call and module graphs, layered views, transition tables, FMEA and metrics maps, system context and sequence notation. Each renders on the interactive canvas with zoom, click-to-inspect, and evidence links. Notation coverage varies by view. Static interpretations and unavailable evidence are shown explicitly; chart names do not establish runtime guarantees.</p>
       </div>
       <ul className="gallery" tabIndex={0} aria-label="System-design charts">
         {SYSTEM_CHARTS.map((chart) => {
@@ -47,7 +51,7 @@ export function VisualsGallery({ revision, onClose, onShow }: Props) {
           const q = text[chart.code] ?? chart.example;
           const isTrace = chart.formId === "HypothesisGraph";
           return (
-            <li key={chart.code} className={available ? "" : "off"}>
+            <li data-visual-code={chart.code} key={chart.code} className={available ? "" : "off"}>
               <div className="between">
                 <span><span className="chip system-chip">{chart.code}</span> <strong>{name}</strong></span>
                 {!available && <span className="badge warn">{reason}</span>}
@@ -86,7 +90,7 @@ export function VisualsGallery({ revision, onClose, onShow }: Props) {
           const q = text[it.code] ?? it.example;
           const isTrace = it.formId === "HypothesisGraph";
           return (
-            <li key={it.code} className={it.available ? "" : "off"}>
+            <li data-visual-code={it.code} key={it.code} className={it.available ? "" : "off"}>
               <div className="between"><span><span className="chip">{it.code}</span> <strong>{it.name}</strong></span>{!it.available && <span className="badge warn">{it.reason}</span>}</div>
               <p>{it.blurb}</p>
               {isTrace ? <p className="muted small">Paste a stack trace into the conversation to open this view.</p> : (

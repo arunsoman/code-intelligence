@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "UML interaction overview",
   "form": "GeneratedChart",
   "compiler": "projected",
-  "version": 3,
+  "version": 4,
   "aliases": [
     "UML interaction overview",
     "interaction overview diagram",

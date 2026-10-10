@@ -445,7 +445,7 @@ function s14Offline(req: ModelRequest): ChartOutputV2 {
   const { bundle } = req;
   const nameOf = new Map(bundle.entities.map((e) => [e.entityId, e.name]));
   const operations: ChartPlanIdempotencyMatrix["operations"] = [];
-  const scenarios: ChartPlanIdempotencyMatrix["scenarios"] = [];
+  const scenarios: ChartPlanIdempotencyMatrix["scenarios"] = [{id:"replay",label:"Same key replay (unverified)"},{id:"concurrent",label:"Concurrent duplicate (unverified)"},{id:"different-key",label:"Different key repeat (unverified)"}];
   const seenOps = new Set<string>();
   for (const e of bundle.entities) {
     if (e.kind === "function" || e.kind === "method") {
@@ -453,15 +453,15 @@ function s14Offline(req: ModelRequest): ChartOutputV2 {
       if (seenOps.has(name)) continue;
       seenOps.add(name);
       operations.push({ id: `op:${operations.length}`, label: name.slice(0, 80), evidenceIds: evidenceForEntity(bundle, e.entityId) });
-      scenarios.push({ id: `sc:${scenarios.length}`, label: "scenario" });
+      if(operations.length===40)break;
     }
   }
   const cells: ChartPlanIdempotencyMatrix["cells"] = [];
-  for (let i = 0; i < Math.min(operations.length, 10); i++) {
-    for (let j = 0; j < Math.min(scenarios.length, 5); j++) {
+  for (let i = 0; i < operations.length; i++) {
+    for (let j = 0; j < scenarios.length; j++) {
       cells.push({
         operationId: operations[i].id, scenarioId: scenarios[j].id,
-        outcome: "unknown", evidenceIds: evidenceForName(bundle, operations[i].label),
+        outcome: "unknown", evidenceIds: [],
       });
     }
   }

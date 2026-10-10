@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "DI wiring diagram",
   "form": "GeneratedChart",
   "compiler": "projected",
-  "version": 3,
+  "version": 4,
   "aliases": [
     "DI wiring diagram",
     "di wiring diagram",
