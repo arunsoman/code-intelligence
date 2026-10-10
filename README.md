@@ -182,7 +182,8 @@ Gateway operations are grouped by component under `/api/v1/components/{C}/{op}` 
 
 ## Run it
 ```
-cargo build --release                 # Rust worker (tree-sitter indexer)
+bash scripts/setup-dev.sh             # System dependencies and repository Rust toolchain
+cargo build --release --locked        # Rust worker (tree-sitter indexer)
 npm install && npm run web:build
 npm start                             # http://127.0.0.1:4317 (loopback only)
 ./scripts_make_demo_repo.sh           # a git-backed payments app at .cie/demo/payments-app, with history
