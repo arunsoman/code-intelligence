@@ -1,3 +1,14 @@
+import type { StateSpec } from "./state.ts";
+export { StateSpecSchema, stateTransitionLabel, type StateSpec } from "./state.ts";
+import type { ErSpec } from "./er.ts";
+export { ErSpecSchema, erColumnLabel, type ErSpec } from "./er.ts";
+import type { SequenceSpec } from "./sequence.ts";
+export { SequenceSpecSchema, type SequenceSpec } from "./sequence.ts";
+import { CHART_DESCRIPTORS } from "./plugins/catalog.generated.ts";
+export { CHART_DESCRIPTORS };
+export * from "./plugins/chart-module.ts";
+import type { ResponseManifest } from "./response.ts";
+export * from "./response.ts";
 // Subset of contracts §2 used by the MVP. Field names match the contract on the wire.
 import { z } from "zod";
 export * from "./defect.ts";
@@ -218,6 +229,10 @@ export interface ViewSpec {
   terrain?: { cells: TerrainCell[]; factors: { id: string; label: string; description: string; weight: number }[]; formula: string };
   /** A many-to-many relation drawn as a grid (V12, V15). Cells are built beside the graph and obey the same provenance rules. */
   matrix?: ViewMatrix;
+  /** Evidence-linked sequence semantics; order is inferred, not observed timing. */
+  sequence?: SequenceSpec;
+  er?: ErSpec;
+  state?: StateSpec;
   /** Parameters that produced this view, shown to the user and used to refresh it. */
   params?: Record<string, string | number | boolean>;
   /** Whole-system summary for level 0: the system itself and the external packages it depends on. */
@@ -305,7 +320,6 @@ export type ChartId =
   | "S26" | "S27" | "S28" | "S29"
   | "generic";
 
-const CHART_IDS = ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12", "S13", "S14", "S15", "S16", "S17", "S18", "S19", "S20", "S21", "S22", "S23", "S24", "S25", "S26", "S27", "S28", "S29", "generic"] as const satisfies [ChartId, ...ChartId[]];
 
 /** Shared base fields present in every chart.v2 variant. */
 const chartV2Base = {
@@ -774,7 +788,7 @@ const ChartOutputV2Sequence = z.object({
   }).strict()).max(120),
   fragments: z.array(z.object({
     id: z.string().max(200),
-    kind: z.enum(["alt", "opt", "loop", "exception"]),
+    kind: z.enum(["alt", "opt", "loop", "exception", "par"]),
     condition: z.string().max(200).optional(),
     evidenceIds: z.array(z.string()).max(20),
   }).strict()).max(20),
@@ -840,120 +854,11 @@ export type ChartPlanC4Context = z.infer<typeof ChartOutputV2C4Context>;
 export type ChartPlanSequence = z.infer<typeof ChartOutputV2Sequence>;
 
 /** Canonical display names for the gallery's system charts: the rendered title and legend must name the selected type. */
-export const CHART_NAMES: Record<ChartId | (string & {}), string> = {
-  S1: "C4 container / component architecture",
-  S2: "Reserve fast-path sequence / swimlane",
-  S3: "BatchId lifecycle state machine",
-  S4: "Ledger and entry relationships",
-  S5: "test-guarantee matrix",
-  S6: "Use case diagram",
-  S7: "BPMN process diagram",
-  S8: "Event storming / event modeling",
-  S9: "Entity-relationship diagram",
-  S10: "Data flow diagram",
-  S11: "Decision table",
-  S12: "Saga / compensation graph",
-  S13: "Outbox pattern topology",
-  S14: "Idempotency matrix",
-  S15: "DI wiring diagram",
-  S16: "UML class diagram",
-  S17: "UML package diagram",
-  S18: "UML communication diagram",
-  S19: "UML interaction overview",
-  S20: "CRC cards",
-  S21: "Call graph",
-  S22: "Layered architecture",
-  S23: "Dependency / module graph",
-  S24: "State transition table",
-  S25: "FMEA / compensation matrix",
-  S26: "Metrics / telemetry map",
-  S27: "C4 context diagram",
-  S28: "UML sequence diagram",
-  S29: "Control flow graph",
-  generic: "Generated chart",
-};
+export const CHART_NAMES = Object.fromEntries(Object.values(CHART_DESCRIPTORS).map((d) => [d.id, d.name])) as Record<ChartId | (string & {}), string>;
+/** Compatibility projection from the discovered plugin metadata. */
+export const CHART_REGISTRY: { [K in ChartId]: import("./plugins/chart-module.ts").ChartDescriptor<K> } = CHART_DESCRIPTORS;
 
-/** Shared routing and retrieval metadata for every selectable chart type. */
-const CHART_ALIASES: Partial<Record<ChartId, readonly string[]>> = {
-  S1: ["C4 container component architecture", "C4 component diagram", "container diagram", "architecture diagram"],
-  S2: ["reserve fast path sequence swimlane", "reserve sequence", "swimlane diagram"],
-  S3: ["state machine", "state diagram", "lifecycle diagram"],
-  S4: ["ledger and entry relationships", "ledger er diagram", "ledger entity relationship diagram"],
-  S5: ["test guarantee matrix", "test traceability matrix"],
-  S6: ["use case diagram", "usecase diagram"],
-  S7: ["bpmn diagram", "business process diagram"],
-  S8: ["event storming event modeling", "event storming board", "event model"],
-  S9: ["entity relationship er diagram", "er diagram", "entity relationship diagram", "entity relationship chart"],
-  S10: ["data flow diagram dfd", "dfd", "data flow chart"],
-  S11: ["decision matrix", "decision table"],
-  S12: ["saga graph", "compensation graph"],
-  S13: ["outbox diagram", "outbox topology"],
-  S14: ["idempotency matrix"],
-  S15: ["di wiring diagram", "dependency injection diagram", "di diagram", "wiring diagram"],
-  S16: ["class diagram", "uml class diagram"],
-  S17: ["package diagram", "uml package diagram"],
-  S18: ["communication diagram", "uml communication diagram"],
-  S19: ["interaction overview diagram", "uml interaction overview"],
-  S20: ["crc cards", "class responsibility collaborator cards"],
-  S21: ["call graph"],
-  S22: ["layered architecture", "layer diagram", "layered architecture diagram"],
-  S23: ["dependency module graph", "module graph", "dependency graph", "module dependency diagram"],
-  S24: ["state transition table", "transition table"],
-  S25: ["fmea compensation matrix", "fmea matrix", "failure mode analysis"],
-  S26: ["metrics telemetry map", "metrics map", "telemetry map"],
-  S27: ["c4 context diagram", "context diagram"],
-  S28: ["uml sequence diagram", "sequence diagram"],
-  S29: ["control flow graph", "cfg", "control flow diagram"],
-};
 
-const CHART_REQUIRED_KINDS: Partial<Record<ChartId, readonly string[]>> = {
-  S16: ["class", "interface", "enum", "field", "method"],
-  S17: ["class", "interface", "module", "package", "function", "method"],
-  S21: ["function", "method"],
-  S23: ["module", "package", "crate", "workspace", "class", "interface", "function", "method"],
-  S12: ["function", "method"],
-  S13: ["function", "method"],
-  S14: ["function", "method"],
-  S15: ["class", "interface"],
-  S18: ["function", "method"],
-  S19: ["function", "method"],
-  S25: ["function", "method"],
-  S27: ["class", "function"],
-  S28: ["function", "method"],
-  S29: ["function", "method"],
-  S11: ["field"],
-  S9: ["table", "column"],
-  S4: ["table", "column"],
-};
-const CHART_REPO_KINDS: Partial<Record<ChartId, readonly string[]>> = {
-  S4: ["table", "column"],
-  S9: ["table", "column"],
-  // These are repository diagrams. Their plans need source facts beyond the files that
-  // happened to win lexical retrieval, otherwise valid branches/dependencies disappear.
-  S11: ["function", "method"],
-  S17: ["class", "interface", "module", "package", "function", "method"],
-  S23: ["module", "package", "crate", "workspace", "class", "interface", "function", "method"],
-  S25: ["function", "method"],
-  S26: ["function", "method"],
-  S27: ["class", "function"],
-};
-const CHART_FORMS: Partial<Record<ChartId, FormId>> = { S2: "TransactionJourney", S5: "TestConfidence" };
-const STANDARD_CHARTS = new Set<ChartId>(["S1", "S2", "S5", "S6", "generic"]);
-const SPECIALIZED_CHARTS = new Set<ChartId>(["S3", "S4", "S7", "S8", "S9", "S10", "S11", "S16"]);
-const PROJECTED_CHARTS = new Set<ChartId>(["S12", "S13", "S14", "S15", "S17", "S18", "S19", "S20", "S21", "S22", "S23", "S24", "S25", "S26", "S27", "S28"]);
-
-const OFFLINE_DERIVED_CHARTS = new Set<ChartId>(["S1", "S2", "S5", "S6", "S8", "S10", "S21", "generic"]);
-export const CHART_REGISTRY = Object.fromEntries(CHART_IDS.map((id) => [id, {
-  id,
-  name: CHART_NAMES[id],
-  form: CHART_FORMS[id] ?? "GeneratedChart",
-  compiler: STANDARD_CHARTS.has(id) ? "standard" as const : SPECIALIZED_CHARTS.has(id) ? "specialized" as const : PROJECTED_CHARTS.has(id) ? "projected" as const : "missing" as const,
-  version: 3,
-  aliases: [...new Set([CHART_NAMES[id], ...(CHART_ALIASES[id] ?? [])])],
-  requiredKinds: CHART_REQUIRED_KINDS[id] ?? [],
-  requiredAcrossRepository: CHART_REPO_KINDS[id] ?? [],
-  offline: OFFLINE_DERIVED_CHARTS.has(id) ? "derived" as const : "gap" as const,
-}])) as Record<ChartId, { id: ChartId; name: string; form: FormId; compiler: "standard" | "specialized" | "projected" | "missing"; version: number; aliases: string[]; requiredKinds: readonly string[]; requiredAcrossRepository: readonly string[]; offline: "derived" | "gap" }>;
 
 /** Resolve an explicitly named chart with token boundaries, preferring the most specific alias. */
 export function chartCodeForQuestion(question: string): ChartId | undefined {
@@ -1127,8 +1032,8 @@ export type ConverseResult =
   // `thinking`: the old-style, pre-answer text (why this form, the caption) — kept for the trace, not meant as the reply.
   // `message` is the composed answer; with no grounded answer available, `message` falls back to that same text and
   // `thinking` is omitted rather than duplicated.
-  | { kind: "analysis"; results: ChatAnalysisResult[]; message: string; thinking?: string }
-  | { kind: "view"; view: ViewSpec; claims: Claim[]; message: string; thinking?: string }
+  | { kind: "analysis"; results: ChatAnalysisResult[]; message: string; thinking?: string; manifest?: ResponseManifest }
+  | { kind: "view"; view: ViewSpec; claims: Claim[]; message: string; thinking?: string; manifest?: ResponseManifest }
   | { kind: "explanation"; explanation: ExplainResult; message: string }
   | { kind: "resume"; workspaceId: Id; message: string }
   | { kind: "zoom"; direction: "in" | "out" | "overview"; message: string }
@@ -2354,3 +2259,5 @@ export interface ReleaseView {
   counts: Partial<Record<ReleaseItemState, number>>;
   needsAssessment: number;
 }
+
+export type { WorkflowStep } from "./plugins/workflow-step.ts";

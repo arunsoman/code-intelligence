@@ -211,6 +211,10 @@ export class Store {
     return { id: r.id, repoRoot: r.repo_root, gitHead: r.git_head, createdAt: r.created_at, analyzerVersion: r.analyzer_version, diagnostics: JSON.parse(r.diagnostics), fileCount: r.file_count };
   }
 
+  entityKindCounts(rev: string): Record<string, number> {
+    return Object.fromEntries((this.db.prepare("select kind, count(*) as n from entities where revision = ? group by kind").all(rev) as { kind: string; n: number }[]).map(r => [r.kind, r.n]));
+  }
+
   entities(rev: string): Entity[] {
     return (this.db.prepare("select json from entities where revision = ? order by file, rowid").all(rev) as any[]).map((r) => JSON.parse(r.json));
   }

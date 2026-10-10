@@ -1,0 +1,10 @@
+import { ChartOutputV2, type EvidenceBundle, type EvidenceRef, type ViewRoute } from "@cie/schema";
+import { compileChartPlan } from "../src/chart-creator.ts";
+const evidence: EvidenceRef = { id: "ev:1", sourceId: "source.ts", location: { kind: "CodeLocation", span: { sourceId: "source.ts", contentHash: "h", revision: "rev", startByte: 0, endByteExclusive: 10 } }, class: "STATIC_RESOLVED", observedAt: "t", accessScopeId: "repo", state: "CURRENT" };
+const bundle: EvidenceBundle = { id: "b", revision: "rev", evidence: [evidence], entities: [], relationships: [], facts: [], coverage: [], unresolved: [], tokenEstimate: 0 };
+const rev = { id: "rev", repoRoot: "/r", gitHead: null, createdAt: "t", analyzerVersion: "t", diagnostics: [], fileCount: 1 };
+const route: ViewRoute = { source: "chosen", confidence: "high", form: "GeneratedChart", name: "Sequence", because: "", alternatives: [] };
+export function sequenceFixture(extra: Record<string, unknown> = {}) {
+  return ChartOutputV2.parse({ contractVersion: "chart.v2", chartId: "S28", chartType: "Sequence", caption: "Checkout", layout: "flow", nodes: [], edges: [], participants: [{ id: "caller", label: "Caller", evidenceIds: ["ev:1"] }, { id: "service", label: "Service", evidenceIds: ["ev:1"] }], messages: [{ from: "caller", to: "service", order: 2, label: "Submit", kind: "sync", fragmentId: "f", evidenceIds: ["ev:1"] }, { from: "service", to: "caller", order: 3, label: "Accepted", kind: "return", evidenceIds: ["ev:1"] }, { from: "caller", to: "service", order: 1, label: "Validate", kind: "async", evidenceIds: ["ev:1"] }, { from: "service", to: "service", order: 4, label: "Commit", kind: "self", evidenceIds: ["ev:1"] }], fragments: [{ id: "f", kind: "par", condition: "Inferred independent work", evidenceIds: ["ev:1"] }], ...extra });
+}
+export function compiledSequence(extra: Record<string, unknown> = {}) { return compileChartPlan({ plan: sequenceFixture(extra), bundle, rev, question: "Checkout sequence", route, chartId: "S28" }).view; }

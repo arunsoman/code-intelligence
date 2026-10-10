@@ -38,7 +38,7 @@ test("ELK packs disconnected domains compactly and adapts to a narrow canvas", a
     assert.deepEqual(r.edges.map(({ via, ...e }) => e), source.edges);
   }
   assert.ok(new Set(wide.nodes.map((n) => n.pos.x)).size > 1, "wide canvas uses multiple columns");
-  assert.ok(narrow.nodes[8].pos.y > narrow.nodes[7].pos.y, "narrow canvas flows downward");
+  assert.ok(narrow.nodes.some(n => n.pos.y > narrow.nodes[0].pos.y), "narrow canvas uses its available height");
   assert.deepEqual(source, before, "input geometry and provenance are untouched");
   assert.deepEqual(await arrangeElk(source, elk, { width: 1000, height: 600 }), wide, "deterministic layout");
 });
@@ -285,4 +285,44 @@ test("forceLayout: nodes with no links stay near the rest instead of drifting aw
   forceLayout(items, links);
   const w = Math.max(...items.map((i) => i.x)) - Math.min(...items.map((i) => i.x)), h = Math.max(...items.map((i) => i.y)) - Math.min(...items.map((i) => i.y));
   assert.ok(w < 2000 && h < 2000, `layout spans ${Math.round(w)} x ${Math.round(h)}`);
+});
+
+test("adaptive layout selects topology fit instead of imposing a vertical aspect cutoff", async () => {
+  const { viewportFit } = await import("../src/arrange.ts");
+  const source = domainGraph();
+  let calls = 0;
+  const engine = { async layout(graph: any) {
+    calls++;
+    const horizontal = graph.layoutOptions["elk.direction"] === "RIGHT";
+    return { ...graph, children: graph.children.map((n: any, i: number) => ({ ...n, x: horizontal ? i % 3 * 230 : 0, y: horizontal ? Math.floor(i / 3) * 90 : i * 160 })), edges: [] };
+  } };
+  const result = await arrangeElk(source, engine, { width: 800, height: 605 });
+  assert.equal(calls, 2);
+  assert.ok(new Set(result.nodes.map(n => n.pos.x)).size > 1);
+  assert.ok(viewportFit(result, { width: 800, height: 605 }) > .8);
+  assert.equal(viewportFit({ ...result, nodes: [result.nodes[0]], edges: [] }, { width: 800, height: 605 }), 1);
+});
+
+test("adaptive layout retains a successful orientation if the other engine pass fails", async () => {
+  let calls = 0;
+  const result = await arrangeElk(domainGraph(), { async layout(graph: any) {
+    if (++calls === 2) throw new Error("orientation failed");
+    return { ...graph, children: graph.children.map((n: any, i: number) => ({ ...n, x: i * 230, y: 0 })), edges: [] };
+  } }, { width: 800, height: 605 });
+  assert.equal(result.nodes.length, 9);
+});
+
+test("re-layout discards an obsolete waypoint without deleting its relationship or evidence", () => {
+  const r: Rendered = { nodes: [
+    { id:"a",label:"A",kind:"node",members:["source:a"],count:1,displayMode:"FACT",tier:"RELEVANT",pos:{x:0,y:0},stale:false },
+    { id:"b",label:"B",kind:"node",members:["source:b"],count:1,displayMode:"FACT",tier:"RELEVANT",pos:{x:400,y:0},stale:false },
+    { id:"obstacle",label:"Race window",kind:"node",members:["source:race"],count:1,displayMode:"HYPOTHESIS",tier:"RELEVANT",pos:{x:200,y:200},stale:false },
+  ], edges: [{ id:"e",from:"a",to:"b",label:"Related",kind:"calls",count:1,edgeIds:["source:e"],evidenceIds:["proof"],displayMode:"FACT",stale:false,via:[{x:200,y:200}] }], groups:[] };
+  const view={formId:"GeneratedChart",nodes:[],groups:[]} as unknown as import("@cie/schema").ViewSpec;
+  const next=arrange(r,view,5);
+  assert.equal(measure(next).edgeThroughNode,0);
+  assert.equal(next.edges.length,1);
+  assert.deepEqual(next.edges[0].evidenceIds,["proof"]);
+  assert.equal(next.edges[0].via,undefined);
+  assert.deepEqual(r.edges[0].via,[{x:200,y:200}],"original snapshot unchanged");
 });

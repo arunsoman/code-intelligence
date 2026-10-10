@@ -1,3 +1,4 @@
+import { SequenceCanvas } from "./SequenceCanvas.tsx";
 import cytoscape from "cytoscape";
 import ElkConstructor from "elkjs/lib/elk-api.js";
 import type { ELK as ElkEngine, ELKConstructorArguments } from "elkjs/lib/elk-api.js";
@@ -11,8 +12,11 @@ import { detailPolicyFor, type DetailPolicy, type SemanticAnchor } from "./detai
 import { renderedLevelFromGraph } from "./rendered-level.ts";
 import { attachFisheye, chartColor, chartFill, CHART_THEME, LENS_DEFAULTS, type LensEngine, type LensState } from "./fisheye.ts";
 import "./zoom.css";
+import type { CanvasState } from "./response-workspace.ts";
 
-interface Props {
+export interface CanvasProps {
+  initialState?: CanvasState;
+  onState?: (state: CanvasState) => void;
   rendered: Rendered;
   lensDetails?: Rendered;
   replayNodes?: Map<string, boolean>;
@@ -98,6 +102,10 @@ function style(): cytoscape.StylesheetJson {
     { selector: "node[role = 'factory']", style: { shape: "cut-rectangle", width: 170, height: 44 } },
     { selector: "node[role = 'rule'], node[role = 'operation']", style: { shape: "round-tag", width: 170, height: 44 } },
     // ── Chart notation roles (S16–S28): shape and line style carry the notation, not color alone ──
+    { selector: "node[role = 'lifecycle-state'], node[role = 'lifecycle-initial'], node[role = 'lifecycle-final']", style: { shape: "round-rectangle", width: 220, height: 72, "text-max-width": "200px", "text-wrap": "wrap", "font-size": 12, "border-width": 2 } },
+    { selector: "node[role = 'lifecycle-initial']", style: { "border-width": 4 } },
+    { selector: "node[role = 'lifecycle-final']", style: { "border-style": "double", "border-width": 6 } },
+    { selector: "node[role = 'er-entity']", style: { shape: "round-rectangle", width: 320, height: "mapData(erRows, 0, 13, 68, 328)", "border-width": 2, "text-wrap": "wrap", "text-max-width": "296px", "font-size": 12, "text-valign": "center" } },
     { selector: "node[role = 'uml-class'], node[role = 'uml-abstract'], node[role = 'uml-interface']", style: { shape: "round-rectangle", width: 270, height: "mapData(umlLines, 1, 10, 76, 238)", "border-width": 3, "font-weight": 700, "text-max-width": "246px", "font-size": 10, "text-valign": "center" } },
     { selector: "node[role = 'uml-abstract']", style: { "border-style": "dashed" } },
     { selector: "node[role = 'uml-interface']", style: { "border-style": "double" } },
@@ -140,6 +148,10 @@ function style(): cytoscape.StylesheetJson {
     { selector: "node[detail = 1][kind = 'node']", style: { height: 46, "text-wrap": "wrap", "font-size": 10 } },
     // Detail mode normally shortens every node; retain the UML member compartments instead of clipping them.
     { selector: "node[detail = 1][role = 'uml-class'], node[detail = 1][role = 'uml-abstract'], node[detail = 1][role = 'uml-interface'], node[detail = 1][role = 'uml-enum']", style: { width: 270, height: "mapData(umlLines, 1, 10, 76, 238)", "text-wrap": "wrap", "text-max-width": "246px", "font-size": 10 } },
+    { selector: "node[detail = 1][role ^= 'lifecycle-']", style: { width: 220, height: 72, "text-max-width": "200px", "font-size": 12 } },
+    { selector: "node[detail = 1][role = 'er-entity']", style: { width: 320, height: "mapData(erRows, 0, 13, 68, 328)", "font-size": 12, "text-max-width": "296px" } },
+    { selector: "edge[kind = 'er-declared'], edge[kind = 'er-inferred']", style: { "target-arrow-shape": "none", "source-arrow-shape": "none", "source-label": "data(sourceLabel)", "target-label": "data(targetLabel)", "source-text-offset": 24, "target-text-offset": 24, "source-text-rotation": "none", "target-text-rotation": "none", "font-size": 11 } },
+    { selector: "edge[kind = 'er-inferred']", style: { "line-style": "dashed" } },
     { selector: "node.stale", style: { opacity: 0.45, "border-style": "dotted", "border-color": muted } },
     { selector: ":parent", style: { "text-valign": "top", "text-halign": "center", "background-opacity": 0.06, "background-color": ink, "border-width": 1, "border-style": "solid", "border-color": muted, "font-size": 11, color: muted, padding: "14px", shape: "round-rectangle", "font-weight": 400 } },
     { selector: "node[group = 'concept']", style: { "border-style": "dashed", "border-color": inf, "background-color": inf, "background-opacity": 0.06, "font-size": 12 } },
@@ -153,6 +165,8 @@ function style(): cytoscape.StylesheetJson {
     { selector: "edge.stale", style: { opacity: 0.4 } },
     { selector: "edge[ambient = 1]", style: { opacity: 0.14, width: 1, "target-arrow-shape": "none", label: "" } },
     { selector: "edge.focus", style: { opacity: 1, width: 2, "target-arrow-shape": "triangle" } },
+    { selector: "edge[kind = 'forbidden-transition']", style: { "line-style": "dashed", "target-arrow-shape": "tee", "line-color": warn, "target-arrow-color": warn, color: warn } },
+    { selector: "edge[kind = 'replay-transition']", style: { "line-style": "dotted", "target-arrow-shape": "triangle" } },
     { selector: "node.kbfocus", style: { "overlay-color": accent, "overlay-opacity": 0.28, "overlay-padding": 9, "border-width": 4, "border-color": accent } },
     { selector: "node.replay-observed", style: { "underlay-color": accent, "underlay-opacity": 0.3, "underlay-padding": 10 } },
     { selector: "node.replay-error", style: { "underlay-color": warn, "underlay-opacity": 0.45, "underlay-padding": 12 } },
@@ -221,9 +235,14 @@ function captureAnchor(c: cytoscape.Core, rendered: Rendered, selected: Set<stri
   return { ids: mid.node ? byId.get(mid.node.id())?.members ?? [] : [], screen: centre };
 }
 
-export function Canvas(input: Props) {
+export function Canvas(input: CanvasProps) {
+  return input.rendered.sequence ? <SequenceCanvas {...input} /> : <GraphCanvas {...input} />;
+}
+
+function GraphCanvas(input: CanvasProps) {
   const lens = useRef<LensEngine | null>(null);
-  const [lensState, setLensState] = useState<LensState>(LENS_DEFAULTS);
+  const [lensState, setLensState] = useState<LensState>(input.initialState?.lens ?? LENS_DEFAULTS);
+  const lensStateRef = useRef(lensState); lensStateRef.current = lensState;
   const [aspect, setAspect] = useState(1);
   const [layout, setLayout] = useState<{ source: Rendered; aspect: number; result: Rendered; engine: "elk" | "fallback" } | null>(null);
   const engine = useRef<InstanceType<typeof ELK> | null>(null);
@@ -278,7 +297,7 @@ export function Canvas(input: Props) {
       cb.current.onSelectNodes(c.nodes(":selected").filter((n) => !n.isParent()).map((n) => n.id()));
     });
     c.on("tap", "node", (e) => { if (e.target.isParent()) return; const n = cb.current.rendered.nodes.find((x) => x.id === e.target.id()); if (n) cb.current.onTapNode(n); });
-    c.on("dbltap", "node", (e) => { lens.current?.focus(e.target.renderedPosition()); lens.current?.configure({ magnification: 2.8 }); });
+    c.on("dbltap", "node", (e) => { lens.current?.focus(e.target.renderedPosition()); });
     c.on("tap", "edge", (e) => { const ed = cb.current.rendered.edges.find((x) => x.id === e.target.id()); if (ed) cb.current.onTapEdge(ed); });
     // A wrapped or shortened label still has its full text: show it on hover, and the text outline (O) keeps every name too.
     const showTip = (e: cytoscape.EventObject, text: string | undefined) => { if (!text) return; const rp = e.target.renderedPosition(); setTip({ x: rp.x, y: rp.y - 12, text }); };
@@ -289,7 +308,7 @@ export function Canvas(input: Props) {
     c.on("mouseout", "node", (e) => e.target.removeClass("lens-hover"));
     const fisheye = attachFisheye(host.current, {
       interactive: () => !cb.current.boxSelect,
-      onChange: setLensState,
+      onChange: (state) => { lensStateRef.current = state; setLensState(state); cb.current.onState?.({ zoom: c.zoom(), pan: c.pan(), lens: state }); },
       scene: () => {
         const nodes = cb.current.rendered.nodes.flatMap((n) => {
           const element = c.getElementById(n.id); if (element.empty()) return [];
@@ -300,7 +319,7 @@ export function Canvas(input: Props) {
         const edges = cb.current.rendered.edges.flatMap((e) => {
           const a = byId.get(e.from), b = byId.get(e.to); if (!a || !b) return [];
           const z = c.zoom(), pan = c.pan(), element = c.getElementById(e.id);
-          return [{ id: e.id, from: e.from, to: e.to, ref: e, sourceArrow: element.style("source-arrow-shape"), targetArrow: element.style("target-arrow-shape"), arrowFill: element.style("target-arrow-fill"), label: element.style("label"), color: e.displayMode === "HYPOTHESIS" ? "#fb7185" : CHART_THEME.accent, dashed: e.displayMode !== "FACT", points: [a, ...(e.via ?? []).map((p) => ({ x: p.x * z + pan.x, y: p.y * z + pan.y })), b] }];
+          return [{ id: e.id, from: e.from, to: e.to, ref: e, sourceArrow: element.style("source-arrow-shape"), targetArrow: element.style("target-arrow-shape"), arrowFill: element.style("target-arrow-fill"), sourceArrowFill: element.style("source-arrow-fill"), lineStyle: element.style("line-style"), label: element.style("label"), color: element.style("line-color"), dashed: element.style("line-style") === "dashed", points: [a, ...(e.via ?? []).map((p) => ({ x: p.x * z + pan.x, y: p.y * z + pan.y })), b] }];
         });
         return { nodes, edges };
       },
@@ -313,6 +332,8 @@ export function Canvas(input: Props) {
       onEdge: (edge) => { if (edge.ref) cb.current.onTapEdge(edge.ref); },
     });
     lens.current = fisheye;
+    fisheye.configure(cb.current.initialState?.lens ?? { easing: !window.matchMedia("(prefers-reduced-motion: reduce)").matches });
+    c.on("pan zoom", () => cb.current.onState?.({ zoom: c.zoom(), pan: c.pan(), lens: lensStateRef.current }));
     c.on("render pan zoom", fisheye.refresh);
     // What the person can see: how many elements are outside the viewport, and whether labels are too small to be drawn.
     let raf = 0;
@@ -361,20 +382,24 @@ export function Canvas(input: Props) {
     const els: cytoscape.ElementDefinition[] = [
       ...rendered.groups.map((g) => ({ data: { id: g.id, label: g.label, group: g.kind, parent: g.parent && rendered.groups.some((x) => x.id === g.parent) ? g.parent : undefined } })),
       ...rendered.nodes.map((n) => {
+        const er = n.role === "er-entity";
+        const erNotes = er ? (n.node?.notes ?? []).slice(0,12).map(note => note.length > 42 ? note.slice(0,41)+"…" : note) : [];
+        const erRows = erNotes.length + ((n.node?.notes?.length ?? 0) > 12 ? 1 : 0);
+        const erLabel = er ? `${n.label.length > 42 ? n.label.slice(0,41)+"…" : n.label}\n────────────────────${erNotes.length ? "\n"+erNotes.join("\n") : "\nNo evidenced columns"}${(n.node?.notes?.length ?? 0) > 12 ? `\n… ${n.node!.notes!.length-12} more fields · inspect` : ""}` : "";
         const bd = n.node?.badge;
         const uml = !!n.node && ["uml-class", "uml-abstract", "uml-interface", "uml-enum"].includes(n.role ?? "");
         const umlNotes = uml ? (n.node?.notes ?? []).slice(0, 8) : [];
         const umlKind = n.role === "uml-interface" ? "«interface»" : n.role === "uml-enum" ? "«enumeration»" : n.role === "uml-abstract" ? "«abstract»" : "«class»";
         const umlLabel = uml ? `${umlKind}\n${n.label}\n────────────────────${umlNotes.length ? `\n${umlNotes.join("\n")}` : ""}${(n.node?.notes?.length ?? 0) > umlNotes.length ? `\n… ${n.node!.notes!.length - umlNotes.length} more members` : ""}` : "";
-        const detail = uml ? umlLabel : level >= 6 && n.node ? `${n.label}\n${[n.role === "symbol" ? n.node.kind : n.role, n.node.notes?.length ? `${n.node.notes.length} note(s)` : "", n.node.unresolvedCalls ? `${n.node.unresolvedCalls} unresolved calls` : ""].filter(Boolean).join(" · ")}` : n.label;
+        const detail = er ? erLabel : uml ? umlLabel : level >= 6 && n.node ? `${n.label}\n${[n.role === "symbol" ? n.node.kind : n.role, n.node.notes?.length ? `${n.node.notes.length} note(s)` : "", n.node.unresolvedCalls ? `${n.node.unresolvedCalls} unresolved calls` : ""].filter(Boolean).join(" · ")}` : n.label;
         const labelText = level === 3 && n.unresolvedCalls ? `${detail}\n${n.unresolvedCalls} unresolved calls` : bd && level < 6 ? `${n.label}\n${bd}` : detail;
-        return { data: { id: n.id, label: labelText, umlLines: uml ? 2 + umlNotes.length + ((n.node?.notes?.length ?? 0) > umlNotes.length ? 1 : 0) : 1, lensColor: chartColor(n.node?.file ?? n.label, n.role), lensFill: chartFill(chartColor(n.node?.file ?? n.label, n.role)), hasBadge: bd ? 1 : 0, heatv: n.node?.heat ? n.node.heat.value : -1, ghost: n.node?.ghost ? 1 : 0, inTx: n.inTx ? 1 : 0, detail: level >= 6 ? 1 : 0, testOverlaySize: 0, runtimeOverlaySize: 0, tier: n.tier, display: n.displayMode, role: n.role ?? "", kind: n.kind, parent: n.parent }, position: { ...n.pos }, classes: n.stale ? "stale" : "" };
+        return { data: { id: n.id, label: labelText, erRows, umlLines: uml ? 2 + umlNotes.length + ((n.node?.notes?.length ?? 0) > umlNotes.length ? 1 : 0) : 1, lensColor: chartColor(n.node?.file ?? n.label, n.role), lensFill: chartFill(chartColor(n.node?.file ?? n.label, n.role)), hasBadge: bd ? 1 : 0, heatv: n.node?.heat ? n.node.heat.value : -1, ghost: n.node?.ghost ? 1 : 0, inTx: n.inTx ? 1 : 0, detail: level >= 6 ? 1 : 0, testOverlaySize: 0, runtimeOverlaySize: 0, tier: n.tier, display: n.displayMode, role: n.role ?? "", kind: n.kind, parent: n.parent }, position: { ...n.pos }, classes: n.stale ? "stale" : "" };
       }),
       ...rendered.edges.map((e) => {
         const at = (id: string) => nodePos.get(id);
         const a = at(e.from), b = at(e.to);
-        const seg = e.via && a && b ? viaToSegments(a, b, e.via) : null;
-        return { ...({ data: { id: e.id, source: e.from, target: e.to, display: e.displayMode, kind: e.kind ?? "", label: level >= 5 || e.count > 1 ? e.label : "", count: e.count, ghost: e.ghost ? 1 : 0, ret: e.ret ? 1 : 0, ambient: e.ambient ? 1 : 0 }, classes: e.stale ? "stale" : "" }), ...(seg ? { style: { "curve-style": "segments", "segment-weights": seg.weights, "segment-distances": seg.distances, "edge-distances": "node-position" } } : {}) };
+        const seg = e.from !== e.to && e.via && a && b ? viaToSegments(a, b, e.via) : null;
+        return { ...({ data: { id: e.id, source: e.from, target: e.to, display: e.displayMode, kind: e.kind ?? "", sourceLabel: e.sourceLabel ?? "", targetLabel: e.targetLabel ?? "", label: level >= 5 || e.count > 1 ? e.label : "", count: e.count, ghost: e.ghost ? 1 : 0, ret: e.ret ? 1 : 0, ambient: e.ambient ? 1 : 0 }, classes: e.stale ? "stale" : "" }), ...(seg ? { style: { "curve-style": "segments", "segment-weights": seg.weights, "segment-distances": seg.distances, "edge-distances": "node-position" } } : {}) };
       }),
     ];
     c.add(els);
@@ -382,8 +407,9 @@ export function Canvas(input: Props) {
     // insertion does not reliably install the style object from an element definition.
     for (const element of els) if (element.style) c.getElementById(element.data.id!).style(element.style);
     if (p.viewKey !== lastViewKey.current || (automatic && aspect !== lastLayoutAspect.current)) {
+      const first = lastViewKey.current === "";
       lastViewKey.current = p.viewKey;
-      fitReadable(c);
+      if (first && p.initialState) { c.zoom(p.initialState.zoom); c.pan(p.initialState.pan); } else fitReadable(c);
     }
     // Reapply selection to the fresh elements.
     c.batch(() => { for (const id of p.selected) c.getElementById(id).select(); });
@@ -472,7 +498,7 @@ export function Canvas(input: Props) {
     syncing.current = false;
   }, [p.selected]);
 
-  const setFocus = (id: string | null, say = true) => {
+  const setFocus = (id: string | null, say = true, expand = true) => {
     const c = cy.current; if (!c) return;
     c.nodes().removeClass("kbfocus");
     focusId.current = id;
@@ -480,7 +506,7 @@ export function Canvas(input: Props) {
     const el = c.getElementById(id);
     if (el.empty()) { focusId.current = null; return; }
     el.addClass("kbfocus");
-    lens.current?.focus(el.renderedPosition());
+    if (expand) lens.current?.focus(el.renderedPosition());
     focusEdges(c, id);
     // A keyboard move is the user asking to look there: pan only if the node is off screen, never change zoom.
     const bb = el.renderedBoundingBox(), w = c.width(), h = c.height();
@@ -506,29 +532,23 @@ export function Canvas(input: Props) {
       if (sorted.length) setFocus(e.key === "Home" ? sorted[0].id : sorted[sorted.length - 1].id);
     } else if (e.key === "Enter" && cur) { e.preventDefault(); cb.current.onTapNode(cur); }
     else if (e.key === " " && cur) { e.preventDefault(); cb.current.onToggleNode(cur); }
-    else if ((e.key === "e" || e.key === "E") && cur) { e.preventDefault(); lens.current?.focus(c.getElementById(cur.id).renderedPosition()); lens.current?.configure({ magnification: 2.8 }); }
+    else if ((e.key === "e" || e.key === "E") && cur) { e.preventDefault(); lens.current?.focus(c.getElementById(cur.id).renderedPosition()); }
     else if (e.key === "Escape") { cb.current.onClear(); cb.current.announce("Selection cleared"); }
     else if (e.key === "o" || e.key === "O") { e.preventDefault(); cb.current.onOpenOutline(); }
   };
 
   // Keep the focus ring on the same element across re-renders (verdicts, level changes); drop it if the element is gone.
-  useEffect(() => { if (focusId.current) setFocus(focusId.current, false); }, [p.rendered]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (focusId.current) setFocus(focusId.current, false, false); }, [p.rendered]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <>
     <div className="canvas" ref={host} tabIndex={0} role="application" aria-busy={!layoutReady} data-layout-engine={automatic ? layoutReady ? layout!.engine : "pending" : "notation"} aria-label={`Map. ${p.caption || "Empty."}`} aria-describedby="canvas-help" onKeyDown={onKeyDown}
       onMouseDown={() => host.current?.focus()}
-      onFocus={() => { if (layoutReady && !focusId.current && cb.current.rendered.nodes.length) { const c = cy.current!; const first = [...cb.current.rendered.nodes].sort((a, b) => { const qa = c.getElementById(a.id).position(), qb = c.getElementById(b.id).position(); return qa.x - qb.x || qa.y - qb.y; })[0]; setFocus(first.id); } }} />
+      onFocus={() => { if (layoutReady && !focusId.current && cb.current.rendered.nodes.length) { const c = cy.current!; const first = [...cb.current.rendered.nodes].sort((a, b) => { const qa = c.getElementById(a.id).position(), qb = c.getElementById(b.id).position(); return qa.x - qb.x || qa.y - qb.y; })[0]; setFocus(first.id, false, false); } }} />
     {!layoutReady && <div className="canvas-hint" role="status">Arranging graph…</div>}
-    <div className="lens-controls" role="group" aria-label="Fisheye lens controls">
-      <label><input type="checkbox" checked={lensState.enabled} onChange={(e) => lens.current?.configure({ enabled: e.target.checked })} /> Lens</label>
-      <label>Magnify <input aria-label="Lens magnification" type="range" min="0.35" max="4" step="0.05" value={lensState.magnification} onChange={(e) => lens.current?.configure({ magnification: Number(e.target.value) })} /> <output>{lensState.magnification.toFixed(2)}×</output></label>
-      <label>Radius <input aria-label="Lens radius" type="range" min="60" max="220" step="2" value={lensState.radius} onChange={(e) => lens.current?.configure({ radius: Number(e.target.value) })} /></label>
-      <label>Falloff <input aria-label="Lens falloff" type="range" min="1.6" max="3.2" step="0.1" value={lensState.falloff} onChange={(e) => lens.current?.configure({ falloff: Number(e.target.value) })} /></label>
-      <label><input type="checkbox" checked={lensState.easing} onChange={(e) => lens.current?.configure({ easing: e.target.checked })} /> Ease</label>
-      <label><input type="checkbox" checked={lensState.rings} onChange={(e) => lens.current?.configure({ rings: e.target.checked })} /> Rings</label>
-      <button type="button" onClick={() => lens.current?.configure({ pinned: !lensState.pinned })}>{lensState.pinned ? "Unpin lens" : "Pin lens"}</button>
-      <span>Wheel: lens · Shift: radius · Alt: shrink · L: toggle</span>
+    <div className="lens-controls" role="group" aria-label="Hover expansion">
+      <button type="button" aria-pressed={!lensState.enabled} onClick={() => lens.current?.configure({ enabled: !lensState.enabled })}>{lensState.enabled ? "Pause hover expansion" : "Resume hover expansion"}</button>
+      <span>Hover: expand · E: focused element · Esc: dismiss · L: pause · [ / ]: pages</span>
     </div>
     {layoutReady && (hint.off > 0 || hint.labelsHidden) && (
       <div className="canvas-hint" role="status">

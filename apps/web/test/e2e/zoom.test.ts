@@ -43,32 +43,35 @@ const lensPoint = (b: Browser) => b.eval<{ x: number; y: number }>(`(() => {
   const p = node.renderedPosition(); return {x:rect.left+p.x,y:rect.top+p.y};
 })()`);
 
-test("fisheye wheel zoom leaves the chart camera, layout and global detail unchanged", { skip: !existsSync(CHROME), timeout: 180_000 }, async () => {
+test("automatic hover expands without moving the graph and removes lens configuration", { skip: !existsSync(CHROME), timeout: 180_000 }, async () => {
   const server = await start(), b = await Browser.launch();
   try {
     await prepare(b, server.url);
     const before = await graphSnapshot(b), point = await lensPoint(b);
     await b.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
-    const initial = await b.eval<number>(`Number(document.querySelector('.canvas').dataset.lensMagnification)`);
-    for (let i = 0; i < 3; i++) await b.send("Input.dispatchMouseEvent", { type: "mouseWheel", ...point, deltaX: 0, deltaY: -180 });
-    await b.waitFor(() => `Number(document.querySelector('.canvas').dataset.lensMagnification) > ${initial}`, 5000);
-    await wait(300);
+    await b.waitFor(() => `document.querySelector('.canvas').dataset.lensActive === 'true'`, 5000);
     assert.deepEqual(await graphSnapshot(b), before);
-    assert.equal(await b.eval(`getComputedStyle(document.querySelector('.canvas')).backgroundColor`), "rgb(11, 15, 23)");
-    assert.ok(await b.eval(`document.querySelector('.fisheye-surface').width > 0`));
-    await b.eval(`window.dispatchEvent(new CustomEvent('cie:lens-zoom',{detail:{direction:'out'}}))`);
-    await wait(100);
-    assert.deepEqual(await graphSnapshot(b), before);
-    const radius = await b.eval<number>(`Number(document.querySelector('[aria-label="Lens radius"]').value)`);
-    await b.send("Input.dispatchMouseEvent", { type: "mouseWheel", ...point, deltaX: 0, deltaY: -180, modifiers: 8 });
-    await b.waitFor(() => `Number(document.querySelector('[aria-label="Lens radius"]').value) > ${radius}`, 5000);
-    assert.deepEqual(await graphSnapshot(b), before);
-    const pinned = await click(b, "Pin lens"); assert.ok(pinned);
-    await b.eval(`document.querySelector('.canvas').focus()`); await b.key("Escape");
-    assert.equal(await b.eval(`document.querySelector('.canvas').dataset.lensPinned`), "false");
-    const errors = b.console.filter((line) => /^exception|^error/.test(line)); assert.deepEqual(errors, []);
+    assert.ok(await b.eval(`(() => { const h=document.querySelector('.canvas'), outer=Number(h.dataset.lensOuterRadius), inner=Number(h.dataset.lensRadius); return Math.abs(outer-Math.min(h.clientWidth,h.clientHeight)*.35)<.01 || Math.abs(outer-260)<.01; })()`));
+    assert.ok(await b.eval(`(() => { const h=document.querySelector('.canvas'); return Math.abs(Number(h.dataset.lensRadius)/Number(h.dataset.lensOuterRadius)-.88)<1e-8; })()`));
+    assert.equal(await b.eval(`document.querySelector('[aria-label="Lens radius"], [aria-label="Lens magnification"], [aria-label="Lens falloff"]')`), null);
+    assert.ok(await click(b, "Pause hover expansion"));
+    await b.waitFor(() => `document.querySelector('.canvas').dataset.lensEnabled === 'false'`, 5000);
+    assert.ok(await click(b, "Resume hover expansion"));
+    await b.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+    await b.waitFor(() => `document.querySelector('.canvas').dataset.lensActive === 'true'`, 5000);
+    const zoom = (await graphSnapshot(b)).zoom;
+    await b.send("Input.dispatchMouseEvent", { type: "mouseWheel", ...point, deltaX: 0, deltaY: -180 });
+    await b.waitFor(() => `document.querySelector('.canvas')._cyreg.cy.zoom() !== ${zoom}`, 5000);
+    assert.equal(await b.eval(`Number(document.querySelector('.canvas').dataset.lensMagnification)`), 2.2);
+    assert.deepEqual(b.console.filter((line) => /^exception|^error/.test(line)), []);
   } finally { b.close(); server.proc.kill(); }
 });
+
+const firstChildPoint = (b: Browser, selector: string) => b.eval<{ x: number; y: number }>(`(() => {
+  const host=document.querySelector(${JSON.stringify(selector)}), r=host.getBoundingClientRect(), radius=Number(host.dataset.lensRadius), count=Number(host.dataset.lensChildren);
+  const side=Math.max(1,radius*Math.SQRT2-16), columns=Math.min(side>=220?2:1,count), rows=Math.ceil(count/columns), width=Math.min(180,(side-(columns-1)*12)/columns);
+  return {x:r.left+Number(host.dataset.lensX)-(columns-1)/2*(width+12), y:r.top+Number(host.dataset.lensY)-(rows-1)/2*64};
+})()`);
 
 test("lens expands only a hovered aggregate and keeps member selection linked to evidence", { skip: !existsSync(CHROME), timeout: 180_000 }, async () => {
   const server = await start(), b = await Browser.launch();
@@ -81,11 +84,7 @@ test("lens expands only a hovered aggregate and keeps member selection linked to
     await b.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
     await b.waitFor(() => `document.querySelector('.canvas').dataset.lensExpanded.startsWith('agg:') && Number(document.querySelector('.canvas').dataset.lensChildren) > 0`, 5000);
     assert.deepEqual(await graphSnapshot(b), before);
-    await click(b, "Pin lens");
-    await b.waitFor(() => `document.querySelector('.canvas').dataset.lensExpanded.startsWith('agg:')`, 5000);
-    const count = await b.eval<number>(`Number(document.querySelector('.canvas').dataset.lensChildren)`);
-    const rows = Math.ceil(count / 2), stepY = Math.min(64, 242 * 1.2 / rows);
-    const childPoint = { x: point.x - (count > 1 ? 84.65 : 0), y: point.y - (rows - 1) / 2 * stepY };
+    const childPoint = await firstChildPoint(b, ".canvas");
     const { data } = await b.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
     writeFileSync('/tmp/cie-fisheye-local.png', Buffer.from(data, "base64"));
     await b.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...childPoint });
@@ -110,16 +109,9 @@ test("concept tree zoom and preview expansion leave the background tree unchange
     const point = await b.eval<{x:number;y:number}>(`(() => {const host=document.querySelector('.tree-lens-stage'),hr=host.getBoundingClientRect();const node=[...host.querySelectorAll('.tnode[aria-expanded]')].find(n=>{const r=n.getBoundingClientRect();return r.x>hr.x && r.right<hr.right-250 && r.y>hr.y && r.bottom<hr.bottom}) || host.querySelector('.tnode[aria-expanded]');const r=node.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
     await b.send("Input.dispatchMouseEvent", {type:"mouseMoved",...point});
     await b.waitFor(() => `document.querySelector('.tree-lens-stage').dataset.lensExpanded !== ''`,5000);
-    await b.send("Input.dispatchMouseEvent",{type:"mouseWheel",...point,deltaX:0,deltaY:-180});
-    await b.waitFor(() => `Number(document.querySelector('.tree-lens-stage').dataset.lensMagnification)>2.2`,5000);
     assert.deepEqual(await snapshot(),before);
-    await b.eval(`document.querySelector('.tree-bar [aria-label="Zoom in"]').click()`);
-    await wait(200); assert.deepEqual(await snapshot(),before);
-    await b.eval(`document.querySelector('.tree-lens-stage .lens-controls button').click()`);
-    await wait(100);
-    const count = await b.eval<number>(`Number(document.querySelector('.tree-lens-stage').dataset.lensChildren)`);
-    const rows = Math.ceil(count/2), stepY = Math.min(64,242*1.2/rows);
-    const childPoint = {x:point.x-(count>1?84.65:0),y:point.y-(rows-1)/2*stepY};
+    assert.equal(await b.eval(`document.querySelector('.tree-bar [aria-label="Zoom in"], .tree-lens-stage input[type=range]')`), null);
+    const childPoint = await firstChildPoint(b, ".tree-lens-stage");
     await b.send("Input.dispatchMouseEvent",{type:"mouseMoved",...childPoint});
     await b.send("Input.dispatchMouseEvent",{type:"mousePressed",...childPoint,button:"left",clickCount:1});
     await b.send("Input.dispatchMouseEvent",{type:"mouseReleased",...childPoint,button:"left",clickCount:1});

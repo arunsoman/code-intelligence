@@ -1,3 +1,5 @@
+import { responsePortfolio } from "./response-portfolio.ts";
+import type { ResponseManifest } from "@cie/schema";
 import { diagnostic, bundleDiagnostics, withDiagnostics } from "./diagnostics.ts";
 // Orchestration. Public operations return ApiResult (contracts §1). Every model call goes through callModel,
 // which enforces the per-repository egress opt-in, scrubs secrets, and writes the audit trail.
@@ -1718,8 +1720,13 @@ export class Service {
   }
 
   /** Every question gets both: the picture, and the written answer composed from the same view (after access redaction, so it never says more). */
-  async ask(ctx: CallContext, req: Parameters<Service["askView"]>[1]): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
-    return withDiagnostics({ requestId: ctx.requestId, traceId: ctx.traceId }, () => this.askInternal(ctx, req));
+  async ask(ctx: CallContext, req: Parameters<Service["askView"]>[1]): Promise<ApiResult<{ view: ViewSpec; claims: Claim[]; manifest?: ResponseManifest }>> {
+    return withDiagnostics({ requestId: ctx.requestId, traceId: ctx.traceId }, async () => {
+      const result = await this.askInternal(ctx, req);
+      if (!result.ok) return result;
+      result.value.view.params = { ...result.value.view.params, scope: req.scope ?? (req.overview ? "repository" : "subject"), ...(req.subject ? { subject: req.subject } : {}) };
+      return { ...result, value: { ...result.value, manifest: this.manifestFor([result.value.view], req.question, { scope: req.scope ?? (req.overview ? "repository" : "subject"), subject: req.subject, seeds: req.seeds }) } };
+    });
   }
 
   private async askInternal(ctx: CallContext, req: Parameters<Service["askView"]>[1]): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
@@ -2035,6 +2042,11 @@ export class Service {
   visuals(ctx: CallContext, req: { revision?: string }): ApiResult<CatalogEntry[]> {
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     return ok(ctx, catalog(this.store, rev, !!rev && isGitRepo(rev.repoRoot)), rev ? { revision: rev.id } : {});
+  }
+
+  private manifestFor(views: ViewSpec[], question: string, context?: { scope: "subject" | "repository"; subject?: string; seeds?: string[] }): ResponseManifest {
+    const rev = this.store.revision(views[0]!.revision);
+    return responsePortfolio({ views, question, context, evidenceKinds: this.store.entityKindCounts(views[0]!.revision), catalog: catalog(this.store, rev, !!rev && isGitRepo(rev.repoRoot)) });
   }
 
   /** Rank supported chat chart options against the question and the answer that was just shown. */
@@ -2598,6 +2610,10 @@ export class Service {
       diagnostic("conversation.start", { question: req.text, revision: req.revision, sessionId: req.sessionId, historyTurns: req.history?.length ?? 0, currentView: req.view?.id });
       try {
         const result = await this.converseSession(ctx, req);
+        if (result.ok && (result.value.kind === "view" || result.value.kind === "analysis")) {
+          const views = result.value.kind === "view" ? [result.value.view] : result.value.results.flatMap((r) => r.view ? [r.view] : []);
+          if (views.length) result.value.manifest = this.manifestFor(views, req.text);
+        }
         diagnostic("conversation.complete", { elapsedMs: performance.now() - started, ok: result.ok, ...(result.ok ? { kind: result.value.kind, message: result.value.message, metadata: result.metadata } : { error: result.error }) });
         return result;
       } catch (error) {

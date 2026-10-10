@@ -11,12 +11,18 @@ export const SIZES: Record<string, [number, number]> = {
   "failure-site": [170, 40], symptom: [190, 46], state: [130, 44], gate: [150, 64], policy: [150, 64], decision: [150, 54],
   hazard: [160, 44], race: [160, 44], unprotected: [160, 44], consequence: [160, 44], gap: [160, 44],
   event: [190, 52], commit: [190, 52], constraint: [190, 52], behavior: [200, 52], concept: [200, 52],
+  "c4-person": [170, 46], "c4-system": [220, 60],
   table: [210, 56], package: [180, 46], module: [170, 44], crate: [170, 44], component: [180, 46], participant: [180, 46],
   interface: [170, 44], factory: [170, 44], process: [170, 56], "data-store": [150, 48],
   "external-entity": [160, 36], "external-system": [160, 36],
   writer: [170, 44], poller: [170, 44], consumer: [170, 44], "outbox-store": [150, 48], "dead-letter": [150, 44],
 };
 export const nodeSize: Sizer = (n) => {
+  if (n.role?.startsWith("lifecycle-")) return { w: 220, h: 72 };
+  if (n.role === "er-entity") {
+    const notes = n.node?.notes?.length ?? 0;
+    return { w: 320, h: 68 + (Math.min(12,notes) + (notes > 12 ? 1 : 0)) * 20 };
+  }
   if (n.kind === "agg") return { w: 190, h: 44 };
   if (n.kind === "ext") return { w: 150, h: 30 };
   if (["uml-class", "uml-abstract", "uml-interface", "uml-enum"].includes(n.role ?? "")) {

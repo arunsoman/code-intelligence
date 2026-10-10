@@ -9,6 +9,7 @@ const label = (n: ViewNode) => n.label;
 test("failure question → CausalGraph listing every failure site with cited evidence; async-only ones are hypotheses", async () => {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
   const r = await svc.ask(ctx(), { question: "Show me everything that could cause a payment to fail", revision });
   assert.ok(r.ok);
   const { view, claims } = r.value;
@@ -43,6 +44,7 @@ test("an empty native causal graph falls back to a reusable evidence-grounded ch
   }
   const model = new CountingProvider();
   const { svc, worker, revision } = await setup(model, demoRepo());
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
   const question = "What could happen in the widget lifecycle?";
   const first = await svc.ask(ctx(), { question, revision, form: "CausalGraph", pins: ["function:src/api/payments-controller.ts#createPayment"] });
   assert.ok(first.ok);
@@ -58,6 +60,7 @@ test("an empty native causal graph falls back to a reusable evidence-grounded ch
 test("invariant question → every writer of the field, transactional or not, and the async path that reaches it", async () => {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
   const r = await svc.ask(ctx(), { question: "Why could this balance become incorrect?", revision });
   assert.ok(r.ok);
   const { view } = r.value;
@@ -125,6 +128,7 @@ test("investigation rejects text with nothing in this repo", async () => {
 test("salience: recency uses git history (recently changed ledger outranks untouched fraud check)", async () => {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
   const r = await svc.ask(ctx(), { question: "how do payments and balances work", revision });
   assert.ok(r.ok);
   const f = (name: string) => r.value.view.nodes.find((n) => n.label === name)?.factors?.find((x) => x.factor === "RECENCY");
@@ -168,6 +172,7 @@ class Clusterer implements ModelProvider {
 
 test("domains: a model-proposed intermediate abstraction nests concept groups, is grounded, and falls back when it is not", async () => {
   const good = await setup(new Clusterer("good"), demoRepo());
+  assert.ok((await good.svc.buildConceptHierarchy(ctx(), { revision: good.revision })).ok);
   const r = await good.svc.ask(ctx(), { question: "how do payments and balances work", revision: good.revision });
   assert.ok(r.ok);
   const v = r.value.view;
@@ -181,6 +186,7 @@ test("domains: a model-proposed intermediate abstraction nests concept groups, i
   good.worker.close();
 
   const bad = await setup(new Clusterer("ungrounded"), demoRepo());
+  assert.ok((await bad.svc.buildConceptHierarchy(ctx(), { revision: bad.revision })).ok);
   const b = await bad.svc.ask(ctx(), { question: "how do payments and balances work", revision: bad.revision });
   assert.ok(b.ok);
   assert.equal(b.value.view.groups.filter((g) => g.kind === "cluster").length, 0, "ungrounded domains are dropped");
@@ -191,6 +197,7 @@ test("domains: a model-proposed intermediate abstraction nests concept groups, i
 
 test("level-0 system summary lists external dependencies with their import evidence", async () => {
   const { svc, worker, revision } = await setup();
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
   const r = await svc.ask(ctx(), { question: "Show me how authentication works", revision });
   assert.ok(r.ok);
   const sys = r.value.view.system!;

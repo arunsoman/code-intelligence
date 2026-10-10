@@ -9,12 +9,14 @@
   ],
   "scripts": {
     "build:worker": "cargo build --release",
-    "test": "cargo test && node --test packages/core/test/*.test.ts packages/model/test/*.test.ts apps/web/test/*.test.ts extensions/vscode/test/*.test.ts packages/reporter/test/*.test.ts && node --test --test-concurrency=1 apps/web/test/e2e/*.test.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p apps/web/tsconfig.json --noEmit",
-    "web:build": "npm -w apps/web run build",
-    "start": "node packages/core/src/server.ts",
+    "test": "npm run plugins:check && cargo test && node --test packages/core/test/*.test.ts packages/model/test/*.test.ts apps/web/test/*.test.ts extensions/vscode/test/*.test.ts packages/reporter/test/*.test.ts && node --test --test-concurrency=1 apps/web/test/e2e/*.test.ts",
+    "typecheck": "npm run plugins:check && tsc -p tsconfig.json --noEmit && tsc -p apps/web/tsconfig.json --noEmit",
+    "web:build": "npm run plugins:check && npm -w apps/web run build",
+    "start": "npm run plugins:check && node packages/core/src/server.ts",
     "eval": "node packages/core/src/demobar.ts",
-    "build:ext": "npm -w extensions/vscode run build"
+    "build:ext": "npm -w extensions/vscode run build",
+    "plugins:generate": "node scripts/generate-plugins.ts",
+    "plugins:check": "node scripts/generate-plugins.ts --check"
   },
   "devDependencies": {
     "@types/node": "^24",

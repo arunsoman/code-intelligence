@@ -20,6 +20,12 @@ test("an explicitly requested empty ER chart remains selected through converse",
   assert.equal(result.value.view.formId, "GeneratedChart");
   assert.equal(result.value.view.params?.chartId, "S9");
   assert.equal(result.value.view.nodes.length, 0);
+  assert.equal(result.value.manifest?.revision, revision);
+  const primary = result.value.manifest?.views.find((v) => v.primary);
+  assert.equal(primary?.code, "S9");
+  assert.equal(primary?.status, "partial");
+  assert.equal(primary?.viewId, result.value.view.id);
+  assert.ok(result.value.manifest?.sections[0]?.text);
   assert.ok(result.value.view.gaps.some((gap) => /no tables/i.test(gap)));
 });
 

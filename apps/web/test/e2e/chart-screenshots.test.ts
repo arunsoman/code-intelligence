@@ -146,7 +146,7 @@ const canvasReady = () =>
 
 /** True once a cytoscape instance has at least one rendered node (more robust). */
 const cyReady = () =>
-  `(() => { try { const cy = document.querySelector('.canvas')?._cyreg?.cy; return !!cy && cy.nodes().length > 0; } catch { return false; } })()`;
+  `(() => { if (document.querySelectorAll("[data-sequence-element=participant]").length) return true; try { const cy = document.querySelector('.canvas')?._cyreg?.cy; return !!cy && cy.nodes().length > 0; } catch { return false; } })()`;
 
 /** True once the terrain treemap is rendered. */
 const terrainReady = () => `document.querySelectorAll('.treemap-cell').length > 0 || document.querySelectorAll('.terrain rect').length > 0 || document.querySelector('.terrain-view')?.children.length > 0`;
@@ -470,8 +470,7 @@ test(
             })()`);
             const point = await b.eval<{x: number; y: number}>(`(() => { const cells = [...document.querySelectorAll('${selector} .mcell, ${selector} .terrain-svg g.cell')]; const cell = cells.find((n) => {const r=n.getBoundingClientRect();return r.x > 0 && r.y > 0 && r.bottom < innerHeight && r.x < innerWidth-350}) || cells[0]; const r = cell.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
             await b.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
-            await b.send("Input.dispatchMouseEvent", { type: "mouseWheel", ...point, deltaX: 0, deltaY: -180 });
-            await b.waitFor(() => `Number(document.querySelector('${selector}').dataset.lensMagnification) > 2.2`, 5000, "shared lens handles wheel zoom");
+            await b.waitFor(() => `document.querySelector('${selector}').dataset.lensActive === 'true' && Number(document.querySelector('${selector}').dataset.lensChildren) > 0`, 5000, "shared lens expands a hovered cell automatically");
             assert.equal(await b.eval(`getComputedStyle(document.querySelector('${selector}')).backgroundColor`), "rgb(11, 15, 23)");
             assert.deepEqual(await b.eval(`(() => { const host = document.querySelector('${selector}'); return [...host.querySelectorAll('.mcell, .terrain-svg g.cell')].map((n) => {const r=n.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,text:n.textContent};}); })()`), before, "lens never changes source cell geometry");
             await wait(300);

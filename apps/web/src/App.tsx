@@ -1,6 +1,11 @@
+import { explorationChoices } from "./exploration-choices.ts";
+import { rendererForView } from "./plugins/renderers/index.ts";
+import { ResponseWorkspaceBar } from "./ResponseWorkspaceBar.tsx";
+import { useResponseWorkspace } from "./use-response-workspace.ts";
+import type { CanvasState } from "./response-workspace.ts";
+import type { EntityCode, ResponseManifest } from "@cie/schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiResult, AuditEvent, JobView, ChangesSince, Claim, ConverseResult, EditorContext, ExplainResult, MapOverlays, MatrixAxis, MatrixCell, ResolvedEvidence, RevisionInfo, SavedState, StatusInfo, VerdictKind, ViewNode, ViewSpec, WorkspaceOpen } from "@cie/schema";
-import { CHART_REGISTRY, type ChartId } from "@cie/schema";
 import { call } from "./api.ts";
 import { selectedChartId } from "./chart-selection.ts";
 import type { ChatAnalysisResult } from "@cie/schema";
@@ -21,7 +26,7 @@ import { Consequences } from "./Consequences.tsx";
 import { TerrainView } from "./TerrainView.tsx";
 import { MatrixView } from "./MatrixView.tsx";
 import { JobBar } from "./JobBar.tsx";
-import { VisualsGallery, SYSTEM_CHARTS, type CatalogEntry } from "./VisualsGallery.tsx";
+import { VisualsGallery, type CatalogEntry } from "./VisualsGallery.tsx";
 import { ProviderWizard } from "./ProviderWizard.tsx";
 import { FolderPicker } from "./FolderPicker.tsx";
 import { DefectPanel } from "./DefectPanel.tsx";
@@ -43,7 +48,7 @@ import { RuntimeReplay, type ReplayFrame } from "./RuntimeReplay.tsx";
 import { EpistemicSummary } from "./EpistemicSummary.tsx";
 import { arrange } from "./arrange.ts";
 import { semanticLevelsApply } from "./detail.ts";
-import { DEFAULT_LEVEL, LEVELS, MAX_LEVEL, basePositions, cellKey, effectiveView, render, selectedAggregates, type RenderEdge, type RenderNode } from "./graph.ts";
+import { DEFAULT_LEVEL, LEVELS, MAX_LEVEL, basePositions, cellKey, effectiveView, selectedAggregates, type RenderEdge, type RenderNode } from "./graph.ts";
 
 interface ExceptionRow { id: string; errorClass: string; message: string; trace: string; source: string; count: number; lastSeen: string }
 type Drawer =
@@ -74,6 +79,10 @@ export function App() {
   const [repoPath, setRepoPath] = useState("");
   const selectedRepoRef = useRef("");
   const repoGeneration = useRef(0);
+  const canvasSnapshot = useRef<CanvasState | undefined>(undefined);
+  const [canvasRestore, setCanvasRestore] = useState<CanvasState | undefined>(undefined);
+  const responseGeneration = useRef(0);
+  const [exploreOpen, setExploreOpen] = useState(false);
   const [view, setView] = useState<ViewSpec | null>(null);
   const [claimMap, setClaimMap] = useState<Record<string, Claim>>({});
   const [selection, setSelection] = useState<string[]>([]); // view node ids (symbol identity)
@@ -150,6 +159,39 @@ export function App() {
   const [cardPins, setCardPins] = useState<{ title: string; ids: string[] } | null>(null);
   const [audit, setAudit] = useState<{ events: AuditEvent[]; chain: { ok: boolean } } | null>(null);
 
+  const responseWorkspace = useResponseWorkspace({
+    currentView: view,
+    snapshot: () => ({ selection, cellSelection: cellSel, level, drawMode, terrainWeights, canvas: canvasSnapshot.current }),
+    show: (next, claims, ui) => {
+      adoptView(next, claims, false);
+      canvasSnapshot.current = ui?.canvas; setCanvasRestore(ui?.canvas);
+      if (ui) { setSelection(ui.selection); setCellSel(ui.cellSelection); setLevel(ui.level); setDrawMode(ui.drawMode); setTerrainWeights(ui.terrainWeights); }
+      setExploreOpen(false);
+    },
+  });
+  const navigateBack = () => { responseGeneration.current++; setBusy(null); if (code) { setCode(null); return; } responseWorkspace.back(); };
+  const resetResponse = () => { responseGeneration.current++; responseWorkspace.reset(); canvasSnapshot.current = undefined; setCanvasRestore(undefined); };
+  const sourceContext = useRef(""); sourceContext.current = `${view?.revision}:${view?.id}:${selection.join("|")}`;
+  const selectedSubjects = (view?.nodes ?? []).filter((n) => selection.includes(n.id) && n.entityRefs.length);
+  const exploreTarget = selectedSubjects.length === 1 ? selectedSubjects[0] : undefined;
+  const exploreChoices = exploreTarget ? explorationChoices(exploreTarget.kind, responseWorkspace.workspace?.manifest) : [];
+  const explore = (choice: typeof exploreChoices[number]) => {
+    if (!exploreTarget || !view || choice.disabled) return;
+    void askForm(`Show the ${choice.concern} of ${exploreTarget.label}`, choice.form, exploreTarget.label, undefined, undefined, undefined, choice.code.startsWith("S") ? choice.code : undefined,
+      { revision: view.revision, seeds: exploreTarget.entityRefs, scope: "subject" });
+  };
+  const openSource = async () => {
+    if (!exploreTarget || !view || exploreTarget.entityRefs.length !== 1) return;
+    const sourceView = view;
+    const sourceKey = sourceContext.current;
+    const token = responseGeneration.current;
+    const r = await call<EntityCode>("C11", "conceptCode", { revision: sourceView.revision, entityId: exploreTarget.entityRefs[0] });
+    if (token !== responseGeneration.current || sourceKey !== sourceContext.current) return;
+    if (!r.ok) { setError(failMsg(r)); return; }
+    if (r.value.state !== "CURRENT" && r.value.state !== "STALE") { setNotice(`Source is ${r.value.state.toLowerCase()}.`); return; }
+    setCode({ title: r.value.name, file: r.value.file, startLine: r.value.startLine, snippet: r.value.text });
+  };
+
   const closeAllDialogs = useCallback(() => {
     setGalleryOpen(false);
     setProviderWizardOpen(false);
@@ -211,6 +253,7 @@ export function App() {
 
   const clearRepositoryContext = () => {
     repoGeneration.current += 1;
+    resetResponse();
     setBusy(null); setError(null);
     setView(null); setClaimMap({}); setSelection([]); setCellSel([]); setLevel(DEFAULT_LEVEL);
     setHierarchyConcepts(0); setMessages([]); setEvents([]); setDrawer(null); setCode(null);
@@ -259,9 +302,10 @@ export function App() {
   const rendered = useMemo(() => {
     if (!eff) return { nodes: [], edges: [], groups: [] };
     const staleSet = new Set([...eff.stale, ...changedIds]);
-    return arrange(render(eff.view, level, positions, staleSet), eff.view, level, true);
+    const renderer = rendererForView(eff.view);
+    return arrange(renderer.render(eff.view, level, positions, staleSet), eff.view, level, true);
   }, [eff, level, positions, changedIds]);
-  const lensDetails = useMemo(() => eff ? render(eff.view, MAX_LEVEL, positions, new Set([...eff.stale, ...changedIds])) : undefined, [eff, positions, changedIds]);
+  const lensDetails = useMemo(() => eff ? rendererForView(eff.view).render(eff.view, MAX_LEVEL, positions, new Set([...eff.stale, ...changedIds])) : undefined, [eff, positions, changedIds]);
   const selectedRender = useMemo(() => selectedAggregates(rendered, selection), [rendered, selection]);
   const nodeById = useMemo(() => new Map((view?.nodes ?? []).map((n) => [n.id, n])), [view]);
   const overlayNodes = useMemo(() => overlayMarks(rendered, nodeById, overlays?.revision === view?.revision ? overlays : null, showTestOverlay, showRuntimeOverlay), [rendered, nodeById, overlays, view, showTestOverlay, showRuntimeOverlay]);
@@ -398,6 +442,8 @@ export function App() {
 
   // ------------------------------------------------------------ views
   function adoptView(v: ViewSpec, claims: Claim[], keepSelection: boolean) {
+    const workspace = responseWorkspace.current();
+    if (workspace && !workspace.tabs.some((t) => t.view?.id === v.id && t.view.revision === v.revision)) resetResponse();
     mergeClaims(claims);
     setSelection((sel) => (keepSelection ? sel.filter((id) => v.nodes.some((n) => n.id === id)) : []));
     setView(v); setDrawer(null); setCode(null); setStale(null); setCellSel([]);
@@ -406,71 +452,33 @@ export function App() {
     if (!keepSelection) { setLevel(v.level ?? DEFAULT_LEVEL); setFitTick((t) => t + 1); setChanges(null); }
   }
 
-  type ChatChartOption = { code: string; formId: string; name: string; blurb: string; example: string; needs: string[] };
-  const availableChatCharts = (catalog: CatalogEntry[]): ChatChartOption[] => {
-    const testsAvailable = catalog.some((entry) => entry.formId === "TestConfidence" && entry.available);
-    const system = SYSTEM_CHARTS.filter((chart) => CHART_REGISTRY[chart.code as ChartId]?.compiler !== "missing" && (chart.formId !== "TestConfidence" || testsAvailable));
-    const byCode = new Map<string, ChatChartOption>();
-    for (const chart of [...system, ...catalog.filter((entry) => entry.available)]) {
-      const canonical = /^S\d+$/.test(chart.code) ? CHART_REGISTRY[chart.code as ChartId]?.name : undefined;
-      byCode.set(chart.code, canonical ? { ...chart, name: canonical } : chart);
-    }
-    return [...byCode.values()];
-  };
-
-  const displayAlternatives = (question: string, routeAlternatives: { form: string; kind?: string; name: string }[] = [], charts: ChatChartOption[] = []) => {
-    const presets = charts.map((chart) => ({
-      form: chart.formId,
-      ...(selectedChartId(chart) ? { chartCode: selectedChartId(chart) } : {}),
-      name: chart.name,
-      question,
-      prompt: `${question}\n\nRender this same topic as a ${chart.name}. ${chart.example}`,
-    }));
-    const known = new Set(presets.map((option) => option.name));
-    const routed = routeAlternatives.filter((option) => !known.has(option.name)).map((option) => ({ ...option, question }));
-    return [...presets, ...routed];
-  };
-
   const appendChartMessage = (question: string, response: string, message: Omit<Message, "role" | "alternatives">, routeAlternatives: { form: string; kind?: string; name: string }[] = []) => {
     const id = uuid();
-    const alternatives = displayAlternatives(question, routeAlternatives);
+    const alternatives = routeAlternatives.map((option) => ({ ...option, question }));
     setMessages((current) => [...current, { ...message, id, role: "assistant" as const, alternatives }].slice(-200));
-    const generation = repoGeneration.current;
-    const revision = info?.revision?.id;
-    void call<CatalogEntry[]>("C19", "visuals", { revision }).then(async (catalogResult) => {
-      if (generation !== repoGeneration.current) return;
-      if (!catalogResult.ok) {
-        console.warn("[chart-recommendations] catalog request failed", { code: catalogResult.error.code, message: catalogResult.error.message });
-        return;
-      }
-      const charts = availableChatCharts(catalogResult.value);
-      const result = await call<{ codes: string[]; source: "llm" | "unavailable"; model: string | null; reason?: string }>("C19", "recommendCharts", {
-        question, response, revision,
-        options: charts.map((chart) => ({ code: chart.code, name: chart.name, description: chart.blurb, form: chart.formId, example: chart.example, needs: chart.needs })),
-      });
-      if (!result.ok) {
-        console.warn("[chart-recommendations] request failed", { code: result.error.code, message: result.error.message, optionCount: charts.length });
-        return;
-      }
-      console.info("[chart-recommendations] completed", { requestId: result.metadata.requestId, model: result.value.model, source: result.value.source, reason: result.value.reason, optionCount: charts.length, optionCodes: charts.map((chart) => chart.code), selectedCount: result.value.codes.length, selectedCodes: result.value.codes });
-      if (generation !== repoGeneration.current || result.value.source !== "llm") return;
-      const byCode = new Map(charts.map((chart) => [chart.code, chart]));
-      const ranked = result.value.codes.flatMap((code) => {
-        const chart = byCode.get(code);
-        return chart ? [{ form: chart.formId, ...(selectedChartId(chart) ? { chartCode: selectedChartId(chart) } : {}), name: chart.name, question, prompt: `${question}\n\nRender this same topic as a ${chart.name}. ${chart.example}` }] : [];
-      });
-      if (ranked.length) setMessages((current) => current.map((item) => item.id === id ? { ...item, alternatives: ranked } : item));
-    });
+    const manifest = responseWorkspace.current()?.manifest;
+    if (manifest) {
+      const alternatives = manifest.views.filter((v) => v.relevant && !v.primary && v.status !== "unavailable").slice(0, 6).map((v) => ({
+        form: v.form, name: v.label, question: manifest.question, ...(v.code.startsWith("S") ? { chartCode: v.code } : {}),
+      }));
+      if (alternatives.length) setMessages((current) => current.map((item) => item.id === id ? { ...item, alternatives } : item));
+    }
   };
 
   const send = async (text: string) => {
+    const command = text.trim().toLowerCase();
+    if (/^(go back|back|zoom out|go up|show parent view)$/.test(command)) { navigateBack(); return; }
+    if (/^(zoom in|zoom into (?:this|it|selected))$/.test(command)) { setExploreOpen(true); setNotice(exploreTarget ? `Choose a perspective on ${exploreTarget.label}.` : "Select one source-backed element to explore."); return; }
+    if (exploreOpen && /^[a-g]$/.test(command) && exploreTarget) { const choice = exploreChoices[command.charCodeAt(0) - 97]; if (choice) explore(choice); return; }
+    const responseToken = ++responseGeneration.current;
+    responseWorkspace.cancel();
     chatRestoreGeneration.current++;
     const generation = repoGeneration.current;
     say("user", text);
     setBusy("Thinking…"); setError(null); setNotice(null);
     try {
       const r = await call<ConverseResult>("C15", "converse", { text, sessionId: chatSessionId, view, selection, revision: info?.revision?.id, pins });
-      if (generation !== repoGeneration.current) return;
+      if (generation !== repoGeneration.current || responseToken !== responseGeneration.current) return;
       if (!r.ok) { say("assistant", failMsg(r), true); return; }
       const v = r.value;
       for (const w of r.metadata.warnings) say("assistant", `Note: ${w}`);
@@ -479,24 +487,26 @@ export function App() {
           const shown = v.results.filter((r) => r.view);
           for (const result of shown) mergeClaims(result.claims);
           const last = shown.at(-1);
-          if (last?.view) adoptView(last.view, last.claims, false);
+          if (v.manifest) responseWorkspace.begin(v.manifest, shown.flatMap((r) => r.view ? [{ view: r.view, claims: r.claims }] : []));
+          else if (last?.view) adoptView(last.view, last.claims, false);
           const summary = [v.message, ...v.results.flatMap((result) => result.view ? [result.title, result.view.caption, ...result.view.nodes.slice(0, 30).map((node) => `${node.label}: ${(node.notes ?? []).join(" ")}`)] : [result.title, result.message])].join("\n");
           appendChartMessage(text, summary, { text: v.message, at: now(), results: v.results, ...(v.thinking ? { thinking: v.thinking } : {}) });
           log("ASK", text.slice(0, 80));
           break;
         }
         case "view": {
-          adoptView(v.view, v.claims, !!view && view.id === v.view.id);
+          if (v.manifest) responseWorkspace.begin(v.manifest, [{ view: v.view, claims: v.claims }]);
+          else adoptView(v.view, v.claims, !!view && view.id === v.view.id);
           const summary = [v.message, v.view.caption, ...v.view.nodes.slice(0, 40).map((node) => `${node.label}: ${(node.notes ?? []).join(" ")}`), ...v.view.edges.slice(0, 40).map((edge) => `${edge.fromNodeId} ${edge.label ?? edge.kind} ${edge.toNodeId}`)].join("\n");
           appendChartMessage(v.view.question, summary, { text: v.message, at: now(), ...(v.thinking ? { thinking: v.thinking } : {}), ...(v.view.formId === "SemanticMap" ? { providerWizard: true } : {}) }, v.view.route?.alternatives);
           log("ASK", text.slice(0, 80)); break;
         }
         case "explanation": mergeClaims(v.explanation.claims); setDrawer({ kind: "explain", data: v.explanation }); say("assistant", v.message); log("EXPLAIN", text.slice(0, 80)); break;
-        case "zoom": window.dispatchEvent(new CustomEvent("cie:lens-zoom", { detail: { direction: v.direction } })); say("assistant", v.message); break;
+        case "zoom": if (v.direction === "out") navigateBack(); else if (v.direction === "in") setExploreOpen(true); else void askForm("Show the overall system", "SemanticMap"); break;
         case "resume": say("assistant", v.message); await resume(v.workspaceId); break;
         case "message": say("assistant", v.message); break;
       }
-    } finally { if (generation === repoGeneration.current) setBusy(null); }
+    } finally { if (generation === repoGeneration.current && responseToken === responseGeneration.current) setBusy(null); }
   };
 
   const showChatResult = (result: ChatAnalysisResult) => {
@@ -535,19 +545,24 @@ export function App() {
     setDrawer({ kind: "inspect", title: vn.label, sub: `${vn.role ?? vn.kind}${vn.file ? ` · ${vn.file}` : ""}`, notes: [...(vn.notes ?? []), ...(mark ? [mark.summary, ...mark.notes] : [])], factors: vn.factors, claimIds: vn.claimIds, evidence: await evidence(evidenceIds), entityId: vn.entityRefs[0] });
     log("INSPECT", vn.label);
   };
-  const askForm = async (question: string, form: string, subject?: string, kind?: string, chatLabel?: string, baseQuestion?: string, chartCode?: string) => {
+  const askForm = async (question: string, form: string, subject?: string, kind?: string, chatLabel?: string, baseQuestion?: string, chartCode?: string, target?: { revision: string; seeds: string[]; scope: "subject" }) => {
+    const related = !target && responseWorkspace.workspace?.tabs.find((t) => chartCode ? t.code === chartCode : t.form === form);
+    if (related && (baseQuestion || question === responseWorkspace.workspace?.manifest.question)) { void responseWorkspace.generate(related.id); return; }
+    const responseToken = ++responseGeneration.current;
+    responseWorkspace.cancel();
     const generation = repoGeneration.current;
     say("user", chatLabel ?? question);
     setBusy("Composing view…"); setError(null); setNotice(null);
     try {
-      const r = await call<{ view: ViewSpec; claims: Claim[] }>("C19", "ask", { question, revision: info?.revision?.id, form, subject, kind, ...(chartCode ? { chartCode } : {}) });
-      if (generation !== repoGeneration.current) return;
+      const r = await call<{ view: ViewSpec; claims: Claim[]; manifest?: ResponseManifest }>("C19", "ask", { question, revision: target?.revision ?? info?.revision?.id, form, subject, kind, ...(target ? { seeds: target.seeds, scope: target.scope } : {}), ...(chartCode ? { chartCode } : {}) });
+      if (generation !== repoGeneration.current || responseToken !== responseGeneration.current) return;
       if (!r.ok) { say("assistant", failMsg(r), true); return; }
-      adoptView(r.value.view, r.value.claims, !!view && view.id === r.value.view.id);
+      if (r.value.manifest) responseWorkspace.begin(r.value.manifest, [{ view: r.value.view, claims: r.value.claims }]);
+      else adoptView(r.value.view, r.value.claims, !!view && view.id === r.value.view.id);
       const summary = [r.value.view.caption, ...r.value.view.nodes.slice(0, 40).map((node) => `${node.label}: ${(node.notes ?? []).join(" ")}`), ...r.value.view.edges.slice(0, 40).map((edge) => `${edge.fromNodeId} ${edge.label ?? edge.kind} ${edge.toNodeId}`)].join("\n");
       appendChartMessage(baseQuestion ?? question, summary, { text: `${r.value.view.formReason ?? ""} ${r.value.view.caption}`.trim(), at: now() });
       log("ASK", `${form}: ${question.slice(0, 60)}`);
-    } finally { if (generation === repoGeneration.current) setBusy(null); }
+    } finally { if (generation === repoGeneration.current && responseToken === responseGeneration.current) setBusy(null); }
   };
   const inspectCell = async (cell: MatrixCell | null, row: MatrixAxis, col: MatrixAxis, additive = false) => {
     if (!view?.matrix) return;
@@ -862,8 +877,22 @@ export function App() {
       </aside>
 
       <main>
+        {responseWorkspace.workspace && <ResponseWorkspaceBar workspace={responseWorkspace.workspace} pending={responseWorkspace.pending}
+          canBack={responseWorkspace.canBack} onBack={navigateBack} onSelect={(id) => { if (id === responseWorkspace.workspace?.activeId) return; responseGeneration.current++; setBusy(null); void responseWorkspace.generate(id); }} onClose={responseWorkspace.close}
+          onGenerate={() => void responseWorkspace.generateAll()} onCancel={responseWorkspace.cancel} onExport={responseWorkspace.exportResponse}
+          onRelate={responseWorkspace.relate} />}
+        {responseWorkspace.workspace && <details className="response-findings"><summary>Answer and supporting views</summary>
+          {responseWorkspace.workspace.manifest.sections.map((section) => <div key={section.id}><strong>{section.label}</strong><p>{section.text}</p>
+            <button className="link small" onClick={() => { const refs = new Set(section.entityRefs); const ids = (view?.nodes ?? []).filter((n) => n.entityRefs.some((id) => refs.has(id))).map((n) => n.id); setSelection(ids); setNotice(ids.length ? `Highlighted ${ids.length} supporting elements.` : "This finding is not represented in the active view. Switch to its supporting tab."); }}>Highlight in this view</button></div>)}
+        </details>}
+        {!responseWorkspace.waiting && selection.length > 0 && <div className="response-explore"><button className="secondary small" onClick={() => setExploreOpen(!exploreOpen)} aria-expanded={exploreOpen}>Explore selected element</button>
+          {exploreOpen && <div className="explore-choices" role="group" aria-label="Explore selected element">
+            {exploreTarget ? <><strong>{exploreTarget.label}</strong>{exploreChoices.map((choice, index) => <button key={choice.code} className="secondary small" disabled={choice.disabled} title={choice.reason} onClick={() => explore(choice)}>{String.fromCharCode(65 + index)}. {choice.label}</button>)}
+              <button className="secondary small" disabled={exploreTarget.entityRefs.length !== 1} title={exploreTarget.entityRefs.length !== 1 ? "Select a single source entity first" : undefined} onClick={() => void openSource()}>Source</button><button className="link small" onClick={() => { setChatSeed({ text: `Explain ${exploreTarget.label}`, n: Date.now() }); document.getElementById("chat-input")?.focus(); }}>Something else…</button></> : <span>Select one source-backed element; groups or ambiguous selections need a member first.</span>}
+          </div>}
+        </div>}
         <div className="sr" role="status" aria-live="polite" aria-atomic="true">{announcement}</div>
-        <p id="canvas-help" className="sr">Keyboard: arrow keys move between elements, Enter inspects, Space selects, E magnifies the focused element, plus and minus adjust the lens, L toggles the lens, O opens a text outline of the whole map, Escape unpins the lens or clears the selection.</p>
+        <p id="canvas-help" className="sr">Keyboard: arrow keys move between elements, Enter inspects, Space selects, E expands the focused element, L pauses or resumes hover expansion, O opens a text outline of the whole map, Escape dismisses the lens or clears the selection.</p>
         {error && <div className="banner error" role="alert">{error} <button className="link" onClick={() => setError(null)}>dismiss</button></div>}
         {notice && <div className="banner ok" role="status">{notice}</div>}
         {changes && changes.changed && (
@@ -877,7 +906,7 @@ export function App() {
         {stale && !changes?.changed && (
           <div className="banner warn" role="alert">Source changed since this was saved ({stale.files.join(", ")}). {stale.evidence} evidence span(s) may no longer match — treat affected claims as stale.</div>
         )}
-        {(view?.formId === "RuntimeOverlay" || (view && !view.matrix && !view.terrain) || view?.formId === "ChangeRisk" || view?.matrix || view?.consequences) && (
+        {!responseWorkspace.waiting && (view?.formId === "RuntimeOverlay" || (view && !view.matrix && !view.terrain) || view?.formId === "ChangeRisk" || view?.matrix || view?.consequences) && (
           <details className="viewctrls" open={viewCtrlOpen} onToggle={(e) => setViewCtrlOpen((e.currentTarget as HTMLDetailsElement).open)}>
             <summary className="viewctrls-toggle">View controls</summary>
             <div className="viewctrls-body">
@@ -931,28 +960,28 @@ export function App() {
             </div>
           </details>
         )}
-        <div className="stage" aria-busy={phase === "composing" ? "true" : undefined}>
-          {view?.matrix && drawMode === "matrix" ? (
+        <div id="response-view-panel" role={responseWorkspace.workspace ? "tabpanel" : undefined} aria-labelledby={responseWorkspace.workspace ? `tab-${responseWorkspace.workspace.activeId}` : undefined} className="stage" aria-busy={responseWorkspace.waiting || phase === "composing" ? "true" : undefined}>
+          {responseWorkspace.waiting ? <div className="empty-chart-state" role="status"><strong>{responseWorkspace.active?.label}</strong><p>{responseWorkspace.active?.status === "generating" ? "Generating this view from the same question and revision…" : responseWorkspace.active?.reason ?? "Select this tab to generate its view."}</p>{responseWorkspace.active?.status === "failed" && <button onClick={() => void responseWorkspace.generate(responseWorkspace.active!.id)}>Retry this view</button>}</div> : view?.matrix && drawMode === "matrix" ? (
             <MatrixView matrix={eff!.view.matrix!} stale={eff!.stale} selected={new Set(cellSel)} onPick={(c, r, k, add) => void inspectCell(c, r, k, add)} />
           ) : view?.terrain ? (
             <TerrainView view={view} weights={terrainWeights} onWeights={setTerrainWeights} selected={new Set(selection)}
               onPick={(id) => { const vn = view.nodes.find((n) => n.id === id); if (vn) { setSelection([id]); void openNodeDrawer(vn); } }}
               onToggle={(id) => setSelection((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]))} />
           ) : (
-          <Canvas rendered={rendered} lensDetails={lensDetails} replayNodes={replayNodes} overlayNodes={overlayNodes} viewKey={viewKey} level={level} fitTick={fitTick} semanticLevels={levelsApply} formId={view?.formId} chartId={typeof view?.params?.chartId === "string" ? view.params.chartId : undefined} selected={selectedRender} boxSelect={boxSelect} caption={view?.caption ?? ""}
+          <Canvas key={responseWorkspace.workspace?.activeId ?? "legacy"} initialState={canvasRestore} onState={(state) => { canvasSnapshot.current = state; }} rendered={rendered} lensDetails={lensDetails} replayNodes={replayNodes} overlayNodes={overlayNodes} viewKey={viewKey} level={level} fitTick={fitTick} semanticLevels={levelsApply} formId={view?.formId} chartId={typeof view?.params?.chartId === "string" ? view.params.chartId : undefined} selected={selectedRender} boxSelect={boxSelect} caption={view?.caption ?? ""}
             onSelectNodes={(ids) => setSelection([...new Set(rendered.nodes.filter((n) => ids.includes(n.id)).flatMap((n) => n.members))])}
             onTapNode={inspectNode} onTapEdge={inspectEdge}
             onToggleNode={(n) => setSelection((sel) => (n.members.every((m) => sel.includes(m)) ? sel.filter((x) => !n.members.includes(x)) : [...new Set([...sel, ...n.members])]))}
             onClear={() => setSelection([])} onOpenOutline={() => openDialog(() => setOutlineOpen(true))} announce={setAnnouncement} />
           )}
-          {view && ["GeneratedChart", "RouteMap"].includes(view.formId) && rendered.nodes.length === 0 && rendered.edges.length === 0 && (
+          {!responseWorkspace.waiting && view && ["GeneratedChart", "RouteMap"].includes(view.formId) && rendered.nodes.length === 0 && rendered.edges.length === 0 && (
             <div className="empty-chart-state" role="status" aria-live="polite">
               <strong>{view.caption || "No diagram elements to display"}</strong>
               <p>{view.gaps[0] ?? "No current indexed evidence supports elements for this diagram."}</p>
               {view.gaps.length > 1 && <ul>{view.gaps.slice(1, 4).map((gap, index) => <li key={index}>{gap}</li>)}</ul>}
             </div>
           )}
-          {view && view.nodes.length > 0 && !view.terrain && !(view.matrix && drawMode === "matrix") && (
+          {!responseWorkspace.waiting && view && view.nodes.length > 0 && !view.terrain && !(view.matrix && drawMode === "matrix") && (
             <div className="toolbar" role="toolbar" aria-label="Canvas tools">
               <button className={`tool ${boxSelect ? "on" : ""}`} aria-pressed={boxSelect} onClick={() => setBoxSelect(!boxSelect)}>{boxSelect ? "Box select: drag to select (click to stop)" : "Box select"}</button>
               <button className="tool" onClick={() => setOutlineOpen(true)} title="The whole map as text (shortcut: O)">Text outline</button>
@@ -965,7 +994,7 @@ export function App() {
           )}
           {!view && (phase === "composing" ? <CanvasSkeleton label={COMPOSING_CAPTION} /> : <div className="empty">{emptyStageCopy(indexed)}</div>)}
         </div>
-        <footer>
+        <footer hidden={responseWorkspace.waiting}>
           {eff && <EpistemicSummary
             elements={view?.matrix && drawMode === "matrix" ? eff.view.matrix!.cells : view?.terrain ? eff.view.nodes.filter((n) => n.tier !== "HIDDEN") : [...rendered.nodes, ...rendered.edges]}
             scope={view?.matrix && drawMode === "matrix" ? "matrix cells" : view?.terrain ? "view nodes" : "drawn nodes and edges"}
@@ -985,7 +1014,7 @@ export function App() {
       </main>
 
       <aside className="right" data-has-evidence={code || drawer ? "true" : "false"}>
-        <ChatPanel onNewContext={() => { chatRestoreGeneration.current++; setChatSessionId(uuid()); setMessages([]); setError(null); setNotice("Started a new conversation context."); }} onShowResult={showChatResult} onShowAlt={(alt) => void askForm(alt.prompt ?? alt.question, alt.form, undefined, alt.kind, `Show as ${alt.name}`, alt.question, alt.chartCode)} onCreateProvider={() => openDialog(() => setProviderWizardOpen(true))} messages={messages} referents={referents} busy={!!busy} canAsk={!!info?.revision} examples={EXAMPLES} seed={chatSeed ?? undefined} onSend={(t) => void send(t)} onDropReferent={(id) => (id.startsWith("cell:") ? setCellSel(cellSel.filter((x) => x !== id)) : id === "card:pins" ? setCardPins(null) : id.startsWith("editor:") ? setDismissed(new Set([...dismissed, id.slice(7)])) : setSelection(selection.filter((x) => x !== id)))} />
+        <ChatPanel onNewContext={() => { resetResponse(); setView(null); setSelection([]); setCellSel([]); setCode(null); setDrawer(null); setBusy(null); chatRestoreGeneration.current++; setChatSessionId(uuid()); setMessages([]); setError(null); setNotice("Started a new conversation context."); }} onShowResult={showChatResult} onShowAlt={(alt) => void askForm(alt.prompt ?? alt.question, alt.form, undefined, alt.kind, `Show as ${alt.name}`, alt.question, alt.chartCode)} onCreateProvider={() => openDialog(() => setProviderWizardOpen(true))} messages={messages} referents={referents} busy={!!busy} canAsk={!!info?.revision} examples={EXAMPLES} seed={chatSeed ?? undefined} onSend={(t) => void send(t)} onDropReferent={(id) => (id.startsWith("cell:") ? setCellSel(cellSel.filter((x) => x !== id)) : id === "card:pins" ? setCardPins(null) : id.startsWith("editor:") ? setDismissed(new Set([...dismissed, id.slice(7)])) : setSelection(selection.filter((x) => x !== id)))} />
         <section className="drawer" aria-label="Evidence">
           {code && (
             <div className="codecard">

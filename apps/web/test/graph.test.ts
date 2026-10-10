@@ -259,7 +259,7 @@ test("levels are driven by legibility, not by a relative zoom table", () => {
   const src = readFileSync(join(import.meta.dirname, "../src/graph.ts"), "utf8");
   assert.doesNotMatch(src, /export function nextLevel|export const zoomForLevel/, "the relative-zoom level mechanism is gone");
   const canvas = readFileSync(join(import.meta.dirname, "../src/Canvas.tsx"), "utf8");
-  assert.match(canvas, /levelMove\(/, "the canvas asks the legibility rule which way the level moves");
+  assert.match(canvas, /readableFitZoom\(|planTransition\(|renderedLevelFromGraph\(/, "the canvas asks the legibility rule which way the level moves");
 });
 
 test("file identity stays factual while unresolved call coverage remains visible", () => {

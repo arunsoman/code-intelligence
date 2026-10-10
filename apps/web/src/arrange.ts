@@ -5,23 +5,24 @@
 // then every edge that would cross a node is routed around it. Selection, claims and evidence are untouched: only
 // positions and edge waypoints change, so provenance is never affected by layout.
 import type { ViewSpec } from "@cie/schema";
-import { callDepth, forceLayout, gutterRoutes, laneGrid, layered, pathClear, orderColumns, marginArcs, orderLanes, routeEdges, separate, wrapColumns, type Item } from "./layout.ts";
+import { callDepth, forceLayout, geometricCrossings, gutterRoutes, laneGrid, layered, pathClear, orderColumns, marginArcs, orderLanes, routeEdges, separate, wrapColumns, type Item } from "./layout.ts";
 import type { Pos, Rendered } from "./graph.ts";
-import { nodeSize } from "./layoutmetrics.ts";
+import { measure, nodeSize } from "./layoutmetrics.ts";
 import { columnFlow } from "./layout.ts";
 import type { ElkNode, ELK } from "elkjs/lib/elk-api.js";
 
 // Automatic topology layouts must not erase time, bands or swim-lane ordering.
-const TOPOLOGY_CHARTS = new Set(["S1", "S3", "S4", "S6", "S9", "S10", "S13", "S15", "S16", "S17", "S21", "S23", "S26", "S27", "generic"]);
+const TOPOLOGY_CHARTS = new Set(["S1", "S3", "S4", "S6", "S9", "S10", "S13", "S15", "S16", "S17", "S21", "S23", "S26", "S27"]);
 export function usesElk(r: Rendered, formId?: string, chartId?: string): boolean {
   if (!r.nodes.length || r.groups.some((g) => g.kind === "lane")) return false;
   if (["RaceWindow", "Archaeology", "SemanticDiff", "TransactionJourney"].includes(formId ?? "")) return false;
   return r.nodes.some((n) => n.kind === "agg" || n.kind === "ext") ||
+    formId === "SemanticMap" ||
     (formId === "GeneratedChart" && TOPOLOGY_CHARTS.has(chartId ?? ""));
 }
 
 /** ELK owns graph geometry; all identities, evidence, grouping and selection stay intact. */
-export async function arrangeElk(r: Rendered, engine: Pick<ELK, "layout">, viewport: { width: number; height: number }): Promise<Rendered> {
+async function arrangeDirection(r: Rendered, engine: Pick<ELK, "layout">, viewport: { width: number; height: number }, direction: "DOWN" | "RIGHT"): Promise<Rendered> {
   if (!r.nodes.length) return r;
   const ids = new Set(r.nodes.map((n) => n.id));
   const ratio = Math.max(0.25, Math.min(4, viewport.width / Math.max(1, viewport.height)));
@@ -40,11 +41,12 @@ export async function arrangeElk(r: Rendered, engine: Pick<ELK, "layout">, viewp
   const graph: ElkNode = {
     id: "layout-root",
     layoutOptions: {
-      "elk.algorithm": "layered", "elk.direction": ratio < 1.4 ? "DOWN" : "RIGHT",
+      "elk.algorithm": "layered", "elk.direction": direction,
       "elk.edgeRouting": "ORTHOGONAL", "elk.randomSeed": "1",
       "elk.hierarchyHandling": "INCLUDE_CHILDREN",
       "elk.separateConnectedComponents": "true", "elk.aspectRatio": String(ratio),
       "elk.layered.compaction.connectedComponents": "true",
+      "elk.layered.mergeEdges": "true",
       "elk.spacing.nodeNode": "32", "elk.spacing.componentComponent": "48",
       "elk.layered.spacing.nodeNodeBetweenLayers": "72",
       "elk.padding": "[top=24,left=24,bottom=24,right=24]",
@@ -73,10 +75,54 @@ export async function arrangeElk(r: Rendered, engine: Pick<ELK, "layout">, viewp
   return { ...r, nodes: r.nodes.map((n) => ({ ...n, pos: positions.get(n.id)! })), edges: r.edges.map((e) => ({ ...e, via: routes.get(e.id) ?? [] })) };
 }
 
+/** Post-process an ELK topology layout to reduce remaining straight-line crossings by barycenter ordering within each layer. */
+function refineTopology(r: Rendered): Rendered {
+  if (r.nodes.length < 3) return r;
+  const items: Item[] = r.nodes.map((n) => ({ id: n.id, ...nodeSize(n), x: n.pos.x, y: n.pos.y }));
+  const links = r.edges.filter((e) => !e.ambient).map((e) => ({ from: e.from, to: e.to }));
+  const before = items.map((i) => ({ ...i }));
+  orderColumns(items, links, { permuteColumns: true });
+  separate(items, 14);
+  const beforeR = measure({ nodes: before.map((i) => ({ id: i.id, label: "", kind: "node" as const, pos: { x: i.x, y: i.y }, members: [i.id], count: 1, displayMode: "FACT" as const, tier: "CONTEXT" as const, stale: false })), edges: r.edges.filter((e) => !e.ambient).map((e) => ({ ...e, from: e.from, to: e.to })), groups: [] });
+  const after = { nodes: items.map((i) => ({ id: i.id, label: "", kind: "node" as const, pos: { x: i.x, y: i.y }, members: [i.id], count: 1, displayMode: "FACT" as const, tier: "CONTEXT" as const, stale: false })), edges: r.edges.filter((e) => !e.ambient).map((e) => ({ ...e })), groups: [] };
+  const afterR = measure(after);
+  if (afterR.edgeCrossings > beforeR.edgeCrossings || afterR.nodeOverlaps > 0 || afterR.edgeThroughNode > 0) return r;
+  const at = new Map(items.map((i) => [i.id, i]));
+  return { ...r, nodes: r.nodes.map((n) => { const i = at.get(n.id)!; return { ...n, pos: { x: i.x, y: i.y } }; }) };
+}
+
+/** Fit at natural node sizes. Never enlarge a small graph just to fill empty pixels. */
+export function viewportFit(r: Rendered, viewport: { width: number; height: number }): number {
+  if (!r.nodes.length) return 1;
+  const boxes = r.nodes.map(n => { const { w, h } = nodeSize(n); return { x1: n.pos.x - w / 2, x2: n.pos.x + w / 2, y1: n.pos.y - h / 2, y2: n.pos.y + h / 2 }; });
+  const points = r.edges.flatMap(e => e.via ?? []);
+  const width = Math.max(...boxes.map(b => b.x2), ...points.map(p => p.x)) - Math.min(...boxes.map(b => b.x1), ...points.map(p => p.x)) + 96;
+  const height = Math.max(...boxes.map(b => b.y2), ...points.map(p => p.y)) - Math.min(...boxes.map(b => b.y1), ...points.map(p => p.y)) + 96;
+  return Math.min(1, Math.max(1, viewport.width) / width, Math.max(1, viewport.height) / height);
+}
+
+/** Compare topology orientations using actual resulting bounds, not an aspect threshold. */
+export async function arrangeElk(r: Rendered, engine: Pick<ELK, "layout">, viewport: { width: number; height: number }): Promise<Rendered> {
+  if (!r.nodes.length) return r;
+  const preferred = viewport.width >= viewport.height ? "RIGHT" : "DOWN";
+  const directions = [preferred, preferred === "RIGHT" ? "DOWN" : "RIGHT"] as const;
+  let best: Rendered | undefined, bestFit = -1, lastError: unknown;
+  for (const direction of directions) {
+    try {
+      const candidate = await arrangeDirection(r, engine, viewport, direction);
+      const fit = viewportFit(candidate, viewport);
+      // Ignore tiny differences to keep orientation stable across panel resizes.
+      if (fit > bestFit * 1.04) { best = candidate; bestFit = fit; }
+    } catch (error) { lastError = error; }
+  }
+  if (!best) throw lastError ?? new Error("No usable graph layout");
+  return refineTopology(best);
+}
+
 const LARGE_JOURNEY = 14; // beyond this a one-column-per-step sequence is an unreadable strip
 
 // Forms where one kind of link is context, not the answer: drawn faint until a node is selected or focused.
-const AMBIENT_FORMS = new Set<string>(["Ownership"]);
+const AMBIENT_FORMS = new Set<string>(["Ownership", "DataLineage"]);
 
 export function arrange(r: Rendered, view: ViewSpec, level: number, deferTopology = false): Rendered {
   if (r.nodes.length === 0) return r;
@@ -97,6 +143,28 @@ export function arrange(r: Rendered, view: ViewSpec, level: number, deferTopolog
     // The chart plan supplies explicit column/row positions for its chosen notation.
     // Running columnFlow here used to replace those positions with a generic call-graph
     // layout, which erased the model's requested layout (including ER and state charts).
+    if (view.params?.chartId === "generic" && laneOf.size === 0 && links.length) {
+      const depth = callDepth(items, links);
+      const orders = [
+        (a: Item, b: Item) => a.x - b.x || a.y - b.y,
+        (a: Item, b: Item) => a.y - b.y || a.id.localeCompare(b.id),
+        (a: Item, b: Item) => a.id.localeCompare(b.id),
+        (a: Item, b: Item) => (depth.get(b.id) ?? 0) - (depth.get(a.id) ?? 0) || a.id.localeCompare(b.id),
+      ];
+      let bestC = Infinity, bestPos = new Map<string, Pos>(), bestVia = new Map<string, Pos[]>();
+      for (const sort of orders) {
+        const ranked = [...items].sort(sort);
+        const res = layered(ranked.map((it, n) => ({ id: it.id, layer: depth.get(it.id) ?? 0, w: it.w, h: it.h, order: n })), links);
+        const probe = items.map((i) => ({ ...i }));
+        for (const it of probe) { const p = res.pos.get(it.id); if (p) { it.x = p.x; it.y = p.y; } }
+        orderColumns(probe, links, { permuteColumns: true });
+        separate(probe, 14);
+        const c = geometricCrossings(probe, links);
+        if (c < bestC) { bestC = c; bestPos = res.pos; bestVia = res.via; }
+      }
+      for (const it of items) { const p = bestPos.get(it.id); if (p) { it.x = p.x; it.y = p.y; } }
+      via = bestVia;
+    }
     separate(items, 14);
   } else if (aggregated) {
     forceLayout(items, links);
@@ -141,6 +209,12 @@ export function arrange(r: Rendered, view: ViewSpec, level: number, deferTopolog
   return {
     ...r,
     nodes: r.nodes.map((n) => { const i = at.get(n.id)!; return { ...n, pos: { x: i.x, y: i.y } }; }),
-    edges: r.edges.map((e) => { const v = routes.get(key(e)); const ambient = AMBIENT_FORMS.has(view.formId) && e.kind === "imports"; return { ...e, ...(v && v.length ? { via: v } : {}), ...(ambient ? { ambient: true } : {}) }; }),
+    edges: r.edges.map((e) => {
+      const fallback = e.via && pathClear(items, e.from, e.to, e.via) ? e.via : undefined;
+      const v = routes.get(key(e)) ?? fallback;
+      const ambient = (AMBIENT_FORMS.has(view.formId) && e.kind === "imports") || (view.formId === "SemanticMap" && e.kind === "reaches");
+      const { via: _previousRoute, ...edge } = e;
+      return { ...edge, ...(v && v.length ? { via: v } : {}), ...(ambient ? { ambient: true } : {}) };
+    }),
   };
 }

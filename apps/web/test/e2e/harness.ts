@@ -8,11 +8,11 @@ export const ROOT = resolve(import.meta.dirname, "../../../..");
 export const REPO = join(ROOT, "fixtures/sample-repo");
 const PORT = 4700 + Math.floor(Math.random() * 200);
 
-export async function startServer(): Promise<{ proc: ChildProcess; url: string }> {
+export async function startServer(overrides: Record<string, string> = {}): Promise<{ proc: ChildProcess; url: string }> {
   const dist = join(ROOT, "apps/web/dist/index.html");
   const newest = Math.max(...execFileSync("find", [join(ROOT, "apps/web/src"), "-type", "f"], { encoding: "utf8" }).trim().split("\n").map((f) => statSync(f).mtimeMs));
   if (!existsSync(dist) || statSync(dist).mtimeMs < newest) execFileSync("npm", ["run", "web:build"], { cwd: ROOT, stdio: "ignore" });
-  const proc = spawn(process.execPath, [join(ROOT, "packages/core/src/server.ts")], { env: { ...process.env, PORT: String(PORT), CIE_DB: join(mkdtempSync(join(tmpdir(), "cie-e2e-")), "e2e.db"), NODE_OPTIONS: "", CIE_OLLAMA_URL: "http://127.0.0.1:9", CIE_ROUTER_SCRIPT: join(ROOT, "apps/web/test/e2e/router-script.json") }, stdio: "ignore" });
+  const proc = spawn(process.execPath, [join(ROOT, "packages/core/src/server.ts")], { env: { ...process.env, PORT: String(PORT), CIE_DB: join(mkdtempSync(join(tmpdir(), "cie-e2e-")), "e2e.db"), NODE_OPTIONS: "", CIE_OLLAMA_URL: "http://127.0.0.1:9", CIE_ROUTER_SCRIPT: join(ROOT, "apps/web/test/e2e/router-script.json"), ...overrides }, stdio: "ignore" });
   const url = `http://127.0.0.1:${PORT}`;
   for (let i = 0; i < 100; i++) { try { if ((await fetch(`${url}/healthz`)).ok) return { proc, url }; } catch { /* not up yet */ } await new Promise((r) => setTimeout(r, 100)); }
   proc.kill(); throw new Error("server did not start");

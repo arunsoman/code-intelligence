@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Containers without sudo must provision these packages in their image.
-if command -v apt-get >/dev/null 2>&1 && [[ "$(id -u)" == 0 ]]; then
+# Reuse image-provided dependencies before attempting package installation.
+if command -v cc >/dev/null && command -v c++ >/dev/null && command -v make >/dev/null && command -v curl >/dev/null && [[ -r /etc/ssl/certs/ca-certificates.crt || -r /etc/pki/tls/certs/ca-bundle.crt ]]; then
+  echo "Using system build tools and certificates."
+elif command -v apt-get >/dev/null 2>&1 && [[ "$(id -u)" == 0 ]]; then
   apt-get update
   apt-get install -y build-essential curl ca-certificates
 elif command -v apt-get >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
@@ -21,6 +23,8 @@ else
   fi
   echo "Using system build tools and certificates provisioned by the environment image."
 fi
+
+if [[ -f "$HOME/.cargo/env" ]]; then source "$HOME/.cargo/env"; fi
 
 if ! command -v rustup >/dev/null 2>&1; then
   installer="$(mktemp)"

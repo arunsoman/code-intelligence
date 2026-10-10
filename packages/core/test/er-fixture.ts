@@ -1,0 +1,8 @@
+import { ChartOutputV2, type EvidenceBundle, type EvidenceRef, type ViewRoute } from "@cie/schema";
+import { compileChartPlan } from "../src/chart-creator.ts";
+const evidence: EvidenceRef = { id:"ev:1",sourceId:"schema.sql",location:{kind:"CodeLocation",span:{sourceId:"schema.sql",contentHash:"h",revision:"rev",startByte:0,endByteExclusive:100}},class:"STATIC_RESOLVED",observedAt:"t",accessScopeId:"repo",state:"CURRENT" };
+export const erBundle: EvidenceBundle = { id:"b",revision:"rev",evidence:[evidence],entities:[{entityId:"t:a",kind:"table",name:"Account",file:"schema.sql",spans:[]},{entityId:"t:e",kind:"table",name:"Entry",file:"schema.sql",spans:[]}],relationships:[],facts:[],coverage:[],unresolved:[],tokenEstimate:0 };
+export function compiledEr(extra: Record<string,unknown> = {}, bundle=erBundle) {
+ const plan=ChartOutputV2.parse({contractVersion:"chart.v2",chartId:"S9",chartType:"ER",layout:"network",caption:"Ledger schema",nodes:[],edges:[],tables:[{id:"account",name:"Account",evidenceIds:["ev:1"],columns:[{name:"id",type:"uuid",isPrimaryKey:true,evidenceIds:["ev:1"]}]},{id:"entry",name:"Entry",evidenceIds:["ev:1"],columns:[{name:"account_id",isForeignKey:true,references:"Account.id",evidenceIds:["ev:1"]},{name:"stale",evidenceIds:["ev:missing"]}]}],relationships:[{fromTable:"entry",toTable:"account",cardinality:"1:N",fkColumn:"account_id",isInferred:true,reason:"Matching names",evidenceIds:["ev:1"]}],...extra});
+ return compileChartPlan({plan,bundle,rev:{id:"rev",repoRoot:"/r",gitHead:null,createdAt:"t",analyzerVersion:"t",diagnostics:[],fileCount:1},question:"Ledger ER",route:{source:"chosen",confidence:"high",form:"GeneratedChart",name:"ER",because:"",alternatives:[]} satisfies ViewRoute,chartId:"S9"}).view;
+}

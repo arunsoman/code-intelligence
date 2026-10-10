@@ -5,9 +5,26 @@ export interface LensState {
   enabled: boolean; magnification: number; radius: number; falloff: number;
   easing: boolean; rings: boolean; pinned: boolean;
 }
-export const LENS_DEFAULTS: LensState = { enabled: true, magnification: 2.2, radius: 110, falloff: 2.2, easing: true, rings: true, pinned: false };
+export const LENS_DEFAULTS: LensState = { enabled: true, magnification: 2.2, radius: 186.56, falloff: 1 / .88, easing: true, rings: true, pinned: false };
 export const CHART_THEME = { background: "#0b0f17", panel: "#111827", text: "#e5e7eb", muted: "#94a3b8", accent: "#38bdf8" };
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
+
+/** Automatic sizing: 70% of the shorter side, capped at 520px diameter. */
+export function automaticLensGeometry(width: number, height: number) {
+  const short = Math.max(0, Math.min(width, height));
+  const outer = Math.max(0, Math.min(short * .35, 260, (short - 16) / 2));
+  return { outer, inner: outer * .88 };
+}
+export function boundedLensCentre(point: Point, width: number, height: number, radius: number): Point {
+  return { x: clamp(point.x, radius + 8, Math.max(radius + 8, width - radius - 8)),
+    y: clamp(point.y, radius + 8, Math.max(radius + 8, height - radius - 8)) };
+}
+function childGrid(radius: number) {
+  const side = Math.max(1, radius * Math.SQRT2 - 16);
+  const columns = side >= 220 ? 2 : 1;
+  const rows = Math.max(1, Math.floor(side / 64));
+  return { side, columns, rows, capacity: columns * rows };
+}
 
 /** Bounded radial lens: the boundary and everything outside it stay fixed.
  * Unlike an integrated magnification profile, it does not displace the periphery.
@@ -44,7 +61,7 @@ export interface LensNode extends Point {
   displayMode?: string; group?: boolean; ref?: RenderNode; element?: Element;
   movable?: boolean; compact?: boolean;
 }
-export interface LensEdge { id: string; from: string; to: string; points: Point[]; color: string; label?: string; dashed?: boolean; sourceArrow?: string; targetArrow?: string; arrowFill?: string; ref?: RenderEdge }
+export interface LensEdge { id: string; from: string; to: string; points: Point[]; color: string; label?: string; dashed?: boolean; sourceArrow?: string; targetArrow?: string; arrowFill?: string; sourceArrowFill?: string; lineStyle?: string; ref?: RenderEdge }
 export interface LensScene { nodes: LensNode[]; edges: LensEdge[] }
 export interface Box extends Point { width: number; height: number }
 const contains = (box: Box, p: Point) => Math.abs(p.x - box.x) <= box.width / 2 && Math.abs(p.y - box.y) <= box.height / 2;
@@ -93,10 +110,10 @@ export function clipLink(a: Point, b: Point, boxes: Box[], gap = 3): [Point, Poi
 
 /** Expand only a focused aggregate in screen space. Source graph/layout are immutable. */
 export function localChildren(parent: LensNode, children: RenderNode[], edges: RenderEdge[], centre: Point, radius: number, page = 0): LensScene {
-  const count = Math.max(1, Math.floor(radius / 44)), capacity = Math.max(1, count * 2);
+  const grid = childGrid(radius), capacity = grid.capacity;
   const shown = children.slice(page * capacity, (page + 1) * capacity);
-  const columns = Math.min(2, shown.length), rows = Math.ceil(shown.length / Math.max(1, columns));
-  const width = Math.min(180, radius * 0.65), stepY = Math.min(64, radius * 1.2 / Math.max(1, rows));
+  const columns = Math.max(1, Math.min(grid.columns, shown.length)), rows = Math.ceil(shown.length / columns);
+  const width = Math.min(180, (grid.side - (columns - 1) * 12) / columns), stepY = 64;
   const nodes: LensNode[] = shown.map((n, index) => ({
     id: n.id, ref: n, label: n.label, details: [n.node?.kind ?? n.role ?? "", ...(n.node?.notes ?? [])].filter(Boolean),
     color: chartColor(n.node?.file ?? parent.ref?.node?.file, n.role), displayMode: n.displayMode,
@@ -108,6 +125,26 @@ export function localChildren(parent: LensNode, children: RenderNode[], edges: R
     id: e.id, from: e.from, to: e.to, color: CHART_THEME.accent, label: e.label, ref: e,
     dashed: e.displayMode !== "FACT", points: [byId.get(e.from)!, byId.get(e.to)!],
   })) };
+}
+
+export type PreviewCapture = { kind: "node"; node: LensNode; children: RenderNode[]; edges: RenderEdge[] }
+  | { kind: "edge"; edge: LensEdge; source?: LensNode; target?: LensNode };
+/** Isolated screen-space preview. It never reads or projects unrelated chart elements. */
+export function focusedPreview(capture: PreviewCapture, centre: Point, radius: number, page = 0): LensScene {
+  if (capture.kind === "node") {
+    if (capture.children.length) return localChildren(capture.node, capture.children, capture.edges, centre, radius, page);
+    const details = (capture.node.details ?? []).slice(0, Math.max(1, Math.min(12, Math.floor((radius * 1.3 - 32) / 16))));
+    return { nodes: [{ ...capture.node, ...centre, width: radius * 1.45, height: Math.min(radius * 1.3, Math.max(48, 32 + details.length * 16)), details: details.length ? details : ["No deeper detail available"], focused: true }], edges: [] };
+  }
+  const width = Math.max(1, radius * .72), gap = Math.min(20, radius * .12);
+  const node = (original: LensNode | undefined, id: string, offset: number): LensNode => ({
+    ...(original ?? { id, label: "Endpoint unavailable", color: CHART_THEME.muted }),
+    x: centre.x + offset, y: centre.y, width, height: Math.min(48, radius * .5), details: [], focused: true,
+  });
+  const a = node(capture.source, capture.edge.from, -(width + gap) / 2), b = node(capture.target, capture.edge.to, (width + gap) / 2);
+  // Duplicate endpoint identity on a self edge still needs two distinct preview boxes.
+  if (a.id === b.id) b.id = `${b.id}:preview-target`;
+  return { nodes: [a, b], edges: [{ ...capture.edge, from: a.id, to: b.id, points: [{ x: a.x, y: a.y }, { x: b.x, y: b.y }] }] };
 }
 
 export interface LensOptions {
@@ -133,31 +170,34 @@ export function attachFisheye(host: HTMLElement, options: LensOptions): LensEngi
   const controls = options.controls ? document.createElement("div") : null;
   if (controls) {
     controls.className = "lens-controls";
-    controls.setAttribute("role", "group"); controls.setAttribute("aria-label", "Fisheye lens controls");
-    controls.innerHTML = '<label><input type="checkbox" data-lens-setting="enabled" checked> Lens</label><label>Magnify <input aria-label="Lens magnification" type="range" min=".35" max="4" step=".05" data-lens-setting="magnification"><output></output></label><label>Radius <input aria-label="Lens radius" type="range" min="60" max="220" step="2" data-lens-setting="radius"></label><label>Falloff <input aria-label="Lens falloff" type="range" min="1.6" max="3.2" step=".1" data-lens-setting="falloff"></label><label><input type="checkbox" data-lens-setting="easing"> Ease</label><label><input type="checkbox" data-lens-setting="rings" checked> Rings</label><button type="button">Pin lens</button><span>Wheel: lens · Shift: radius · Alt: shrink · L: toggle</span>';
-    controls.addEventListener("input", (e) => {
-      const input = e.target as HTMLInputElement, setting = input.dataset.lensSetting as keyof LensState;
-      if (setting) Object.assign(state, { [setting]: input.type === "checkbox" ? input.checked : Number(input.value) });
-      notify();
-    });
-    controls.querySelector("button")!.onclick = () => { state.pinned = !state.pinned; if (state.pinned) active = true; notify(); };
+    controls.setAttribute("role", "group"); controls.setAttribute("aria-label", "Hover expansion");
+    controls.innerHTML = '<button type="button" aria-pressed="false">Pause hover expansion</button>';
+    controls.querySelector("button")!.onclick = () => { clearHover(); state.enabled = !state.enabled; if (!state.enabled) active = false; notify(); };
     host.append(controls);
   }
-  let target: Point = { x: 0, y: 0 }, centre = { ...target }, mouse = { ...target }, active = false, alt = false;
+  let target: Point = { x: 0, y: 0 }, centre = { ...target }, mouse = { ...target }, active = false;
   let currentM = state.magnification, raf = 0, last = 0, disposed = false, page = 0, expandedId = "", lastFocusedId = "";
   let drawnNodes: LensNode[] = [], drawnEdges: LensEdge[] = [];
+  let hoverTimer: ReturnType<typeof setTimeout> | undefined, hoverId = "";
+  let anchor: Point = { x: 0, y: 0 };
+  let captured: PreviewCapture | undefined;
+  const clearHover = () => { clearTimeout(hoverTimer); hoverTimer = undefined; hoverId = ""; };
+  const geometry = () => { const g = automaticLensGeometry(host.clientWidth, host.clientHeight); state.radius = g.inner; state.falloff = 1 / .88; return g; };
   const position = (e: MouseEvent) => { const b = host.getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; };
   const notify = () => {
     if (controls) {
-      for (const input of controls.querySelectorAll<HTMLInputElement>("input")) { const value = state[input.dataset.lensSetting as keyof LensState]; if (input.type === "checkbox") input.checked = Boolean(value); else input.value = String(value); }
-      controls.querySelector("output")!.textContent = state.magnification.toFixed(2) + "×";
-      controls.querySelector("button")!.textContent = state.pinned ? "Unpin lens" : "Pin lens";
+      const button = controls.querySelector("button")!;
+      button.textContent = state.enabled ? "Pause hover expansion" : "Resume hover expansion";
+      button.setAttribute("aria-pressed", String(!state.enabled));
     }
     options.onChange?.({ ...state }); schedule();
   };
   const publish = () => {
     host.dataset.lensEnabled = String(state.enabled); host.dataset.lensMagnification = String(state.magnification);
     host.dataset.lensExpanded = expandedId; host.dataset.lensChildren = String(drawnNodes.filter((n) => n.focused).length);
+    host.dataset.lensRadius = String(state.radius); host.dataset.lensOuterRadius = String(state.radius * state.falloff);
+    host.dataset.lensTarget = captured?.kind === "node" ? captured.node.id : captured?.edge.id ?? "";
+    host.dataset.lensX = String(centre.x); host.dataset.lensY = String(centre.y); host.dataset.lensActive = String(active && state.enabled);
     host.dataset.lensPage = String(page); host.dataset.lensPinned = String(state.pinned);
   };
   function schedule() { if (!raf && !disposed) raf = requestAnimationFrame(paint); }
@@ -165,56 +205,33 @@ export function attachFisheye(host: HTMLElement, options: LensOptions): LensEngi
     raf = 0; const dt = Math.min(0.05, (now - (last || now - 16)) / 1000); last = now;
     const k = state.easing ? 1 - Math.exp(-dt * 16) : 1;
     centre.x += (target.x - centre.x) * k; centre.y += (target.y - centre.y) * k;
-    const wanted = alt ? Math.min(state.magnification, 0.55) : state.magnification;
+    const wanted = LENS_DEFAULTS.magnification;
     currentM += (wanted - currentM) * k;
     const w = host.clientWidth, h = host.clientHeight, dpr = devicePixelRatio || 1;
+    geometry(); target = boundedLensCentre(target, w, h, state.radius * state.falloff);
+    if (!state.easing) centre = { ...target };
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
     drawnNodes = []; drawnEdges = []; expandedId = "";
-    if (!active || !state.enabled) { publish(); return; }
-    const radius = state.radius * state.falloff, source = options.scene();
-    const transform = (p: Point) => projectLens(p, centre, currentM, radius);
-    const under = invertLens(mouse, centre, currentM, radius);
-    const focused = (state.pinned && source.nodes.find((n) => n.id === lastFocusedId)) || source.nodes.filter((n) => !n.group && contains(n, under)).sort((a, b) => Math.hypot(a.x - under.x, a.y - under.y) - Math.hypot(b.x - under.x, b.y - under.y))[0];
-    if (focused) lastFocusedId = focused.id;
-    const detail = focused && currentM >= 1.8 ? options.children?.(focused) : undefined;
-    if (detail?.nodes.length) page = Math.min(page, Math.ceil(detail.nodes.length / (Math.max(1, Math.floor(radius / 44)) * 2)) - 1);
-    const expansion = detail?.nodes.length ? localChildren(focused!, detail.nodes, detail.edges, centre, radius, page) : undefined;
-    if (expansion) expandedId = focused!.id;
-    for (const node of source.nodes) {
-      if (expansion && node.id === focused!.id) continue;
-      const d = Math.hypot(node.x - centre.x, node.y - centre.y), local = d < radius ? 1 + (currentM - 1) * Math.pow(1 - d / radius, 2) : 1;
-      const pos = transform(node), lines = node.id === focused?.id && d < state.radius && local > 1.5 ? (node.details ?? []).slice(0, 4) : [];
-      const isFocus = node.id === focused?.id;
-      let width = Math.max(node.width * local, lines.length ? 210 : 0), height = Math.max(node.height * local, lines.length ? 32 + lines.length * 16 : 0);
-      if (node.compact && d < radius) { width = Math.min(width, isFocus ? 260 : 160); height = Math.min(height, isFocus ? 110 : 60); }
-      drawnNodes.push({ ...node, ...pos, width, height, details: lines, focused: isFocus, movable: d < radius && !expansion && !isFocus });
-    }
-    if (!expansion) drawnNodes = relaxLensNodes(drawnNodes, centre, radius);
-    drawnEdges = source.edges.filter((e) => !expansion || e.from !== focused!.id && e.to !== focused!.id).map((edge) => ({ ...edge, points: edge.points.flatMap((a, index) => {
-      const b = edge.points[index + 1]; if (!b) return [transform(a)];
-      const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 16));
-      return Array.from({ length: steps }, (_, i) => transform({ x: a.x + (b.x - a.x) * i / steps, y: a.y + (b.y - a.y) * i / steps }));
-    }) }));
-    if (expansion) { drawnNodes.push(...expansion.nodes.map((n) => ({ ...n, focused: true }))); drawnEdges.push(...expansion.edges); }
-    const at = new Map(drawnNodes.map((n) => [n.id, n]));
-    for (const edge of drawnEdges) {
-      const a = at.get(edge.from), b = at.get(edge.to);
-      if (a && edge.points.length) edge.points[0] = { x: a.x, y: a.y };
-      if (b && edge.points.length) edge.points[edge.points.length - 1] = { x: b.x, y: b.y };
-    }
+    if (!active || !state.enabled || options.interactive?.() === false || state.radius <= 0) { publish(); return; }
+    const radius = state.radius * state.falloff;
+    if (!captured) { active = false; publish(); return; }
+    const title = captured.kind === "node" ? captured.node.label : captured.edge.label ?? "Relationship";
+    const detail = captured.kind === "node" && captured.children.length ? captured : undefined;
+    if (detail) page = Math.min(page, Math.ceil(detail.children.length / childGrid(state.radius).capacity) - 1);
+    const preview = focusedPreview(captured, centre, state.radius, page);
+    drawnNodes = preview.nodes; drawnEdges = preview.edges;
+    if (detail) expandedId = detail.node.id;
     ctx.save(); ctx.beginPath(); ctx.arc(centre.x, centre.y, radius, 0, Math.PI * 2); ctx.clip();
     ctx.fillStyle = CHART_THEME.background; ctx.fillRect(centre.x - radius, centre.y - radius, radius * 2, radius * 2);
-    ctx.fillStyle = "rgba(148,163,184,0.10)";
-    for (let x = Math.floor((centre.x - radius) / 30) * 30; x < centre.x + radius; x += 30) for (let y = Math.floor((centre.y - radius) / 30) * 30; y < centre.y + radius; y += 30) { const p = transform({ x, y }); ctx.fillRect(p.x, p.y, 1.5, 1.5); }
     const visibleNodes = drawnNodes.filter((n) => Math.hypot(n.x - centre.x, n.y - centre.y) < radius + Math.hypot(n.width, n.height) / 2);
     const boxes = visibleNodes.filter((n) => !n.group);
     for (const edge of drawnEdges) {
-      ctx.strokeStyle = edge.color; ctx.lineWidth = 1.5; ctx.setLineDash(edge.dashed ? [5, 4] : []);
+      ctx.strokeStyle = edge.color; ctx.lineWidth = 1.5; ctx.setLineDash(edge.lineStyle === "dotted" ? [1, 3] : edge.dashed ? [5, 4] : []);
       ctx.beginPath(); let firstSegment: [Point, Point] | undefined, lastSegment: [Point, Point] | undefined;
       for (let i = 1; i < edge.points.length; i++) for (const segment of clipLink(edge.points[i - 1], edge.points[i], boxes)) { ctx.moveTo(segment[0].x, segment[0].y); ctx.lineTo(segment[1].x, segment[1].y); firstSegment ??= segment; lastSegment = segment; }
       ctx.stroke(); ctx.setLineDash([]);
-      if (firstSegment && edge.sourceArrow && edge.sourceArrow !== "none") arrow(firstSegment[1], firstSegment[0], edge.sourceArrow, edge.color, edge.arrowFill);
+      if (firstSegment && edge.sourceArrow && edge.sourceArrow !== "none") arrow(firstSegment[1], firstSegment[0], edge.sourceArrow, edge.color, edge.sourceArrowFill ?? edge.arrowFill);
       if (lastSegment && edge.targetArrow !== "none") arrow(lastSegment[0], lastSegment[1], edge.targetArrow ?? "triangle", edge.color, edge.arrowFill);
       if (edge.label && edge.points.length > 1) {
         const mid = edge.points[Math.floor(edge.points.length / 2)];
@@ -228,7 +245,9 @@ export function attachFisheye(host: HTMLElement, options: LensOptions): LensEngi
     }
     for (const node of visibleNodes.filter((n) => !n.focused)) drawNode(node);
     for (const node of visibleNodes.filter((n) => n.focused)) drawNode(node);
-    if (expansion && detail) { ctx.fillStyle = CHART_THEME.muted; ctx.font = "11px system-ui"; ctx.textAlign = "center"; ctx.fillText(`${focused!.label} · ${expansion.nodes.length} of ${detail.nodes.length} · [ / ] pages`, centre.x, centre.y + radius - 20); }
+    ctx.fillStyle = CHART_THEME.muted; ctx.font = "11px system-ui"; ctx.textAlign = "center";
+    ctx.fillText(`Focused: ${title}`, centre.x, centre.y - radius + 18, state.radius * 1.6);
+    if (detail) ctx.fillText(`${drawnNodes.length} of ${detail.children.length} · [ / ] pages`, centre.x, centre.y + radius - 18);
     ctx.restore();
     if (state.rings) { ctx.strokeStyle = "rgba(56,189,248,.35)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(centre.x, centre.y, state.radius, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([6, 7]); ctx.strokeStyle = "rgba(148,163,184,.4)"; ctx.beginPath(); ctx.arc(centre.x, centre.y, radius, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); }
     publish();
@@ -271,56 +290,93 @@ export function attachFisheye(host: HTMLElement, options: LensOptions): LensEngi
   }
   const hit = (point: Point) => [...drawnNodes].reverse().find((n) => !n.group && contains(n, point));
   const ignored = (e: Event) => !!(e.target as Element)?.closest?.(".lens-controls, input, textarea, select, button:not(.mcell), a, [contenteditable=true]") || options.interactive?.() === false;
-  const move = (e: PointerEvent) => { if (ignored(e)) return; mouse = position(e); if (!state.pinned) { target = { ...mouse }; page = 0; } if (!active) centre = { ...target }; active = true; schedule(); };
-  const leave = () => { if (!state.pinned) { active = false; schedule(); } };
-  const wheel = (e: WheelEvent) => { if (!state.enabled || ignored(e)) return; e.preventDefault(); e.stopImmediatePropagation(); if (!active) { target = position(e); centre = { ...target }; active = true; } if (e.shiftKey) state.radius = clamp(state.radius + (e.deltaY < 0 ? 6 : -6), 60, 220); else state.magnification = clamp(state.magnification * Math.exp(-e.deltaY * .0012), .35, 4); notify(); };
+  const sourceHit = (point: Point) => {
+    const scene = options.scene();
+    const node = scene.nodes.filter((n) => !n.group && contains(n, point)).sort((a, b) => a.width * a.height - b.width * b.height)[0];
+    if (node) return { id: node.id, point: { x: node.x, y: node.y }, node: true };
+    const edge = edgeHit(scene.edges, point);
+    return edge ? { id: edge.id, point, node: false } : undefined;
+  };
+  const activate = (point: Point, nodeId = "", edgeId = "") => {
+    clearHover(); geometry();
+    const scene = options.scene();
+    const node = scene.nodes.find((n) => n.id === nodeId);
+    const edge = scene.edges.find((e) => e.id === edgeId);
+    const copyNode = (n: LensNode | undefined) => n ? { ...n, details: [...(n.details ?? [])] } : undefined;
+    if (node) {
+      const children = options.children?.(node);
+      captured = { kind: "node", node: { ...node, details: [...(node.details ?? [])] }, children: (children?.nodes ?? []).map((n) => ({ ...n, members: [...n.members] })), edges: (children?.edges ?? []).map((e) => ({ ...e })) };
+    } else if (edge) captured = { kind: "edge", edge: { ...edge, points: edge.points.map((p) => ({ ...p })) }, source: copyNode(scene.nodes.find((n) => n.id === edge.from)), target: copyNode(scene.nodes.find((n) => n.id === edge.to)) };
+    else { captured = undefined; active = false; schedule(); return; }
+    anchor = { ...point }; lastFocusedId = nodeId; page = 0;
+    target = boundedLensCentre(point, host.clientWidth, host.clientHeight, state.radius * state.falloff);
+    centre = { ...target }; active = true; schedule();
+  };
+  const move = (e: PointerEvent) => {
+    if (ignored(e) || !state.enabled) { clearHover(); return; }
+    mouse = position(e);
+    if (active) {
+      const sourceNode = captured?.kind === "node" ? captured.node : undefined;
+      // Keep a small corridor from an edge-clamped source to its expanded content.
+      const dx = centre.x - anchor.x, dy = centre.y - anchor.y, length = dx * dx + dy * dy;
+      const t = length ? clamp(((mouse.x - anchor.x) * dx + (mouse.y - anchor.y) * dy) / length, 0, 1) : 0;
+      const corridor = Math.hypot(mouse.x - anchor.x - t * dx, mouse.y - anchor.y - t * dy) <= 20;
+      if (Math.hypot(mouse.x - centre.x, mouse.y - centre.y) <= state.radius * state.falloff || sourceNode && contains(sourceNode, mouse) || corridor) return;
+    }
+    if (state.pinned) return;
+    if (active) { active = false; lastFocusedId = ""; schedule(); }
+    const candidate = sourceHit(mouse);
+    if (!candidate) { clearHover(); return; }
+    if (candidate.id === hoverId) return;
+    clearHover(); hoverId = candidate.id;
+    hoverTimer = setTimeout(() => { if (!disposed && state.enabled && options.interactive?.() !== false) activate(candidate.point, candidate.node ? candidate.id : "", candidate.node ? "" : candidate.id); }, 200);
+  };
+  const leave = () => { clearHover(); if (!state.pinned) { active = false; lastFocusedId = ""; schedule(); } };
+  const edgeHit = (edges: LensEdge[], point: Point) => edges.find((edge) => edge.points.slice(1).some((b, i) => {
+    const a = edge.points[i], dx = b.x - a.x, dy = b.y - a.y, length = dx * dx + dy * dy;
+    const t = length ? clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / length, 0, 1) : 0;
+    return Math.hypot(point.x - a.x - t * dx, point.y - a.y - t * dy) < 5;
+  }));
   const click = (e: MouseEvent) => {
     if (!active || !state.enabled || ignored(e) || e.detail === 0 || Math.hypot(position(e).x - centre.x, position(e).y - centre.y) > state.radius * state.falloff) return;
     e.preventDefault(); e.stopImmediatePropagation(); const node = hit(position(e));
     if (node) options.onNode?.(node, e.ctrlKey || e.metaKey || e.shiftKey);
     else {
       const point = position(e);
-      const edge = drawnEdges.find((edge) => edge.points.slice(1).some((b, i) => {
-        const a = edge.points[i], dx = b.x - a.x, dy = b.y - a.y, length = dx * dx + dy * dy;
-        const t = length ? clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / length, 0, 1) : 0;
-        return Math.hypot(point.x - a.x - t * dx, point.y - a.y - t * dy) < 5;
-      }));
+      const edge = edgeHit(drawnEdges, point);
       if (edge && options.onEdge) options.onEdge(edge);
-      else { state.pinned = !state.pinned; notify(); }
+      else { active = false; lastFocusedId = ""; schedule(); }
     }
   };
   const down = (e: MouseEvent) => { if (!ignored(e) && active && state.enabled && Math.hypot(position(e).x - centre.x, position(e).y - centre.y) < state.radius * state.falloff) e.stopImmediatePropagation(); };
-  const double = (e: MouseEvent) => { if (!active || !state.enabled || ignored(e)) return; e.preventDefault(); e.stopImmediatePropagation(); state.magnification = Math.max(2.6, state.magnification); notify(); };
   const key = (e: KeyboardEvent) => {
     if ((e.target as HTMLElement)?.matches("input,textarea,select,[contenteditable=true]")) return;
-    if (e.key === "Alt") { alt = true; schedule(); }
-    if (e.key.toLowerCase() === "l") { e.preventDefault(); e.stopImmediatePropagation(); state.enabled = !state.enabled; notify(); }
-    if (e.key === "Escape" && state.pinned) { e.preventDefault(); e.stopImmediatePropagation(); state.pinned = false; notify(); }
-    if (["+", "=", "-", "_"].includes(e.key)) { e.preventDefault(); e.stopImmediatePropagation(); state.magnification = clamp(state.magnification + (e.key === "-" || e.key === "_" ? -.2 : .2), .35, 4); active = true; if (!target.x && !target.y) target = centre = { x: host.clientWidth / 2, y: host.clientHeight / 2 }; notify(); }
+    if (e.key.toLowerCase() === "l") { e.preventDefault(); e.stopImmediatePropagation(); clearHover(); state.enabled = !state.enabled; if (!state.enabled) active = false; notify(); }
+    if (e.key === "Escape" && active) { e.preventDefault(); e.stopImmediatePropagation(); clearHover(); state.pinned = false; active = false; lastFocusedId = ""; notify(); }
     if (e.key === "[" || e.key === "]") { e.preventDefault(); page = Math.max(0, page + (e.key === "[" ? -1 : 1)); schedule(); }
   };
-  const zoomCommand = (e: Event) => {
-    const direction = (e as CustomEvent<{ direction: string }>).detail?.direction;
-    if (!["in", "out", "overview"].includes(direction)) return;
-    state.magnification = direction === "overview" ? 1 : clamp(state.magnification + (direction === "in" ? .4 : -.4), .35, 4);
-    active = true; state.enabled = true;
-    if (!target.x && !target.y) target = centre = mouse = { x: host.clientWidth / 2, y: host.clientHeight / 2 };
-    notify();
+  const focusElement = (e: FocusEvent) => {
+    const node = options.scene().nodes.find((n) => n.element === e.target);
+    if (node && state.enabled) activate(node, node.id);
   };
-  const up = (e: KeyboardEvent) => { if (e.key === "Alt") { alt = false; schedule(); } };
-  const blur = () => { alt = false; schedule(); };
+  const touch = (e: PointerEvent) => {
+    if (e.pointerType !== "touch" || ignored(e) || !state.enabled) return;
+    const candidate = sourceHit(position(e));
+    if (candidate && !active) activate(candidate.point, candidate.node ? candidate.id : "", candidate.node ? "" : candidate.id);
+  };
+  const blur = () => { clearHover(); active = false; state.pinned = false; schedule(); };
   host.addEventListener("pointermove", move); host.addEventListener("pointerleave", leave);
-  host.addEventListener("wheel", wheel, { passive: false, capture: true }); host.addEventListener("pointerdown", down, true);
+  host.addEventListener("pointerdown", touch); host.addEventListener("focusin", focusElement); host.addEventListener("pointerdown", down, true);
   host.addEventListener("mousedown", down, true); host.addEventListener("mouseup", down, true);
-  host.addEventListener("click", click, true); host.addEventListener("dblclick", double, true); host.addEventListener("keydown", key, true);
-  window.addEventListener("cie:lens-zoom", zoomCommand); window.addEventListener("keyup", up); window.addEventListener("blur", blur);
-  const observer = new ResizeObserver(schedule); observer.observe(host); notify(); publish();
+  host.addEventListener("click", click, true); host.addEventListener("keydown", key, true);
+  window.addEventListener("blur", blur);
+  const observer = new ResizeObserver(() => { geometry(); target = boundedLensCentre(target, host.clientWidth, host.clientHeight, state.radius * state.falloff); centre = { ...target }; options.onChange?.({ ...state }); schedule(); }); observer.observe(host); geometry(); notify(); publish();
   return {
-    configure(patch) { Object.assign(state, patch); if (patch.pinned || patch.magnification != null) { active = true; if (!target.x && !target.y) target = centre = mouse = {x:host.clientWidth / 2,y:host.clientHeight / 2}; } state.magnification = clamp(state.magnification, .35, 4); state.radius = clamp(state.radius, 60, 220); state.falloff = clamp(state.falloff, 1.6, 3.2); notify(); },
-    focus(point) { target = { ...point }; centre = { ...point }; mouse = { ...point }; active = true; schedule(); },
+    configure(patch) { if (patch.enabled != null) state.enabled = patch.enabled; state.pinned = false; state.magnification = LENS_DEFAULTS.magnification; state.rings = true; state.easing = !matchMedia("(prefers-reduced-motion: reduce)").matches; geometry(); if (!state.enabled) { clearHover(); active = false; } notify(); },
+    focus(point) { if (!state.enabled) return; mouse = { ...point }; const candidate = sourceHit(point); activate(candidate?.point ?? point, candidate?.node ? candidate.id : "", candidate && !candidate.node ? candidate.id : ""); },
     refresh: schedule,
     nextPage(delta) { page = Math.max(0, page + delta); schedule(); },
-    dispose() { disposed = true; cancelAnimationFrame(raf); observer.disconnect(); canvas.remove(); controls?.remove(); host.removeEventListener("pointermove", move); host.removeEventListener("pointerleave", leave); host.removeEventListener("wheel", wheel, true); host.removeEventListener("pointerdown", down, true); host.removeEventListener("mousedown", down, true); host.removeEventListener("mouseup", down, true); host.removeEventListener("click", click, true); host.removeEventListener("dblclick", double, true); host.removeEventListener("keydown", key, true); window.removeEventListener("cie:lens-zoom", zoomCommand); window.removeEventListener("keyup", up); window.removeEventListener("blur", blur); },
+    dispose() { disposed = true; clearHover(); cancelAnimationFrame(raf); observer.disconnect(); canvas.remove(); controls?.remove(); host.removeEventListener("pointermove", move); host.removeEventListener("pointerleave", leave); host.removeEventListener("pointerdown", touch); host.removeEventListener("focusin", focusElement); host.removeEventListener("pointerdown", down, true); host.removeEventListener("mousedown", down, true); host.removeEventListener("mouseup", down, true); host.removeEventListener("click", click, true); host.removeEventListener("keydown", key, true); window.removeEventListener("blur", blur); },
   };
 }
 

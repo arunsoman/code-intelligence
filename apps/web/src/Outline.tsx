@@ -17,6 +17,7 @@ export function Outline({ rendered, level, onClose, onPick }: Props) {
         {items.map((it, i) => (
           <li key={it.id}>
             <button ref={i === 0 ? first : undefined} className="link" onClick={() => onPick(it.id)}>{it.text}</button>
+            {rendered.nodes.find(n=>n.id===it.id)?.role === "er-entity" && <ul aria-label="Entity columns">{rendered.nodes.find(n=>n.id===it.id)?.node?.notes?.map((note,index)=><li key={index}>{note}</li>)}</ul>}
             {it.links.length > 0 && <ul>{it.links.map((l, j) => <li key={j}>{l}</li>)}</ul>}
           </li>
         ))}

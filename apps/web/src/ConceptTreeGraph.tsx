@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { ConceptHierarchyView, EntityCode } from "@cie/schema";
 import { call } from "./api.ts";
-import { attachFisheye, chartColor, LENS_DEFAULTS, type LensEngine } from "./fisheye.ts";
+import { attachFisheye, chartColor, type LensEngine } from "./fisheye.ts";
 import type { RenderNode } from "./graph.ts";
 import { SOUNDNESS } from "./concept-hierarchy-view.ts";
 import {
@@ -33,7 +33,6 @@ export function ConceptTreeGraph({ revision, view, onAsk }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const lensStage = useRef<HTMLDivElement>(null);
   const fisheye = useRef<LensEngine | null>(null);
-  const [magnification, setMagnification] = useState(LENS_DEFAULTS.magnification);
 
   const root = useMemo<TreeNode | null>(() => (lens === "domain" ? buildDomainTree(view, { onlyWithConcepts: onlyWith }) : lens === "structure" ? buildStructureTree(view, { onlyWithConcepts: onlyWith }) : buildMeaningTree(view)), [view, lens, onlyWith]);
   // A different tree starts at its top again; the user's own opening and closing is kept while they stay on one tree.
@@ -77,13 +76,13 @@ export function ConceptTreeGraph({ revision, view, onAsk }: Props) {
   useEffect(() => {
     const host = lensStage.current; if (!host) return;
     const engine = attachFisheye(host, {
-      controls: true, onChange: (state) => setMagnification(state.magnification),
+      controls: true,
       scene() {
         const bounds = host.getBoundingClientRect();
         const nodes = [...host.querySelectorAll<SVGGElement>(".tnode")].flatMap((element) => {
           const id = element.dataset.treeId!, node = current.current.allNodes.get(id); if (!node) return [];
           const rect = element.querySelector("rect")!.getBoundingClientRect();
-          return [{ id, label: node.label, details: [KIND_WORD[node.kind], node.sub], color: chartColor(node.sub, node.kind), selected: id === current.current.selected, x: rect.x - bounds.x + rect.width / 2, y: rect.y - bounds.y + rect.height / 2, width: rect.width, height: rect.height }];
+          return [{ id, element, label: node.label, details: [KIND_WORD[node.kind], node.sub], color: chartColor(node.sub, node.kind), selected: id === current.current.selected, x: rect.x - bounds.x + rect.width / 2, y: rect.y - bounds.y + rect.height / 2, width: rect.width, height: rect.height }];
         });
         const edges = [...host.querySelectorAll<SVGPathElement>(".tlink")].flatMap((path) => {
           const link = current.current.layout?.links.find((l) => l.id === path.dataset.linkId), matrix = path.getScreenCTM(); if (!link || !matrix) return [];
@@ -123,9 +122,7 @@ export function ConceptTreeGraph({ revision, view, onAsk }: Props) {
         <button className="secondary" onClick={() => root && setExpanded(defaultExpanded(root, 1))}>Collapse</button>
         <button className="secondary" onClick={() => root && setExpanded(defaultExpanded(root, LENS[lens].depth + 1))}>Open one more level</button>
         <button className="secondary" onClick={fit} title="Zoom so the whole width of what is open fits">Fit</button>
-        <button className="secondary" aria-label="Zoom out" disabled={magnification <= .35} onClick={() => fisheye.current?.configure({magnification:magnification-.2})}>−</button>
-        <span className="muted small" aria-live="polite">Lens {magnification.toFixed(2)}×</span>
-        <button className="secondary" aria-label="Zoom in" disabled={magnification >= 4} onClick={() => fisheye.current?.configure({magnification:magnification+.2})}>+</button>
+
       </div>
       <p className="muted small">{LENS[lens].help}{query && ` ${found.matches.size ? `${found.matches.size} match(es) opened.` : "No match."}`}</p>
       <div className="tree-split">

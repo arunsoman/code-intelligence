@@ -148,8 +148,8 @@ export interface RenderNode {
   id: string; label: string; kind: "node" | "agg" | "ext"; evidenceIds?: string[]; members: string[]; count: number; displayMode: DisplayMode;
   tier: ViewNode["tier"]; pos: Pos; node?: ViewNode; role?: string; parent?: string; rank?: number; stale: boolean; inTx?: boolean; unresolvedCalls?: number;
 }
-export interface RenderEdge { id: string; kind?: string; from: string; to: string; displayMode: DisplayMode; label: string; count: number; edgeIds: string[]; evidenceIds: string[]; stale: boolean; ghost?: boolean; ret?: boolean; via?: Pos[]; ambient?: boolean }
-export interface Rendered { nodes: RenderNode[]; edges: RenderEdge[]; groups: { id: string; label: string; kind: "file" | "concept" | "cluster" | "lane" | "region"; parent?: string }[] }
+export interface RenderEdge { sourceLabel?: string; targetLabel?: string; id: string; kind?: string; from: string; to: string; displayMode: DisplayMode; label: string; count: number; edgeIds: string[]; evidenceIds: string[]; stale: boolean; ghost?: boolean; ret?: boolean; via?: Pos[]; ambient?: boolean }
+export interface Rendered { sequence?: import("./sequence-layout.ts").SequenceScene; nodes: RenderNode[]; edges: RenderEdge[]; groups: { id: string; label: string; kind: "file" | "concept" | "cluster" | "lane" | "region"; parent?: string }[] }
 
 const MODE_RANK: Record<DisplayMode, number> = { HIDDEN: 0, FACT: 1, INFERENCE: 2, FOG: 3, HYPOTHESIS: 4 };
 const TIER_RANK = { HIDDEN: 0, CONTEXT: 1, RELEVANT: 2, CRITICAL: 3 } as const;
@@ -216,17 +216,39 @@ export function render(view: ViewSpec, level: number, pos: Map<string, Pos>, sta
     });
   }
 
+  const nodeById = new Map(view.nodes.map((n) => [n.id, n]));
   const merged = new Map<string, RenderEdge>();
+  const kinds = new Map<string, Set<string>>();
+  const sameDir = new Map<string, boolean>();
+  const genericAmbient = view.formId === "GeneratedChart" && view.params?.chartId === "generic";
   for (const e of view.edges) {
     const from = idOf.get(e.fromNodeId), to = idOf.get(e.toNodeId);
     if (!from || !to || from === to) continue;
     const aggregated = from.startsWith("agg:") || to.startsWith("agg:");
-    const key = aggregated ? `${from}>${to}:${e.displayMode}` : e.id;
+    const key = aggregated ? `${from}>${to}` : e.id;
     const cur = merged.get(key);
-    if (cur) { cur.ghost = cur.ghost || e.ghost; cur.ret = cur.ret || e.style === "return"; cur.count++; cur.edgeIds.push(e.id); cur.evidenceIds = [...new Set([...cur.evidenceIds, ...e.evidenceIds])].slice(0, 30); cur.stale = cur.stale || stale.has(e.id); }
-    else merged.set(key, { id: aggregated ? `agge:${key}` : e.id, kind: aggregated ? "" : e.kind, from, to, displayMode: e.displayMode, label: e.label ?? "", count: 1, edgeIds: [e.id], evidenceIds: e.evidenceIds.slice(0, 30), stale: stale.has(e.id), ghost: e.ghost, ret: e.style === "return" });
+    const fromNode = nodeById.get(e.fromNodeId), toNode = nodeById.get(e.toNodeId);
+    const sd = !!fromNode?.file && !!toNode?.file && dirOf(fromNode.file) === dirOf(toNode.file);
+    if (cur) {
+      cur.ghost = cur.ghost || e.ghost; cur.ret = cur.ret || e.style === "return"; cur.count++; cur.edgeIds.push(e.id);
+      cur.evidenceIds = [...new Set([...cur.evidenceIds, ...e.evidenceIds])].slice(0, 30); cur.stale = cur.stale || stale.has(e.id);
+      if (MODE_RANK[e.displayMode] > MODE_RANK[cur.displayMode]) cur.displayMode = e.displayMode;
+      kinds.get(key)!.add(e.kind ?? "");
+      sameDir.set(key, sameDir.get(key)! && sd);
+    } else {
+      merged.set(key, { id: aggregated ? `agge:${key}` : e.id, kind: aggregated ? "" : e.kind, from, to, displayMode: e.displayMode, label: e.label ?? "", count: 1, edgeIds: [e.id], evidenceIds: e.evidenceIds.slice(0, 30), stale: stale.has(e.id), ghost: e.ghost, ret: e.style === "return" });
+      kinds.set(key, new Set([e.kind ?? ""]));
+      sameDir.set(key, sd);
+    }
   }
-  const edges = [...[...merged.values()].map((e) => (e.count > 1 ? { ...e, label: `${e.count}` } : e)), ...extEdges];
+  for (const [key, e] of merged) {
+    const ks = kinds.get(key)!;
+    if (ks.size === 1) { const k = [...ks][0]; if (k) e.kind = k; }
+  }
+  const edges = [...[...merged.entries()].map(([key, e]) => {
+    const ambient = (view.formId === "SemanticMap" && e.kind === "reaches") || (view.formId === "TestConfidence" && e.kind === "missing for") || (view.formId === "DataLineage" && (e.kind === "imports" || e.kind === "interleaves")) || (genericAmbient && sameDir.get(key)) ? true : undefined;
+    return e.count > 1 && view.formId !== "SemanticMap" ? { ...e, label: `${e.count}`, ambient } : { ...e, ambient };
+  }), ...extEdges];
   // Compound groups only exist when symbols are shown individually.
   const groups = level >= 4 ? view.groups.filter((g) => g.childNodeIds.some((c) => idOf.get(c) === c)).map((g) => ({ id: g.id, label: g.label, kind: g.kind, parent: g.parentGroupId })) : [];
   // Brackets that cannot be a parent (a node already sits in a lane) are shown as a flag on the node.

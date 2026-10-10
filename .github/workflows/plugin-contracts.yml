@@ -1,0 +1,15 @@
+name: Plugin contracts
+on: [push, pull_request]
+jobs:
+  architecture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: node --test packages/core/test/state-compiler.test.ts apps/web/test/state-renderer.test.ts packages/core/test/er-compiler.test.ts apps/web/test/er-renderer.test.ts packages/core/test/sequence-compiler.test.ts apps/web/test/sequence-renderer.test.ts packages/core/test/answer-workflow.test.ts packages/core/test/plugin-architecture.test.ts apps/web/test/fisheye.test.ts apps/web/test/response-workspace.test.ts
+      - run: npm run web:build
