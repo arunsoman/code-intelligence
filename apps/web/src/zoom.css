@@ -2,5 +2,27 @@
 .canvas-hint { position: absolute; left: 12px; bottom: 12px; z-index: 3; max-width: calc(100% - 24px); display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center;
   padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font-size: 13px; box-shadow: 0 1px 4px rgba(0, 0, 0, .15); }
 .canvas-hint button { margin-left: 6px; }
+.stage { --bg: #0b0f17; --panel: #111827; --ink: #e5e7eb; --muted: #94a3b8; --line: #1f2937; --accent: #38bdf8; background: #0b0f17; color: #e5e7eb; }
+.chart-lens-host { position: relative; background: #0b0f17; color: #e5e7eb; }
+.chart-lens-host .lens-controls { position: absolute; float: none; margin: 0; top: 12px; }
+.canvas { background-color: #0b0f17; background-image: radial-gradient(rgba(148,163,184,.1) .75px, transparent .75px); background-size: 30px 30px; }
+.fisheye-surface { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; }
+.lens-controls { position: absolute; top: 12px; right: 12px; z-index: 4; width: 218px; padding: 10px 12px; display: grid; gap: 7px; border: 1px solid #1f2937; border-radius: 12px; background: rgba(17,24,39,.9); color: #e5e7eb; backdrop-filter: blur(8px); font-size: 12px; }
+.lens-controls label { display: flex; gap: 6px; align-items: center; justify-content: space-between; }
+.lens-controls input[type=range] { width: 100px; accent-color: #38bdf8; padding: 0; }
+.lens-controls input[type=checkbox] { accent-color: #38bdf8; }
+.lens-controls output { min-width: 36px; color: #38bdf8; }
+.lens-controls button { padding: 4px 8px; border: 1px solid #1f2937; background: #0f172a; color: #e5e7eb; }
+.lens-controls span { color: #94a3b8; font-size: 10px; }
+.stage .toolbar, .stage .canvas-hint { background: rgba(17,24,39,.9); border-color: #1f2937; color: #e5e7eb; }
+.stage .toolbar button, .stage .canvas-hint button, .stage .toolbar select { background: #0f172a; border-color: #1f2937; color: #e5e7eb; }
+.stage .levelctl label { display: flex; align-items: center; gap: 6px; }
 /* The full text of a label that had to wrap or shorten, shown on hover so it is never lost. */
 .canvas-tip { position: absolute; z-index: 4; transform: translate(-50%, -100%); max-width: 340px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font-size: 12px; line-height: 1.3; box-shadow: 0 2px 8px rgba(0, 0, 0, .18); pointer-events: none; white-space: pre-wrap; }
+
+.tree-lens-stage { position: relative; min-height: 0; overflow: hidden; --bg: #0b0f17; --panel: #111827; --ink: #e5e7eb; --muted: #94a3b8; --line: #1f2937; --accent: #38bdf8; }
+.tree-lens-stage .tree-scroll { height: 100%; box-sizing: border-box; background: #0b0f17; background-image: radial-gradient(rgba(148,163,184,.1) .75px, transparent .75px); background-size: 30px 30px; }
+.tree-lens-stage .tnode rect { fill: #111827; }
+.tree-lens-stage .tnode .tl { fill: #e5e7eb; }
+.tree-lens-stage .tnode .ts, .tree-lens-stage .tnode .tc { fill: #94a3b8; }
+.tree-lens-stage .tnode:hover rect, .tree-lens-stage .tnode.sel rect { filter: drop-shadow(0 0 5px #38bdf8); }

@@ -261,6 +261,7 @@ export function App() {
     const staleSet = new Set([...eff.stale, ...changedIds]);
     return arrange(render(eff.view, level, positions, staleSet), eff.view, level, true);
   }, [eff, level, positions, changedIds]);
+  const lensDetails = useMemo(() => eff ? render(eff.view, MAX_LEVEL, positions, new Set([...eff.stale, ...changedIds])) : undefined, [eff, positions, changedIds]);
   const selectedRender = useMemo(() => selectedAggregates(rendered, selection), [rendered, selection]);
   const nodeById = useMemo(() => new Map((view?.nodes ?? []).map((n) => [n.id, n])), [view]);
   const overlayNodes = useMemo(() => overlayMarks(rendered, nodeById, overlays?.revision === view?.revision ? overlays : null, showTestOverlay, showRuntimeOverlay), [rendered, nodeById, overlays, view, showTestOverlay, showRuntimeOverlay]);
@@ -491,7 +492,7 @@ export function App() {
           log("ASK", text.slice(0, 80)); break;
         }
         case "explanation": mergeClaims(v.explanation.claims); setDrawer({ kind: "explain", data: v.explanation }); say("assistant", v.message); log("EXPLAIN", text.slice(0, 80)); break;
-        case "zoom": setLevel((l) => v.direction === "overview" ? 1 : Math.max(0, Math.min(MAX_LEVEL, l + (v.direction === "in" ? 1 : -1)))); setFitTick((t) => t + 1); say("assistant", v.message); break;
+        case "zoom": window.dispatchEvent(new CustomEvent("cie:lens-zoom", { detail: { direction: v.direction } })); say("assistant", v.message); break;
         case "resume": say("assistant", v.message); await resume(v.workspaceId); break;
         case "message": say("assistant", v.message); break;
       }
@@ -521,7 +522,7 @@ export function App() {
     if (n.kind === "agg") {
       setSelection(n.members);
       setAnnouncement(`Selected the group ${n.label}; opened its ${n.count} member elements.`);
-      setDrawer({ kind: "inspect", title: n.label, sub: `${n.count} element(s) collapsed at level ${level}`, notes: [`Zoom in or press + to see them individually. Selecting this selects all ${n.count}.`], claimIds: [], evidence: [], members: n.members.map((m) => nodeById.get(m)?.label ?? m) });
+      setDrawer({ kind: "inspect", title: n.label, sub: `${n.count} element(s) collapsed at level ${level}`, notes: [`Hover with the lens to see these elements individually. Pin the lens to select a member. Selecting this selects all ${n.count}.`], claimIds: [], evidence: [], members: n.members.map((m) => nodeById.get(m)?.label ?? m) });
       return;
     }
     setSelection(n.members);
@@ -576,14 +577,6 @@ export function App() {
     const how = e.displayMode === "FACT" ? "Fact · statically proven" : e.displayMode === "HYPOTHESIS" ? "Hypothesis · cannot be proven statically" : "Inference · derived from cited evidence";
     setDrawer({ kind: "inspect", title, sub: `${first?.kind ?? "link"} · ${how}`, notes: e.count > 1 ? under.slice(0, 6).map((u) => `${lab(u.fromNodeId)} → ${lab(u.toNodeId)}${u.label ? ` (${u.label})` : ""}`) : [], claimIds: [...new Set(under.map((u) => u.claimId).filter((c): c is string => !!c))], evidence: await evidence(e.evidenceIds) });
   };
-  const expand = async (n: RenderNode) => {
-    const vn = n.node;
-    if (!vn || !vn.evidenceIds[0]) return;
-    const [ev] = await evidence([vn.evidenceIds[0]]);
-    if (ev) setCode({ title: vn.label, file: ev.file, startLine: ev.startLine, snippet: ev.snippet });
-    log("EXPAND", vn.label);
-  };
-
   // ------------------------------------------------------------ verdicts
   const verdict = async (claim: Claim, v: VerdictKind, explanation: string): Promise<string | null> => {
     const r = await call<{ claim: Claim; affected: Claim[] }>("C18", "verdict", { claimId: claim.draft.id, verdict: v, explanation, expectedVersion: claim.version }, uuid());
@@ -662,7 +655,6 @@ export function App() {
     say("assistant", mode === "pin" ? "Pinned: it will always be shown." : mode === "boost" ? "Boosted: it ranks higher." : mode === "demote" ? "Demoted: it ranks lower." : "Reset to its computed relevance.");
   };
   const levelsApply = !!view && semanticLevelsApply(view);
-  const stepLevel = (d: number) => { setLevel((l) => Math.max(0, Math.min(MAX_LEVEL, l + d))); setFitTick((t) => t + 1); };
   const dm = (m: string) => (m === "FACT" ? "fact" : m === "INFERENCE" ? "inference" : m === "FOG" ? "fog" : "hyp");
   const pending = !!busy || jobActive;
   const phase = canvasPhase({ hasView: !!view, pending });
@@ -748,6 +740,7 @@ export function App() {
           <details className="nav-menu"><summary>Explore</summary><div className="nav-popover">
             <button className="nav-item" accessKey="k" title="Cross-repository search (Ctrl+K)" aria-keyshortcuts="Ctrl+K" onClick={() => openDialog(() => setSearchOpen(true))}>Search</button>
             <button className="nav-item" onClick={() => openDialog(() => setGalleryOpen(true))}>Visuals</button>
+            <button className="nav-item" onClick={() => window.open("/demos/fisheye.html", "_blank", "noopener,noreferrer")}>Fisheye lens demo</button>
           </div></details>
           <details className="nav-menu" aria-disabled={!indexed || undefined}><summary className={indexed ? "" : "nav-disabled"} title={indexed ? undefined : "Index a repository first"}>Health</summary><div className="nav-popover">
             <button className="nav-item" disabled={!revision} onClick={() => openDialog(() => setDefectsOpen(true))}>Defects</button>
@@ -870,7 +863,7 @@ export function App() {
 
       <main>
         <div className="sr" role="status" aria-live="polite" aria-atomic="true">{announcement}</div>
-        <p id="canvas-help" className="sr">Keyboard: arrow keys move between elements, Enter inspects, Space selects, E opens the code, plus and minus change the level of detail, O opens a text outline of the whole map, Escape clears the selection.</p>
+        <p id="canvas-help" className="sr">Keyboard: arrow keys move between elements, Enter inspects, Space selects, E magnifies the focused element, plus and minus adjust the lens, L toggles the lens, O opens a text outline of the whole map, Escape unpins the lens or clears the selection.</p>
         {error && <div className="banner error" role="alert">{error} <button className="link" onClick={() => setError(null)}>dismiss</button></div>}
         {notice && <div className="banner ok" role="status">{notice}</div>}
         {changes && changes.changed && (
@@ -946,11 +939,11 @@ export function App() {
               onPick={(id) => { const vn = view.nodes.find((n) => n.id === id); if (vn) { setSelection([id]); void openNodeDrawer(vn); } }}
               onToggle={(id) => setSelection((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]))} />
           ) : (
-          <Canvas rendered={rendered} replayNodes={replayNodes} overlayNodes={overlayNodes} viewKey={viewKey} level={level} fitTick={fitTick} semanticLevels={levelsApply} formId={view?.formId} chartId={typeof view?.params?.chartId === "string" ? view.params.chartId : undefined} selected={selectedRender} boxSelect={boxSelect} caption={view?.caption ?? ""}
+          <Canvas rendered={rendered} lensDetails={lensDetails} replayNodes={replayNodes} overlayNodes={overlayNodes} viewKey={viewKey} level={level} fitTick={fitTick} semanticLevels={levelsApply} formId={view?.formId} chartId={typeof view?.params?.chartId === "string" ? view.params.chartId : undefined} selected={selectedRender} boxSelect={boxSelect} caption={view?.caption ?? ""}
             onSelectNodes={(ids) => setSelection([...new Set(rendered.nodes.filter((n) => ids.includes(n.id)).flatMap((n) => n.members))])}
-            onTapNode={inspectNode} onTapEdge={inspectEdge} onExpand={expand} onZoomLevel={setLevel}
+            onTapNode={inspectNode} onTapEdge={inspectEdge}
             onToggleNode={(n) => setSelection((sel) => (n.members.every((m) => sel.includes(m)) ? sel.filter((x) => !n.members.includes(x)) : [...new Set([...sel, ...n.members])]))}
-            onStepLevel={stepLevel} onClear={() => setSelection([])} onOpenOutline={() => openDialog(() => setOutlineOpen(true))} announce={setAnnouncement} />
+            onClear={() => setSelection([])} onOpenOutline={() => openDialog(() => setOutlineOpen(true))} announce={setAnnouncement} />
           )}
           {view && ["GeneratedChart", "RouteMap"].includes(view.formId) && rendered.nodes.length === 0 && rendered.edges.length === 0 && (
             <div className="empty-chart-state" role="status" aria-live="polite">
@@ -964,9 +957,9 @@ export function App() {
               <button className={`tool ${boxSelect ? "on" : ""}`} aria-pressed={boxSelect} onClick={() => setBoxSelect(!boxSelect)}>{boxSelect ? "Box select: drag to select (click to stop)" : "Box select"}</button>
               <button className="tool" onClick={() => setOutlineOpen(true)} title="The whole map as text (shortcut: O)">Text outline</button>
               {levelsApply && <span className="levelctl" role="group" aria-label="Level of detail">
-                <button className="tool" onClick={() => stepLevel(-1)} disabled={level <= 0} aria-label="Zoom out one level">−</button>
-                <span className="level" aria-live="polite" title={LEVELS[level].hint}>L{level} · {LEVELS[level].name}</span>
-                <button className="tool" onClick={() => stepLevel(1)} disabled={level >= MAX_LEVEL} aria-label="Zoom in one level">+</button>
+                <label>Context <select aria-label="Chart context level" value={level} onChange={(e) => { setLevel(Number(e.target.value)); setFitTick((t) => t + 1); }}>
+                  {LEVELS.map((entry, index) => <option key={index} value={index}>L{index} · {entry.name}</option>)}
+                </select></label>
               </span>}
             </div>
           )}
@@ -1027,7 +1020,7 @@ export function App() {
               {claimsFor(drawer.claimIds).map((c) => <ClaimCard key={c.draft.id} claim={c} onVerdict={verdict} />)}
               {drawer.evidence.map((e) => <EvidenceCard key={e.id} e={e} />)}
             </>
-          ) : !code && <p className="muted">Click an element or edge to see exactly where it comes from. Double-click an element to expand its code.</p>}
+          ) : !code && <p className="muted">Click an element or edge to see exactly where it comes from. Hover with the lens to expand an element; pin it to inspect its members.</p>}
         </section>
       </aside>
     </div>

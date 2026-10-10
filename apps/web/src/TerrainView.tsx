@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { attachElementFisheye } from "./fisheye.ts";
 import type { TerrainCell, ViewSpec } from "@cie/schema";
 import { composite, squarify } from "./graph.ts";
 
@@ -9,6 +10,8 @@ const W = 900, H = 560;
 function tint(t: number): string { return `color-mix(in srgb, var(--heat-hot) ${Math.round(t * 100)}%, var(--heat-cool))`; }
 
 export function TerrainView({ view, weights, onWeights, selected, onPick, onToggle }: Props) {
+  const host = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (!host.current) return; const lens = attachElementFisheye(host.current, ".terrain-svg g.cell"); return () => lens.dispose(); }, []);
   const t = view.terrain!;
   const [focus, setFocus] = useState<string | null>(null);
   const scored = useMemo(() => t.cells.map((c) => ({ c, risk: composite(c.factors, weights) })), [t, weights]);
@@ -20,7 +23,7 @@ export function TerrainView({ view, weights, onWeights, selected, onPick, onTogg
   const top = (c: TerrainCell) => Object.entries(c.factors).sort((a, b) => b[1] * (weights[b[0]] ?? 0) - a[1] * (weights[a[0]] ?? 0)).slice(0, 2).map(([k]) => t.factors.find((f) => f.id === k)?.label.toLowerCase()).join(" and ");
   const total = Object.values(weights).reduce((a, b) => a + b, 0) || 1;
   return (
-    <div className="terrain">
+    <div className="terrain chart-lens-host" ref={host}>
       <div className="terrain-weights" role="group" aria-label="Weights of the composite risk">
         {t.factors.map((f) => (
           <label key={f.id} title={f.description}>

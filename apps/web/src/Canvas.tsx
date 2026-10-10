@@ -4,15 +4,17 @@ import type { ELK as ElkEngine, ELKConstructorArguments } from "elkjs/lib/elk-ap
 import elkWorkerUrl from "elkjs/lib/elk-worker.min.js?url";
 import { arrangeElk, usesElk } from "./arrange.ts";
 import { useEffect, useRef, useState } from "react";
-import { describeNode, MAX_LEVEL, nextByDirection, viaToSegments, type Dir, type RenderEdge, type RenderNode, type Rendered } from "./graph.ts";
+import { describeNode, nextByDirection, viaToSegments, type Dir, type RenderEdge, type RenderNode, type Rendered } from "./graph.ts";
 import type { OverlayMark } from "./mapoverlays.ts";
-import { POLICY, fontPx, levelMove, panFor, planTransition, pullInside, readableFitZoom, resolveAnchor, visibility, zoomAfterSwitch, type AnchorNode, type Move } from "./legibility.ts";
+import { POLICY, fontPx, planTransition, readableFitZoom, visibility } from "./legibility.ts";
 import { detailPolicyFor, type DetailPolicy, type SemanticAnchor } from "./detail.ts";
 import { renderedLevelFromGraph } from "./rendered-level.ts";
+import { attachFisheye, chartColor, chartFill, CHART_THEME, LENS_DEFAULTS, type LensEngine, type LensState } from "./fisheye.ts";
 import "./zoom.css";
 
 interface Props {
   rendered: Rendered;
+  lensDetails?: Rendered;
   replayNodes?: Map<string, boolean>;
   overlayNodes?: Map<string, OverlayMark>;
   /** Changes when a new view (or new view version) replaces the old one; only then is the camera fitted. */
@@ -23,17 +25,13 @@ interface Props {
   onSelectNodes: (renderNodeIds: string[]) => void;
   onTapNode: (n: RenderNode) => void;
   onTapEdge: (e: RenderEdge) => void;
-  onExpand: (n: RenderNode) => void;
-  /** A level proposed by a zoom gesture, reported only after the zoom has settled. */
-  onZoomLevel: (level: number) => void;
   caption: string;
-  /** Bumps when the level was chosen explicitly (stepper, chat); the camera then fits the new rendering. */
+  /** Bumps when the level was chosen explicitly (context selector); the camera then fits the new rendering. */
   fitTick: number;
   formId?: string;
   chartId?: string;
   policy?: DetailPolicy;
   onToggleNode: (n: RenderNode) => void;
-  onStepLevel: (delta: number) => void;
   /** True for forms whose levels change the content (the semantic map); the others keep one drawing and only hide labels that are too small to read. */
   semanticLevels: boolean;
   onClear: () => void;
@@ -41,15 +39,16 @@ interface Props {
   announce: (text: string) => void;
 }
 
-const DWELL_MS = 120; // short: labels must not stay unreadable while a switch waits (below the hard minimum it is immediate)
 // elkjs publishes a CommonJS constructor; NodeNext treats its default declaration as a module namespace.
 const ELK = ElkConstructor as unknown as { new(options?: ELKConstructorArguments): ElkEngine };
 const css = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
 function style(): cytoscape.StylesheetJson {
-  const heatCool = css("--heat-cool"), heatHot = css("--heat-hot"), fact = css("--fact"), inf = css("--inference"), fog = css("--fog"), hyp = css("--hyp"), warn = css("--warn"), ok = css("--ok"), ink = css("--ink"), muted = css("--muted"), panel = css("--panel"), accent = css("--accent");
+  const heatCool = css("--heat-cool"), heatHot = css("--heat-hot"), fact = "#60a5fa", inf = "#a78bfa", fog = "#94a3b8", hyp = "#fb7185", warn = "#fbbf24", ok = "#4ade80", ink = CHART_THEME.text, muted = CHART_THEME.muted, panel = CHART_THEME.panel, accent = CHART_THEME.accent;
   return [
     { selector: "node", style: { label: "data(label)", "min-zoomed-font-size": POLICY.hardMinPx, "font-size": 11, color: ink, "text-valign": "center", "text-halign": "center", "text-wrap": "wrap", "text-max-width": "146px", "text-background-color": panel, "text-background-opacity": 0.9, "text-background-padding": "2px", width: 150, height: 28, shape: "round-rectangle", "background-color": panel, "border-width": 2, "border-color": fact } },
+    { selector: "node[lensColor]", style: { "background-color": "data(lensFill)", "background-opacity": 1, "border-color": "data(lensColor)", "underlay-color": "data(lensColor)", "underlay-opacity": .08, "underlay-padding": 5 } },
+    { selector: "node.lens-hover", style: { "underlay-opacity": .3, "underlay-padding": 10 } },
     { selector: "node[tier = 'CRITICAL']", style: { "border-width": 3, "font-weight": 700 } },
     { selector: "node[tier = 'CONTEXT']", style: { opacity: 0.8, "border-width": 1 } },
     { selector: "node[display = 'INFERENCE']", style: { "border-style": "dashed", "border-color": inf } },
@@ -192,9 +191,6 @@ function fitReadable(c: cytoscape.Core, readableFloor = false) {
 }
 const reduceMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-/** What the camera was looking at when a level change was proposed, and what the change is. */
-interface Pending { kind: "switch" | "fit"; move: Exclude<Move, "none">; ids: string[]; screen: { x: number; y: number } | null }
-
 /** The thing the person was looking at: what is under the pointer (or near it), else the selection, else what is nearest the middle of the view. */
 function captureAnchor(c: cytoscape.Core, rendered: Rendered, selected: Set<string>, pointer: { x: number; y: number } | null, focusId: string | null): { ids: string[]; screen: { x: number; y: number } } {
   const w = c.width(), h = c.height(), centre = { x: w / 2, y: h / 2 };
@@ -226,6 +222,8 @@ function captureAnchor(c: cytoscape.Core, rendered: Rendered, selected: Set<stri
 }
 
 export function Canvas(input: Props) {
+  const lens = useRef<LensEngine | null>(null);
+  const [lensState, setLensState] = useState<LensState>(LENS_DEFAULTS);
   const [aspect, setAspect] = useState(1);
   const [layout, setLayout] = useState<{ source: Rendered; aspect: number; result: Rendered; engine: "elk" | "fallback" } | null>(null);
   const engine = useRef<InstanceType<typeof ELK> | null>(null);
@@ -237,16 +235,9 @@ export function Canvas(input: Props) {
   const cb = useRef(p);
   cb.current = p;
   const syncing = useRef(false);
-  const levelRef = useRef(p.level);
-  const pending = useRef<Pending | null>(null);
-  const animating = useRef(false);
-  const programmatic = useRef(false); // true while the app itself moves the camera (a fit): those zoom events are not the person zooming
-  const lastZoom = useRef(1);
   const pointer = useRef<{ x: number; y: number } | null>(null);
   const [hint, setHint] = useState<{ off: number; total: number; labelsHidden: boolean }>({ off: 0, total: 0, labelsHidden: false });
   const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null);
-  const lockZoom = useRef<number | null>(null);
-  const timer = useRef<number | null>(null);
   const lastViewKey = useRef("");
   const lastLayoutAspect = useRef(aspect);
   const focusId = useRef<string | null>(null);
@@ -280,20 +271,49 @@ export function Canvas(input: Props) {
 
   useEffect(() => {
     if (!host.current) return;
-    const c = cytoscape({ container: host.current, style: style(), boxSelectionEnabled: true, wheelSensitivity: 0.25, minZoom: 0.05, maxZoom: 4 });
+    const c = cytoscape({ container: host.current, style: style(), boxSelectionEnabled: true, userZoomingEnabled: false, wheelSensitivity: 0.25, minZoom: 0.05, maxZoom: 4 });
     cy.current = c;
     c.on("select unselect", "node", () => {
       if (syncing.current) return;
       cb.current.onSelectNodes(c.nodes(":selected").filter((n) => !n.isParent()).map((n) => n.id()));
     });
     c.on("tap", "node", (e) => { if (e.target.isParent()) return; const n = cb.current.rendered.nodes.find((x) => x.id === e.target.id()); if (n) cb.current.onTapNode(n); });
-    c.on("dbltap", "node", (e) => { const n = cb.current.rendered.nodes.find((x) => x.id === e.target.id()); if (n) cb.current.onExpand(n); });
+    c.on("dbltap", "node", (e) => { lens.current?.focus(e.target.renderedPosition()); lens.current?.configure({ magnification: 2.8 }); });
     c.on("tap", "edge", (e) => { const ed = cb.current.rendered.edges.find((x) => x.id === e.target.id()); if (ed) cb.current.onTapEdge(ed); });
     // A wrapped or shortened label still has its full text: show it on hover, and the text outline (O) keeps every name too.
     const showTip = (e: cytoscape.EventObject, text: string | undefined) => { if (!text) return; const rp = e.target.renderedPosition(); setTip({ x: rp.x, y: rp.y - 12, text }); };
     c.on("mouseover", "node", (e) => showTip(e, cb.current.rendered.nodes.find((x) => x.id === e.target.id())?.label));
     c.on("mouseover", "edge", (e) => showTip(e, cb.current.rendered.edges.find((x) => x.id === e.target.id())?.label));
     c.on("mouseout", "node, edge", () => setTip(null));
+    c.on("mouseover", "node", (e) => e.target.addClass("lens-hover"));
+    c.on("mouseout", "node", (e) => e.target.removeClass("lens-hover"));
+    const fisheye = attachFisheye(host.current, {
+      interactive: () => !cb.current.boxSelect,
+      onChange: setLensState,
+      scene: () => {
+        const nodes = cb.current.rendered.nodes.flatMap((n) => {
+          const element = c.getElementById(n.id); if (element.empty()) return [];
+          const at = element.renderedPosition();
+          return [{ id: n.id, label: n.label, ref: n, ...at, width: element.renderedWidth(), height: element.renderedHeight(), color: chartColor(n.node?.file ?? n.label, n.role), shape: element.style("shape"), displayMode: n.displayMode, selected: element.selected(), details: [n.node?.kind ?? n.role ?? "", ...(n.node?.notes ?? [])].filter(Boolean) }];
+        });
+        const byId = new Map(nodes.map((n) => [n.id, n]));
+        const edges = cb.current.rendered.edges.flatMap((e) => {
+          const a = byId.get(e.from), b = byId.get(e.to); if (!a || !b) return [];
+          const z = c.zoom(), pan = c.pan(), element = c.getElementById(e.id);
+          return [{ id: e.id, from: e.from, to: e.to, ref: e, sourceArrow: element.style("source-arrow-shape"), targetArrow: element.style("target-arrow-shape"), arrowFill: element.style("target-arrow-fill"), label: element.style("label"), color: e.displayMode === "HYPOTHESIS" ? "#fb7185" : CHART_THEME.accent, dashed: e.displayMode !== "FACT", points: [a, ...(e.via ?? []).map((p) => ({ x: p.x * z + pan.x, y: p.y * z + pan.y })), b] }];
+        });
+        return { nodes, edges };
+      },
+      children: (parent) => {
+        if (parent.ref?.kind !== "agg") return { nodes: [], edges: [] };
+        const members = new Set(parent.ref.members), details = cb.current.lensDetails;
+        return { nodes: details?.nodes.filter((n) => members.has(n.id)) ?? [], edges: details?.edges ?? [] };
+      },
+      onNode: (node, toggle) => { if (node.ref) { if (toggle) cb.current.onToggleNode(node.ref); else cb.current.onTapNode(node.ref); } },
+      onEdge: (edge) => { if (edge.ref) cb.current.onTapEdge(edge.ref); },
+    });
+    lens.current = fisheye;
+    c.on("render pan zoom", fisheye.refresh);
     // What the person can see: how many elements are outside the viewport, and whether labels are too small to be drawn.
     let raf = 0;
     const refresh = () => {
@@ -307,29 +327,6 @@ export function Canvas(input: Props) {
     c.on("pan zoom resize", schedule);
     refreshRef.current = refresh;
     host.current.addEventListener("wheel", (e) => { const r = host.current!.getBoundingClientRect(); pointer.current = { x: e.clientX - r.left, y: e.clientY - r.top }; }, { passive: true, capture: true });
-    // Semantic zoom: the level changes when labels become unreadable (zooming out) or large (zooming in), not at a fixed relative zoom.
-    // Zoom lock: a level chosen explicitly (stepper, fit) is not undone by the next stray zoom event.
-    lastZoom.current = c.zoom();
-    c.on("zoom", () => {
-      const z = c.zoom(), moving = z < lastZoom.current ? "out" : "in";
-      lastZoom.current = z;
-      if (animating.current || programmatic.current || !cb.current.semanticLevels) return;
-      if (lockZoom.current !== null) {
-        if (Math.abs(z - lockZoom.current) / lockZoom.current < 0.02) return;
-        lockZoom.current = null; // the user moved the camera again; zoom drives the level once more
-      }
-      if (timer.current) window.clearTimeout(timer.current);
-      const move = levelMove(z, moving, levelRef.current, MAX_LEVEL);
-      if (move === "none") return;
-      const go = () => {
-        const again = levelMove(c.zoom(), moving, levelRef.current, MAX_LEVEL);
-        if (again === "none") return;
-        pending.current = { kind: "switch", move: again, ...captureAnchor(c, cb.current.rendered, cb.current.selected, pointer.current, focusId.current) };
-        levelRef.current += again === "coarser" ? -1 : 1;
-        cb.current.onZoomLevel(levelRef.current);
-      };
-      if (move === "coarser" && fontPx(z) < POLICY.hardMinPx) go(); else timer.current = window.setTimeout(go, DWELL_MS);
-    });
     // The stage can be resized after mount (caption wraps, panels resize); keep cytoscape's measurements current.
     const ro = new ResizeObserver(() => {
       c.resize();
@@ -338,48 +335,14 @@ export function Canvas(input: Props) {
       setAspect(Math.round(ratio * 4) / 4);
     });
     ro.observe(host.current);
-    return () => { ro.disconnect(); if (timer.current) window.clearTimeout(timer.current); if (raf) cancelAnimationFrame(raf); c.destroy(); cy.current = null; };
+    return () => { fisheye.dispose(); lens.current = null; ro.disconnect(); if (raf) cancelAnimationFrame(raf); c.destroy(); cy.current = null; };
   }, []);
-
-  // A level chosen explicitly (stepper, chat) must not be undone by the next stray zoom event.
-  useEffect(() => {
-    if (levelRef.current !== p.level) { levelRef.current = p.level; if (cy.current) lockZoom.current = cy.current.zoom(); }
-  }, [p.level]);
-
-  /** Move the camera from code. The zoom events this causes are ignored by the level logic, so a fit cannot undo a level that was just chosen. */
-  const quietly = (c: cytoscape.Core, fn: () => void) => {
-    programmatic.current = true;
-    try { fn(); } finally { lastZoom.current = c.zoom(); requestAnimationFrame(() => { programmatic.current = false; lastZoom.current = c.zoom(); }); }
-  };
-
-  /**
-   * The elements have just been replaced by another level. Put the camera where the person was looking: the node that now stands for what was under
-   * the pointer goes back to the same place on screen, at a zoom where labels are readable, and a drawing that fits is pulled fully into view.
-   */
-  const settleLevelChange = (c: cytoscape.Core, rendered: Rendered, pend: Pending) => {
-    const w = c.width(), h = c.height(), pad = 40;
-    const bb = c.elements().boundingBox();
-    const zFit = bb.w > 0 && bb.h > 0 ? Math.min((w - 2 * pad) / bb.w, (h - 2 * pad) / bb.h) : 1;
-    const z = zoomAfterSwitch(pend.move, zFit);
-    const nodes: AnchorNode[] = rendered.nodes.map((n) => { const q = c.getElementById(n.id).position(); return { id: n.id, members: n.members, x: q.x, y: q.y }; });
-    const anchor = resolveAnchor(pend.ids, nodes);
-    const model = anchor ? { x: anchor.x, y: anchor.y } : { x: (bb.x1 + bb.x2) / 2, y: (bb.y1 + bb.y2) / 2 };
-    const screen = anchor && pend.screen ? pend.screen : { x: w / 2, y: h / 2 };
-    let pan = panFor(model, screen, z);
-    if (pend.move === "coarser") pan = pullInside(pan, bb, z, w, h);
-    lockZoom.current = null;
-    if (reduceMotion()) { quietly(c, () => c.viewport({ zoom: z, pan })); return; }
-    animating.current = true;
-    c.animate({ zoom: z, pan }, { duration: 160, complete: () => { animating.current = false; lastZoom.current = c.zoom(); refreshRef.current(); } });
-  };
 
   /** "Bring into view": fit everything; labels that would be too small to read are then not drawn, and the outline keeps the names. */
   const bringIntoView = () => {
     const c = cy.current; if (!c) return;
-    lockZoom.current = null;
-    if (reduceMotion()) { quietly(c, () => fitReadable(c)); refreshRef.current(); return; }
-    animating.current = true;
-    c.animate({ fit: { eles: c.elements(), padding: 40 }, duration: 180, complete: () => { if (c.zoom() > 1.4) c.zoom(1.4); animating.current = false; lastZoom.current = c.zoom(); refreshRef.current(); } });
+    if (reduceMotion()) { fitReadable(c); refreshRef.current(); return; }
+    c.animate({ fit: { eles: c.elements(), padding: 40 }, duration: 180, complete: () => { if (c.zoom() > 1.4) c.zoom(1.4); refreshRef.current(); } });
   };
 
   // Rebuild elements when the rendering changes. The camera moves only for a new view; level changes and
@@ -405,7 +368,7 @@ export function Canvas(input: Props) {
         const umlLabel = uml ? `${umlKind}\n${n.label}\n────────────────────${umlNotes.length ? `\n${umlNotes.join("\n")}` : ""}${(n.node?.notes?.length ?? 0) > umlNotes.length ? `\n… ${n.node!.notes!.length - umlNotes.length} more members` : ""}` : "";
         const detail = uml ? umlLabel : level >= 6 && n.node ? `${n.label}\n${[n.role === "symbol" ? n.node.kind : n.role, n.node.notes?.length ? `${n.node.notes.length} note(s)` : "", n.node.unresolvedCalls ? `${n.node.unresolvedCalls} unresolved calls` : ""].filter(Boolean).join(" · ")}` : n.label;
         const labelText = level === 3 && n.unresolvedCalls ? `${detail}\n${n.unresolvedCalls} unresolved calls` : bd && level < 6 ? `${n.label}\n${bd}` : detail;
-        return { data: { id: n.id, label: labelText, umlLines: uml ? 2 + umlNotes.length + ((n.node?.notes?.length ?? 0) > umlNotes.length ? 1 : 0) : 1, hasBadge: bd ? 1 : 0, heatv: n.node?.heat ? n.node.heat.value : -1, ghost: n.node?.ghost ? 1 : 0, inTx: n.inTx ? 1 : 0, detail: level >= 6 ? 1 : 0, testOverlaySize: 0, runtimeOverlaySize: 0, tier: n.tier, display: n.displayMode, role: n.role ?? "", kind: n.kind, parent: n.parent }, position: { ...n.pos }, classes: n.stale ? "stale" : "" };
+        return { data: { id: n.id, label: labelText, umlLines: uml ? 2 + umlNotes.length + ((n.node?.notes?.length ?? 0) > umlNotes.length ? 1 : 0) : 1, lensColor: chartColor(n.node?.file ?? n.label, n.role), lensFill: chartFill(chartColor(n.node?.file ?? n.label, n.role)), hasBadge: bd ? 1 : 0, heatv: n.node?.heat ? n.node.heat.value : -1, ghost: n.node?.ghost ? 1 : 0, inTx: n.inTx ? 1 : 0, detail: level >= 6 ? 1 : 0, testOverlaySize: 0, runtimeOverlaySize: 0, tier: n.tier, display: n.displayMode, role: n.role ?? "", kind: n.kind, parent: n.parent }, position: { ...n.pos }, classes: n.stale ? "stale" : "" };
       }),
       ...rendered.edges.map((e) => {
         const at = (id: string) => nodePos.get(id);
@@ -418,28 +381,16 @@ export function Canvas(input: Props) {
     // Apply routed edge geometry as a bypass after insertion. Cytoscape's element
     // insertion does not reliably install the style object from an element definition.
     for (const element of els) if (element.style) c.getElementById(element.data.id!).style(element.style);
-    const pend = pending.current;
-    if (pend && pend.kind === "switch") {
-      pending.current = null;
-      settleLevelChange(c, rendered, pend);
-    } else if (p.viewKey !== lastViewKey.current || pend?.kind === "fit" || (automatic && aspect !== lastLayoutAspect.current)) {
+    if (p.viewKey !== lastViewKey.current || (automatic && aspect !== lastLayoutAspect.current)) {
       lastViewKey.current = p.viewKey;
-      pending.current = null;
-      const canCoarsen = cb.current.semanticLevels && cb.current.formId !== "GeneratedChart";
-      quietly(c, () => fitReadable(c, !canCoarsen));
-      lockZoom.current = null;
-      // A new view starts at the finest level that fits with readable labels: if these are too small, try the next coarser level (the effect runs again).
-      if (canCoarsen && fontPx(c.zoom()) < POLICY.aggregateBelowPx && p.level > 0) {
-        pending.current = { kind: "fit", move: "coarser", ids: [], screen: null };
-        levelRef.current = p.level - 1;
-        window.setTimeout(() => cb.current.onZoomLevel(p.level - 1), 0);
-      }
+      fitReadable(c);
     }
     // Reapply selection to the fresh elements.
     c.batch(() => { for (const id of p.selected) c.getElementById(id).select(); });
     focusEdges(c, focusId.current);
     syncing.current = false;
     refreshRef.current();
+    lens.current?.refresh();
     lastLayoutAspect.current = aspect;
   }, [p.rendered, p.viewKey, layoutReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -505,11 +456,9 @@ export function Canvas(input: Props) {
         policy,
         kind: "EXPLICIT_LEVEL",
       });
-      quietly(c, () => c.viewport(plan.camera));
-      lockZoom.current = plan.camera.zoom;
+      c.viewport(plan.camera);
     } else {
-      quietly(c, () => fitReadable(c, !p.semanticLevels));
-      lockZoom.current = c.zoom();
+      fitReadable(c, !p.semanticLevels);
     }
     refreshRef.current();
   }, [p.fitTick, p.rendered, layoutReady]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -531,6 +480,7 @@ export function Canvas(input: Props) {
     const el = c.getElementById(id);
     if (el.empty()) { focusId.current = null; return; }
     el.addClass("kbfocus");
+    lens.current?.focus(el.renderedPosition());
     focusEdges(c, id);
     // A keyboard move is the user asking to look there: pan only if the node is off screen, never change zoom.
     const bb = el.renderedBoundingBox(), w = c.width(), h = c.height();
@@ -556,9 +506,7 @@ export function Canvas(input: Props) {
       if (sorted.length) setFocus(e.key === "Home" ? sorted[0].id : sorted[sorted.length - 1].id);
     } else if (e.key === "Enter" && cur) { e.preventDefault(); cb.current.onTapNode(cur); }
     else if (e.key === " " && cur) { e.preventDefault(); cb.current.onToggleNode(cur); }
-    else if ((e.key === "e" || e.key === "E") && cur) { e.preventDefault(); cb.current.onExpand(cur); }
-    else if (e.key === "+" || e.key === "=") { e.preventDefault(); cb.current.onStepLevel(1); }
-    else if (e.key === "-" || e.key === "_") { e.preventDefault(); cb.current.onStepLevel(-1); }
+    else if ((e.key === "e" || e.key === "E") && cur) { e.preventDefault(); lens.current?.focus(c.getElementById(cur.id).renderedPosition()); lens.current?.configure({ magnification: 2.8 }); }
     else if (e.key === "Escape") { cb.current.onClear(); cb.current.announce("Selection cleared"); }
     else if (e.key === "o" || e.key === "O") { e.preventDefault(); cb.current.onOpenOutline(); }
   };
@@ -572,10 +520,20 @@ export function Canvas(input: Props) {
       onMouseDown={() => host.current?.focus()}
       onFocus={() => { if (layoutReady && !focusId.current && cb.current.rendered.nodes.length) { const c = cy.current!; const first = [...cb.current.rendered.nodes].sort((a, b) => { const qa = c.getElementById(a.id).position(), qb = c.getElementById(b.id).position(); return qa.x - qb.x || qa.y - qb.y; })[0]; setFocus(first.id); } }} />
     {!layoutReady && <div className="canvas-hint" role="status">Arranging graph…</div>}
+    <div className="lens-controls" role="group" aria-label="Fisheye lens controls">
+      <label><input type="checkbox" checked={lensState.enabled} onChange={(e) => lens.current?.configure({ enabled: e.target.checked })} /> Lens</label>
+      <label>Magnify <input aria-label="Lens magnification" type="range" min="0.35" max="4" step="0.05" value={lensState.magnification} onChange={(e) => lens.current?.configure({ magnification: Number(e.target.value) })} /> <output>{lensState.magnification.toFixed(2)}×</output></label>
+      <label>Radius <input aria-label="Lens radius" type="range" min="60" max="220" step="2" value={lensState.radius} onChange={(e) => lens.current?.configure({ radius: Number(e.target.value) })} /></label>
+      <label>Falloff <input aria-label="Lens falloff" type="range" min="1.6" max="3.2" step="0.1" value={lensState.falloff} onChange={(e) => lens.current?.configure({ falloff: Number(e.target.value) })} /></label>
+      <label><input type="checkbox" checked={lensState.easing} onChange={(e) => lens.current?.configure({ easing: e.target.checked })} /> Ease</label>
+      <label><input type="checkbox" checked={lensState.rings} onChange={(e) => lens.current?.configure({ rings: e.target.checked })} /> Rings</label>
+      <button type="button" onClick={() => lens.current?.configure({ pinned: !lensState.pinned })}>{lensState.pinned ? "Unpin lens" : "Pin lens"}</button>
+      <span>Wheel: lens · Shift: radius · Alt: shrink · L: toggle</span>
+    </div>
     {layoutReady && (hint.off > 0 || hint.labelsHidden) && (
       <div className="canvas-hint" role="status">
         {hint.off > 0 && <span>{hint.off} of {hint.total} element{hint.total === 1 ? "" : "s"} off-screen <button type="button" className="tool" onClick={bringIntoView}>Bring into view</button></span>}
-        {hint.labelsHidden && <span>Labels are hidden at this zoom: zoom in, or open the text outline (O).</span>}
+        {hint.labelsHidden && <span>Hover with the lens to read details, or open the text outline (O).</span>}
       </div>
     )}
     {tip && <div className="canvas-tip" role="tooltip" style={{ left: tip.x, top: tip.y }}>{tip.text}</div>}

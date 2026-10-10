@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { attachElementFisheye } from "./fisheye.ts";
 import type { MatrixAxis, MatrixCell, ViewMatrix } from "@cie/schema";
 import { cellKey } from "./graph.ts";
 
@@ -13,6 +14,8 @@ const tint = (t: number) => `color-mix(in srgb, var(--heat-hot) ${Math.round(t *
  * how it is known with its border (solid fact, dashed inference, dotted hypothesis) and in words, never by colour alone.
  */
 export function MatrixView({ matrix, stale, selected, onPick }: Props) {
+  const host = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (!host.current) return; const lens = attachElementFisheye(host.current, ".mcell"); return () => lens.dispose(); }, []);
   const [focus, setFocus] = useState<[number, number]>([0, 0]);
   const refs = useRef(new Map<string, HTMLButtonElement>());
   const cellAt = new Map(matrix.cells.map((c) => [`${c.row}|${c.col}`, c]));
@@ -29,7 +32,7 @@ export function MatrixView({ matrix, stale, selected, onPick }: Props) {
   };
   const used = [...new Set(matrix.cells.map((c) => c.state))].filter((s) => matrix.states[s]);
   return (
-    <div className="matrix">
+    <div className="matrix chart-lens-host" ref={host}>
       {/* A compact key (one wrapping line) plus the full definitions on demand: the matrix, not the legend, gets the height. */}
       <div id="matrix-legend" className="matrix-key">
         <ul aria-label="Cell key">

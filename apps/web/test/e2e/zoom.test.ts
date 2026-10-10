@@ -1,15 +1,13 @@
-// Semantic zoom in a real browser (issue: text unreadable before the level changes, new levels outside the viewport, forms that never aggregate).
-// Sweeps the wheel in both directions over a map that has levels and over a form that has none, reading the camera after every step.
+// Local fisheye zoom in a real browser: the global camera, layout, and context stay unchanged.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Browser, CHROME } from "./cdp.ts";
 import { ROOT } from "./harness.ts";
 
-const FONT = 11, HARD_MIN = 9, AGGREGATE_BELOW = 10;
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function start() {
@@ -22,98 +20,113 @@ async function start() {
   proc.kill(); throw new Error("server did not start");
 }
 const click = (b: Browser, label: string) => b.eval<boolean>(`(() => { const el = [...document.querySelectorAll('button')].find((x) => x.textContent.trim().startsWith(${JSON.stringify(label)}) && !x.disabled); if (!el) return false; el.click(); return true; })()`);
-/** What the camera sees now, and what the page says about it. */
-const probe = (b: Browser) => b.eval<{ level: string; zoom: number; fontPx: number; nodes: number; inView: number; drawingPct: number; hint: string; offscreenTold: number }>(`(() => {
-  const cy = document.querySelector('.canvas')._cyreg.cy, w = cy.width(), h = cy.height();
-  const nodes = cy.nodes().filter((n) => !n.isParent());
-  const boxes = nodes.map((n) => n.renderedBoundingBox());
-  const inView = boxes.filter((b) => !(b.x2 <= 0 || b.x1 >= w || b.y2 <= 0 || b.y1 >= h)).length;
-  let pct = 100; if (boxes.length) { const x1 = Math.min(...boxes.map((b) => b.x1)), y1 = Math.min(...boxes.map((b) => b.y1)), x2 = Math.max(...boxes.map((b) => b.x2)), y2 = Math.max(...boxes.map((b) => b.y2)); const a = (x2 - x1) * (y2 - y1); const ix = Math.max(0, Math.min(x2, w) - Math.max(x1, 0)), iy = Math.max(0, Math.min(y2, h) - Math.max(y1, 0)); pct = a > 0 ? Math.round(100 * ix * iy / a) : 100; }
-  const hint = document.querySelector('.canvas-hint')?.innerText ?? '';
-  const told = /(\\d+) of \\d+ element/.exec(hint);
-  return { level: (document.body.innerText.match(/L\\d · [A-Za-z ]+/) ?? [''])[0], zoom: cy.zoom(), fontPx: ${FONT} * cy.zoom(), nodes: nodes.length, inView, drawingPct: pct, hint, offscreenTold: told ? Number(told[1]) : 0 };
-})()`);
-const wheel = async (b: Browser, dy: number, ticks = 3) => { for (let i = 0; i < ticks; i++) { await b.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 600, y: 480, deltaX: 0, deltaY: dy }); await wait(30); } };
-const lvl = (s: string) => Number(/L(\d)/.exec(s)?.[1] ?? -1);
 
-test("semantic zoom: levels change before text is unreadable, content stays in view, the page tells the truth about what is off-screen, and nothing flickers", { skip: !existsSync(CHROME), timeout: 240_000 }, async () => {
+async function prepare(b: Browser, url: string) {
+  await b.send("Emulation.setDeviceMetricsOverride", { width: 1500, height: 920, deviceScaleFactor: 1, mobile: false });
+  await b.goto(url); await b.eval(`document.getElementById('repo').focus()`); await b.type(join(ROOT, "fixtures/payments-repo"));
+  assert.ok(await click(b, "Index"));
+  await b.waitFor(() => `/rev \\S+ · \\d+ files/.test(document.querySelector('header').innerText)`, 60_000);
+  await b.waitFor(() => `[...document.querySelectorAll('button')].some((x) => x.textContent.startsWith('Build concept hierarchy') && !x.disabled)`, 60_000);
+  assert.ok(await click(b, "Build concept hierarchy"));
+  await b.waitFor(() => `/[1-9]\\d* hierarchy concepts/.test(document.querySelector('header').innerText)`, 60_000);
+  await b.eval(`document.getElementById('chat-input').focus()`); await b.type("how does createPayment work"); await b.key("Enter");
+  await b.waitFor(() => `document.querySelector('.canvas')?._cyreg?.cy.nodes().length > 0 && document.querySelector('.canvas').getAttribute('aria-busy') === 'false'`, 30_000);
+  await wait(200);
+}
+const graphSnapshot = (b: Browser) => b.eval(`(() => {
+  const cy = document.querySelector('.canvas')._cyreg.cy;
+  return { level: document.querySelector('[aria-label="Chart context level"]')?.value, zoom: cy.zoom(), pan: cy.pan(), nodes: cy.nodes().map((n) => ({id:n.id(),position:n.position()})), edges: cy.edges().map((e) => e.id()) };
+})()`);
+const lensPoint = (b: Browser) => b.eval<{ x: number; y: number }>(`(() => {
+  const host = document.querySelector('.canvas'), cy = host._cyreg.cy, rect = host.getBoundingClientRect();
+  const node = cy.nodes().filter((n) => !n.isParent() && n.renderedPosition().x > 0 && n.renderedPosition().y > 70 && n.renderedPosition().x < cy.width()-260 && n.renderedPosition().y < cy.height()-30)[0] || cy.nodes().filter((n)=>!n.isParent())[0];
+  const p = node.renderedPosition(); return {x:rect.left+p.x,y:rect.top+p.y};
+})()`);
+
+test("fisheye wheel zoom leaves the chart camera, layout and global detail unchanged", { skip: !existsSync(CHROME), timeout: 180_000 }, async () => {
   const server = await start(), b = await Browser.launch();
   try {
-    await b.send("Emulation.setDeviceMetricsOverride", { width: 1500, height: 920, deviceScaleFactor: 1, mobile: false });
-    await b.goto(server.url);
-    await b.eval(`document.getElementById('repo').focus()`); await b.type(join(ROOT, "fixtures/payments-repo"));
-    await click(b, "Index");
-    await b.waitFor(() => `/rev \\S+ · \\d+ files/.test(document.querySelector('header').innerText)`, 60_000);
-    await b.eval(`document.getElementById('chat-input').focus()`); await b.type("how does createPayment work"); await b.key("Enter");
-    await b.waitFor(() => `document.querySelectorAll('.elements li').length > 0`, 30_000); await wait(1500);
-
-    const start = await probe(b);
-    assert.ok(start.fontPx >= AGGREGATE_BELOW, `a new view starts with readable labels (${start.fontPx.toFixed(1)} px at ${start.level})`);
-    assert.ok(start.drawingPct >= 99 && start.offscreenTold === 0, "and is not cropped");
-
-    const sweep = async (dy: number, steps: number) => {
-      const rows: { level: number; px: number; pct: number; inView: number; nodes: number; told: number; hint: string }[] = [];
-      let prev = await probe(b);
-      for (let i = 0; i < steps; i++) {
-        await wheel(b, dy); await wait(450);
-        const p = await probe(b);
-        rows.push({ level: lvl(p.level), px: p.fontPx, pct: p.drawingPct, inView: p.inView, nodes: p.nodes, told: p.offscreenTold, hint: p.hint });
-        // text: readable, or not drawn (and the page says so); never drawn too small
-        if (p.fontPx < HARD_MIN) assert.match(p.hint, /Labels are hidden/, `step ${i}: ${p.fontPx.toFixed(1)} px and no notice that labels are hidden`);
-        // truthfulness: the number the page reports equals the number of elements actually outside the viewport
-        assert.equal(p.offscreenTold, p.nodes - p.inView, `step ${i}: the page says ${p.offscreenTold} off-screen, ${p.nodes - p.inView} are`);
-        if (lvl(p.level) !== lvl(prev.level)) {
-          // a level change: the labels come back readable and the new content is in view (or the page says what is not)
-          assert.ok(p.fontPx >= AGGREGATE_BELOW || p.fontPx >= HARD_MIN && lvl(p.level) === 0, `step ${i}: after the switch to ${p.level} labels are ${p.fontPx.toFixed(1)} px`);
-          assert.ok(p.inView >= 1, `step ${i}: nothing of ${p.level} is in view`);
-          assert.ok(p.drawingPct >= 80 || p.offscreenTold > 0 || p.hint !== "", `step ${i}: only ${p.drawingPct}% of ${p.level} is in view and the page does not say so`);
-        }
-        prev = p;
-      }
-      return rows;
-    };
-
-    const out = await sweep(240, 30);
-    const levelsOut = out.map((r) => r.level);
-    assert.deepEqual(levelsOut, [...levelsOut].sort((a, c) => c - a), `zooming out only ever goes to coarser levels (no flicker): ${levelsOut.join(" ")}`);
-    assert.ok(new Set(levelsOut).size >= 2, "zooming out changed the level at least once");
-    assert.ok(Math.min(...out.map((r) => r.px)) >= HARD_MIN || out.every((r) => r.px >= HARD_MIN || /Labels are hidden/.test(r.hint)), "no label was drawn below the hard minimum");
-
-    const inn = await sweep(-240, 45);
-    const levelsIn = inn.map((r) => r.level);
-    assert.deepEqual(levelsIn, [...levelsIn].sort((a, c) => a - c), `zooming in only ever goes to finer levels: ${levelsIn.join(" ")}`);
-    assert.ok(new Set(levelsIn).size >= 2, "zooming in changed the level at least once");
+    await prepare(b, server.url);
+    const before = await graphSnapshot(b), point = await lensPoint(b);
+    await b.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+    const initial = await b.eval<number>(`Number(document.querySelector('.canvas').dataset.lensMagnification)`);
+    for (let i = 0; i < 3; i++) await b.send("Input.dispatchMouseEvent", { type: "mouseWheel", ...point, deltaX: 0, deltaY: -180 });
+    await b.waitFor(() => `Number(document.querySelector('.canvas').dataset.lensMagnification) > ${initial}`, 5000);
+    await wait(300);
+    assert.deepEqual(await graphSnapshot(b), before);
+    assert.equal(await b.eval(`getComputedStyle(document.querySelector('.canvas')).backgroundColor`), "rgb(11, 15, 23)");
+    assert.ok(await b.eval(`document.querySelector('.fisheye-surface').width > 0`));
+    await b.eval(`window.dispatchEvent(new CustomEvent('cie:lens-zoom',{detail:{direction:'out'}}))`);
+    await wait(100);
+    assert.deepEqual(await graphSnapshot(b), before);
+    const radius = await b.eval<number>(`Number(document.querySelector('[aria-label="Lens radius"]').value)`);
+    await b.send("Input.dispatchMouseEvent", { type: "mouseWheel", ...point, deltaX: 0, deltaY: -180, modifiers: 8 });
+    await b.waitFor(() => `Number(document.querySelector('[aria-label="Lens radius"]').value) > ${radius}`, 5000);
+    assert.deepEqual(await graphSnapshot(b), before);
+    const pinned = await click(b, "Pin lens"); assert.ok(pinned);
+    await b.eval(`document.querySelector('.canvas').focus()`); await b.key("Escape");
+    assert.equal(await b.eval(`document.querySelector('.canvas').dataset.lensPinned`), "false");
+    const errors = b.console.filter((line) => /^exception|^error/.test(line)); assert.deepEqual(errors, []);
   } finally { b.close(); server.proc.kill(); }
 });
 
-test("a form with no levels keeps one drawing and stops drawing labels that are too small to read, saying so; Bring into view fits everything", { skip: !existsSync(CHROME), timeout: 180_000 }, async () => {
+test("lens expands only a hovered aggregate and keeps member selection linked to evidence", { skip: !existsSync(CHROME), timeout: 180_000 }, async () => {
   const server = await start(), b = await Browser.launch();
   try {
-    await b.send("Emulation.setDeviceMetricsOverride", { width: 1500, height: 920, deviceScaleFactor: 1, mobile: false });
-    await b.goto(server.url);
-    await b.eval(`document.getElementById('repo').focus()`); await b.type(join(ROOT, "fixtures/payments-repo"));
-    await click(b, "Index");
-    await b.waitFor(() => `/rev \\S+ · \\d+ files/.test(document.querySelector('header').innerText)`, 60_000);
-    await click(b, "Visuals"); await wait(500);
-    await b.eval(`(() => { const card = [...document.querySelectorAll('[role=dialog] li, [role=dialog] article, [role=dialog] section')].filter((x) => x.innerText.includes('Data lineage') && x.querySelector('button')).sort((p, q) => p.innerText.length - q.innerText.length)[0]; [...card.querySelectorAll('button')].find((x) => x.textContent.trim() === 'Show').click(); })()`);
-    await b.waitFor(() => `document.querySelectorAll('.elements li').length > 0`, 30_000); await wait(1500);
-    assert.equal(lvl((await probe(b)).level), -1, "this form has no level stepper");
-    assert.equal(await b.eval(`document.querySelector('.canvas')._cyreg.cy.nodes().filter((n) => !n.isParent())[0].pstyle('min-zoomed-font-size').value`), HARD_MIN, "labels below the hard minimum are not drawn");
-    const before = await probe(b);
-    for (let i = 0; i < 40; i++) { await wheel(b, 240); await wait(60); }
-    await wait(500);
-    const small = await probe(b);
-    assert.ok(small.fontPx < HARD_MIN, `zoomed far out (${small.fontPx.toFixed(1)} px)`);
-    assert.match(small.hint, /Labels are hidden/);
-    assert.equal(small.nodes, before.nodes, "nothing was aggregated or dropped");
-    // pan far away: the page counts what is off-screen, then Bring into view fits it
-    await b.eval(`document.querySelector('.canvas')._cyreg.cy.panBy({ x: 2000, y: 0 }); 0`); await wait(400);
-    const lost = await probe(b);
-    assert.ok(lost.offscreenTold > 0 && lost.offscreenTold === lost.nodes - lost.inView, `${lost.offscreenTold} told, ${lost.nodes - lost.inView} actually off-screen`);
-    assert.ok(await click(b, "Bring into view"));
-    await wait(900);
-    const back = await probe(b);
-    assert.equal(back.nodes - back.inView, 0, "everything is in view again");
-    assert.equal(back.offscreenTold, 0);
+    await prepare(b, server.url);
+    await b.eval(`(() => { const select = document.querySelector('[aria-label="Chart context level"]'); select.value = '1'; select.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+    await b.waitFor(() => `document.querySelector('[aria-label="Chart context level"]').value === '1' && document.querySelector('.canvas').getAttribute('aria-busy') === 'false'`, 15_000);
+    await wait(300);
+    const before = await graphSnapshot(b), point = await lensPoint(b);
+    await b.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+    await b.waitFor(() => `document.querySelector('.canvas').dataset.lensExpanded.startsWith('agg:') && Number(document.querySelector('.canvas').dataset.lensChildren) > 0`, 5000);
+    assert.deepEqual(await graphSnapshot(b), before);
+    await click(b, "Pin lens");
+    await b.waitFor(() => `document.querySelector('.canvas').dataset.lensExpanded.startsWith('agg:')`, 5000);
+    const count = await b.eval<number>(`Number(document.querySelector('.canvas').dataset.lensChildren)`);
+    const rows = Math.ceil(count / 2), stepY = Math.min(64, 242 * 1.2 / rows);
+    const childPoint = { x: point.x - (count > 1 ? 84.65 : 0), y: point.y - (rows - 1) / 2 * stepY };
+    const { data } = await b.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+    writeFileSync('/tmp/cie-fisheye-local.png', Buffer.from(data, "base64"));
+    await b.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...childPoint });
+    await b.send("Input.dispatchMouseEvent", { type: "mousePressed", ...childPoint, button: "left", clickCount: 1 });
+    await b.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...childPoint, button: "left", clickCount: 1 });
+    await b.waitFor(() => `document.querySelector('.drawer') && /code|evidence|function|step/i.test(document.querySelector('.drawer').innerText)`, 5000);
+    assert.equal((await graphSnapshot(b)).level, "1");
+    assert.deepEqual(b.console.filter((line) => /^exception|^error/.test(line)), []);
   } finally { b.close(); server.proc.kill(); }
+});
+
+
+test("concept tree zoom and preview expansion leave the background tree unchanged", {skip: !existsSync(CHROME), timeout:180_000}, async () => {
+  const server = await start(), b = await Browser.launch();
+  try {
+    await prepare(b, server.url);
+    assert.ok(await click(b, "Browse concept hierarchy"));
+    await b.waitFor(() => `document.querySelector('.tree-lens-stage .tnode') && document.querySelector('.tree-lens-stage .fisheye-surface')`, 15_000);
+    await wait(300);
+    const snapshot = () => b.eval(`(() => {const scroll = document.querySelector('.tree-scroll'), svg=scroll.querySelector('svg');return {nodes:[...svg.querySelectorAll('.tnode')].map(n=>({id:n.dataset.treeId,pos:n.getAttribute('transform'),expanded:n.getAttribute('aria-expanded')})),width:svg.getAttribute('width'),height:svg.getAttribute('height'),top:scroll.scrollTop,left:scroll.scrollLeft};})()`);
+    const before = await snapshot();
+    const point = await b.eval<{x:number;y:number}>(`(() => {const host=document.querySelector('.tree-lens-stage'),hr=host.getBoundingClientRect();const node=[...host.querySelectorAll('.tnode[aria-expanded]')].find(n=>{const r=n.getBoundingClientRect();return r.x>hr.x && r.right<hr.right-250 && r.y>hr.y && r.bottom<hr.bottom}) || host.querySelector('.tnode[aria-expanded]');const r=node.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+    await b.send("Input.dispatchMouseEvent", {type:"mouseMoved",...point});
+    await b.waitFor(() => `document.querySelector('.tree-lens-stage').dataset.lensExpanded !== ''`,5000);
+    await b.send("Input.dispatchMouseEvent",{type:"mouseWheel",...point,deltaX:0,deltaY:-180});
+    await b.waitFor(() => `Number(document.querySelector('.tree-lens-stage').dataset.lensMagnification)>2.2`,5000);
+    assert.deepEqual(await snapshot(),before);
+    await b.eval(`document.querySelector('.tree-bar [aria-label="Zoom in"]').click()`);
+    await wait(200); assert.deepEqual(await snapshot(),before);
+    await b.eval(`document.querySelector('.tree-lens-stage .lens-controls button').click()`);
+    await wait(100);
+    const count = await b.eval<number>(`Number(document.querySelector('.tree-lens-stage').dataset.lensChildren)`);
+    const rows = Math.ceil(count/2), stepY = Math.min(64,242*1.2/rows);
+    const childPoint = {x:point.x-(count>1?84.65:0),y:point.y-(rows-1)/2*stepY};
+    await b.send("Input.dispatchMouseEvent",{type:"mouseMoved",...childPoint});
+    await b.send("Input.dispatchMouseEvent",{type:"mousePressed",...childPoint,button:"left",clickCount:1});
+    await b.send("Input.dispatchMouseEvent",{type:"mouseReleased",...childPoint,button:"left",clickCount:1});
+    await b.waitFor(() => `document.querySelector('.codepane h3') !== null`,5000);
+    assert.deepEqual(await snapshot(),before);
+    const {data} = await b.send("Page.captureScreenshot",{format:"png",captureBeyondViewport:false});
+    writeFileSync('/tmp/cie-fisheye-hierarchy.png',Buffer.from(data,'base64'));
+    assert.deepEqual(b.console.filter(line=>/^exception|^error/.test(line)),[]);
+  } finally {b.close();server.proc.kill();}
 });

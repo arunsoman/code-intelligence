@@ -93,14 +93,14 @@ async function showVisual(
 ): Promise<"shown" | "trace" | "unavailable" | "notfound"> {
   await clickButton(b, "Visuals");
   await b.waitFor(
-    () => ` [...document.querySelectorAll('.gallery li')].some((x) => x.querySelector('strong')?.innerText.includes(${JSON.stringify(namePart)}))`,
+    () => ` [...document.querySelectorAll('.gallery li')].some((x) => x.querySelector('strong')?.innerText.toLowerCase().includes(${JSON.stringify(namePart.toLowerCase())}))`,
     15_000,
     `${namePart} in visuals gallery`,
   );
 
   const result = await b.eval<"shown" | "trace" | "unavailable" | "notfound">(
     `(() => {
-      const li = [...document.querySelectorAll('.gallery li')].find((x) => x.querySelector('strong')?.innerText.includes(${JSON.stringify(namePart)}));
+      const li = [...document.querySelectorAll('.gallery li')].find((x) => x.querySelector('strong')?.innerText.toLowerCase().includes(${JSON.stringify(namePart.toLowerCase())}));
       if (!li) return 'notfound';
 
       // This entry needs a pasted stack trace — no Show button.
@@ -450,7 +450,7 @@ test(
           // "shown" → the gallery button was clicked; nothing extra to do.
 
           // Wait for something to render.
-          await b.waitFor(chart.waitFor, chart.timeoutMs ?? RENDER_TIMEOUT, `${chart.code} to render`);
+          if (outcome !== "unavailable") await b.waitFor(chart.waitFor, chart.timeoutMs ?? RENDER_TIMEOUT, `${chart.code} to render`);
           await b.waitFor(() => `!document.querySelector('.canvas[aria-busy="true"]')`, RENDER_TIMEOUT, "graph layout finished");
           if (["S1", "S16"].includes(chart.code) && outcome === "shown") {
             await b.waitFor(() => `document.querySelector('.canvas')?.dataset.layoutEngine === 'elk' && !document.querySelector('.canvas[aria-busy="true"]')`, RENDER_TIMEOUT, `${chart.code} uses the ELK worker`);
@@ -460,6 +460,22 @@ test(
             }
           }
           if (chart.extraWait) await wait(chart.extraWait);
+
+          if (outcome === "shown" && ["S5", "V12", "V15", "V16"].includes(chart.code)) {
+            const selector = chart.code === "V16" ? ".terrain" : ".matrix";
+            const before = await b.eval(`(() => {
+              const host = document.querySelector('${selector}');
+              const cells = [...host.querySelectorAll('.mcell, .terrain-svg g.cell')];
+              return cells.map((n) => { const r = n.getBoundingClientRect(); return {x:r.x,y:r.y,w:r.width,h:r.height,text:n.textContent}; });
+            })()`);
+            const point = await b.eval<{x: number; y: number}>(`(() => { const cells = [...document.querySelectorAll('${selector} .mcell, ${selector} .terrain-svg g.cell')]; const cell = cells.find((n) => {const r=n.getBoundingClientRect();return r.x > 0 && r.y > 0 && r.bottom < innerHeight && r.x < innerWidth-350}) || cells[0]; const r = cell.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
+            await b.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+            await b.send("Input.dispatchMouseEvent", { type: "mouseWheel", ...point, deltaX: 0, deltaY: -180 });
+            await b.waitFor(() => `Number(document.querySelector('${selector}').dataset.lensMagnification) > 2.2`, 5000, "shared lens handles wheel zoom");
+            assert.equal(await b.eval(`getComputedStyle(document.querySelector('${selector}')).backgroundColor`), "rgb(11, 15, 23)");
+            assert.deepEqual(await b.eval(`(() => { const host = document.querySelector('${selector}'); return [...host.querySelectorAll('.mcell, .terrain-svg g.cell')].map((n) => {const r=n.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,text:n.textContent};}); })()`), before, "lens never changes source cell geometry");
+            await wait(300);
+          }
 
           // Screenshot.
           const safeName = `${chart.code}-${chart.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`;

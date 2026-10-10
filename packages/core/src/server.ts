@@ -18,7 +18,7 @@ import { Store } from "./store.ts";
 import { WorkerClient } from "./worker.ts";
 
 const PORT = Number(process.env.PORT ?? 4317);
-const HOST = "127.0.0.1";
+const HOST = process.env.HOST ?? "127.0.0.1";
 const MAX_BODY = 8 * 1024 * 1024; // saved views and pasted traces can be large
 class BodyTooLargeError extends Error { constructor() { super("body too large"); } }
 const WEB_DIST = fileURLToPath(new URL("../../../apps/web/dist/", import.meta.url));
@@ -146,9 +146,13 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
   });
 
   return async (req: IncomingMessage, res: ServerResponse) => {
-    // DNS-rebinding guard: only accept loopback Host headers.
+    // DNS-rebinding guard: accept loopback, or this socket’s address when LAN binding is explicitly enabled.
     const host = (req.headers.host ?? "").replace(/:\d+$/, "");
-    if (host !== "127.0.0.1" && host !== "localhost") return send(res, 403, { error: "bad host" });
+    // LAN access is opt-in through HOST; only the actual bound interface is accepted.
+    const localAddress = req.socket.localAddress?.replace(/^::ffff:/, "");
+    const lanHost = HOST !== "127.0.0.1" && HOST !== "localhost" &&
+      (host === HOST || ((HOST === "0.0.0.0" || HOST === "::") && host === localAddress));
+    if (host !== "127.0.0.1" && host !== "localhost" && !lanHost) return send(res, 403, { error: "bad host" });
     const url = new URL(req.url ?? "/", "http://localhost");
     const isApi = url.pathname.startsWith("/api/") || url.pathname === "/healthz";
     const actor = isApi ? identify(req) : null;
