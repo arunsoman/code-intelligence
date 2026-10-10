@@ -58,5 +58,5 @@ export function workspaceExport(workspace: ResponseWorkspace): string {
 
 /** Cancelled history requests must become retryable; all saved UI coordinates survive. */
 export function restoreWorkspace(frame: ResponseWorkspace): ResponseWorkspace {
-  return { ...frame, tabs: frame.tabs.map(t => t.status === "generating" ? { ...t, status: "available" as const, reason: "Select this view to retry generation.", attempt: t.attempt + 1 } : t) };
+  return { ...frame, tabs: frame.tabs.map(t => (t.status === "generating" || t.status === "queued") ? { ...t, status: "available" as const, reason: "Select this view to retry generation.", attempt: t.attempt + 1 } : t) };
 }

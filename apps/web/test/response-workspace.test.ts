@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ResponseManifest, ViewSpec } from "@cie/schema";
-import { acceptCompletion, activateTab, closeTab, createWorkspace, projectSelection, updateTab, workspaceExport } from "../src/response-workspace.ts";
+import { acceptCompletion, activateTab, closeTab, createWorkspace, projectSelection, restoreWorkspace, updateTab, workspaceExport } from "../src/response-workspace.ts";
 import { responsePortfolio } from "../../../packages/core/src/response-portfolio.ts";
 
 const view = (id = "a", revision = "r1", code = "S23") => ({ id, revision, version: 1, question: "Show component structure", formId: "GeneratedChart", level: 5, params: { chartId: code, scope: "subject", subject: "Checkout" }, caption: "Checkout", gaps: [], nodes: [{ id: `${id}:node`, entityRefs: ["entity:checkout"], label: "Checkout", kind: "function", evidenceIds: ["ev:1"] }], edges: [] } as unknown as ViewSpec);
@@ -76,4 +76,11 @@ test("exploration disables absent evidence and varies structural perspective by 
   assert.equal(explorationChoices("class", m)[0].code, "S16");
   assert.equal(explorationChoices("function", m)[0].code, "S21");
   assert.equal(explorationChoices("function", m).find(c => c.code === "S9")?.disabled, true);
+});
+
+test("queued history jobs become retryable and invalidate late completions",()=>{
+ let w=createWorkspace(manifest(),[{view:view(),claims:[]}]);const tab=w.tabs.find(t=>t.code==="S16")!;
+ w=updateTab(w,tab.id,{status:"queued",attempt:2});const restored=restoreWorkspace(w);const retry=restored.tabs.find(t=>t.id===tab.id)!;
+ assert.equal(retry.status,"available");assert.equal(retry.attempt,3);
+ assert.equal(acceptCompletion(restored,{responseId:w.manifest.responseId,revision:w.manifest.revision,tabId:tab.id,attempt:2},{view:view("next","r1","S16"),claims:[]}),restored);
 });

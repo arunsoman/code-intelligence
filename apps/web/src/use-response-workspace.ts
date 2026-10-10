@@ -1,6 +1,7 @@
+import { GenerationQueue } from "./generation-queue.ts";
 import { emptyNavigation, extendNavigation, jumpNavigation, navigationCrumbs, type NavigationHistory } from "./exploration-navigation.ts";
 import { useEffect, useRef, useState } from "react";
-import type { Claim, ResponseManifest, ViewSpec } from "@cie/schema";
+import type { ApiResult, Claim, ResponseManifest, ViewSpec } from "@cie/schema";
 import { call } from "./api.ts";
 import { acceptCompletion, activateTab, closeTab, createWorkspace, perspectiveState, updateTab, workspaceExport,
   type ResponseWorkspace, type TabState, type WorkspaceTab } from "./response-workspace.ts";
@@ -15,10 +16,10 @@ export function useResponseWorkspace(p: {
   const history = useRef<NavigationHistory>(emptyNavigation());
   const [navigation, setNavigation] = useState<NavigationHistory>(emptyNavigation());
   const setHistory = (next: NavigationHistory) => { history.current=next; setNavigation(next); };
-  const requests = useRef(new Map<string, AbortController>());
+  const [requests] = useState(() => new GenerationQueue<ApiResult<{view:ViewSpec;claims:Claim[]}>>());
   const latest = useRef(p); latest.current = p;
   const epoch = useRef(0);
-  useEffect(() => () => { epoch.current++; for (const c of requests.current.values()) c.abort(); }, []);
+  useEffect(() => () => { epoch.current++; requests.cancelAll(); }, []);
   const set = (next: ResponseWorkspace | null) => { current.current = next; setWorkspace(next); };
   const stash = () => {
     const w = current.current;
@@ -29,10 +30,9 @@ export function useResponseWorkspace(p: {
   };
   const cancel = () => {
     epoch.current++;
-    for (const controller of requests.current.values()) controller.abort();
-    requests.current.clear();
+    requests.cancelAll();
     const w = current.current;
-    if (w) set({ ...w, tabs: w.tabs.map((t) => t.status === "generating" ? { ...t, status: "available", reason: "Generation cancelled. Select this view to retry.", attempt: t.attempt + 1 } : t) });
+    if (w) set({ ...w, tabs: w.tabs.map((t) => (t.status === "generating" || t.status === "queued") ? { ...t, status: "available", reason: "Generation cancelled. Select this view to retry.", attempt: t.attempt + 1 } : t) });
   };
   const reset = () => { cancel(); set(null); setHistory(emptyNavigation()); };
   const begin = (manifest: ResponseManifest, built: { view: ViewSpec; claims: Claim[] }[], explorationLabel?: string) => {
@@ -58,20 +58,23 @@ export function useResponseWorkspace(p: {
       }
       return;
     }
-    if (requests.current.has(id)) return;
-    if (requests.current.size >= 2) { set(updateTab(w, id, { status: "available", reason: "Two views are already generating. Select this tab again when one finishes." })); return; }
+    if (requests.has(id)) { if(activate)requests.promote(id); return; }
     const attempt = tab.attempt + 1;
     const token = { responseId: w.manifest.responseId, revision: w.manifest.revision, tabId: id, attempt };
     const taskEpoch = epoch.current;
-    const controller = new AbortController(); requests.current.set(id, controller);
-    set(updateTab(w, id, { status: "generating", reason: undefined, attempt }));
-    const result = await call<{ view: ViewSpec; claims: Claim[] }>("C19", "ask", {
-      question: tab.questionAnswered, revision: token.revision, form: tab.form,
-      subject: tab.subject, scope: tab.scope, seeds: tab.seeds,
-      ...(tab.code.startsWith("S") ? { chartCode: tab.code } : {}),
-    }, undefined, "v1", controller.signal);
-    if (requests.current.get(id) === controller) requests.current.delete(id);
-    if (controller.signal.aborted || epoch.current !== taskEpoch || current.current?.manifest.responseId !== token.responseId) return;
+    set(updateTab(w, id, { status: "queued", reason: "Waiting for a generation slot. This view will start automatically.", attempt }));
+    const outcome = await requests.enqueue(id, signal => call<{ view: ViewSpec; claims: Claim[] }>("C19", "ask", {
+      question: tab!.questionAnswered, revision: token.revision, form: tab!.form,
+      subject: tab!.subject, scope: tab!.scope, seeds: tab!.seeds,
+      ...(tab!.code.startsWith("S") ? { chartCode: tab!.code } : {}),
+    }, undefined, "v1", signal), activate ? "foreground" : "supporting", () => {
+      const active=current.current;
+      if(epoch.current===taskEpoch && active?.manifest.responseId===token.responseId && active.tabs.find(t=>t.id===id)?.attempt===attempt)
+        set(updateTab(active,id,{status:"generating",reason:undefined}));
+    });
+    if (outcome.status === "cancelled" || epoch.current !== taskEpoch || current.current?.manifest.responseId !== token.responseId || current.current.tabs.find(t=>t.id===id)?.attempt!==attempt) return;
+    if(outcome.status === "failed") { set(updateTab(current.current!,id,{status:"failed",reason:outcome.message})); return; }
+    const result=outcome.value;
     if (!result.ok) { set(updateTab(current.current!, id, { status: "failed", reason: result.error.message })); return; }
     const next = acceptCompletion(current.current!, token, result.value); set(next);
     const completed = next.tabs.find((t) => t.id === id);
@@ -87,16 +90,17 @@ export function useResponseWorkspace(p: {
   const back = () => jump(history.current.ancestors.length-1);
   const generateAll = async () => {
     const w = current.current; if (!w) return;
-    const queueEpoch = epoch.current;
-    for (const tab of w.tabs.filter((t) => t.relevant && t.status !== "unavailable" && !t.view)) {
-      if (epoch.current !== queueEpoch || current.current?.manifest.responseId !== w.manifest.responseId) break;
-      set(updateTab(current.current!, tab.id, { open: true }));
-      await generate(tab.id, false);
-    }
+    const tabs=w.tabs.filter(t=>t.relevant && !t.primary && t.status!=="unavailable" && t.status!=="stale" && !t.view).slice(0,3);
+    for(const tab of tabs)set(updateTab(current.current!,tab.id,{open:true}));
+    await Promise.all(tabs.map(tab=>generate(tab.id,false)));
   };
   const close = (id: string) => {
     stash(); const w = current.current; if (!w) return;
-    const next = closeTab(w, id); set(next);
+    if(w.tabs.filter(t=>t.open).length<=1)return;
+    requests.cancel(id);
+    const tab=w.tabs.find(t=>t.id===id);
+    const retryable=tab && (tab.status==="generating" || tab.status==="queued") ? updateTab(w,id,{status:"available",reason:"Generation stopped when this tab closed. Reopen to retry.",attempt:tab.attempt+1}) : w;
+    const next = closeTab(retryable, id); set(next);
     if (next.activeId !== w.activeId) void generate(next.activeId);
   };
   const exportResponse = () => {
@@ -111,6 +115,6 @@ export function useResponseWorkspace(p: {
     latest.current.show(tab.view, tab.claims, { ...latest.current.snapshot(), selection: tab.view.nodes.filter((n) => n.evidenceIds.length).map((n) => n.id) });
   };
   return { workspace, active, begin, reset, cancel, back, jump, generate, generateAll, close, exportResponse, relate,
-    pending: workspace?.tabs.some((t) => t.status === "generating") ?? false, canBack: navigation.ancestors.length > 0, breadcrumbs: navigationCrumbs(navigation,workspace), navigationTruncated: navigation.truncated,
+    pending: workspace?.tabs.some((t) => t.status === "generating" || t.status === "queued") ?? false, canBack: navigation.ancestors.length > 0, breadcrumbs: navigationCrumbs(navigation,workspace), navigationTruncated: navigation.truncated,
     waiting: !!active && !active.view, current: () => current.current, snapshot: () => { stash(); return current.current; } };
 }

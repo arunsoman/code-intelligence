@@ -30,7 +30,10 @@ export function ResponseWorkspaceBar(p: {
     <div className="response-scope"><button className="secondary small" disabled={!p.canBack} onClick={p.onBack} title="Return to the parent exploration scope">Back to parent</button>
       <strong>{p.workspace.manifest.question}</strong><span className="muted small">Revision {p.workspace.manifest.revision.slice(0, 12)}</span>
     </div>
-    {p.workspace.manifest.plan && <details className="response-plan-details"><summary>Response interpretation</summary><p className="response-view-purpose"><strong>Perspective:</strong> {p.workspace.manifest.plan.concerns.join(" · ")} <span className="muted small">{p.workspace.manifest.plan.scope === "subject" ? `Subject: ${p.workspace.manifest.plan.subject ?? "selected sources"}` : "Repository"} · {p.workspace.manifest.plan.evidenceStatus === "checked" ? "Indexed-source preflight checked" : "Evidence preflight pending"}</span></p></details>}
+    {p.workspace.manifest.plan && <details className="response-plan-details"><summary>Response interpretation</summary><p className="response-view-purpose"><strong>Perspective:</strong> {p.workspace.manifest.plan.concerns.join(" · ")} <span className="muted small">{p.workspace.manifest.plan.scope === "subject" ? `Subject: ${p.workspace.manifest.plan.subject ?? "selected sources"}` : "Repository"} · {p.workspace.manifest.plan.evidenceStatus === "checked" ? "Indexed-source preflight checked" : "Evidence preflight pending"}</span></p>
+      {p.workspace.manifest.plan.classification && <p className="small muted">{p.workspace.manifest.plan.classification.basis==="keyword" ? `Matched question terms: ${p.workspace.manifest.plan.classification.matches.map(m=>`${m.concern}: ${m.terms.join(", ")}`).join(" · ")}` : p.workspace.manifest.plan.classification.basis==="primary-view" ? "Perspective comes from the primary view; no intent terms matched." : "No specific perspective was identified."}</p>}
+      {!!p.workspace.manifest.plan.recommendations?.length && <ul className="response-recommendations">{p.workspace.manifest.plan.recommendations.map(r=><li key={r.code}><strong>{p.workspace.tabs.find(t=>t.code===r.code)?.label??r.code}</strong> — {r.reasons.join(" ")}</li>)}</ul>}
+    </details>}
     <div className="response-tabs" role="tablist" aria-label="Charts for this response">
       {tabs.map((tab) => <div className="response-tab" key={tab.id}>
         <button id={`tab-${tab.id}`} type="button" role="tab" aria-selected={tab.id === p.workspace.activeId}
@@ -44,7 +47,8 @@ export function ResponseWorkspaceBar(p: {
     <div className="response-view-tools">
       <button className="secondary small" aria-expanded={more} onClick={() => { setAll(false); setMore(!more); }}>More views ({candidates.length})</button>
       <button className="secondary small" onClick={() => { setAll(true); setMore(true); }}>All views</button>
-      <button className="secondary small" disabled={p.pending} onClick={p.onGenerate}>Generate supporting views</button>
+      <button className="secondary small" disabled={!p.workspace.tabs.some(t=>t.relevant && !t.primary && !t.view && !["unavailable","stale","generating","queued"].includes(t.status))} onClick={p.onGenerate}>Generate supporting views</button>
+      {p.pending && <span className="muted small" role="status">{p.workspace.tabs.filter(t=>t.status==="generating").length} generating · {p.workspace.tabs.filter(t=>t.status==="queued").length} queued</span>}
       {p.pending && <button className="secondary small" onClick={p.onCancel}>Cancel generation</button>}
       <button className="secondary small" onClick={p.onExport}>Export response</button>
       {active?.view && <button className="secondary small" onClick={() => p.onRelate(active)}>Highlight response evidence</button>}
@@ -52,7 +56,7 @@ export function ResponseWorkspaceBar(p: {
     {more && <div className="response-more" aria-label="Related chart choices">
       {groups.map((group) => <div key={group}><strong>{group}</strong>{candidates.filter((t) => t.concern === group).map((tab) =>
         <button key={tab.id} disabled={tab.status === "unavailable"} title={tab.reason} onClick={() => { p.onSelect(tab.id); setMore(false); }}>
-          {tab.label}<span>{tab.status === "unavailable" ? tab.reason : tab.reason ?? `Another perspective on ${p.workspace.manifest.question}`}</span>
+          {tab.label}<span>{tab.status === "unavailable" ? tab.reason : tab.recommendation?.reasons.join(" ") ?? tab.reason ?? `Another perspective on ${p.workspace.manifest.question}`}</span>
         </button>)}</div>)}
       {!candidates.length && <p>All relevant choices are already in the tab strip.</p>}
     </div>}
