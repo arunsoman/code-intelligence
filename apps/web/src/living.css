@@ -1,0 +1,157 @@
+/* Living Investigation MVP */
+
+.living-investigation .living-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.living-investigation .demo-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #f59e0b;
+}
+
+.living-investigation .case-file {
+  margin-top: 1rem;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  padding: 0.75rem 1rem 1rem;
+  background: var(--surface, #fafafa);
+}
+
+.living-investigation .case-header {
+  margin-bottom: 0.75rem;
+}
+
+.living-investigation .case-question {
+  margin: 0 0 0.25rem;
+  font-size: 1.05rem;
+}
+
+.living-investigation .status-line {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text, #111827);
+}
+
+.living-investigation .case-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  padding-bottom: 0.5rem;
+}
+
+.living-investigation .case-tabs .tab {
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 0.35rem 0.65rem;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.living-investigation .case-tabs .tab.active {
+  background: #fff;
+  border-color: var(--border, #e5e7eb);
+  border-bottom-color: #fff;
+  font-weight: 600;
+}
+
+.living-investigation .hyp-card,
+.living-investigation .check-card,
+.living-investigation .obs-card,
+.living-investigation .view-hint-card {
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem;
+  margin-bottom: 0.5rem;
+  background: #fff;
+}
+
+.living-investigation .hyp-card header,
+.living-investigation .check-card header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.living-investigation .hyp-summary {
+  margin: 0.25rem 0;
+}
+
+.living-investigation .hyp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+
+.living-investigation .grade-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+}
+
+.living-investigation .grade-fact {
+  border-left: 3px solid #059669;
+}
+.living-investigation .grade-badge.grade-fact {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.living-investigation .grade-inference {
+  border-left: 3px solid #2563eb;
+}
+.living-investigation .grade-badge.grade-inference {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.living-investigation .grade-hypothesis {
+  border-left: 3px solid #7c3aed;
+}
+.living-investigation .grade-badge.grade-hypothesis {
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+.living-investigation .grade-fog {
+  border-left: 3px solid #6b7280;
+}
+.living-investigation .grade-badge.grade-fog {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.living-investigation .obs-card.retracted {
+  opacity: 0.6;
+  text-decoration: line-through;
+}
+
+.living-investigation .completion-panel ul {
+  margin: 0.35rem 0 0.75rem 1.1rem;
+}
+
+.living-investigation .evidence-inspector {
+  margin-top: 1rem;
+  max-height: 240px;
+  overflow: auto;
+  border-top: 1px solid var(--border, #e5e7eb);
+  padding-top: 0.5rem;
+}

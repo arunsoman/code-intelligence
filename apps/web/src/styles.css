@@ -1,3 +1,5 @@
+@import "./living.css";
+
 :root {
   --bg: #f6f7f9; --panel: #ffffff; --ink: #14181f; --muted: #4c5563; --line: #d9dde4;
   --fact: #1f6feb; --inference: #b45309; --fog: #7c3aed; --hyp: #c2255c; --accent: #1f6feb; --on-accent: #ffffff; --heat-cool: #ffffff; --heat-hot: #f2a65a; --warn: #b42318; --ok: #177031;
