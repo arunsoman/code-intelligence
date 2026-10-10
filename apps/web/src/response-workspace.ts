@@ -10,7 +10,7 @@ export interface WorkspaceTab extends ResponseView {
   open: boolean; view?: ViewSpec; claims: Claim[]; ui?: TabState; attempt: number;
 }
 export interface ResponseWorkspace {
-  manifest: ResponseManifest; tabs: WorkspaceTab[]; activeId: string;
+  manifest: ResponseManifest; tabs: WorkspaceTab[]; activeId: string; navigationLabel?: string;
 }
 
 export function createWorkspace(manifest: ResponseManifest, built: { view: ViewSpec; claims: Claim[] }[]): ResponseWorkspace {
@@ -46,8 +46,13 @@ export function projectSelection(from: ViewSpec | undefined, selection: string[]
   return to.nodes.filter((n) => n.entityRefs.some((id) => entities.has(id))).map((n) => n.id);
 }
 
+/** A different diagram keeps semantic selection, but begins with its own geometry and defaults. */
+export function perspectiveState(from: ViewSpec | undefined, to: ViewSpec, previous: TabState): TabState {
+ return { ...previous, selection: projectSelection(from,previous.selection,to), cellSelection: [], level: to.level, drawMode: "matrix", terrainWeights: {}, canvas: undefined };
+}
+
 export function workspaceExport(workspace: ResponseWorkspace): string {
-  return JSON.stringify({ schemaVersion: "workspace.v1", manifest: workspace.manifest, activeId: workspace.activeId,
+  return JSON.stringify({ schemaVersion: "workspace.v1", manifest: workspace.manifest, activeId: workspace.activeId, navigationLabel: workspace.navigationLabel,
     views: workspace.tabs.filter((t) => t.open).map((t) => ({ ...t, ui: undefined })) }, null, 2);
 }
 

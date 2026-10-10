@@ -1,4 +1,5 @@
-import { explorationChoices } from "./exploration-choices.ts";
+import { ExplorationPanel } from "./ExplorationPanel.tsx";
+import { explorationChoices, explorationTarget, explorationQuestion, explorationShortcut, type ExplorationEdge } from "./exploration-choices.ts";
 import { rendererForView } from "./plugins/renderers/index.ts";
 import { ResponseWorkspaceBar } from "./ResponseWorkspaceBar.tsx";
 import { useResponseWorkspace } from "./use-response-workspace.ts";
@@ -83,6 +84,7 @@ export function App() {
   const [canvasRestore, setCanvasRestore] = useState<CanvasState | undefined>(undefined);
   const responseGeneration = useRef(0);
   const [exploreOpen, setExploreOpen] = useState(false);
+  const [exploreEdge, setExploreEdge] = useState<ExplorationEdge | null>(null);
   const [view, setView] = useState<ViewSpec | null>(null);
   const [claimMap, setClaimMap] = useState<Record<string, Claim>>({});
   const [selection, setSelection] = useState<string[]>([]); // view node ids (symbol identity)
@@ -170,18 +172,23 @@ export function App() {
     },
   });
   const navigateBack = () => { responseGeneration.current++; setBusy(null); if (code) { setCode(null); return; } responseWorkspace.back(); };
+  const navigateAncestor = (index:number) => {
+    if (index<0 || index>=responseWorkspace.breadcrumbs.length) return;
+    responseGeneration.current++; setBusy(null); setCode(null);
+    if (index===responseWorkspace.breadcrumbs.length-1) responseWorkspace.cancel();
+    else responseWorkspace.jump(index);
+  };
   const resetResponse = () => { responseGeneration.current++; responseWorkspace.reset(); canvasSnapshot.current = undefined; setCanvasRestore(undefined); };
   const sourceContext = useRef(""); sourceContext.current = `${view?.revision}:${view?.id}:${selection.join("|")}`;
-  const selectedSubjects = (view?.nodes ?? []).filter((n) => selection.includes(n.id) && n.entityRefs.length);
-  const exploreTarget = selectedSubjects.length === 1 ? selectedSubjects[0] : undefined;
-  const exploreChoices = exploreTarget ? explorationChoices(exploreTarget.kind, responseWorkspace.workspace?.manifest) : [];
+  const exploreTarget = explorationTarget(view, selection, exploreEdge);
+  const exploreChoices = exploreTarget ? explorationChoices(exploreTarget.kind, responseWorkspace.workspace?.manifest, view?.revision) : [];
   const explore = (choice: typeof exploreChoices[number]) => {
     if (!exploreTarget || !view || choice.disabled) return;
-    void askForm(`Show the ${choice.concern} of ${exploreTarget.label}`, choice.form, exploreTarget.label, undefined, undefined, undefined, choice.code.startsWith("S") ? choice.code : undefined,
+    void askForm(explorationQuestion(choice, exploreTarget), choice.form, exploreTarget.label, undefined, undefined, undefined, choice.code.startsWith("S") ? choice.code : undefined,
       { revision: view.revision, seeds: exploreTarget.entityRefs, scope: "subject" });
   };
   const openSource = async () => {
-    if (!exploreTarget || !view || exploreTarget.entityRefs.length !== 1) return;
+    if (!exploreTarget || !view || exploreTarget.source !== "element" || exploreTarget.entityRefs.length !== 1) return;
     const sourceView = view;
     const sourceKey = sourceContext.current;
     const token = responseGeneration.current;
@@ -446,6 +453,7 @@ export function App() {
     if (workspace && !workspace.tabs.some((t) => t.view?.id === v.id && t.view.revision === v.revision)) resetResponse();
     mergeClaims(claims);
     setSelection((sel) => (keepSelection ? sel.filter((id) => v.nodes.some((n) => n.id === id)) : []));
+    setExploreEdge(null);
     setView(v); setDrawer(null); setCode(null); setStale(null); setCellSel([]);
     if (!keepSelection) setDrawMode("matrix");
     if (v.terrain) setTerrainWeights(Object.fromEntries(v.terrain.factors.map((f) => [f.id, f.weight])));
@@ -469,7 +477,7 @@ export function App() {
     const command = text.trim().toLowerCase();
     if (/^(go back|back|zoom out|go up|show parent view)$/.test(command)) { navigateBack(); return; }
     if (/^(zoom in|zoom into (?:this|it|selected))$/.test(command)) { setExploreOpen(true); setNotice(exploreTarget ? `Choose a perspective on ${exploreTarget.label}.` : "Select one source-backed element to explore."); return; }
-    if (exploreOpen && /^[a-g]$/.test(command) && exploreTarget) { const choice = exploreChoices[command.charCodeAt(0) - 97]; if (choice) explore(choice); return; }
+    if (exploreOpen && exploreTarget) { const choice = explorationShortcut(command, exploreChoices); if (choice) { explore(choice); return; } }
     const responseToken = ++responseGeneration.current;
     responseWorkspace.cancel();
     chatRestoreGeneration.current++;
@@ -530,11 +538,13 @@ export function App() {
       return;
     }
     if (n.kind === "agg") {
+      setExploreEdge(null);
       setSelection(n.members);
       setAnnouncement(`Selected the group ${n.label}; opened its ${n.count} member elements.`);
       setDrawer({ kind: "inspect", title: n.label, sub: `${n.count} element(s) collapsed at level ${level}`, notes: [`Hover with the lens to see these elements individually. Pin the lens to select a member. Selecting this selects all ${n.count}.`], claimIds: [], evidence: [], members: n.members.map((m) => nodeById.get(m)?.label ?? m) });
       return;
     }
+    setExploreEdge(null);
     setSelection(n.members);
     setAnnouncement(`Selected ${n.label}; opened its code and evidence details.`);
     await openNodeDrawer(n.node!);
@@ -557,7 +567,7 @@ export function App() {
       const r = await call<{ view: ViewSpec; claims: Claim[]; manifest?: ResponseManifest }>("C19", "ask", { question, revision: target?.revision ?? info?.revision?.id, form, subject, kind, ...(target ? { seeds: target.seeds, scope: target.scope } : {}), ...(chartCode ? { chartCode } : {}) });
       if (generation !== repoGeneration.current || responseToken !== responseGeneration.current) return;
       if (!r.ok) { say("assistant", failMsg(r), true); return; }
-      if (r.value.manifest) responseWorkspace.begin(r.value.manifest, [{ view: r.value.view, claims: r.value.claims }]);
+      if (r.value.manifest) responseWorkspace.begin(r.value.manifest, [{ view: r.value.view, claims: r.value.claims }], target ? subject ?? "Selected scope" : undefined);
       else adoptView(r.value.view, r.value.claims, !!view && view.id === r.value.view.id);
       const summary = [r.value.view.caption, ...r.value.view.nodes.slice(0, 40).map((node) => `${node.label}: ${(node.notes ?? []).join(" ")}`), ...r.value.view.edges.slice(0, 40).map((edge) => `${edge.fromNodeId} ${edge.label ?? edge.kind} ${edge.toNodeId}`)].join("\n");
       appendChartMessage(baseQuestion ?? question, summary, { text: `${r.value.view.formReason ?? ""} ${r.value.view.caption}`.trim(), at: now() });
@@ -589,6 +599,8 @@ export function App() {
     const first = under[0];
     const lab = (id: string) => nodeById.get(id)?.label ?? id;
     const title = e.count > 1 ? `${e.count} links` : first ? `${lab(first.fromNodeId)} → ${lab(first.toNodeId)}` : "link";
+    const endpoints = [...new Set(under.flatMap(x => [x.fromNodeId,x.toNodeId]))];
+    if (endpoints.length) { setSelection(endpoints); setExploreEdge({ viewId: view.id, nodeIds: endpoints, label: title }); setExploreOpen(true); }
     const how = e.displayMode === "FACT" ? "Fact · statically proven" : e.displayMode === "HYPOTHESIS" ? "Hypothesis · cannot be proven statically" : "Inference · derived from cited evidence";
     setDrawer({ kind: "inspect", title, sub: `${first?.kind ?? "link"} · ${how}`, notes: e.count > 1 ? under.slice(0, 6).map((u) => `${lab(u.fromNodeId)} → ${lab(u.toNodeId)}${u.label ? ` (${u.label})` : ""}`) : [], claimIds: [...new Set(under.map((u) => u.claimId).filter((c): c is string => !!c))], evidence: await evidence(e.evidenceIds) });
   };
@@ -878,18 +890,15 @@ export function App() {
 
       <main>
         {responseWorkspace.workspace && <ResponseWorkspaceBar workspace={responseWorkspace.workspace} pending={responseWorkspace.pending}
-          canBack={responseWorkspace.canBack} onBack={navigateBack} onSelect={(id) => { if (id === responseWorkspace.workspace?.activeId) return; responseGeneration.current++; setBusy(null); void responseWorkspace.generate(id); }} onClose={responseWorkspace.close}
+          canBack={!!code || responseWorkspace.canBack} breadcrumbs={responseWorkspace.breadcrumbs} navigationTruncated={responseWorkspace.navigationTruncated} sourceTitle={code?.title} onJump={navigateAncestor} onBack={navigateBack} onSelect={(id) => { if (id === responseWorkspace.workspace?.activeId) return; responseGeneration.current++; setBusy(null); void responseWorkspace.generate(id); }} onClose={responseWorkspace.close}
           onGenerate={() => void responseWorkspace.generateAll()} onCancel={responseWorkspace.cancel} onExport={responseWorkspace.exportResponse}
           onRelate={responseWorkspace.relate} />}
         {responseWorkspace.workspace && <details className="response-findings"><summary>Answer and supporting views</summary>
           {responseWorkspace.workspace.manifest.sections.map((section) => <div key={section.id}><strong>{section.label}</strong><p>{section.text}</p>
             <button className="link small" onClick={() => { const refs = new Set(section.entityRefs); const ids = (view?.nodes ?? []).filter((n) => n.entityRefs.some((id) => refs.has(id))).map((n) => n.id); setSelection(ids); setNotice(ids.length ? `Highlighted ${ids.length} supporting elements.` : "This finding is not represented in the active view. Switch to its supporting tab."); }}>Highlight in this view</button></div>)}
         </details>}
-        {!responseWorkspace.waiting && selection.length > 0 && <div className="response-explore"><button className="secondary small" onClick={() => setExploreOpen(!exploreOpen)} aria-expanded={exploreOpen}>Explore selected element</button>
-          {exploreOpen && <div className="explore-choices" role="group" aria-label="Explore selected element">
-            {exploreTarget ? <><strong>{exploreTarget.label}</strong>{exploreChoices.map((choice, index) => <button key={choice.code} className="secondary small" disabled={choice.disabled} title={choice.reason} onClick={() => explore(choice)}>{String.fromCharCode(65 + index)}. {choice.label}</button>)}
-              <button className="secondary small" disabled={exploreTarget.entityRefs.length !== 1} title={exploreTarget.entityRefs.length !== 1 ? "Select a single source entity first" : undefined} onClick={() => void openSource()}>Source</button><button className="link small" onClick={() => { setChatSeed({ text: `Explain ${exploreTarget.label}`, n: Date.now() }); document.getElementById("chat-input")?.focus(); }}>Something else…</button></> : <span>Select one source-backed element; groups or ambiguous selections need a member first.</span>}
-          </div>}
+        {!responseWorkspace.waiting && selection.length > 0 && <div className="response-explore"><button className="secondary small" onClick={() => setExploreOpen(!exploreOpen)} aria-expanded={exploreOpen}>Explore selected scope</button>
+          {exploreOpen && <ExplorationPanel key={`${view?.id}:${selection.join("|")}`} target={exploreTarget} choices={exploreChoices} onExplore={explore} onSource={()=>void openSource()} onOther={()=>{setChatSeed({text:`Explain ${exploreTarget?.label ?? "the selected scope"}`,n:Date.now()});document.getElementById("chat-input")?.focus();}} />}
         </div>}
         <div className="sr" role="status" aria-live="polite" aria-atomic="true">{announcement}</div>
         <p id="canvas-help" className="sr">Keyboard: arrow keys move between elements, Enter inspects, Space selects, E expands the focused element, L pauses or resumes hover expansion, O opens a text outline of the whole map, Escape dismisses the lens or clears the selection.</p>

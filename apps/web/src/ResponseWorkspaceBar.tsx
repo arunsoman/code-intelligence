@@ -1,8 +1,10 @@
+import { NavigationBreadcrumbs } from "./NavigationBreadcrumbs.tsx";
+import type { NavigationCrumb } from "./exploration-navigation.ts";
 import { useState } from "react";
 import type { ResponseWorkspace, WorkspaceTab } from "./response-workspace.ts";
 
 export function ResponseWorkspaceBar(p: {
-  workspace: ResponseWorkspace; pending: boolean; canBack: boolean;
+  workspace: ResponseWorkspace; pending: boolean; canBack: boolean; breadcrumbs: NavigationCrumb[]; navigationTruncated: boolean; sourceTitle?: string; onJump: (index:number)=>void;
   onSelect: (id: string) => void; onClose: (id: string) => void; onBack: () => void;
   onGenerate: () => void; onCancel: () => void; onExport: () => void;
   onRelate: (tab: WorkspaceTab) => void;
@@ -24,7 +26,8 @@ export function ResponseWorkspaceBar(p: {
     requestAnimationFrame(() => document.getElementById(`tab-${tabs[index]!.id}`)?.focus());
   };
   return <section className="response-workspace-bar" aria-label="Response views">
-    <div className="response-scope"><button className="secondary small" disabled={!p.canBack} onClick={p.onBack}>Back</button>
+    <NavigationBreadcrumbs crumbs={p.breadcrumbs} truncated={p.navigationTruncated} sourceTitle={p.sourceTitle} onJump={p.onJump} />
+    <div className="response-scope"><button className="secondary small" disabled={!p.canBack} onClick={p.onBack} title="Return to the parent exploration scope">Back to parent</button>
       <strong>{p.workspace.manifest.question}</strong><span className="muted small">Revision {p.workspace.manifest.revision.slice(0, 12)}</span>
     </div>
     {p.workspace.manifest.plan && <p className="response-view-purpose"><strong>Perspective:</strong> {p.workspace.manifest.plan.concerns.join(" · ")} <span className="muted small">{p.workspace.manifest.plan.scope === "subject" ? `Subject: ${p.workspace.manifest.plan.subject ?? "selected sources"}` : "Repository"} · {p.workspace.manifest.plan.evidenceStatus === "checked" ? "Indexed-source preflight checked" : "Evidence preflight pending"}</span></p>}

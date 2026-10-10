@@ -763,3 +763,20 @@ button.model-menu__option:disabled { background: color-mix(in srgb, var(--accent
 .sequence-table caption { text-align: left; padding: 12px 0; color: #94a3b8; }
 
 .sequence-message text, .sequence-participant text { pointer-events: auto; cursor: pointer; }
+
+.exploration-panel { flex-basis: 100%; min-width: 0; }
+.exploration-groups { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,260px),1fr)); gap: 12px; margin: 12px 0; }
+.exploration-groups fieldset { min-width: 0; border: 1px solid var(--border, #334155); border-radius: 8px; padding: 12px; }
+.exploration-groups legend { padding: 0 6px; font-weight: 600; }
+.exploration-option + .exploration-option { border-top: 1px solid var(--border, #334155); padding-top: 10px; margin-top: 10px; }
+.exploration-option p { margin: 6px 0; overflow-wrap: anywhere; }
+.exploration-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+
+.navigation-breadcrumbs { padding: 8px 0; }
+.navigation-breadcrumbs ol { list-style: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; padding: 0; }
+.navigation-breadcrumbs li { display: flex; align-items: center; min-width: 0; max-width: 100%; }
+.navigation-breadcrumbs li + li::before { content: "›"; margin-right: 8px; opacity: .65; }
+.navigation-breadcrumbs button, .navigation-breadcrumbs li > span { display: flex; flex-direction: column; text-align: left; min-width: 0; max-width: 240px; }
+.navigation-breadcrumbs button > span, .navigation-breadcrumbs li > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.navigation-breadcrumbs small { opacity: .75; font-weight: normal; }
+.navigation-breadcrumbs [aria-current="page"] { font-weight: 700; opacity: 1; }

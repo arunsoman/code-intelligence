@@ -20,6 +20,7 @@ export const ResponseManifestSchema = z.object({
   schemaVersion: z.literal("response.v1"), policyVersion: z.enum(["portfolio.v1", "portfolio.v2", "portfolio.v3"]),
   responseId: z.string().min(1), revision: z.string().min(1), question: z.string(),
   plan: z.object({ intent: z.enum(["structure", "behavior", "data", "state", "reliability", "concurrency", "quality", "general"]), concerns: z.array(z.string()), primaryCode: z.string(), supportingCodes: z.array(z.string()).max(3), scope: z.enum(["subject", "repository"]), subject: z.string().optional(), evidenceStatus: z.enum(["checked", "not-checked"]) }).strict().optional(),
+  explorationAvailability: z.array(z.object({ code: z.string(), available: z.boolean(), reason: z.string().optional(), basis: z.literal("revision-preflight") }).strict()).max(60).optional(),
   interpretation: z.string(), subjectRefs: z.array(SemanticRefSchema),
   primaryViewId: z.string(), views: z.array(ResponseViewSchema).max(60),
   sections: z.array(z.object({ id: z.string(), label: z.string(), text: z.string(),

@@ -49,6 +49,10 @@ export function responsePortfolio(input: { views: ViewSpec[]; catalog: CatalogEn
     add(native.code, native.formId, native.name, available, native.formId === "HypothesisGraph" ? "Start this investigation by pasting a stack trace." : native.reason);
   }
   return ResponseManifestSchema.parse({ schemaVersion: "response.v1", policyVersion: "portfolio.v3", plan: planning.plan, responseId,
+    explorationAvailability: [
+      ...Object.values(CHART_REGISTRY).filter(d => d.id !== "generic").map(d => ({ code: d.id, ...planning.availability.get(d.id)!, basis: "revision-preflight" as const })),
+      ...input.catalog.filter(n => n.formId !== "GeneratedChart").map(n => ({ code: n.code, available: n.available && n.formId !== "HypothesisGraph", reason: n.formId === "HypothesisGraph" ? "Start this investigation by pasting a stack trace." : n.reason, basis: "revision-preflight" as const })),
+    ],
     revision: first.revision, question, interpretation: first.route?.because ?? first.formReason ?? "Related views use this question and revision.",
     subjectRefs: refs, primaryViewId: descriptors[0]!.id, views: [...descriptors.filter(d => d.viewId), ...planning.plan!.supportingCodes.flatMap(code => descriptors.filter(d => d.code === code && !d.viewId)), ...descriptors.filter(d => !d.viewId && !planning.plan!.supportingCodes.includes(d.code))],
     sections: input.views.map((v, i) => ({ id: `${responseId}:section:${i}`, label: descriptors[i]!.label,

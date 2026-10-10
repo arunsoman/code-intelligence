@@ -74,6 +74,6 @@ test("exploration disables absent evidence and varies structural perspective by 
   const { explorationChoices } = await import("../src/exploration-choices.ts");
   const m = responsePortfolio({ views: [view()], catalog: [], question: "structure", evidenceKinds: { function: 1 } });
   assert.equal(explorationChoices("class", m)[0].code, "S16");
-  assert.equal(explorationChoices("function", m)[0].code, "S23");
+  assert.equal(explorationChoices("function", m)[0].code, "S21");
   assert.equal(explorationChoices("function", m).find(c => c.code === "S9")?.disabled, true);
 });

@@ -1,7 +1,8 @@
+import { emptyNavigation, extendNavigation, jumpNavigation, navigationCrumbs, type NavigationHistory } from "./exploration-navigation.ts";
 import { useEffect, useRef, useState } from "react";
 import type { Claim, ResponseManifest, ViewSpec } from "@cie/schema";
 import { call } from "./api.ts";
-import { restoreWorkspace, acceptCompletion, activateTab, closeTab, createWorkspace, projectSelection, updateTab, workspaceExport,
+import { acceptCompletion, activateTab, closeTab, createWorkspace, perspectiveState, updateTab, workspaceExport,
   type ResponseWorkspace, type TabState, type WorkspaceTab } from "./response-workspace.ts";
 
 /** Only the active renderer is mounted. Semantic specs and local UI state survive tab switches. */
@@ -11,8 +12,9 @@ export function useResponseWorkspace(p: {
 }) {
   const [workspace, setWorkspace] = useState<ResponseWorkspace | null>(null);
   const current = useRef<ResponseWorkspace | null>(null);
-  const history = useRef<ResponseWorkspace[]>([]);
-  const [historySize, setHistorySize] = useState(0);
+  const history = useRef<NavigationHistory>(emptyNavigation());
+  const [navigation, setNavigation] = useState<NavigationHistory>(emptyNavigation());
+  const setHistory = (next: NavigationHistory) => { history.current=next; setNavigation(next); };
   const requests = useRef(new Map<string, AbortController>());
   const latest = useRef(p); latest.current = p;
   const epoch = useRef(0);
@@ -22,12 +24,8 @@ export function useResponseWorkspace(p: {
     const w = current.current;
     if (!w) return;
     const active = w.tabs.find((t) => t.id === w.activeId);
-    if (!active?.view || active.view.id !== latest.current.currentView?.id) return;
+    if (!active?.view || (active.view.id !== latest.current.currentView?.id || active.view.revision !== latest.current.currentView?.revision)) return;
     set(updateTab(w, w.activeId, { ui: latest.current.snapshot(), ...(latest.current.currentView ? { view: latest.current.currentView } : {}) }));
-  };
-  const remember = () => {
-    stash(); if (!current.current) return;
-    history.current = [...history.current, current.current].slice(-30); setHistorySize(history.current.length);
   };
   const cancel = () => {
     epoch.current++;
@@ -36,9 +34,14 @@ export function useResponseWorkspace(p: {
     const w = current.current;
     if (w) set({ ...w, tabs: w.tabs.map((t) => t.status === "generating" ? { ...t, status: "available", reason: "Generation cancelled. Select this view to retry.", attempt: t.attempt + 1 } : t) });
   };
-  const reset = () => { cancel(); set(null); history.current = []; setHistorySize(0); };
-  const begin = (manifest: ResponseManifest, built: { view: ViewSpec; claims: Claim[] }[]) => {
-    remember(); cancel(); const next = createWorkspace(manifest, built); set(next);
+  const reset = () => { cancel(); set(null); setHistory(emptyNavigation()); };
+  const begin = (manifest: ResponseManifest, built: { view: ViewSpec; claims: Claim[] }[], explorationLabel?: string) => {
+    stash(); const parent=current.current;
+    let next={...createWorkspace(manifest,built),...(explorationLabel ? {navigationLabel:explorationLabel} : {})};
+    const initial=next.tabs.find(t=>t.id===next.activeId);
+    if (explorationLabel!==undefined && initial?.view) next=updateTab(next,next.activeId,{ui:perspectiveState(latest.current.currentView??undefined,initial.view,latest.current.snapshot())});
+    setHistory(extendNavigation(history.current,parent,next,explorationLabel!==undefined));
+    cancel(); set(next);
     const active = next.tabs.find((t) => t.id === next.activeId);
     if (active?.view) latest.current.show(active.view, active.claims, active.ui);
   };
@@ -46,11 +49,11 @@ export function useResponseWorkspace(p: {
     let w = current.current;
     let tab = w?.tabs.find((t) => t.id === id);
     if (!w || !tab || tab.status === "unavailable" || tab.status === "stale") return;
-    if (activate && w.activeId !== id) { remember(); w = current.current!; set(activateTab(w, id)); }
+    if (activate && w.activeId !== id) { stash(); w = current.current!; set(activateTab(w, id)); }
     w = current.current!; tab = w.tabs.find((t) => t.id === id)!;
     if (tab.view) {
       if (activate) {
-        const ui = tab.ui ?? { ...latest.current.snapshot(), selection: projectSelection(latest.current.currentView ?? undefined, latest.current.snapshot().selection, tab.view), cellSelection: [], level: tab.view.level, drawMode: "matrix", terrainWeights: {}, canvas: undefined };
+        const ui = tab.ui ?? perspectiveState(latest.current.currentView ?? undefined,tab.view,latest.current.snapshot());
         latest.current.show(tab.view, tab.claims, ui);
       }
       return;
@@ -74,15 +77,14 @@ export function useResponseWorkspace(p: {
     const completed = next.tabs.find((t) => t.id === id);
     if (next.activeId === id && completed?.view) latest.current.show(completed.view, completed.claims, completed.ui);
   };
-  const back = () => {
-    const frame = history.current.pop(); if (!frame) return;
-    cancel(); setHistorySize(history.current.length);
-    const restored = restoreWorkspace(frame);
-    set(restored);
-    const tab = restored.tabs.find((t) => t.id === restored.activeId);
-    if (tab?.view) latest.current.show(tab.view, tab.claims, tab.ui);
+  const jump = (index:number) => {
+    const result=jumpNavigation(history.current,index); if (!result) return;
+    cancel(); setHistory(result.history); set(result.workspace);
+    const tab=result.workspace.tabs.find(t=>t.id===result.workspace.activeId);
+    if (tab?.view) latest.current.show(tab.view,tab.claims,tab.ui);
     else if (tab) void generate(tab.id);
   };
+  const back = () => jump(history.current.ancestors.length-1);
   const generateAll = async () => {
     const w = current.current; if (!w) return;
     const queueEpoch = epoch.current;
@@ -108,7 +110,7 @@ export function useResponseWorkspace(p: {
     if (!tab.view) return;
     latest.current.show(tab.view, tab.claims, { ...latest.current.snapshot(), selection: tab.view.nodes.filter((n) => n.evidenceIds.length).map((n) => n.id) });
   };
-  return { workspace, active, begin, reset, cancel, back, generate, generateAll, close, exportResponse, relate,
-    pending: workspace?.tabs.some((t) => t.status === "generating") ?? false, canBack: historySize > 0,
+  return { workspace, active, begin, reset, cancel, back, jump, generate, generateAll, close, exportResponse, relate,
+    pending: workspace?.tabs.some((t) => t.status === "generating") ?? false, canBack: navigation.ancestors.length > 0, breadcrumbs: navigationCrumbs(navigation,workspace), navigationTruncated: navigation.truncated,
     waiting: !!active && !active.view, current: () => current.current, snapshot: () => { stash(); return current.current; } };
 }

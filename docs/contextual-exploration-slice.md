@@ -1,0 +1,9 @@
+# Contextual exploration slice
+
+Apply after the nine previous patches, ending with the activity renderer. The exploration panel ranks views by the selected scope: code, class, data entity, component/group or relationship endpoints. Recommended choices are grouped by concern, with an expandable full catalog derived from chart plugin metadata. Each option explains the question it answers and its availability reason. Source access remains limited to one source entity. Chat supports `explore` followed by an exact displayed view name.
+
+Clicking a relationship selects its endpoints and opens exploration. Requests preserve the selected entity seeds and revision, rather than relying on display names. A group can become a scope; unbound members are disclosed and excluded. At most forty unique seeds are requested, with explicit truncation disclosure. Elements without source identities cannot silently establish a scope. View changes clear relationship focus.
+
+The response manifest adds optional revision-preflight availability separately from generated parent statuses. A parent failure, partial result or unavailable subject must not disable exploration of another subject. Cross-revision availability is ignored; old manifests remain compatible and chart evidence is marked unchecked. Missing compilers remain disabled. Native concurrency requires explicit preflight availability. Requestable means generation can be attempted, not that semantic evidence for the selected scope is proven. Existing history and canvas snapshots remain in use; hierarchical navigation is the next slice.
+
+Validation covers contextual ordering, revision/status isolation, source seed binding, relationship scope, missing identities, seed limits, catalog completeness and existing renderer/workflow tests. Browser interaction remains unverified.
