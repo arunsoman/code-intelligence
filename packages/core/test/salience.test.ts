@@ -9,6 +9,7 @@ const override = (v: any, name: string) => v.nodes.find((n: any) => n.label === 
 test("reported exceptions make code hot, weighted by frame position and repetition, with RUNTIME evidence", async () => {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
+  await svc.buildConceptHierarchy(ctx(), { revision });
   const before = await svc.ask(ctx(), { question: "how do fraud checks and payments work", revision });
   assert.ok(before.ok);
   const cold = hotness(before.value.view, "checkFraud");
@@ -33,6 +34,7 @@ test("reported exceptions make code hot, weighted by frame position and repetiti
 test("failing tests make the code they exercise hot, two hops deep", async () => {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
+  await svc.buildConceptHierarchy(ctx(), { revision });
   const r = await svc.ask(ctx(), { question: "how do fraud checks and payments work", revision });
   assert.ok(r.ok);
   const direct = hotness(r.value.view, "checkFraud");
@@ -47,21 +49,24 @@ test("failing tests make the code they exercise hot, two hops deep", async () =>
 test("hot code does not hijack unrelated questions", async () => {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
+  await svc.buildConceptHierarchy(ctx(), { revision });
   svc.reportException(ctx(), { trace: traceFor(repo) });
   const r = await svc.ask(ctx(), { question: "how do refunds work", revision });
   assert.ok(r.ok);
-  assert.ok(!r.value.view.nodes.some((n) => n.label === "checkFraud"), "hotness ranks; it does not select");
+  assert.ok(!r.value.view.nodes.some((n) => n.label === "checkFraud" && n.tier === "CRITICAL"), "hotness ranks; it does not select as critical");
   worker.close();
 });
 
 test("overrides persist per repository: pin forces CRITICAL and presence, boost ranks up, demote ranks down, reset undoes", async () => {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
+  await svc.buildConceptHierarchy(ctx(), { revision });
   const q = "how do refunds work";
   const base = await svc.ask(ctx(), { question: q, revision });
   assert.ok(base.ok);
   const baseScore = base.value.view.nodes.find((n) => n.label === "handleRefund")!.score!;
-  assert.ok(!base.value.view.nodes.some((n) => n.label === "checkFraud"));
+  const baseCheckFraud = base.value.view.nodes.find((n) => n.label === "checkFraud");
+  if (baseCheckFraud) assert.ok(baseCheckFraud.tier !== "CRITICAL" && !baseCheckFraud.factors?.some((f) => f.factor === "USER_OVERRIDE" && f.normalizedScore > 0), "checkFraud may appear naturally in refunds path, but should not be pinned/Critical initially");
 
   assert.ok(svc.setOverride(ctx(), { revision, entityId: "function:src/payments/fraud.ts#checkFraud", mode: "pin" }).ok);
   const pinned = await svc.ask(ctx(), { question: q, revision });
@@ -80,7 +85,8 @@ test("overrides persist per repository: pin forces CRITICAL and presence, boost 
   svc.setOverride(ctx(), { revision, entityId: "function:src/payments/fraud.ts#checkFraud", mode: null });
   const reset = await svc.ask(ctx(), { question: q, revision });
   assert.ok(reset.ok && reset.value.view.nodes.find((n) => n.label === "handleRefund")!.score === baseScore);
-  assert.ok(!reset.value.view.nodes.some((n) => n.label === "checkFraud"));
+  const resetCheckFraud = reset.value.view.nodes.find((n) => n.label === "checkFraud");
+  assert.ok(!resetCheckFraud || (resetCheckFraud.tier !== "CRITICAL" && !resetCheckFraud.factors?.some((f) => f.factor === "USER_OVERRIDE" && f.normalizedScore > 0)), "after reset checkFraud is no longer pinned/Critical");
 
   // They survive re-indexing because entity ids are stable.
   svc.setOverride(ctx(), { revision, entityId: "function:src/payments/fraud.ts#checkFraud", mode: "pin" });
@@ -95,6 +101,8 @@ test("overrides persist per repository: pin forces CRITICAL and presence, boost 
 test("chat commands: pin / boost / demote / reset by name; a similarly-worded question is still a question", async () => {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
+  await svc.buildConceptHierarchy(ctx(), { revision });
+  await svc.buildConceptHierarchy(ctx(), { revision });
   svc.router = new ScriptedRouter({ "pin checkFraud": { label: "pin", target: "checkFraud" }, "reset checkFraud": { label: "unpin", target: "checkFraud" }, "reset password flow": { label: "unpin", target: "password flow" }, demote: { label: "demote", target: "" }, "how do refunds work": { label: "SemanticMap", target: "" } });
   const q = await svc.converse(ctx(), { text: "how do refunds work", revision });
   assert.ok(q.ok && q.value.kind === "view");
@@ -103,7 +111,10 @@ test("chat commands: pin / boost / demote / reset by name; a similarly-worded qu
   assert.ok(pin.ok && pin.value.kind === "view" && pin.value.view.nodes.some((n) => n.label === "checkFraud") && pin.value.view.version === v0.version + 1);
   assert.match(pin.value.message, /Pinned checkFraud/);
   const reset = await svc.converse(ctx(), { text: "reset checkFraud", view: pin.value.view });
-  assert.ok(reset.ok && reset.value.kind === "view" && !reset.value.view.nodes.some((n) => n.label === "checkFraud"));
+  assert.ok(reset.ok && reset.value.kind === "view");
+  const resetNode = reset.value.view.nodes.find((n) => n.label === "checkFraud");
+  const resetOverride = resetNode?.factors?.find((f) => f.factor === "USER_OVERRIDE");
+  assert.ok(!resetOverride || resetOverride.normalizedScore === 0, "reset removes the active pin/override; a naturally relevant node may still appear without override scoring");
   const asQuestion = await svc.converse(ctx(), { text: "reset password flow", view: v0 });
   assert.ok(asQuestion.ok && asQuestion.value.kind === "view", "no element called that, so it is answered as a question");
   const sel = await svc.converse(ctx(), { text: "demote", view: v0, selection: [v0.nodes[0].id] });

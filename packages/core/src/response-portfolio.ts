@@ -26,11 +26,13 @@ export function responsePortfolio(input: { views: ViewSpec[]; catalog: CatalogEn
   const relevant = new Set([primaryCode, ...planning.plan!.supportingCodes]);
   const add = (code: string, form: string, label: string, available: boolean, reason?: string, view?: ViewSpec) => {
     const id = `${responseId}:${hash(code + (view?.id ?? ""))}`;
+    const recommendation=planning.plan!.recommendations?.find(r=>r.code===code);
     descriptors.push({ id, code, form, label, concern: concernOf(code), questionAnswered: view?.question ?? `${CHART_REGISTRY[code as ChartId]?.questionAnswered ?? question} — Topic: ${question}`,
       subject: typeof view?.params?.subject === "string" ? view.params.subject : subject, seeds,
       scope, primary: descriptors.length === 0, relevant: !!view || relevant.has(code),
       status: view ? view.gaps.length ? "partial" : "ready" : available ? "available" : "unavailable",
-      reason: view ? view.gaps[0] : reason, ...(view ? { viewId: view.id } : {}) });
+      reason: view ? view.gaps[0] : reason,
+      ...(recommendation ? {recommendation:{score:recommendation.score,reasons:recommendation.reasons}} : {}), ...(view ? { viewId: view.id } : {}) });
   };
   for (const view of input.views) {
     const code = viewCode(view, input.catalog);
@@ -48,7 +50,7 @@ export function responsePortfolio(input: { views: ViewSpec[]; catalog: CatalogEn
     const available = native.available && native.formId !== "HypothesisGraph";
     add(native.code, native.formId, native.name, available, native.formId === "HypothesisGraph" ? "Start this investigation by pasting a stack trace." : native.reason);
   }
-  return ResponseManifestSchema.parse({ schemaVersion: "response.v1", policyVersion: "portfolio.v3", plan: planning.plan, responseId,
+  return ResponseManifestSchema.parse({ schemaVersion: "response.v1", policyVersion: "portfolio.v4", plan: planning.plan, responseId,
     explorationAvailability: [
       ...Object.values(CHART_REGISTRY).filter(d => d.id !== "generic").map(d => ({ code: d.id, ...planning.availability.get(d.id)!, basis: "revision-preflight" as const })),
       ...input.catalog.filter(n => n.formId !== "GeneratedChart").map(n => ({ code: n.code, available: n.available && n.formId !== "HypothesisGraph", reason: n.formId === "HypothesisGraph" ? "Start this investigation by pasting a stack trace." : n.reason, basis: "revision-preflight" as const })),

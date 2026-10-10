@@ -2141,9 +2141,12 @@ export class Service {
   async refreshView(ctx: CallContext, req: { view: ViewSpec }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
     const v = req.view;
     if (!v) return fail(ctx, { code: "INVALID_SCHEMA", message: "no view", retryable: false });
+    const rev = this.store.revision(v.revision);
+    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "unknown revision", retryable: false });
+    const pins = [...this.store.overrides(rev.repoRoot)].filter(([, mode]) => mode === "pin").map(([entityId]) => entityId);
     const r = v.investigation
       ? await this.investigate(ctx, { trace: v.investigation.trace, revision: v.revision, ignored: v.investigation.ignored })
-      : await this.ask(ctx, { question: v.question, revision: v.revision, form: v.formId, ...(typeof v.params?.chartId === "string" ? { chartCode: v.params.chartId } : {}), scope: v.params?.scope === "repository" ? "repository" : "subject", overview: v.params?.overview === true, subject: typeof v.params?.subject === "string" ? v.params.subject : undefined });
+      : await this.ask(ctx, { question: v.question, revision: v.revision, form: v.formId, ...(typeof v.params?.chartId === "string" ? { chartCode: v.params.chartId } : {}), scope: v.params?.scope === "repository" ? "repository" : "subject", overview: v.params?.overview === true, subject: typeof v.params?.subject === "string" ? v.params.subject : undefined, pins });
     if (r.ok) r.value.view.version = v.version + 1;
     return r;
   }
