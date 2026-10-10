@@ -329,3 +329,16 @@ test("re-layout discards an obsolete waypoint without deleting its relationship 
   assert.equal(next.edges[0].via,undefined);
   assert.deepEqual(r.edges[0].via,[{x:200,y:200}],"original snapshot unchanged");
 });
+
+// No semantic edges means there is no execution order to encode in a column.
+test("unconnected task nodes pack across the canvas without inventing links", async () => {
+  const source = domainGraph();
+  source.edges = [];
+  source.nodes = source.nodes.map(n => ({ ...n, kind: "node", role: "task" }));
+  const before = structuredClone(source);
+  const result = await arrangeElk(source, { async layout() { throw new Error("Grid must not need a worker"); } }, { width: 900, height: 500 });
+  assert.ok(new Set(result.nodes.map(n => n.pos.x)).size > 1);
+  assert.equal(measure(result).nodeOverlaps, 0);
+  assert.deepEqual(result.edges, []);
+  assert.deepEqual(source, before);
+});

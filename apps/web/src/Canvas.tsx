@@ -172,7 +172,7 @@ function style(): cytoscape.StylesheetJson {
     { selector: "edge[kind = 'raises']", style: { "line-color": warn, "target-arrow-color": warn, color: warn } },
     { selector: "edge[count > 1]", style: { width: "mapData(count, 2, 12, 3, 8)" } },
     { selector: "edge.stale", style: { opacity: 0.4 } },
-    { selector: "edge[ambient = 1]", style: { opacity: 0.14, width: 1, "target-arrow-shape": "none", label: "" } },
+    { selector: "edge[ambient = 1]", style: { opacity: 0.45, width: 1.5, "target-arrow-shape": "triangle", label: "" } },
     { selector: "edge.focus", style: { opacity: 1, width: 2, "target-arrow-shape": "triangle" } },
     { selector: "edge[kind = 'forbidden-transition']", style: { "line-style": "dashed", "target-arrow-shape": "tee", "line-color": warn, "target-arrow-color": warn, color: warn } },
     { selector: "edge[kind = 'replay-transition']", style: { "line-style": "dotted", "target-arrow-shape": "triangle" } },
@@ -208,9 +208,18 @@ function focusEdges(c: cytoscape.Core, focusId: string | null) {
  */
 function fitReadable(c: cytoscape.Core, readableFloor = false) {
   c.resize(); c.fit(undefined, 40);
-  const z = readableFloor ? readableFitZoom(c.zoom()) : Math.min(c.zoom(), 1.4);
+  const fontUnits = Math.min(11, ...c.nodes().filter(n => !n.isParent()).map(n => parseFloat(n.style("font-size")) || 11));
+  const z = readableFloor ? readableFitZoom(c.zoom(), 1.4, 11, fontUnits) : Math.min(c.zoom(), 1.4);
   if (z !== c.zoom()) c.zoom(z);
   c.center();
+  if (readableFloor) {
+    // When the readable drawing cannot fit, start at its beginning rather than
+    // hiding the entry point above/left of the viewport. Pan remains available.
+    const bb = c.elements().boundingBox();
+    const pan = c.pan();
+    c.pan({ x: bb.w * z > c.width() - 80 ? 40 - bb.x1 * z : pan.x,
+      y: bb.h * z > c.height() - 120 ? 64 - bb.y1 * z : pan.y });
+  }
 }
 const reduceMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -410,7 +419,7 @@ function GraphCanvas(input: CanvasProps) {
       ...rendered.edges.map((e) => {
         const at = (id: string) => nodePos.get(id);
         const a = at(e.from), b = at(e.to);
-        const seg = e.from !== e.to && e.via && a && b ? viaToSegments(a, b, e.via) : null;
+        const seg = e.from !== e.to && e.via && a && b ? viaToSegments(a, b, automatic ? e.via.slice(1, -1) : e.via) : null;
         return { ...({ data: { id: e.id, source: e.from, target: e.to, display: e.displayMode, kind: e.kind ?? "", sourceLabel: e.sourceLabel ?? "", targetLabel: e.targetLabel ?? "", label: level >= 5 || e.count > 1 ? e.label : "", count: e.count, ghost: e.ghost ? 1 : 0, ret: e.ret ? 1 : 0, ambient: e.ambient ? 1 : 0 }, classes: e.stale ? "stale" : "" }), ...(seg ? { style: { "curve-style": "segments", "segment-weights": seg.weights, "segment-distances": seg.distances, "edge-distances": "node-position" } } : {}) };
       }),
     ];
@@ -421,7 +430,7 @@ function GraphCanvas(input: CanvasProps) {
     if (p.viewKey !== lastViewKey.current || (automatic && aspect !== lastLayoutAspect.current)) {
       const first = lastViewKey.current === "";
       lastViewKey.current = p.viewKey;
-      if (first && p.initialState) { c.zoom(p.initialState.zoom); c.pan(p.initialState.pan); } else fitReadable(c);
+      if (first && p.initialState) { c.zoom(p.initialState.zoom); c.pan(p.initialState.pan); } else fitReadable(c, p.formId === "GeneratedChart" || !p.semanticLevels);
     }
     // Reapply selection to the fresh elements.
     c.batch(() => { for (const id of p.selected) c.getElementById(id).select(); });
@@ -496,7 +505,7 @@ function GraphCanvas(input: CanvasProps) {
       });
       c.viewport(plan.camera);
     } else {
-      fitReadable(c, !p.semanticLevels);
+      fitReadable(c, p.formId === "GeneratedChart" || !p.semanticLevels);
     }
     refreshRef.current();
   }, [p.fitTick, p.rendered, layoutReady]); // eslint-disable-line react-hooks/exhaustive-deps

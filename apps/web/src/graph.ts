@@ -356,7 +356,7 @@ export function composite(factors: Record<string, number>, weights: Record<strin
  */
 export function viaToSegments(from: Pos, to: Pos, via: Pos[]): { weights: number[]; distances: number[] } | null {
   const dx = to.x - from.x, dy = to.y - from.y, len2 = dx * dx + dy * dy;
-  if (len2 < 1) return null;
+  if (len2 < 1 || !via.length) return null;
   const len = Math.sqrt(len2);
   return {
     weights: via.map((p) => ((p.x - from.x) * dx + (p.y - from.y) * dy) / len2),

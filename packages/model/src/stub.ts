@@ -220,7 +220,7 @@ function s1Offline(req: ModelRequest): ChartOutputV2 {
   const { nodes, edges } = callFlowParts(req);
   return {
     contractVersion: "chart.v2", chartId: "S1", chartType: CHART_NAMES.S1, layout: "flow",
-    caption: `Offline S1 (C4 container) diagram: ${nodes.length} node(s) from indexed call relationships. Container boundaries and technology choices are not derived offline. ${OFFLINE_LIMIT}`,
+    caption: `Offline S1 (container / component architecture) diagram: ${nodes.length} node(s) from indexed call relationships. Container boundaries and technology choices are not derived offline. ${OFFLINE_LIMIT}`,
     nodes, edges,
   };
 }
@@ -812,7 +812,7 @@ function c4ContextOffline(req: ModelRequest): ChartOutputV2 {
   }
   return {
     contractVersion: "chart.v2", chartId: "S27", chartType: CHART_NAMES.S27, layout: "flow",
-    caption: `Offline S27 (C4 context): repository boundary plus ${seen.size} possible external system(s) grounded in infrastructure/provider client imports. Users, deployment names, and runtime connections remain gaps. ${OFFLINE_LIMIT}`,
+    caption: `Offline S27 (system context): repository boundary plus ${seen.size} possible external system(s) grounded in infrastructure/provider client imports. Users, deployment names, and runtime connections remain gaps. ${OFFLINE_LIMIT}`,
     nodes: [], edges: [], elements, relationships,
   };
 }

@@ -75,22 +75,6 @@ async function arrangeDirection(r: Rendered, engine: Pick<ELK, "layout">, viewpo
   return { ...r, nodes: r.nodes.map((n) => ({ ...n, pos: positions.get(n.id)! })), edges: r.edges.map((e) => ({ ...e, via: routes.get(e.id) ?? [] })) };
 }
 
-/** Post-process an ELK topology layout to reduce remaining straight-line crossings by barycenter ordering within each layer. */
-function refineTopology(r: Rendered): Rendered {
-  if (r.nodes.length < 3) return r;
-  const items: Item[] = r.nodes.map((n) => ({ id: n.id, ...nodeSize(n), x: n.pos.x, y: n.pos.y }));
-  const links = r.edges.filter((e) => !e.ambient).map((e) => ({ from: e.from, to: e.to }));
-  const before = items.map((i) => ({ ...i }));
-  orderColumns(items, links, { permuteColumns: true });
-  separate(items, 14);
-  const beforeR = measure({ nodes: before.map((i) => ({ id: i.id, label: "", kind: "node" as const, pos: { x: i.x, y: i.y }, members: [i.id], count: 1, displayMode: "FACT" as const, tier: "CONTEXT" as const, stale: false })), edges: r.edges.filter((e) => !e.ambient).map((e) => ({ ...e, from: e.from, to: e.to })), groups: [] });
-  const after = { nodes: items.map((i) => ({ id: i.id, label: "", kind: "node" as const, pos: { x: i.x, y: i.y }, members: [i.id], count: 1, displayMode: "FACT" as const, tier: "CONTEXT" as const, stale: false })), edges: r.edges.filter((e) => !e.ambient).map((e) => ({ ...e })), groups: [] };
-  const afterR = measure(after);
-  if (afterR.edgeCrossings > beforeR.edgeCrossings || afterR.nodeOverlaps > 0 || afterR.edgeThroughNode > 0) return r;
-  const at = new Map(items.map((i) => [i.id, i]));
-  return { ...r, nodes: r.nodes.map((n) => { const i = at.get(n.id)!; return { ...n, pos: { x: i.x, y: i.y } }; }) };
-}
-
 /** Fit at natural node sizes. Never enlarge a small graph just to fill empty pixels. */
 export function viewportFit(r: Rendered, viewport: { width: number; height: number }): number {
   if (!r.nodes.length) return 1;
@@ -101,9 +85,9 @@ export function viewportFit(r: Rendered, viewport: { width: number; height: numb
   return Math.min(1, Math.max(1, viewport.width) / width, Math.max(1, viewport.height) / height);
 }
 
-/** Unconnected class cards can use a compact grid without inventing relational order. */
+/** Unconnected nodes can use a compact grid without inventing relational order. */
 export function classCardGrid(r: Rendered, viewport: {width:number;height:number}): Rendered | undefined {
-  if (!r.nodes.length || r.edges.length || r.groups.length || !r.nodes.every(n=>["uml-class","uml-abstract","uml-interface","uml-enum"].includes(n.role??""))) return;
+  if (!r.nodes.length || r.edges.length || r.groups.length) return;
   let best: Rendered | undefined, score=-Infinity;
   for (let columns=1;columns<=r.nodes.length;columns++) {
     const sizes=r.nodes.map(nodeSize),rows=Math.ceil(r.nodes.length/columns);
@@ -136,7 +120,9 @@ export async function arrangeElk(r: Rendered, engine: Pick<ELK, "layout">, viewp
     } catch (error) { lastError = error; }
   }
   if (!best) throw lastError ?? new Error("No usable graph layout");
-  return refineTopology(best);
+  // ELK routes belong to these exact positions. Moving endpoints without
+  // rerouting creates detached links and invalid bends.
+  return best;
 }
 
 const LARGE_JOURNEY = 14; // beyond this a one-column-per-step sequence is an unreadable strip

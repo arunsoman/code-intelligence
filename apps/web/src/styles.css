@@ -785,7 +785,7 @@ button.model-menu__option:disabled { background: color-mix(in srgb, var(--accent
 
 /* Preserve drawing space regardless of response length or open exploration controls. */
 .canvas-space-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 16px; border-bottom: 1px solid var(--line); flex: none; }
-.workspace-chrome { flex: none; max-height: min(36vh, 300px); overflow: auto; overscroll-behavior: contain; min-width: 0; }
+.workspace-chrome { flex: none; max-height: min(30vh, 250px); overflow: auto; overscroll-behavior: contain; min-width: 0; }
 main > .stage { min-height: 180px; flex: 1 0 180px; }
 main { overflow: auto; }
 .response-plan-details { padding: 4px 0; }

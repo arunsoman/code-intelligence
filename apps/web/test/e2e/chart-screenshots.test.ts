@@ -115,6 +115,10 @@ async function showVisual(
     `${code} in visuals gallery`,
   );
 
+  // System entries mount synchronously, while evidence availability arrives
+  // with the built-in catalog. Do not capture that loading state as unavailable.
+  await b.waitFor(() => `!!document.querySelector('[data-visual-code="V12"]')`, 15_000, "gallery evidence availability loaded");
+
   const result = await b.eval<"shown" | "trace" | "unavailable" | "notfound">(
     `(() => {
       const li = document.querySelector('[data-visual-code="${code}"]');
@@ -516,6 +520,11 @@ test(
             } else assert.ok(await b.eval(`/No (rows|columns) with current evidence/.test(document.querySelector('${selector}').textContent)`), "empty tables explain missing evidence");
           }
 
+          await b.eval(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+          await wait(200);
+          if (chart.code === "S1" && outcome === "shown") {
+            assert.ok(await b.eval(`document.querySelector('.canvas')._cyreg.cy.edges().every(e => { const a=e.sourceEndpoint(), b=e.targetEndpoint(); return a && b && Number.isFinite(a.x) && Number.isFinite(a.y) && Number.isFinite(b.x) && Number.isFinite(b.y); })`), "routed links have drawable attachment endpoints");
+          }
           stage="capture";
           // Screenshot.
           const safeName = `${chart.code}-${chart.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`;
