@@ -30,7 +30,7 @@ export function ResponseWorkspaceBar(p: {
     <div className="response-scope"><button className="secondary small" disabled={!p.canBack} onClick={p.onBack} title="Return to the parent exploration scope">Back to parent</button>
       <strong>{p.workspace.manifest.question}</strong><span className="muted small">Revision {p.workspace.manifest.revision.slice(0, 12)}</span>
     </div>
-    {p.workspace.manifest.plan && <p className="response-view-purpose"><strong>Perspective:</strong> {p.workspace.manifest.plan.concerns.join(" · ")} <span className="muted small">{p.workspace.manifest.plan.scope === "subject" ? `Subject: ${p.workspace.manifest.plan.subject ?? "selected sources"}` : "Repository"} · {p.workspace.manifest.plan.evidenceStatus === "checked" ? "Indexed-source preflight checked" : "Evidence preflight pending"}</span></p>}
+    {p.workspace.manifest.plan && <details className="response-plan-details"><summary>Response interpretation</summary><p className="response-view-purpose"><strong>Perspective:</strong> {p.workspace.manifest.plan.concerns.join(" · ")} <span className="muted small">{p.workspace.manifest.plan.scope === "subject" ? `Subject: ${p.workspace.manifest.plan.subject ?? "selected sources"}` : "Repository"} · {p.workspace.manifest.plan.evidenceStatus === "checked" ? "Indexed-source preflight checked" : "Evidence preflight pending"}</span></p></details>}
     <div className="response-tabs" role="tablist" aria-label="Charts for this response">
       {tabs.map((tab) => <div className="response-tab" key={tab.id}>
         <button id={`tab-${tab.id}`} type="button" role="tab" aria-selected={tab.id === p.workspace.activeId}

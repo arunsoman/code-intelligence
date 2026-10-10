@@ -223,8 +223,9 @@ export function render(view: ViewSpec, level: number, pos: Map<string, Pos>, sta
   const genericAmbient = view.formId === "GeneratedChart" && view.params?.chartId === "generic";
   for (const e of view.edges) {
     const from = idOf.get(e.fromNodeId), to = idOf.get(e.toNodeId);
-    if (!from || !to || from === to) continue;
+    if (!from || !to) continue;
     const aggregated = from.startsWith("agg:") || to.startsWith("agg:");
+    if (from === to && (aggregated || e.fromNodeId !== e.toNodeId)) continue;
     const key = aggregated ? `${from}>${to}` : e.id;
     const cur = merged.get(key);
     const fromNode = nodeById.get(e.fromNodeId), toNode = nodeById.get(e.toNodeId);

@@ -153,7 +153,9 @@ export function App() {
   const [repoExpanded, setRepoExpanded] = useState(true);
   const [repoAutoCollapsed, setRepoAutoCollapsed] = useState(false);
   // UX-12: view controls collapsible
-  const [viewCtrlOpen, setViewCtrlOpen] = useState(true);
+  const [viewCtrlOpen, setViewCtrlOpen] = useState(false);
+  const [canvasFocus, setCanvasFocus] = useState(false);
+  const [focusPanel, setFocusPanel] = useState(false);
   const [exceptions, setExceptions] = useState<ExceptionRow[]>([]);
   const [browsingHierarchy, setBrowsingHierarchy] = useState(false);
   const [hierarchyConcepts, setHierarchyConcepts] = useState(0);
@@ -196,6 +198,7 @@ export function App() {
     if (token !== responseGeneration.current || sourceKey !== sourceContext.current) return;
     if (!r.ok) { setError(failMsg(r)); return; }
     if (r.value.state !== "CURRENT" && r.value.state !== "STALE") { setNotice(`Source is ${r.value.state.toLowerCase()}.`); return; }
+    if (canvasFocus) setFocusPanel(true);
     setCode({ title: r.value.name, file: r.value.file, startLine: r.value.startLine, snippet: r.value.text });
   };
 
@@ -550,6 +553,7 @@ export function App() {
     await openNodeDrawer(n.node!);
   };
   const openNodeDrawer = async (vn: ViewNode) => {
+    if (canvasFocus) setFocusPanel(true);
     const mark = [...overlayNodes.entries()].flatMap(([renderId, value]) => rendered.nodes.find((n) => n.id === renderId)?.members.some((id) => nodeById.get(id)?.entityRefs.some((entity) => vn.entityRefs.includes(entity))) ? [value] : [])[0];
     const evidenceIds = [...new Set([...vn.evidenceIds, ...(mark?.evidenceIds ?? [])])];
     setDrawer({ kind: "inspect", title: vn.label, sub: `${vn.role ?? vn.kind}${vn.file ? ` · ${vn.file}` : ""}`, notes: [...(vn.notes ?? []), ...(mark ? [mark.summary, ...mark.notes] : [])], factors: vn.factors, claimIds: vn.claimIds, evidence: await evidence(evidenceIds), entityId: vn.entityRefs[0] });
@@ -602,6 +606,7 @@ export function App() {
     const endpoints = [...new Set(under.flatMap(x => [x.fromNodeId,x.toNodeId]))];
     if (endpoints.length) { setSelection(endpoints); setExploreEdge({ viewId: view.id, nodeIds: endpoints, label: title }); setExploreOpen(true); }
     const how = e.displayMode === "FACT" ? "Fact · statically proven" : e.displayMode === "HYPOTHESIS" ? "Hypothesis · cannot be proven statically" : "Inference · derived from cited evidence";
+    if (canvasFocus) setFocusPanel(true);
     setDrawer({ kind: "inspect", title, sub: `${first?.kind ?? "link"} · ${how}`, notes: e.count > 1 ? under.slice(0, 6).map((u) => `${lab(u.fromNodeId)} → ${lab(u.toNodeId)}${u.label ? ` (${u.label})` : ""}`) : [], claimIds: [...new Set(under.map((u) => u.claimId).filter((c): c is string => !!c))], evidence: await evidence(e.evidenceIds) });
   };
   // ------------------------------------------------------------ verdicts
@@ -696,7 +701,7 @@ export function App() {
   }, [indexed, repoAutoCollapsed]);
 
   return (
-    <div className="app">
+    <div className="app" data-canvas-focus={canvasFocus ? "true" : undefined}>
       {picking && <FolderPicker initialPath={repoPath} onClose={() => setPicking(false)} onPick={(p) => { selectRepository(p, true); setPicking(false); log("PICK_REPO", p); }} />}
       {galleryOpen && <VisualsGallery revision={info?.revision?.id} onClose={() => setGalleryOpen(false)} onShow={(it: CatalogEntry, q: string) => { setGalleryOpen(false); void askForm(q, it.formId, undefined, undefined, undefined, undefined, selectedChartId(it)); }} />}
       {providerWizardOpen && <ProviderWizard revision={info?.revision?.id} onClose={() => setProviderWizardOpen(false)} />}
@@ -889,6 +894,12 @@ export function App() {
       </aside>
 
       <main>
+        <div className="canvas-space-tools" role="toolbar" aria-label="Workspace space">
+          <button className="secondary small" aria-pressed={canvasFocus} onClick={() => {setCanvasFocus(!canvasFocus);setFocusPanel(false);}}>{canvasFocus ? "Exit canvas focus" : "Focus canvas"}</button>
+          {canvasFocus && <button className="secondary small" aria-expanded={focusPanel} aria-controls="workspace-right-panel" onClick={()=>setFocusPanel(!focusPanel)}>{focusPanel ? "Hide chat & evidence" : "Chat & evidence"}</button>}
+          <span className="muted small">{canvasFocus ? "Canvas focus · panels are available on demand" : "Chart workspace"}</span>
+        </div>
+        <div className="workspace-chrome">
         {responseWorkspace.workspace && <ResponseWorkspaceBar workspace={responseWorkspace.workspace} pending={responseWorkspace.pending}
           canBack={!!code || responseWorkspace.canBack} breadcrumbs={responseWorkspace.breadcrumbs} navigationTruncated={responseWorkspace.navigationTruncated} sourceTitle={code?.title} onJump={navigateAncestor} onBack={navigateBack} onSelect={(id) => { if (id === responseWorkspace.workspace?.activeId) return; responseGeneration.current++; setBusy(null); void responseWorkspace.generate(id); }} onClose={responseWorkspace.close}
           onGenerate={() => void responseWorkspace.generateAll()} onCancel={responseWorkspace.cancel} onExport={responseWorkspace.exportResponse}
@@ -969,6 +980,7 @@ export function App() {
             </div>
           </details>
         )}
+        </div>
         <div id="response-view-panel" role={responseWorkspace.workspace ? "tabpanel" : undefined} aria-labelledby={responseWorkspace.workspace ? `tab-${responseWorkspace.workspace.activeId}` : undefined} className="stage" aria-busy={responseWorkspace.waiting || phase === "composing" ? "true" : undefined}>
           {responseWorkspace.waiting ? <div className="empty-chart-state" role="status"><strong>{responseWorkspace.active?.label}</strong><p>{responseWorkspace.active?.status === "generating" ? "Generating this view from the same question and revision…" : responseWorkspace.active?.reason ?? "Select this tab to generate its view."}</p>{responseWorkspace.active?.status === "failed" && <button onClick={() => void responseWorkspace.generate(responseWorkspace.active!.id)}>Retry this view</button>}</div> : view?.matrix && drawMode === "matrix" ? (
             <MatrixView matrix={eff!.view.matrix!} stale={eff!.stale} selected={new Set(cellSel)} onPick={(c, r, k, add) => void inspectCell(c, r, k, add)} />
@@ -1022,7 +1034,7 @@ export function App() {
         </footer>
       </main>
 
-      <aside className="right" data-has-evidence={code || drawer ? "true" : "false"}>
+      <aside id="workspace-right-panel" className="right" data-focus-open={focusPanel ? "true" : undefined} data-has-evidence={code || drawer ? "true" : "false"}>
         <ChatPanel onNewContext={() => { resetResponse(); setView(null); setSelection([]); setCellSel([]); setCode(null); setDrawer(null); setBusy(null); chatRestoreGeneration.current++; setChatSessionId(uuid()); setMessages([]); setError(null); setNotice("Started a new conversation context."); }} onShowResult={showChatResult} onShowAlt={(alt) => void askForm(alt.prompt ?? alt.question, alt.form, undefined, alt.kind, `Show as ${alt.name}`, alt.question, alt.chartCode)} onCreateProvider={() => openDialog(() => setProviderWizardOpen(true))} messages={messages} referents={referents} busy={!!busy} canAsk={!!info?.revision} examples={EXAMPLES} seed={chatSeed ?? undefined} onSend={(t) => void send(t)} onDropReferent={(id) => (id.startsWith("cell:") ? setCellSel(cellSel.filter((x) => x !== id)) : id === "card:pins" ? setCardPins(null) : id.startsWith("editor:") ? setDismissed(new Set([...dismissed, id.slice(7)])) : setSelection(selection.filter((x) => x !== id)))} />
         <section className="drawer" aria-label="Evidence">
           {code && (

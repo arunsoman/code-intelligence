@@ -780,3 +780,17 @@ button.model-menu__option:disabled { background: color-mix(in srgb, var(--accent
 .navigation-breadcrumbs button > span, .navigation-breadcrumbs li > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .navigation-breadcrumbs small { opacity: .75; font-weight: normal; }
 .navigation-breadcrumbs [aria-current="page"] { font-weight: 700; opacity: 1; }
+
+/* Preserve drawing space regardless of response length or open exploration controls. */
+.canvas-space-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 16px; border-bottom: 1px solid var(--line); flex: none; }
+.workspace-chrome { flex: none; max-height: min(36vh, 300px); overflow: auto; overscroll-behavior: contain; min-width: 0; }
+main > .stage { min-height: 180px; flex: 1 0 180px; }
+main { overflow: auto; }
+.response-plan-details { padding: 4px 0; }
+.response-plan-details > summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.response-scope > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.response-view-purpose { max-height: 72px; overflow: auto; }
+.app[data-canvas-focus="true"], .app[data-canvas-focus="true"]:has(.side[data-collapsed="true"]) { grid-template-columns: 0 minmax(0, 1fr) 0; }
+.app[data-canvas-focus="true"] > .side, .app[data-canvas-focus="true"] > .right { display: none; }
+.app[data-canvas-focus="true"] .workspace-chrome { max-height: min(26vh, 230px); }
+.app[data-canvas-focus="true"] > .right[data-focus-open="true"] { display: grid; position: fixed; top: 64px; bottom: 0; right: 0; width: min(420px, 85vw); z-index: 10; box-shadow: -8px 0 28px rgba(0,0,0,.25); }

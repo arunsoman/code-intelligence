@@ -12,7 +12,7 @@ import { columnFlow } from "./layout.ts";
 import type { ElkNode, ELK } from "elkjs/lib/elk-api.js";
 
 // Automatic topology layouts must not erase time, bands or swim-lane ordering.
-const TOPOLOGY_CHARTS = new Set(["S1", "S2", "S3", "S4", "S6", "S9", "S10", "S13", "S15", "S16", "S17", "S21", "S23", "S26", "S27"]);
+const TOPOLOGY_CHARTS = new Set(["S1", "S2", "S3", "S4", "S6", "S7", "S9", "S10", "S12", "S13", "S15", "S16", "S17", "S18", "S19", "S21", "S23", "S26", "S27"]);
 export function usesElk(r: Rendered, formId?: string, chartId?: string): boolean {
   if (!r.nodes.length || r.groups.some((g) => g.kind === "lane")) return false;
   if (["RaceWindow", "Archaeology", "SemanticDiff", "TransactionJourney"].includes(formId ?? "")) return false;
@@ -101,8 +101,28 @@ export function viewportFit(r: Rendered, viewport: { width: number; height: numb
   return Math.min(1, Math.max(1, viewport.width) / width, Math.max(1, viewport.height) / height);
 }
 
+/** Unconnected class cards can use a compact grid without inventing relational order. */
+export function classCardGrid(r: Rendered, viewport: {width:number;height:number}): Rendered | undefined {
+  if (!r.nodes.length || r.edges.length || r.groups.length || !r.nodes.every(n=>["uml-class","uml-abstract","uml-interface","uml-enum"].includes(n.role??""))) return;
+  let best: Rendered | undefined, score=-Infinity;
+  for (let columns=1;columns<=r.nodes.length;columns++) {
+    const sizes=r.nodes.map(nodeSize),rows=Math.ceil(r.nodes.length/columns);
+    const widths=Array.from({length:columns},(_,c)=>Math.max(...sizes.filter((_,i)=>i%columns===c).map(s=>s.w)));
+    const heights=Array.from({length:rows},(_,row)=>Math.max(...sizes.slice(row*columns,(row+1)*columns).map(s=>s.h)));
+    const width=widths.reduce((a,b)=>a+b,0)+(columns-1)*40+96,height=heights.reduce((a,b)=>a+b,0)+(rows-1)*40+96;
+    const fit=Math.min(1,viewport.width/width,viewport.height/height);
+    const aspectPenalty=Math.abs(Math.log((width/height)/(Math.max(1,viewport.width)/Math.max(1,viewport.height))));
+    const value=fit-aspectPenalty*.001;
+    if(value<=score)continue;
+    score=value;
+    best={...r,nodes:r.nodes.map((n,i)=>{const c=i%columns,row=Math.floor(i/columns);return {...n,pos:{x:widths.slice(0,c).reduce((a,b)=>a+b,0)+c*40+widths[c]/2,y:heights.slice(0,row).reduce((a,b)=>a+b,0)+row*40+heights[row]/2}};})};
+  }
+  return best;
+}
+
 /** Compare topology orientations using actual resulting bounds, not an aspect threshold. */
 export async function arrangeElk(r: Rendered, engine: Pick<ELK, "layout">, viewport: { width: number; height: number }): Promise<Rendered> {
+  const grid=classCardGrid(r,viewport); if(grid)return grid;
   if (!r.nodes.length) return r;
   const preferred = viewport.width >= viewport.height ? "RIGHT" : "DOWN";
   const directions = [preferred, preferred === "RIGHT" ? "DOWN" : "RIGHT"] as const;
