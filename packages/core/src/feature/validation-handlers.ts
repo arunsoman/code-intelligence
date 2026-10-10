@@ -24,7 +24,7 @@ export function validationHandlers(svc: Service, fs: SqliteFeatureStore, owned: 
         const abort = new AbortController(); const unsubscribe = control.onCancel(() => abort.abort());
         try { return await guardedAsync(c, async () => {
           control.checkpoint();
-          const runner = new LocalRunner({ fence: () => control.holdsFence?.() ?? true });
+          const runner = dockerAvailable() ? new DockerRunner({ fence: () => control.holdsFence?.() ?? true }) : new LocalRunner({ fence: () => control.holdsFence?.() ?? true });
           const evidence = await runFeatureValidation({ store: fs, runner, runCheck: driver?.(candidate, request), beforeSave: () => { if (control.holdsFence && !control.holdsFence()) throw new Cancelled(); control.checkpoint(); } }, { candidateId: candidate.id, plan, actor: c.actor.principalId, wallMs: body.budget.wallMs, signal: abort.signal });
           control.checkpoint(); control.commit();
           return { status: evidence.every((e) => e.results.every((r) => r.status === "PASS" || r.status === "NOT_APPLICABLE")) ? "COMPLETE" : "PARTIAL", value: evidence.flatMap((e) => e.results), evidenceIds: evidence.map((e) => e.id), diagnostics: evidence.flatMap((e) => e.coverage.gaps) };

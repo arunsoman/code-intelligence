@@ -18,6 +18,7 @@ import { advanceStage, reconcileAll, resumeRequest } from "./lifecycle.ts";
 import type { Handlers } from "./routes.ts";
 import { SqliteFeatureStore } from "./store.ts";
 import { compileChangeGraph, featureReview } from "./presentation.ts";
+import { workbenchHandlers } from "./workbench-handlers.ts";
 import { validationHandlers } from "./validation-handlers.ts";
 import { gateDriverFor, securityHandlers, type GateHooks } from "./security-handlers.ts";
 import { perfHandlers, type PerfHooks } from "./perf-handlers.ts";
@@ -53,6 +54,7 @@ export function featureHandlers(svc: Service, opts: { gates?: GateHooks; perf?: 
   const who = (c: CallContext) => c.actor.principalId;
 
   return {
+    ...workbenchHandlers(svc, fs, owned, authOf, opts.pipeline ?? {}, gateDriverFor(opts.gates ?? {}, fs)),
     ...validationHandlers(svc, fs, owned, gateDriverFor(opts.gates ?? {}, fs)),
     ...perfHandlers(svc, fs, owned, opts.perf ?? {}),
     ...issueHandlers(svc, fs, owned, opts.issues ?? {}),

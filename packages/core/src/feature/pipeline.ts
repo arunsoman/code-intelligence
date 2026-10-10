@@ -10,6 +10,8 @@
 //   * A step that throws FeatureError stops the run with that message (BLOCKED); anything else is a bug and propagates.
 //   * Generation is a hook: this module runs scripted generators in tests and the model adapter in production (adapterEdits below).
 import { readFileSync } from "node:fs";
+import { policyFor } from "../access.ts";
+import { passesThroughLink } from "./tree.ts";
 import { safeJoin, walkFiles } from "../isolated-exec.ts";
 import { loadFeatureConfig } from "./config.ts";
 import { authorize, type AuthorityConfig } from "./authority.ts";
@@ -76,14 +78,15 @@ export interface PipelineResult {
 
 const SRC = /\.[cm]?[jt]sx?$/;
 /** Files the generator is shown: planned edit targets that exist, then files the discovery matched to the request, capped. */
-export function contextFor(request: FeatureRecord, max = 12, maxBytes = 24_000): ContextArtifact[] {
+export function contextFor(request: FeatureRecord, max = 12, maxBytes = 24_000, store?: Store): ContextArtifact[] {
   const want = new Set<string>(request.tasks.flatMap((t) => t.plannedEdits));
   for (const e of request.assessment?.relatedEntities ?? []) want.add(e.file);
   const out: ContextArtifact[] = [];
   const present = new Set(walkFiles(request.repositoryId, (p) => SRC.test(p), 5000));
-  for (const rel of [...want].filter((p) => present.has(p)).sort().slice(0, max)) {
-    let text: string; try { text = readFileSync(safeJoin(request.repositoryId, rel)).subarray(0, maxBytes).toString("utf8"); } catch { continue; }
-    out.push({ ref: { artifactId: `file:${rel}`, version: "1", locator: rel, contentHash: rawHash(readFileSync(safeJoin(request.repositoryId, rel))) }, text });
+  const policy = store ? policyFor(store, request.repositoryId) : { denied: () => false };
+  for (const rel of [...want].filter((p) => present.has(p) && !policy.denied(p)).sort().slice(0, max)) {
+    let text: string; try { if (passesThroughLink(request.repositoryId, rel)) continue; const bytes = readFileSync(safeJoin(request.repositoryId, rel)); if (bytes.length > maxBytes) continue; text = bytes.toString("utf8"); if (Buffer.from(text).compare(bytes) !== 0) continue; } catch { continue; }
+    out.push({ ref: { artifactId: `file:${rel}`, version: "1", locator: rel, contentHash: rawHash(text) }, text });
   }
   return out;
 }
@@ -221,7 +224,7 @@ export async function runFeaturePipeline(d: PipelineDeps, actor: Id, i: Pipeline
     if (req().mode === "PLAN") return finish("PLAN_ONLY", "plan only: this request was made in PLAN mode");
 
     // ---- generate edits and build the candidate
-    const context = contextFor(req());
+    const context = contextFor(req(), 12, 24000, d.store);
     let gen: Awaited<ReturnType<PipelineDeps["generateEdits"]>>;
     try { gen = await d.generateEdits({ request: req(), context }); } catch (e) { if (e instanceof FeatureError) { add(t, "GENERATE", "STOPPED", e.message); return finish("FAILED", e.message); } throw e; }
     add(t, "GENERATE", "DONE", `${gen.edits.length} edit(s) from ${gen.invocationIds.length} model call(s); ${context.length} file(s) shown`);

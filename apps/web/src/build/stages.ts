@@ -3,9 +3,9 @@ export type WizardStage = "DESCRIBE" | "CLARIFY" | "PLAN" | "CHANGES" | "VALIDAT
 export const STAGES: { id: WizardStage; label: string; primary: string }[] = [
   { id: "DESCRIBE", label: "Describe", primary: "Start analysis" },
   { id: "CLARIFY", label: "Clarify", primary: "Continue with ready work" },
-  { id: "PLAN", label: "Plan", primary: "Build candidate" },
+  { id: "PLAN", label: "Agree plan", primary: "Build candidate" },
   { id: "CHANGES", label: "Changes", primary: "Request revision" },
-  { id: "VALIDATE", label: "Validate", primary: "Run required checks" },
+  { id: "VALIDATE", label: "Test & repair", primary: "Run required checks" },
   { id: "DELIVER", label: "Deliver", primary: "Export patch" },
 ];
 /** Effectful actions are always their own buttons; "Next" only moves the view and never starts one (plan S10). */

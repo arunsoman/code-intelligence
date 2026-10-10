@@ -105,6 +105,7 @@ export type FeatureWorkspace = {
 
 /** 1/5. Request, contract, requirements, criteria, blockers, issue binding, overlap and release payloads. */
 export type FeatureRecord = {
+  workbench?: import("./workbench.ts").WorkbenchState;
   schemaVersion: 1; requestId: Id; repositoryId: Id; mode: OutcomeMode; state: RequestState; tier?: Tier;
   promptRef: { artifactId: Id; contentHash: Hash; redactedPreview: string; /** The full prompt, kept for the owner only; the issue projection uses `redactedPreview`. */ text?: string };
   inputRefs: SourceRef[]; source: Snapshot; contractVersion: number; contract?: FeatureContract;

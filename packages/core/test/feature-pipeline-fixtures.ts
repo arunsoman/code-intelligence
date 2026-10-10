@@ -18,6 +18,9 @@ export function demo(authority?: object): string {
   const dir = join(mkdtempSync(join(tmpdir(), "cie-tx-")), "transactions-app");
   execFileSync("bash", [join(ROOT, "scripts_make_demo_repo.sh"), dir, "transactions-app"], { stdio: "pipe" });
   execFileSync("git", ["-C", dir, "remote", "add", "origin", "https://github.com/acme/transactions.git"]);
+  // This fixture intentionally evaluates built-in security checks. Production still requires external SAST by default.
+  mkdirSync(join(dir, ".cie"), { recursive: true });
+  writeFileSync(join(dir, ".cie/security.json"), JSON.stringify({ requireExternalSast: false }));
   if (authority) { mkdirSync(join(dir, ".cie"), { recursive: true }); writeFileSync(join(dir, ".cie/authority.json"), JSON.stringify(authority)); }
   return dir;
 }

@@ -17,6 +17,13 @@ export type OpSpec = { key: string; mutating: boolean; owner: string; note?: str
 
 /** Typed signatures other tasks code against. Implementations return these; the gateway wraps them in ApiResult. */
 export interface FeatureApi {
+  // Product wizard: jobs return immediately; local reports remain unverified diagnostic input.
+  prepareFeaturePlan(ctx: Ctx, i: { requestId: Id }): { jobId: Id };
+  buildFeatureCandidate(ctx: Ctx, i: { requestId: Id; candidateHash?: Hash; reportId?: Id; maxRepairs?: number; wallMs?: number; syntheticTestData?: boolean }): { jobId: Id };
+  importFeatureTestReport(ctx: Ctx, i: { requestId: Id; report: import("@cie/schema").FeatureTestReport }): import("./workbench.ts").ImportedTestReport;
+  getFeatureWorkbench(ctx: Ctx, i: { requestId: Id }): import("./workbench.ts").WorkbenchState;
+  exportFeatureValidationReport(ctx: Ctx, i: { requestId: Id; candidateHash: Hash }): ReturnType<typeof import("./workbench.ts").validationReport>;
+
   // intake and discovery (1.B, 1.C)
   submitFeature(ctx: Ctx, i: { inputRefs: SourceRef[]; text: string; repositoryId: Id; mode: OutcomeMode; budget?: { modelTokens: number; wallMs: number }; idempotencyKey: string }): FeatureRequest;
   discoverFeatureContext(ctx: Ctx, i: { requestId: Id; snapshot: Snapshot; retrievalBudget: { tokens: number; files: number } }): Outcome<RepositoryAssessment>;
@@ -83,6 +90,8 @@ const op = (key: string, mutating: boolean, owner: string, note?: string): OpSpe
 
 /** One row per operation. Component prefixes follow the spec's ownership labels, not services (spec §21). */
 export const OPS: OpSpec[] = [
+  op("C02/prepareFeaturePlan", true, "product-wizard"),
+  op("C28/buildFeatureCandidate", true, "product-wizard"), op("C27/importFeatureTestReport", true, "product-wizard"), op("C27/getFeatureWorkbench", false, "product-wizard"), op("C27/exportFeatureValidationReport", false, "product-wizard"),
   op("C02/submitFeature", true, "1.C"), op("C10/discoverFeatureContext", false, "1.C"), op("C02/resumeRequest", false, "1.B"),
   op("C15/normalizeRequirements", true, "2.I"), op("C15/detectSemanticConflicts", false, "2.I"), op("C25/checkRequirementConstraints", false, "2.I"),
   op("C23/assessFeatureImpact", false, "2.I"), op("C22/planClarifications", false, "2.I"),

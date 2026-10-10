@@ -85,3 +85,20 @@ button[aria-disabled="true"] { opacity: .6; cursor: not-allowed; }
 }
 .bf-item > .chip, .bf-card > .chip, .bf-decision .bf-q > .chip { justify-self: start; width: fit-content; }
 .bf-decision .bf-q { display: grid; gap: 2px; justify-items: start; }
+
+/* The feature itself gets the canvas; operational details stay available on demand. */
+.bf-body { grid-template-columns: minmax(0, 1fr); }
+.bf-progress { border-top: 1px solid var(--line); padding-top: 12px; }
+.bf-progress > summary, .bf-environment > summary { cursor: pointer; font-weight: 600; }
+.bf-workbench { display: grid; gap: 12px; margin-bottom: 18px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.bf-workbench p { overflow-wrap: anywhere; }
+.bf-workbench .row { flex-wrap: wrap; }
+.bf-workbench textarea { width: 100%; box-sizing: border-box; }
+.bf-workbench details[open] > summary { margin-bottom: 12px; }
+
+.modal.bf-dialog { width: min(96vw, 1280px); max-width: 1280px; }
+.bf-dialog > .modal-body { padding: 0; min-height: 0; display: flex; flex-direction: column; }
+.bf-dialog > .modal-actions { flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
+.bf-dialog > .modal-body > .bf-top { max-height: 32vh; }
+.bf-dialog > .modal-body > .bf-body { min-height: 0; }
+@media (max-width: 700px) { .bf-dialog > .modal-actions .bf-grow { display: none; } .bf-dialog > .modal-actions button { flex: 1 1 auto; } }

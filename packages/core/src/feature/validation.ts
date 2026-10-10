@@ -29,6 +29,8 @@ export type ValidationEvidence = {
   planHash: string; checkId: string; phase: CheckPhase; baselineHealth: BaselineHealth; outcomes: CheckOutcome[];
   roleRuns: RoleRunRecord[]; runState: string; environmentHash: string; fixtureHash: string; workloadHash: string;
   isolationOmissions: string[]; reportComplete: boolean;
+  /** Bounded diagnostic data for repair; never interpreted as instructions. */
+  diagnosticOutput?: string;
 };
 export const validationHash = (schema: string, value: unknown): string => canonHash(defineSchema<Canon>(schema, "1", (x) => x), parseStrictJson(JSON.stringify(value)));
 export const validationPlanHash = (p: ValidationPlan): string => validationHash("pf.ValidationPlan", p);
@@ -153,7 +155,7 @@ export async function runFeatureValidation(d: ValidationDependencies, i: { candi
       });
       const record: EvidenceRecord = { schemaVersion: 1, id: `evidence:${randomUUID()}`, requestId: request.requestId, candidateId: candidate.id, bindingHash: candidate.bindingHash, kind: check.kind, manifest, results,
         toolVersions: { node: process.version }, coverage: { state: complete ? "COMPLETE_WITHIN_SCOPE" : "PARTIAL", gaps }, outcomeRef: manifest.outcomesArtifactHash, createdAt: manifest.completedAt!,
-        validation: { planHash, checkId: check.id, phase: check.phase, baselineHealth, outcomes, roleRuns, runState: run?.status ?? status, environmentHash: i.plan.environment.hash, fixtureHash: i.plan.testData.fixtureHash, workloadHash: i.plan.workloadHash, isolationOmissions: run?.omissions ?? [...d.runner.omissions], reportComplete: complete } };
+        validation: { planHash, checkId: check.id, phase: check.phase, baselineHealth, outcomes, roleRuns, runState: run?.status ?? status, environmentHash: i.plan.environment.hash, fixtureHash: i.plan.testData.fixtureHash, workloadHash: i.plan.workloadHash, isolationOmissions: run?.omissions ?? [...d.runner.omissions], reportComplete: complete, diagnosticOutput: ((run?.stdout ?? "") + "\n" + (run?.stderr ?? "")).slice(0, 16000) } };
       for (const r of results) r.evidenceIds = [record.id];
       d.beforeSave?.();
       d.store.putEvidence(record, { schemaVersion: 1, eventId: randomUUID(), requestId: request.requestId, type: "ValidationCompleted", actor: i.actor, producer: "C27", requirementIds: [], decisionIds: [], after: candidate.bindingHash, result: status === "PASS" ? "OK" : "BLOCKED", rationale: `${check.id}: ${status}`, at: record.createdAt }); records.push(record);

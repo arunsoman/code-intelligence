@@ -3,9 +3,10 @@ import { STAGES, type WizardStage } from "./stages.ts";
 import { blankWorkspace, localStore, type WizardStore } from "./store.ts";
 import { advanceRemote, openRemote, type RemoteCall } from "./remote.ts";
 import { advanceWizard, recordDecision, stageGate, type WizardWorkspace } from "./wizard.ts";
-import { GLOSSARY, MODES, STATUS_WORDS, actionReasons, ago, digestOf, issueLink, landingStage, openQuestions, primaryOf, refKind, retryTask, sectionsOf, stepsOf, summaryNotes, type TaskCard } from "./view.ts";
+import { MODES, STATUS_WORDS, digestOf, issueLink, landingStage, openQuestions, primaryOf, refKind, retryTask, sectionsOf, stepsOf, summaryNotes, type TaskCard } from "./view.ts";
 import { Modal } from "../Modal.tsx";
 import "./build.css";
+import { FeatureWorkbench, rememberBuildJob } from "./FeatureWorkbench.tsx";
 import { ChangeReview, ClarifyReview, PlanReview } from "./ReviewStages.tsx";
 import { DeliverReview, ValidateReview } from "./DeliverStages.tsx";
 
@@ -30,20 +31,18 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
   initialRequestId?: string;
 }) {
   const [requestId, setRequestId] = useState<string | null>(() => { if (initialRequestId) return initialRequestId; try { return api ? localStorage.getItem(KEY(api.repositoryId)) : null; } catch { return null; } });
+  const currentRequest = useRef(requestId); currentRequest.current = requestId;
   const remote = api && requestId ? { requestId, call: api.call } : undefined;
   const persistence = store ?? localStore();
   const [ws, setWs] = useState<WizardWorkspace>(() => { const w = blankWorkspace(); return { ...w, stage: landingStage(w) }; });
+  const [analysing, setAnalysing] = useState(false);
+  const intakeAction = useRef<{ identity: string; key: string } | undefined>(undefined);
   const [note, setNote] = useState<string | null>(null);
   const [impact, setImpact] = useState<string | null>(null);
   const [draftAnswer, setDraftAnswer] = useState<Record<string, string>>({});
 
-  const [now, setNow] = useState(() => Date.now());
   const [focusQ, setFocusQ] = useState<string | null>(null);
   const inputs = useRef(new Map<string, HTMLInputElement | null>());
-  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 15_000); return () => clearInterval(t); }, []);
-  // A modal takes focus when it opens (so Tab and Escape act on it, found by the live-browser gate) and gives it back to what opened it.
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { const opener = document.activeElement as HTMLElement | null; dialogRef.current?.focus(); return () => { try { opener?.focus(); } catch { /* the opener is gone */ } }; }, []);
   useEffect(() => { if (focusQ && ws.stage === "CLARIFY") { inputs.current.get(focusQ)?.focus(); setFocusQ(null); } }, [focusQ, ws.stage]);
 
   const at = STAGES.findIndex((s) => s.id === ws.stage);
@@ -57,7 +56,7 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
   const issue = issueLink(ws.issueRef);
 
   const commit = (next: WizardWorkspace) => { if (next.requestId) persistence.save(next); setWs(next); };
-  const refresh = async () => { if (!remote) return; const r = await openRemote(remote.call, { ...ws, workspaceVersion: -1 }, remote.requestId); if (r.ok && !r.unchanged) commit(r.value); else if (!r.ok) setNote(r.message); };
+  const refresh = async () => { if (!remote) return; const r = await openRemote(remote.call, { ...ws, workspaceVersion: -1 }, remote.requestId); if (currentRequest.current !== remote.requestId) return; if (r.ok && !r.unchanged) commit(r.value); else if (!r.ok) setNote(r.message); };
   useEffect(() => {
     if (!remote) return;
     let live = true;
@@ -65,7 +64,7 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remote?.requestId]);
-  const refreshRemote = async () => { if (!remote) return; const o = await openRemote(remote.call, { ...ws, workspaceVersion: -1 }, remote.requestId); if (o.ok && !o.unchanged) commit(o.value); };
+  const refreshRemote = async () => { if (!remote) return; const o = await openRemote(remote.call, { ...ws, workspaceVersion: -1 }, remote.requestId); if (currentRequest.current !== remote.requestId) return; if (o.ok && !o.unchanged) commit(o.value); };
   const move = (target: WizardStage) => {
     if (remote) {
       void advanceRemote(remote.call, ws, target).then((r) => {
@@ -82,7 +81,11 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
   };
   const analyse = async () => {
     if (!api || requestId) { move("CLARIFY"); return; }
-    const key = uid();
+    setAnalysing(true);
+    try {
+    const identity = JSON.stringify([ws.prompt, ws.outcomeMode, api.repositoryId]);
+    if (intakeAction.current?.identity !== identity) intakeAction.current = { identity, key: uid() };
+    const key = intakeAction.current.key;
     const sub = await api.call<{ requestId: string; warnings?: string[] }>("C02", "submitFeature", { text: ws.prompt, repositoryId: api.repositoryId, mode: MODE_OUT[ws.outcomeMode] ?? "PLAN", ...(releaseId ? { releaseId } : {}) }, key);
     if (!sub.ok) { setNote(sub.error.message); return; }
     const found = await api.call("C10", "discoverFeatureContext", { requestId: sub.value.requestId, retrievalBudget: { tokens: 8000, files: 5000 } }, uid());
@@ -92,8 +95,13 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
     const o = await openRemote(api.call, { ...ws, requestId: sub.value.requestId, workspaceVersion: -1 }, sub.value.requestId);
     if (!o.ok || o.unchanged) return;
     commit(o.value);
+    if (found.ok) {
+      const plan = await api.call<{ jobId: string }>("C02", "prepareFeaturePlan", { requestId: sub.value.requestId }, uid());
+      if (plan.ok) rememberBuildJob(sub.value.requestId, plan.value.jobId); else setNote(plan.error.message);
+    }
     const a = await advanceRemote(api.call, o.value, "CLARIFY");
     if (a.ok) commit(a.value); else setNote(a.message);
+    } catch { setNote("Analysis connection failed. Retry to resume the same saved request."); } finally { setAnalysing(false); }
   };
   const answer = (questionId: string, question: string, stage: WizardStage) => {
     const text = (draftAnswer[questionId] ?? "").trim();
@@ -111,7 +119,6 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
     const c = ws.criteria.find((x) => x.id === id);
     return <abbr className="chip bf-term" title={`${refKind(id)} ${id}${c ? `: ${c.text}` : ""}`}>{id}</abbr>;
   };
-  const Term = ({ t }: { t: string }) => <abbr className="bf-term" title={GLOSSARY.find((g) => g.term.toLowerCase().startsWith(t.toLowerCase()))?.meaning}>{t}</abbr>;
   const goAnswer = (qid: string) => { if (ws.stage !== "CLARIFY") move("CLARIFY"); setFocusQ(qid); };
   const runPrimary = () => {
     if (primary.kind === "SUBMIT_ANSWER") { const q = oq.find((x) => x.id === primary.questionId)!; answer(q.id, `${q.id}: ${q.text}`, "CLARIFY"); }
@@ -119,7 +126,7 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
     else if (primary.kind === "ANALYSE") void analyse();
     else if (primary.kind === "GO") move(primary.target);
   };
-  const primaryDisabled = primary.kind === "NONE" || (primary.kind === "ANALYSE" && !!primary.disabledReason);
+  const primaryDisabled = analysing || primary.kind === "NONE" || (primary.kind === "ANALYSE" && !!primary.disabledReason);
   const Card = ({ c }: { c: TaskCard }) => (
     <li className={`bf-card ${c.tone}`}>
       <div className="bf-head"><span className="chip">{c.chip}</span><span className="bf-name">{c.task.label}</span></div>
@@ -141,32 +148,11 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
       actions={<>
         <button className="secondary" disabled={at === 0} onClick={() => move(STAGES[at - 1].id)}>← {at > 0 ? STAGES[at - 1].label : "Back"}</button>
         <span className="bf-grow" />
-        <details className="bf-details bf-menu">
-          <summary className="secondary" style={{ cursor: "pointer", padding: "5px 12px", border: "1px solid var(--line)", borderRadius: 6 }}>More actions ▾</summary>
-          <div className="bf-pop up right" role="region" aria-label="Actions that change things">
-            <p className="muted" style={{ margin: 0 }}>Each of these changes something, so each is its own button. Moving between stages never runs them.</p>
-            {actionReasons(ws).map((a) => (
-              <div className="bf-act" key={a.action}>
-                <button className="secondary small" aria-disabled={!a.enabled} aria-describedby={`why-${a.action}`} onClick={(e) => { if (!a.enabled) e.preventDefault(); }}>{a.action}</button>
-                <p id={`why-${a.action}`}>{a.enabled ? "Ready." : `Not available yet: ${a.reason}`}</p>
-              </div>
-            ))}
-          </div>
-        </details>
-        <button disabled={primaryDisabled} title={primary.kind === "ANALYSE" ? primary.disabledReason ?? undefined : undefined} onClick={runPrimary}>{primary.label}</button>
+        <button className="secondary" onClick={() => void refresh().catch(() => setNote("Could not refresh the saved request."))}>Refresh saved state</button>
+        {requestId && <button className="secondary" disabled={analysing} onClick={() => { try { if (api) localStorage.removeItem(KEY(api.repositoryId)); } catch {} setRequestId(null); intakeAction.current = undefined; commit(blankWorkspace()); setNote(null); }}>New feature</button>}
+        <button className={primary.kind === "ANALYSE" ? undefined : "secondary"} disabled={primaryDisabled} title={primary.kind === "ANALYSE" ? primary.disabledReason ?? undefined : undefined} onClick={runPrimary}>{analysing ? "Analysing…" : primary.label}</button>
       </>}>
       <div className="bf-top">
-          <div className="bf-title">
-            <h2>Build feature<span className="bf-updated" aria-live="polite">updated {ago(ws.updatedAt, now)}</span></h2>
-            <details className="bf-details">
-              <summary className="bf-ghost" aria-label="Glossary" title="What do these words mean?">?</summary>
-              <div className="bf-pop right" role="region" aria-label="Glossary">
-                {GLOSSARY.map((g) => <p key={g.term} style={{ margin: 0 }}><strong>{g.term}.</strong> {g.meaning}</p>)}
-              </div>
-            </details>
-            <button className="bf-ghost" onClick={onClose} aria-label="Close" title="Close (Esc)">✕</button>
-          </div>
-
           <div className="bf-chiprow" aria-label="Source">
             <span className="bf-label">Source</span>
             <span className="chip" title="The request this wizard follows">request {ws.requestId}</span>
@@ -218,7 +204,7 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
             )}
           </div>
           {impact && <p role="alert" className="bf-banner warn">{impact}</p>}
-          {note && <p role="status" className="bf-banner error">{note}</p>}
+          {note && <p role="status" className="bf-banner">{note}</p>}
 
           <nav aria-label="Stages">
             <ol className="bf-steps">
@@ -236,6 +222,7 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
         <div className="bf-body">
           <section className="bf-col" aria-label={`${STAGES[at].label} stage`}>
             <h3>{STAGES[at].label}</h3>
+            {api && <FeatureWorkbench key={ws.requestId} ws={ws} repositoryId={api.repositoryId} call={api.call} refresh={refreshRemote} notify={setNote} />}
             {gate.disabledReason && ws.stage !== "DESCRIBE" && ws.stage !== "CLARIFY" && <p className="muted small">Not ready for its main action: {gate.disabledReason}</p>}
 
             {ws.review && remote && ws.stage === "CLARIFY" && <ClarifyReview review={ws.review} version={ws.contractVersion} requestId={remote.requestId} call={remote.call} refresh={refreshRemote} notify={setNote} />}
@@ -243,12 +230,12 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
             {ws.review && remote && ws.stage === "CHANGES" && <ChangeReview review={ws.review} requestId={remote.requestId} candidateHash={ws.candidate?.hash} call={remote.call} />}
             {ws.stage === "DESCRIBE" && (
               <div className="bf-stack">
-                {ws.candidate && <p className="bf-banner warn">This request already has a candidate ({STATUS_WORDS[ws.candidate.status]}). Editing it here and starting analysis again creates a <strong>new</strong> candidate draft; the current one is kept until then.</p>}
-                <label className="bf-field">What should change?
-                  <textarea className="bf-textarea" rows={Math.min(8, Math.max(3, ws.prompt.split("\n").length + Math.ceil(ws.prompt.length / 90)))} value={ws.prompt} onChange={(e) => commit({ ...ws, prompt: e.target.value, workspaceVersion: ws.workspaceVersion + 1 })} />
+                {requestId && <p className="muted">This is the saved feature request. Use New feature to describe a different change.</p>}
+                <label className="bf-field">What feature is missing?
+                  <textarea disabled={!!requestId} placeholder="Describe who needs the feature, what they should be able to do, and an example of the expected result." className="bf-textarea" rows={Math.min(8, Math.max(3, ws.prompt.split("\n").length + Math.ceil(ws.prompt.length / 90)))} value={ws.prompt} onChange={(e) => commit({ ...ws, prompt: e.target.value, workspaceVersion: ws.workspaceVersion + 1 })} />
                 </label>
                 <label className="bf-field">Outcome
-                  <select className="bf-select" value={ws.outcomeMode} onChange={(e) => commit({ ...ws, outcomeMode: e.target.value, workspaceVersion: ws.workspaceVersion + 1 })}>
+                  <select disabled={!!requestId} className="bf-select" value={ws.outcomeMode} onChange={(e) => commit({ ...ws, outcomeMode: e.target.value, workspaceVersion: ws.workspaceVersion + 1 })}>
                     {MODES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
                   </select>
                   <p className="bf-help">{MODES.find((m) => m.value === ws.outcomeMode)?.explain}</p>
@@ -331,8 +318,8 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
             )}
           </section>
 
-          <section className="bf-col" aria-label="Progress">
-            <h3>Progress</h3>
+          <details className="bf-col bf-progress" aria-label="Progress">
+            <summary>Detailed task progress</summary>
             {sections.map((sec) => (
               <div key={sec.key} className="bf-sect">
                 <h4>{sec.label} {sec.cards.length > 0 ? `(${sec.cards.length})` : ""}</h4>
@@ -340,7 +327,7 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
                 {sec.key === "blocked" && digest.needsAnswer > 0 && <p className="bf-none">{digest.needsAnswer} of these need your decision; the question is pinned at the top.</p>}
               </div>
             ))}
-          </section>
+          </details>
         </div>
 
     </Modal>
