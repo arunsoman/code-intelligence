@@ -706,64 +706,76 @@ export function compileDfdV2(o: { plan: ChartPlanDfd; bundle: EvidenceBundle; re
 }
 
 export function compileDecisionTableV2(o: { plan: ChartPlanDecisionTable; bundle: EvidenceBundle; rev: RevisionRow; question: string; route: ViewRoute; run?: ModelRunRef; diag?: ChartCompileDiag; chartId?: string }): { view: ViewSpec; claims: Claim[]; diagnostics: ChartDiagnostics } {
-  const valid = new Set(o.bundle.evidence.filter((e) => e.state === "CURRENT").map((e) => e.id));
-  const conditions = o.plan.chartId === "S11" ? o.plan.conditions : [];
-  const rules = o.plan.chartId === "S11" ? o.plan.rules : [];
-  const nodes: ViewSpec["nodes"] = [];
+  return compileTableChartV2(o);
+}
+
+function compileTableChartV2(o: { plan: ChartPlanDecisionTable | ChartPlanStateTransitionTable | ChartPlanFmeaMatrix; bundle: EvidenceBundle; rev: RevisionRow; question: string; route: ViewRoute; run?: ModelRunRef; diag?: ChartCompileDiag }) {
+  const evidence = new Map(o.bundle.evidence.filter(e => e.state === "CURRENT").map(e => [e.id,e]));
+  const current = (ids: string[]) => [...new Set(ids.filter(id => evidence.has(id)))];
   const gaps: string[] = [];
-
-  // Conditions as nodes
-  for (const c of conditions.slice(0, 10)) {
-    const evidenceIds = c.evidenceIds.filter((id) => valid.has(id));
-    if (!evidenceIds.length) {
-      gaps.push(`Condition "${c.label}" was omitted because it lacks current evidence.`);
-      continue;
-    }
-    nodes.push({
-      id: `n:dt:${c.id}`, entityRefs: [], label: c.label, kind: "condition", file: "", claimIds: [], evidenceIds,
-      tier: nodes.length === 0 ? "CRITICAL" : "RELEVANT", displayMode: o.diag?.provider === "stub" ? "INFERENCE" : "FACT", unresolvedCalls: 0,
-      role: "condition", pos: { x: 0, y: 0 }
-    });
-  }
-
-  const edges: ViewSpec["edges"] = [];
-  for (const r of rules.slice(0, 20)) {
-    const evidenceIds = r.evidenceIds.filter((id) => valid.has(id));
-    if (!evidenceIds.length) {
-      gaps.push(`Rule was omitted because it lacks current evidence.`);
-      continue;
-    }
-    // Create a cell node for each rule
-    nodes.push({
-      id: `n:dt:${r.id}`, entityRefs: [], label: `Rule ${rules.indexOf(r) + 1}`, kind: "rule", file: "", claimIds: [], evidenceIds,
-      tier: "RELEVANT", displayMode: r.isCovered ? "FACT" : "HYPOTHESIS", unresolvedCalls: 0,
-      role: "rule", notes: Object.entries(r.values).map(([k, v]) => `${k}=${v}`),
-      pos: { x: 0, y: 0 }
-    });
-  }
-
-  if (!conditions.length && !rules.length) gaps.push("The chart creator found no decision table elements in the available evidence.");
-
-  const chartType = CHART_REGISTRY.S11.name;
-  const viewId = `view:generated:${createHash("sha256").update(`${o.bundle.id}|${o.question}`).digest("hex").slice(0, 12)}`;
-  const view: ViewSpec = {
-    id: viewId, version: 1, revision: o.rev.id, taskId: `task:${viewId}`, formId: "GeneratedChart",
-    caption: `${chartType} · ${modelText(o.plan.caption, "Arranged from indexed decision table elements.").text}`,
-    question: o.question, level: 5, nodes, edges, groups: [],
-    legend: [{ label: "Code fact", displayMode: "FACT", description: "Decision table elements link to current indexed source evidence." }, ...legendEntriesForChartId("S11")],
-    cameraPolicy: { behavior: "PRESERVE" }, gaps, formReason: `Generated ${chartType} from indexed code evidence.`, route: o.route,
-    meta: { kind: "generated-chart", field: chartType, subject: "S11" }, params: { chartType, chartLayout: o.plan.layout, chartId: "S11" },
+  const table: NonNullable<ViewSpec["table"]> = { schemaVersion: "table.v1", basis: "interpreted-static", rowTitle: "Rule", columns: [], rows: [] };
+  type Cell = typeof table.rows[number]["cells"][number];
+  const cell = (columnId: string, text: string | undefined, ids: string[]): Cell => {
+    const evidenceIds=current(ids), known=!!text?.trim() && evidenceIds.length>0;
+    return {columnId,text:known ? text! : "Unknown",status:known ? "interpreted" : "unknown",evidenceIds:known ? evidenceIds : []};
   };
-
-  const diagnostics: ChartDiagnostics = {
-    chartId: "S11", contractVersion: "chart.v2", provider: o.diag?.provider ?? o.run?.provider ?? "", model: o.diag?.model ?? o.run?.model ?? "",
-    cacheHit: o.diag?.cacheHit ?? false, schemaValidationPassed: o.diag?.schemaValidationPassed ?? true,
-    suppliedEntities: o.bundle.entities.length, suppliedRelationships: o.bundle.relationships.length, suppliedEvidence: o.bundle.evidence.length,
-    acceptedNodes: nodes.length, omittedNodes: (conditions.length + rules.length) - nodes.length, acceptedEdges: edges.length,
-    omittedEdges: 0, gaps,
-    ...(o.diag?.fallbackReason ? { fallbackReason: o.diag.fallbackReason } : {}),
+  const nodes: ViewSpec["nodes"] = [];
+  const row = (id: string, label: string, ids: string[], cells: Cell[]) => {
+    if (table.rows.some(r=>r.id===id)) { gaps.push(`Duplicate row ${id} was omitted.`); return; }
+    const own=current(ids);
+    if (!own.length) { gaps.push(`${label} was omitted because it lacks current evidence.`); return; }
+    const nodeId=`n:table:${o.plan.chartId}:${id}`, evidenceIds=[...new Set([...own,...cells.flatMap(c=>c.evidenceIds)])];
+    table.rows.push({id,nodeId,label,cells});
+    nodes.push({id:nodeId,label,entityRefs:[],kind:"table-row",role:"table-row",file:evidence.get(own[0])?.sourceId??"",claimIds:[],evidenceIds,tier:"RELEVANT",displayMode:"INFERENCE",unresolvedCalls:0,pos:{x:0,y:0},notes:cells.map(c=>`${table.columns.find(col=>col.id===c.columnId)?.label??c.columnId}: ${c.text} (${c.status})`)});
   };
-  return { view, claims: [], diagnostics };
+  const plan=o.plan;
+  if (plan.chartId==="S11") {
+    const seen=new Set<string>();
+    const conditions=plan.conditions.filter(c=>{
+      if(seen.has(c.id)||!current(c.evidenceIds).length){gaps.push(`Condition ${c.label} was omitted: duplicate ID or no current evidence.`);return false;}
+      seen.add(c.id);return true;
+    });
+    table.columns=[...conditions.map(c=>({id:`condition:${c.id}`,label:c.label})),{id:"outcome",label:"Outcome"},{id:"coverage",label:"Coverage interpretation"}];
+    plan.rules.forEach((r,i)=>row(r.id,`Rule ${i+1}`,r.evidenceIds,[...conditions.map(c=>cell(`condition:${c.id}`,r.values[c.id],[...r.evidenceIds,...c.evidenceIds])),cell("outcome",r.outcome,r.outcomeEvidenceIds),cell("coverage",r.isCovered?"Covered?":"Not covered?",r.evidenceIds)]));
+  } else if(plan.chartId==="S24") {
+    table.rowTitle="State";
+    const unique = <T extends {id:string;label:string;evidenceIds:string[]}>(items:T[]) => {
+      const seen=new Set<string>();return items.filter(x=>{if(seen.has(x.id)){gaps.push(`Duplicate axis ${x.id} was omitted.`);return false;}seen.add(x.id);return true;});
+    };
+    const states=unique(plan.states);
+    const events=unique(plan.events).filter(e=>{
+      if(current([...e.evidenceIds,...plan.cells.filter(c=>c.eventId===e.id).flatMap(c=>c.evidenceIds)]).length)return true;
+      gaps.push(`Event ${e.label} was omitted because it lacks current evidence.`);return false;
+    });
+    table.columns=events.map(e=>({id:e.id,label:e.label}));
+    for(const state of states){
+      const cells=events.map(event=>{
+        const matches=plan.cells.filter(c=>c.stateId===state.id&&c.eventId===event.id&&current(c.evidenceIds).length);
+        const alternatives=matches.map(c=>{
+          const target=states.find(s=>s.id===c.nextStateId);
+          if(!target){gaps.push(`Transition ${state.label} / ${event.label} has an unknown target.`);return cell(event.id,undefined,[]);}
+          return cell(event.id,`${c.isForbidden?"FORBIDDEN? · ":""}${target.label}${c.guard?` · guard: ${c.guard}`:""}`,c.evidenceIds);
+        });
+        if(!alternatives.length)return cell(event.id,undefined,[]);
+        const texts=[...new Set(alternatives.map(c=>c.text))];
+        return {columnId:event.id,text:texts.join(" / "),status:texts.length>1?"conflict" as const:alternatives[0].status,evidenceIds:[...new Set(alternatives.flatMap(c=>c.evidenceIds))]};
+      });
+      row(state.id,state.label,[...state.evidenceIds,...plan.cells.filter(c=>c.stateId===state.id).flatMap(c=>c.evidenceIds)],cells);
+    }
+    for(const c of plan.cells)if(!states.some(s=>s.id===c.stateId)||!events.some(e=>e.id===c.eventId))gaps.push("A transition references a missing state or event axis.");
+  } else {
+    table.rowTitle="Failure";table.columns=[{id:"impact",label:"Impact"},{id:"compensation",label:"Compensation"}];
+    for(const f of plan.failures)row(f.id,f.label,f.evidenceIds,[cell("impact",f.impact?.text,f.impact?.evidenceIds??[]),cell("compensation",f.compensation?.text,f.compensation?.evidenceIds??[])]);
+    gaps.push("Severity, occurrence, detection and risk-priority scores are not supplied by this contract.");
+  }
+  gaps.push("Cells are static plan interpretations. Unknown does not mean forbidden, safe, or covered; citations do not establish runtime behavior.");
+  const unknown=table.rows.flatMap(r=>r.cells).filter(c=>c.status==="unknown").length;
+  if(unknown)gaps.push(`${unknown} cells have no current evidence-backed value.`);
+  const chartType=CHART_REGISTRY[plan.chartId].name;
+  const id=`view:generated:${createHash("sha256").update(`${o.bundle.id}|${o.question}`).digest("hex").slice(0,12)}`;
+  const view:ViewSpec={id,version:1,revision:o.rev.id,taskId:`task:${id}`,formId:"GeneratedChart",caption:`${chartType} · ${modelText(plan.caption,"Static table interpretation").text}`,question:o.question,level:5,nodes,edges:[],groups:[],table,legend:[{label:"Interpretation",displayMode:"INFERENCE",description:"Cell values are model interpretations with current citations, not runtime proof."}],cameraPolicy:{behavior:"PRESERVE"},gaps,formReason:`Typed ${chartType} table`,route:o.route,meta:{kind:"generated-chart",field:chartType,subject:plan.chartId},params:{chartType,chartLayout:plan.layout,chartId:plan.chartId}};
+  const total=plan.chartId==="S11"?plan.rules.length:plan.chartId==="S24"?plan.states.length:plan.failures.length;
+  return {view,claims:[] as Claim[],diagnostics:{chartId:plan.chartId,contractVersion:"chart.v2" as const,provider:o.diag?.provider??o.run?.provider??"",model:o.diag?.model??o.run?.model??"",cacheHit:o.diag?.cacheHit??false,schemaValidationPassed:o.diag?.schemaValidationPassed??true,suppliedEntities:o.bundle.entities.length,suppliedRelationships:o.bundle.relationships.length,suppliedEvidence:o.bundle.evidence.length,acceptedNodes:nodes.length,omittedNodes:total-nodes.length,acceptedEdges:0,omittedEdges:0,gaps,...(o.diag?.fallbackReason?{fallbackReason:o.diag.fallbackReason}:{})}};
 }
 
 type PlanObject = Record<string, unknown>;
@@ -942,6 +954,7 @@ function projectTypedChart(plan: ChartPlanV2, bundle: EvidenceBundle, offline: b
 }
 
 export function compileStructuredChartV2(o: { plan: ChartPlanV2; bundle: EvidenceBundle; rev: RevisionRow; question: string; route: ViewRoute; run?: ModelRunRef; diag?: ChartCompileDiag }): { view: ViewSpec; claims: Claim[]; diagnostics: ChartDiagnostics } {
+  if (o.plan.chartId === "S24" || o.plan.chartId === "S25") return compileTableChartV2({...o,plan:o.plan});
   const projection = projectTypedChart(o.plan, o.bundle, o.diag?.provider === "stub" || o.run?.provider === "stub");
   const validEvidence = new Map(o.bundle.evidence.filter((e) => e.state === "CURRENT").map((e) => [e.id, e]));
   const gaps: string[] = [];

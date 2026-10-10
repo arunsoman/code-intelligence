@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "State transition table",
   "form": "GeneratedChart",
   "compiler": "projected",
-  "version": 3,
+  "version": 4,
   "aliases": [
     "State transition table",
     "state transition table",
@@ -17,7 +17,7 @@ export const descriptor = {
   "requiredAcrossRepository": [],
   "offline": "gap",
   "concern": "State and rules",
-  "renderer": "view-spec",
+  "renderer": "table",
   "questionAnswered": "Which triggers move between states?",
   "description": "A real table: current state \u00d7 event \u2192 next state, with guards and forbidden transitions as negative facts. Combinations the source does not cover stay visibly unknown.",
   "example": "Build the state transition table for the batchId lifecycle: rows for NoState, Reserved, Posted and RolledBack; columns for reserve, post and rollback; each cell names the next state and its guard, and forbidden transitions (rollback after post) are marked as forbidden.",

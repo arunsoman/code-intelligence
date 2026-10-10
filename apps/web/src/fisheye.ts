@@ -389,7 +389,7 @@ export function attachElementFisheye(host: HTMLElement, selector: string): LensE
       return { edges: [], nodes: [...host.querySelectorAll(selector)].map((element, index) => {
         const box = element.getBoundingClientRect(), description = element.getAttribute("aria-label") ?? element.textContent ?? "";
         const terrain = element.matches(".terrain-svg g.cell"), label = terrain ? description.split(", risk ")[0] : element.textContent?.trim() || description.split(",")[0];
-        const displayMode = element.classList.contains("m-hypothesis") ? "HYPOTHESIS" : element.classList.contains("m-inference") ? "INFERENCE" : element.querySelector(".fogmask") ? "FOG" : "FACT";
+        const displayMode = element.classList.contains("m-hypothesis") ? "HYPOTHESIS" : element.classList.contains("m-inference") ? "INFERENCE" : element.classList.contains("m-fog") || element.querySelector(".fogmask") ? "FOG" : "FACT";
         return { id: `cell:${index}`, element, compact: true, displayMode, label, details: terrain ? description.split(", ").slice(1) : [description], color: chartColor(description), x: box.left - bounds.left + box.width / 2, y: box.top - bounds.top + box.height / 2, width: box.width, height: box.height, selected: element.getAttribute("aria-pressed") === "true" || element.closest("[aria-selected=true]") != null };
       }) };
     },

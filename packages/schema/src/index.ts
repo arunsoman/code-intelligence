@@ -1,3 +1,5 @@
+import type { TableSpec } from "./table.ts";
+export { TableSpecSchema, type TableSpec } from "./table.ts";
 import type { ActivitySpec } from "./activity.ts";
 export { ActivitySpecSchema, type ActivitySpec } from "./activity.ts";
 import type { StateSpec } from "./state.ts";
@@ -233,6 +235,7 @@ export interface ViewSpec {
   matrix?: ViewMatrix;
   /** Evidence-linked sequence semantics; order is inferred, not observed timing. */
   sequence?: SequenceSpec;
+  table?: TableSpec;
   er?: ErSpec;
   state?: StateSpec;
   activity?: ActivitySpec;

@@ -240,7 +240,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S11",
     "name": "Decision table",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "specialized",
     "offline": "gap",
     "aliases": [
@@ -256,7 +256,7 @@ export const CHART_DESCRIPTORS = {
       "method"
     ],
     "concern": "State and rules",
-    "renderer": "view-spec",
+    "renderer": "table",
     "questionAnswered": "Which conditions determine each outcome?",
     "description": "Guard conditions (state exists, balance sufficient, DB sync result) mapped to outcomes (return existing, throw, compensate, persist). Each row is grounded in a branch condition visible in the indexed control-flow.",
     "example": "Build a decision table for the reserve operation. Rows are combinations of: state-already-exists, balance-sufficient, DB-sync-succeeded. Columns are the outcome actions. Cite the code branch that produces each outcome and mark any combination not evidenced in the code as a gap.",
@@ -580,7 +580,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S24",
     "name": "State transition table",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -591,7 +591,7 @@ export const CHART_DESCRIPTORS = {
     "requiredKinds": [],
     "requiredAcrossRepository": [],
     "concern": "State and rules",
-    "renderer": "view-spec",
+    "renderer": "table",
     "questionAnswered": "Which triggers move between states?",
     "description": "A real table: current state × event → next state, with guards and forbidden transitions as negative facts. Combinations the source does not cover stay visibly unknown.",
     "example": "Build the state transition table for the batchId lifecycle: rows for NoState, Reserved, Posted and RolledBack; columns for reserve, post and rollback; each cell names the next state and its guard, and forbidden transitions (rollback after post) are marked as forbidden.",
@@ -601,7 +601,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S25",
     "name": "FMEA / compensation matrix",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -619,7 +619,7 @@ export const CHART_DESCRIPTORS = {
       "method"
     ],
     "concern": "Reliability",
-    "renderer": "view-spec",
+    "renderer": "table",
     "questionAnswered": "What failure modes and mitigations are evidenced?",
     "description": "Failure mode × impact × compensation as a table, each cell backed by source or test evidence. A failure with no evidenced compensation is listed as a gap, never assumed recoverable.",
     "example": "Build an FMEA matrix for the reserve fast path: Redis reserve failure, DB sync failure, provider failure, duplicate post. For each, the evidenced impact and the compensation in the code (cancelFast, rollback, INSERT IGNORE), and mark any failure without a compensation.",

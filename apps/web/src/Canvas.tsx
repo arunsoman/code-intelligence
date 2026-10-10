@@ -1,3 +1,4 @@
+import { TableCanvas } from "./TableCanvas.tsx";
 import { SequenceCanvas } from "./SequenceCanvas.tsx";
 import cytoscape from "cytoscape";
 import ElkConstructor from "elkjs/lib/elk-api.js";
@@ -242,7 +243,7 @@ function captureAnchor(c: cytoscape.Core, rendered: Rendered, selected: Set<stri
 }
 
 export function Canvas(input: CanvasProps) {
-  return input.rendered.sequence ? <SequenceCanvas {...input} /> : <GraphCanvas {...input} />;
+  return input.rendered.table ? <TableCanvas {...input} /> : input.rendered.sequence ? <SequenceCanvas {...input} /> : <GraphCanvas {...input} />;
 }
 
 function GraphCanvas(input: CanvasProps) {
