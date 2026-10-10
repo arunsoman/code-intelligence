@@ -55,7 +55,7 @@ test("S3 state machine: evidenced states/transitions compile; fabricated and sta
   assert.ok(view.nodes.every((n) => n.role === "state" && n.pos), "state role and explicit positions");
   const initial = view.nodes.find((n) => n.label === "pending")!;
   assert.equal(initial.badge, "start");
-  const replay = view.edges.find((e) => e.label?.includes("replay"))!;
+  const replay = view.edges.find((e) => e.kind === "replay-transition")!;
   assert.ok(replay, "the idempotent replay transition is drawn");
   assert.equal(replay.fromNodeId, replay.toNodeId, "replay is a self-transition");
   const guard = view.edges.find((e) => e.label?.includes("[balance ok]"))!;
@@ -66,11 +66,11 @@ test("S3 state machine: evidenced states/transitions compile; fabricated and sta
   assert.equal(diagnostics.acceptedEdges, 2);
   assert.equal(diagnostics.omittedEdges, 2);
   assert.ok(view.caption.startsWith("BatchId lifecycle state machine"), "the title names the selected chart type");
-  assert.ok(view.legend.some((l) => l.label === "Chart: BatchId lifecycle state machine"));
-  assert.equal(claims.length, 0, "statically evidenced transitions stay facts, not claims");
+  assert.ok(view.legend.some((l) => l.displayMode === "INFERENCE"));
+  assert.equal(claims.length, 0, "interpreted transitions do not manufacture claims");
 });
 
-test("S3 state machine: a forbidden transition is drawn as a negative fact with its own kind", () => {
+test("S3 state machine: a forbidden transition is drawn as an interpreted restriction with its own kind", () => {
   const a = evRef(), b = evRef();
   const bundle = makeBundle({ evidence: [a, b] });
   const plan: ChartPlanStateMachine = {
@@ -84,12 +84,13 @@ test("S3 state machine: a forbidden transition is drawn as a negative fact with 
   const { view, diagnostics } = compile(plan, bundle, "S3");
   const edge = view.edges[0];
   assert.equal(edge.kind, "forbidden-transition");
-  assert.equal(edge.displayMode, "FACT");
-  assert.ok(edge.label!.includes("forbidden"));
+  assert.equal(edge.displayMode, "INFERENCE");
+  assert.equal(view.state?.transitions[0].forbidden, true);
+  assert.equal(view.state?.transitions[0].basis, "plan-inferred");
   assert.equal(diagnostics.acceptedEdges, 1);
 });
 
-test("S9 ER diagram: declared relations stay facts, inferred ones become gated dashed claims, unsupported ones are dropped", () => {
+test("S9 ER diagram: cardinalities remain interpretations without matched schema relationships, unsupported ones are dropped", () => {
   const ddl = evRef(), writer = evRef("CURRENT", "TEST");
   const bundle = makeBundle({ evidence: [ddl, writer] });
   const plan: ChartPlanErDiagram = {
@@ -112,16 +113,15 @@ test("S9 ER diagram: declared relations stay facts, inferred ones become gated d
   const { view, claims, diagnostics } = compile(plan, bundle, "S9");
   assert.equal(view.nodes.length, 2, "the phantom table is omitted");
   const ledger = view.nodes.find((n) => n.label === "ledger_entries")!;
-  assert.ok(ledger.notes!.some((n) => n.includes("PK id")));
-  assert.ok(ledger.notes!.some((n) => n.includes("FK account_id") && n.includes("accounts.id")));
-  const declared = view.edges.find((e) => e.label === "1:N · fk:account_id")!;
-  assert.ok(declared && declared.displayMode === "FACT" && !declared.claimId, "a schema-evidenced relation is a fact with no claim");
-  const inferred = view.edges.find((e) => e.label?.includes("inferred"))!;
-  assert.ok(inferred, "the inferred relation is drawn");
-  assert.equal(inferred.displayMode, "INFERENCE");
-  assert.ok(inferred.claimId, "an inferred relation carries its claim");
-  assert.ok(claims.find((c) => c.draft.id === inferred.claimId)!.gates.length === 5, "the inference claim passed all five gates");
-  assert.ok(view.gaps.some((g) => g.includes("no reason for the inference")), "an inferred relation without a reason is dropped");
+  const columns = view.er!.tables.find(table => table.nodeId === ledger.id)!.columns;
+  assert.equal(columns.find(column => column.name === "id")?.isPrimaryKey, true);
+  assert.equal(columns.find(column => column.name === "account_id")?.references, "accounts.id");
+  assert.equal(columns.find(column => column.name === "amount")?.isNullable, false);
+  assert.ok(view.edges.every(edge => edge.displayMode === "INFERENCE"), "citations alone do not establish a schema relation");
+  assert.deepEqual(view.er!.relationships.map(relation => relation.cardinality), ["N:M", "1:N"]);
+  assert.ok(view.er!.relationships.every(relation => relation.cardinalityBasis === "plan-inferred"));
+  assert.equal(claims.length, 0);
+  assert.ok(view.gaps.some(gap => gap.includes("no rationale")), "an inferred relation without a reason is dropped");
   assert.equal(diagnostics.acceptedEdges, 2);
   assert.equal(diagnostics.omittedEdges, 1);
 });
@@ -154,7 +154,7 @@ test("S7 BPMN: lanes become lane groups, message flows stay distinct, gateway co
   assert.ok(view.nodes.find((n) => n.role === "start-event"));
   assert.ok(view.nodes.find((n) => n.role === "gateway-xor"));
   assert.ok(view.nodes.find((n) => n.role === "compensation-task"));
-  const cond = view.edges.find((e) => e.label === "insufficient")!;
+  const cond = view.edges.find((e) => e.label === "[insufficient]")!;
   assert.ok(cond && cond.kind === "sequence-flow");
   const msg = view.edges.find((e) => e.kind === "message-flow")!;
   assert.ok(msg, "the message flow is a distinct kind");
@@ -199,11 +199,11 @@ test("S10 DFD: distinct element roles and data-labeled flows", () => {
   };
   const { view } = compile(plan, bundle, "S10");
   assert.ok(view.nodes.find((n) => n.role === "external-entity"));
-  assert.ok(view.nodes.find((n) => n.role === "process")!.badge === "L1");
+  assert.ok(view.nodes.find((n) => n.role === "process")!.badge === "L1?");
   assert.ok(view.nodes.find((n) => n.role === "data-store"));
   const flow = view.edges[0];
   assert.equal(flow.label, "balance", "the flow names the data, not the function");
-  assert.equal(flow.kind, "persisted-flow");
+  assert.equal(flow.kind, "persisted");
 });
 
 
@@ -224,11 +224,11 @@ test("S12 saga: compensation edges return, irreversible steps flagged, missing c
     ],
   };
   const { view } = compile(plan, bundle, "S12");
-  assert.ok(view.nodes.find((n) => n.label === "post")!.badge === "irreversible");
+  assert.ok(view.nodes.find((n) => n.label === "post")!.badge === "irreversible?");
   const ret = view.edges.find((e) => e.kind === "compensation")!;
   assert.equal(ret.style, "return");
   assert.ok(ret.label === "db sync failed");
-  assert.ok(view.gaps.some((g) => g.includes("no evidenced compensation") && g.includes("reserve")), "a forward step without compensation is a labeled gap");
+  assert.ok(view.gaps.some((g) => g.includes("no current evidence-backed compensation") && g.includes("reserve")), "a forward step without compensation is a labeled gap");
 });
 
 test("S13 outbox: writer, store, poller and consumer are distinct roles; atomic writes say so", () => {
@@ -250,13 +250,13 @@ test("S13 outbox: writer, store, poller and consumer are distinct roles; atomic 
   };
   const { view } = compile(plan, bundle, "S13");
   for (const role of ["writer", "outbox-store", "poller", "consumer"]) assert.ok(view.nodes.find((n) => n.role === role), role);
-  const atomic = view.edges.find((e) => e.label === "transactionalWrite · atomic")!;
-  assert.ok(atomic, "the atomic write is labeled as such, backed by evidence");
+  const atomic = view.edges.find((e) => e.label === "transactionalWrite · atomic? (plan interpretation)")!;
+  assert.ok(atomic, "the atomic write is labeled as such, with uncertainty visible");
 });
 
 
 
-test("S15 DI wiring: injection kinds label edges, unresolved bindings stay fog, cycles annotate components", () => {
+test("S15 DI wiring: injection kinds label edges, unresolved bindings remain explicit, cycles annotate components", () => {
   const ctor = evRef(), unresolved = evRef(), cycle = evRef();
   const bundle = makeBundle({ evidence: [ctor, unresolved, cycle] });
   const plan: ChartPlanDiWiring = {
@@ -274,12 +274,12 @@ test("S15 DI wiring: injection kinds label edges, unresolved bindings stay fog, 
     cycles: [{ componentIds: ["svc", "impl", "svc"], evidenceIds: [cycle.id] }],
   };
   const { view } = compile(plan, bundle, "S15");
-  const ctorEdge = view.edges.find((e) => e.label?.includes("constructor injection @ledger") && e.label.includes("singleton"))!;
-  assert.ok(ctorEdge && ctorEdge.displayMode === "FACT");
+  const ctorEdge = view.edges.find((e) => e.label?.includes("constructor · ledger") && e.label.includes("singleton"))!;
+  assert.ok(ctorEdge && ctorEdge.displayMode === "INFERENCE");
   const unresolvedEdge = view.edges.find((e) => e.kind === "unresolved-binding")!;
-  assert.ok(unresolvedEdge && unresolvedEdge.displayMode === "FOG" && unresolvedEdge.label!.startsWith("unresolved"));
+  assert.ok(unresolvedEdge && unresolvedEdge.displayMode === "INFERENCE" && unresolvedEdge.label!.includes("unresolved"));
   const svc = view.nodes.find((n) => n.label === "ReserveService")!;
-  assert.ok(svc.notes!.some((n) => n.includes("injection cycle")));
+  assert.ok(svc.notes!.some((n) => n.includes("dependency cycle")));
   assert.ok(view.nodes.find((n) => n.role === "interface"));
 });
 
@@ -357,7 +357,7 @@ test("the offline stub answers every chart id with a schema-valid chart.v2 plan 
     assert.equal(parsed.data.chartId, chartId, `${chartId}: the selected chart id is preserved`);
     assert.notEqual(parsed.data.chartType, "call-flow", `${chartId}: the offline result is not relabeled call-flow`);
     if (!OFFLINE_DERIVED_IDS.includes(chartId)) {
-      assert.ok(parsed.data.caption.includes("offline model cannot derive"), `${chartId}: an unsupported type says so in its caption`);
+      assert.ok(/offline|statically/i.test(parsed.data.caption), `${chartId}: an unsupported type says so in its caption`);
     }
   }
 });
@@ -465,11 +465,11 @@ test("S16 class diagram: kinds, members in notes, UML relation kinds; inferred w
   };
   const { view, diagnostics } = compile(plan, bundle, "S16");
   assert.equal(view.nodes.length, 3, "the class with fabricated evidence is omitted");
-  assert.ok(view.nodes.find((n) => n.role === "interface" && n.label === "BookkeepingEngine"));
+  assert.ok(view.nodes.find((n) => n.role === "uml-interface" && n.label === "BookkeepingEngine"));
   const impl = view.nodes.find((n) => n.label === "BookkeepingEngineImpl")!;
   assert.ok(impl.notes!.some((n) => n.startsWith("- reserves")) , "attributes are listed as notes");
   const realization = view.edges.find((e) => e.kind === "realization")!;
-  assert.ok(realization && realization.displayMode === "FACT");
+  assert.ok(realization && realization.displayMode === "INFERENCE");
   const assoc = view.edges.find((e) => e.kind === "association")!;
   assert.ok(assoc && assoc.label!.includes("inferred") && assoc.claimId, "the reasoned inference is drawn as a claim");
   assert.equal(diagnostics.acceptedEdges, 2);
@@ -492,13 +492,13 @@ test("S17 package diagram: members become notes and dependencies stay dashed evi
   };
   const { view, diagnostics } = compile(plan, bundle, "S17");
   assert.equal(view.nodes.length, 2);
-  assert.ok(view.nodes.find((n) => n.role === "package" && n.notes!.includes("BookkeepingEngine")));
+  assert.ok(view.nodes.find((n) => n.role === "package" && n.notes!.some(note => note.includes("BookkeepingEngine"))));
   assert.equal(view.edges.length, 1);
-  assert.equal(view.edges[0].kind, "package-dependency");
+  assert.equal(view.edges[0].kind, "depends-on");
   assert.equal(diagnostics.omittedEdges, 1);
 });
 
-test("S18 communication diagram: numbered messages, unique-order enforcement, kinds map to edge kinds", () => {
+test("S18 communication diagram: numbered messages, ambiguous orders retained, kinds map to edge kinds", () => {
   const a = evRef(), b = evRef();
   const bundle = makeBundle({ evidence: [a, b] });
   const plan: ChartPlanCommunication = {
@@ -519,12 +519,12 @@ test("S18 communication diagram: numbered messages, unique-order enforcement, ki
   const { view, diagnostics } = compile(plan, bundle, "S18");
   assert.equal(view.nodes.length, 3);
   assert.ok(view.nodes.every((n) => n.role === "participant" && n.pos));
-  const first = view.edges.find((e) => e.label === "1: reserve")!;
-  assert.ok(first && first.kind === "sync-message" && first.displayMode === "FACT");
-  assert.ok(view.edges.find((e) => e.kind === "return-message"), "kinds are preserved as edge kinds");
-  assert.equal(view.edges.length, 3, "the duplicate order and the ghost target are omitted");
-  assert.ok(view.gaps.some((g) => g.includes("already used")));
-  assert.equal(diagnostics.acceptedEdges, 3);
+  const first = view.edges.find((e) => e.label === "1. reserve")!;
+  assert.ok(first && first.kind === "sync-flow" && first.displayMode === "INFERENCE");
+  assert.ok(view.edges.find((e) => e.kind === "return"), "kinds are preserved as edge kinds");
+  assert.equal(view.edges.length, 4, "duplicate orders are retained; only the missing target is omitted");
+  assert.ok(view.gaps.some((g) => g.includes("relative order is ambiguous")));
+  assert.equal(diagnostics.acceptedEdges, 4);
 });
 
 test("S19 interaction overview: frames, refs in notes, guards on flows", () => {
@@ -546,10 +546,10 @@ test("S19 interaction overview: frames, refs in notes, guards on flows", () => {
   };
   const { view } = compile(plan, bundle, "S19");
   assert.equal(view.nodes.length, 4);
-  assert.equal(view.nodes.find((n) => n.label === "start")!.badge, "start");
+  assert.equal(view.nodes.find((n) => n.label === "start")!.role, "start");
   const ref = view.nodes.find((n) => n.role === "interaction-ref")!;
   assert.ok(ref.notes!.some((n) => n.includes("reserve sequence")));
-  const guarded = view.edges.find((e) => e.label === "provider OK")!;
+  const guarded = view.edges.find((e) => e.label === "[provider OK]")!;
   assert.ok(guarded, "the guard labels the flow");
 });
 
@@ -573,10 +573,10 @@ test("S21 call graph: static call edges, unknown functions dropped, owner noted"
   const { view, diagnostics } = compile(plan, bundle, "S21");
   assert.equal(view.nodes.length, 3);
   const edge = view.edges.find((e) => e.kind === "call")!;
-  assert.ok(edge && edge.displayMode === "FACT", "call edges are facts when statically evidenced");
+  assert.ok(edge && edge.displayMode === "INFERENCE", "plan citations alone do not verify a call relationship");
   assert.ok(view.nodes.find((n) => n.role === "method" && n.notes!.some((x) => x.includes("Owner: ReserveService"))));
   assert.equal(diagnostics.acceptedEdges, 1);
-  assert.ok(view.gaps.some((g) => g.includes("not part of the chart")));
+  assert.ok(view.gaps.some((g) => g.includes("endpoint is missing")));
 });
 
 test("S22 layered architecture: region groups per layer, ordered layout, async edges dashed", () => {
@@ -655,14 +655,14 @@ test("S27 C4 context: person/system/external roles, one-subject expectation, lab
   const { view, diagnostics } = compile(plan, bundle, "S27");
   assert.ok(view.nodes.find((n) => n.role === "c4-person"));
   assert.ok(view.nodes.find((n) => n.role === "c4-system"));
-  assert.ok(view.nodes.find((n) => n.role === "external-system"));
+  assert.ok(view.nodes.find((n) => n.role === "c4-external"));
   const tech = view.edges.find((e) => e.kind === "context-relation" && e.label!.includes("RESP"))!;
   assert.ok(tech, "technology is part of the relationship label");
   assert.equal(diagnostics.omittedEdges, 1);
   assert.ok(!view.gaps.some((g) => g.includes("subject software system")), "exactly one subject, no warning");
 });
 
-test("S28 sequence diagram: lifelines, ordered message outline, fragments as regions, unique orders", () => {
+test("S28 sequence diagram: participants, typed messages and fragments, ambiguous orders retained", () => {
   const a = evRef(), b = evRef();
   const bundle = makeBundle({ evidence: [a, b] });
   const plan: ChartPlanSequence = {
@@ -681,22 +681,20 @@ test("S28 sequence diagram: lifelines, ordered message outline, fragments as reg
     fragments: [{ id: "alt1", kind: "alt", condition: "already reserved", evidenceIds: [b.id] }],
   };
   const { view, diagnostics } = compile(plan, bundle, "S28");
-  assert.ok(view.nodes.find((n) => n.role === "lifeline" && n.label === "Redis"));
-  const msgs = view.nodes.filter((n) => n.role === "message" || n.role === "async-message" || n.role === "return-message");
-  assert.equal(msgs.length, 3, "the duplicate order is omitted");
-  const numbers = msgs.map((m) => Number(m.label.split(".")[0])).sort((x, y) => x - y);
-  assert.deepEqual(numbers, [1, 2, 3], "message nodes carry their order number");
-  const first = view.nodes.find((n) => n.label === "1. tryReserveFast")!;
-  const second = view.nodes.find((n) => n.label === "2. tryReserveFast")!;
-  assert.ok(first.pos!.y < second.pos!.y, "messages are laid out in reading order");
-  assert.ok(second.notes!.some((x) => x.includes("Fragment alt")), "fragment membership is in the notes");
-  const region = view.groups.find((g) => g.label.startsWith("alt") && g.kind === "region");
-  assert.ok(region && region.childNodeIds.length === 1);
-  const order = view.edges.find((e) => e.kind === "reading-order")!;
-  assert.ok(order && order.displayMode === "INFERENCE", "reading-order edges are layout, not claims");
-  assert.equal(diagnostics.omittedEdges, 1, "the duplicate-order message is omitted");
-  assert.ok(view.gaps.some((g) => g.includes("already used")));
-  assert.ok(view.gaps.some((g) => g.includes("did not declare")), "the undeclared fragment reference is disclosed");
+  assert.ok(view.nodes.find(node => node.role === "participant" && node.label === "Redis"));
+  assert.equal(view.nodes.length, 3, "messages and fragments are not synthetic participant nodes");
+  assert.equal(view.sequence!.schemaVersion, "sequence.v1");
+  assert.deepEqual(view.sequence!.messages.map(message => message.order), [1, 2, 2, 3]);
+  assert.equal(view.sequence!.ordering, "inferred-static");
+  assert.equal(view.sequence!.messages[1].fragmentId, "alt1");
+  assert.equal(view.sequence!.messages[3].fragmentId, undefined);
+  assert.equal(view.sequence!.fragments[0].kind, "alt");
+  assert.ok(view.edges.every(edge => edge.displayMode === "INFERENCE"));
+  assert.equal(diagnostics.acceptedEdges, 4);
+  assert.equal(diagnostics.omittedEdges, 0, "duplicate orders are disclosed rather than silently deleted");
+  assert.ok(view.gaps.some(gap => gap.includes("relative order is ambiguous")));
+  assert.ok(view.gaps.some(gap => gap.includes("unavailable fragment")));
+
 });
 
 test("the offline stub derives an S21 call graph from resolved call relationships", async () => {
@@ -721,5 +719,5 @@ test("the offline stub derives an S21 call graph from resolved call relationship
   assert.ok(plan.calls[0].evidenceIds.includes(a.id));
   const { view } = compile(plan, bundle, "S21");
   assert.equal(view.edges.filter((e) => e.kind === "call").length, 1);
-  assert.ok(view.gaps.length === 0, "a fully evidenced call graph has no gaps");
+  assert.ok(view.gaps.some(gap => gap.includes("static plan interpretations")), "static evidence limitations remain visible");
 });

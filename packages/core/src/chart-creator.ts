@@ -20,5 +20,13 @@ export function compileChartPlan(o: Parameters<typeof compileLegacyChartPlan>[0]
   const id = o.chartId ?? plan.chartId;
   if (!(id in modules)) throw new Error(`No compiler registered for selected chart ${id}`);
   if (id !== plan.chartId) throw new Error(`Requested ${id}, but received a ${plan.chartId} plan`);
-  return compileRegistered(plan.chartId, { ...o, chartId: plan.chartId, plan });
+  const result = compileRegistered(plan.chartId, { ...o, chartId: plan.chartId, plan });
+  const descriptor = modules[plan.chartId].descriptor;
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (![descriptor.name, ...descriptor.aliases].some(alias => normalize(alias) === normalize(plan.chartType))) {
+    const warning = `Model chart type "${plan.chartType}" disagrees with selected ${descriptor.name}; the selected typed contract was used.`;
+    result.view.gaps.push(warning);
+    if (result.diagnostics.gaps !== result.view.gaps) result.diagnostics.gaps.push(warning);
+  }
+  return result;
 }

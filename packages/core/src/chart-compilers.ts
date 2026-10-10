@@ -314,13 +314,16 @@ export function compileRaceTimelineV2(o: { plan: ChartPlanRaceTimeline; bundle: 
 export function compileClassDiagramV2(o: { plan: ChartPlanV2; bundle: EvidenceBundle; rev: RevisionRow; question: string; route: ViewRoute; run?: ModelRunRef; diag?: ChartCompileDiag }): { view: ViewSpec; claims: Claim[]; diagnostics: ChartDiagnostics } {
   const valid = new Set(o.bundle.evidence.filter((e) => e.state === "CURRENT").map((e) => e.id));
   const classes = o.plan.chartId === "S16" ? o.plan.classes : [];
-  const byName = new Map(o.bundle.entities.filter((e) => ["class", "interface", "enum"].includes(e.kind)).map((e) => [e.name, e]));
+  const declarations = o.bundle.entities.filter((e) => ["class", "interface", "enum"].includes(e.kind));
   const evidenceById = new Map(o.bundle.evidence.filter((e) => e.state === "CURRENT").map((e) => [e.id, e]));
   const nodeIds = new Map<string, string>(), entityIds = new Map<string, string>();
   const nodes: ViewSpec["nodes"] = [], gaps: string[] = [];
   for (const c of classes.slice(0, 60)) {
-    const entity = byName.get(c.name);
-    const evidenceIds = [...new Set([...c.evidenceIds, ...c.attributes.flatMap((x) => x.evidenceIds), ...c.operations.flatMap((x) => x.evidenceIds)].filter((id) => valid.has(id)))].slice(0, 20);
+    if (nodeIds.has(c.id)) { gaps.push(`Duplicate class ${c.id} was omitted; the first declaration is retained.`); continue; }
+    const matches = declarations.filter(entity => entity.name === c.name);
+    const entity = matches.length === 1 ? matches[0] : undefined;
+    if (matches.length > 1) gaps.push(`Class ${c.name} matches multiple source declarations; its source identity remains ambiguous.`);
+    const evidenceIds = [...new Set(c.evidenceIds.filter((id) => valid.has(id)))].slice(0, 20);
     if (!evidenceIds.length) { gaps.push(`"${c.name}" was omitted because its declaration lacks current evidence.`); continue; }
     const notes = [
       ...c.attributes.filter((x) => x.evidenceIds.some((id) => valid.has(id))).map((x) => `- ${x.text}`),
@@ -328,7 +331,7 @@ export function compileClassDiagramV2(o: { plan: ChartPlanV2; bundle: EvidenceBu
     ].map((x) => x.slice(0, 300)).slice(0, 60);
     const id = `n:uml:${c.id}`;
     nodeIds.set(c.id, id); if (entity) entityIds.set(c.id, entity.entityId);
-    nodes.push({ id, entityRefs: entity ? [entity.entityId] : [], label: entity?.name ?? c.name, kind: entity?.kind ?? c.kind, file: entity?.file ?? evidenceById.get(evidenceIds[0]!)?.sourceId ?? "", claimIds: [], evidenceIds, tier: nodes.length ? "RELEVANT" : "CRITICAL", displayMode: "FACT", unresolvedCalls: 0, role: c.kind === "interface" ? "uml-interface" : c.kind === "enum" ? "uml-enum" : c.kind === "abstract" ? "uml-abstract" : "uml-class", notes });
+    nodes.push({ id, entityRefs: entity ? [entity.entityId] : [], label: entity?.name ?? c.name, kind: entity?.kind ?? c.kind, file: entity?.file ?? evidenceById.get(evidenceIds[0]!)?.sourceId ?? "", claimIds: [], evidenceIds, tier: nodes.length ? "RELEVANT" : "CRITICAL", displayMode: entity ? "FACT" : "INFERENCE", unresolvedCalls: 0, role: c.kind === "interface" ? "uml-interface" : c.kind === "enum" ? "uml-enum" : c.kind === "abstract" ? "uml-abstract" : "uml-class", notes });
   }
   const edges: ViewSpec["edges"] = [];
   const claims: Claim[] = [];
@@ -344,8 +347,9 @@ export function compileClassDiagramV2(o: { plan: ChartPlanV2; bundle: EvidenceBu
     const claim = r.isInferred ? gateClaim({ assertion: `UML ${r.kind} relation from ${r.from} to ${r.to}${r.label ? ` (${r.label})` : ""}.`, claimClass: "uml-relation", evidenceIds, rationaleSummary: r.reason! }, o.bundle) : undefined;
     if (claim) claims.push(claim);
     const label = r.label ?? rel?.label;
-    edges.push({ id: `ge:${rel?.id ?? `${o.plan.chartId}:${r.from}:${r.to}:${edges.length}`}`, fromNodeId, toNodeId, kind: r.kind, ...(rel ? { relationshipId: rel.id } : {}), ...(claim ? { claimId: claim.draft.id } : {}), label: r.isInferred ? `${label ?? r.kind} (inferred: ${r.reason})` : label, evidenceIds, displayMode: r.isInferred ? "INFERENCE" : "FACT" });
+    edges.push({ id: `ge:${rel?.id ?? `${o.plan.chartId}:${r.from}:${r.to}:${edges.length}`}`, fromNodeId, toNodeId, kind: r.kind, ...(rel ? { relationshipId: rel.id } : {}), ...(claim ? { claimId: claim.draft.id } : {}), label: r.isInferred ? `${label ?? r.kind} (inferred: ${r.reason})` : label, evidenceIds, displayMode: r.isInferred || !rel ? "INFERENCE" : "FACT" });
   }
+  if (edges.some(edge => edge.displayMode === "INFERENCE")) gaps.push("UML relations without matching indexed endpoints and evidence remain plan interpretations.");
   if (!classes.length) gaps.push("The chart creator found no UML classes in the available evidence.");
   const chartType = CHART_REGISTRY.S16.name;
   const viewId = `view:generated:${createHash("sha256").update(`${o.bundle.id}|${o.question}`).digest("hex").slice(0, 12)}`;
@@ -408,7 +412,7 @@ export function compileStateMachineV2(o: { plan: ChartPlanStateMachine; bundle: 
     }
     const evidenceIds = t.evidenceIds.filter((id) => valid.has(id));
     if (!evidenceIds.length) {
-      gaps.push(`Transition from "${t.from}" to "${t.to}" was omitted - no current evidence.`);
+      gaps.push(`Transition "${t.trigger}" from "${t.from}" to "${t.to}" was omitted - no current evidence.`);
       continue;
     }
     const edgeId = `ge:state:${edges.length}:${t.from}>${t.to}`;
@@ -543,6 +547,7 @@ export function compileBpmnV2(o: { plan: ChartPlanBpmn; bundle: EvidenceBundle; 
       gaps.push(`BPMN element "${e.label}" was omitted because it lacks current evidence.`);
       continue;
     }
+    if (nodeIds.has(e.id)) { gaps.push(`Duplicate BPMN element ${e.id} was omitted; the first declaration is retained.`); continue; }
     const id = `n:bpmn:${e.id}`;
     nodeIds.set(e.id, id);
     const roleMap: Record<string, string> = {
@@ -574,7 +579,7 @@ export function compileBpmnV2(o: { plan: ChartPlanBpmn; bundle: EvidenceBundle; 
     let kind: string = f.kind === "sequence" ? "sequence-flow" : f.kind === "message" ? "message-flow" : "default-flow";
     let label = f.condition ? `[${f.condition}]` : "";
     edges.push({
-      id: `ge:bpmn:${f.from}>${f.to}`, fromNodeId, toNodeId, kind,
+      id: `ge:bpmn:${edges.length}:${f.from}>${f.to}`, fromNodeId, toNodeId, kind,
       label, evidenceIds, displayMode: "FACT"
     });
   }
@@ -706,12 +711,13 @@ export function compileDfdV2(o: { plan: ChartPlanDfd; bundle: EvidenceBundle; re
       gaps.push(`DFD element "${e.label}" was omitted because it lacks current evidence.`);
       continue;
     }
+    if (nodeIds.has(e.id)) { gaps.push(`Duplicate DFD element ${e.id} was omitted; the first declaration is retained.`); continue; }
     const id = `n:dfd:${e.id}`;
     nodeIds.set(e.id, id);
     nodes.push({
       id, entityRefs: [], label: e.label, kind: "dfd-element", file: "", claimIds: [], evidenceIds,
       tier: nodes.length === 0 ? "CRITICAL" : "RELEVANT", displayMode: "FACT", unresolvedCalls: 0,
-      role: roleMap[e.kind] || "process", pos: { x: 0, y: 0 }
+      role: roleMap[e.kind] || "process", ...(e.level !== undefined ? { badge: `L${e.level}?`, notes: ["DFD level is a plan interpretation."] } : {}), pos: { x: 0, y: 0 }
     });
   }
 
@@ -730,7 +736,7 @@ export function compileDfdV2(o: { plan: ChartPlanDfd; bundle: EvidenceBundle; re
     }
     const kind = f.kind === "sync" ? "sync" : f.kind === "async" ? "async" : "persisted";
     edges.push({
-      id: `ge:dfd:${f.from}>${f.to}`, fromNodeId, toNodeId, kind,
+      id: `ge:dfd:${edges.length}:${f.from}>${f.to}`, fromNodeId, toNodeId, kind,
       label: f.label || "", evidenceIds, displayMode: "FACT"
     });
   }
@@ -885,7 +891,7 @@ function compileTableChartV2(o: { plan: ChartPlanDecisionTable | ChartPlanStateT
 
 type PlanObject = Record<string, unknown>;
 type ProjectedNode = { id: string; label: string; kind: string; entityRefs: string[]; evidenceIds: string[]; notes: string[]; inferred: boolean; badge?: string };
-type ProjectedEdge = { from: string; to: string; kind: string; label?: string; evidenceIds: string[] };
+type ProjectedEdge = { from: string; to: string; kind: string; label?: string; evidenceIds: string[]; style?: "return" };
 
 function planObject(value: unknown): PlanObject | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as PlanObject : null;
@@ -1022,7 +1028,7 @@ function projectTypedChart(plan: ChartPlanV2, bundle: EvidenceBundle, offline: b
       const item = planObject(entry);
       if (!item || typeof item.from !== "string" || typeof item.to !== "string") continue;
       const evidenceIds = planEvidence(item);
-      const linkKinds: Record<string, string> = { calls: "call", dependencies: "depends-on", bindings: "injects", flows: "flow", messages: "message" };
+      const linkKinds: Record<string, string> = { calls: "call", dependencies: "depends-on", bindings: "injects", flows: "flow", messages: "message", relationships: "context-relation" };
       let kind = linkKinds[key] ?? (typeof item.kind === "string" ? item.kind : key);
       let detail = [typeof item.label === "string" ? item.label : "", typeof item.guard === "string" ? `[${item.guard}]` : "", typeof item.triggerCondition === "string" ? item.triggerCondition : ""].filter(Boolean).join(" · ");
       if (plan.chartId === "S27") detail = [detail, item.technology].filter(Boolean).join(" · ");
@@ -1031,7 +1037,7 @@ function projectTypedChart(plan: ChartPlanV2, bundle: EvidenceBundle, offline: b
       if (plan.chartId === "S13") { kind = String(item.kind); detail = `${kind}${item.isAtomic === true ? " · atomic? (plan interpretation)" : ""}`; }
       if (plan.chartId === "S18") { kind = item.kind === "async" ? "async-flow" : item.kind === "return" ? "return" : "sync-flow"; detail = `${item.order}. ${detail}`; }
       if (plan.chartId === "S22" && item.kind === "async") kind = "async-flow";
-      edges.push({ from: item.from, to: item.to, kind, ...(detail ? { label: detail.slice(0, 200) } : {}), evidenceIds });
+      edges.push({ from: item.from, to: item.to, kind, ...(detail ? { label: detail.slice(0, 200) } : {}), evidenceIds, ...(plan.chartId === "S12" && item.kind === "compensation" ? { style: "return" as const } : {}) });
     }
   }
   const nodeIds = new Set(nodes.keys());
@@ -1058,6 +1064,17 @@ function projectTypedChart(plan: ChartPlanV2, bundle: EvidenceBundle, offline: b
     }
   }
 
+  if (plan.chartId === "S12") {
+    for (const step of nodes.values()) {
+      if (step.kind !== "forward-step" || !step.evidenceIds.length) continue;
+      const compensation = edges.some(edge => edge.from === step.id && edge.kind === "compensation" && nodes.get(edge.to)?.kind === "compensation-step" && !!nodes.get(edge.to)?.evidenceIds.length && edge.evidenceIds.some(id => currentEvidence.has(id)));
+      if (!compensation) gaps.push(`${step.label} has no current evidence-backed compensation; absence is not proof of irreversibility.`);
+    }
+  }
+  if (plan.chartId === "S27") {
+    const subjects = [...nodes.values()].filter(node => node.kind === "c4-system" && node.evidenceIds.length);
+    if (subjects.length !== 1) gaps.push(`Context view expects one subject software system; ${subjects.length} grounded subjects were supplied.`);
+  }
   if (plan.chartId === "S21") {
     for (const fn of list("functions")) {
       const owner = nodes.get(String(fn.parentId)), node = nodes.get(String(fn.id));
@@ -1100,7 +1117,7 @@ export function compileStructuredChartV2(o: { plan: ChartPlanV2; bundle: Evidenc
     if (!fromNodeId || !toNodeId) { gaps.push("A typed chart connection was omitted because one endpoint is missing."); continue; }
     const evidenceIds = [...new Set(spec.evidenceIds.filter((id) => validEvidence.has(id)))];
     if (!evidenceIds.length) { gaps.push("A typed chart connection was omitted because it has no current evidence."); continue; }
-    edges.push({ id: `ge:typed:${o.plan.chartId}:${edges.length}`, fromNodeId, toNodeId, kind: spec.kind, ...(spec.label ? { label: spec.label } : {}), evidenceIds, displayMode: "INFERENCE" });
+    edges.push({ id: `ge:typed:${o.plan.chartId}:${edges.length}`, fromNodeId, toNodeId, kind: spec.kind, ...(spec.label ? { label: spec.label } : {}), evidenceIds, displayMode: "INFERENCE", ...(spec.style ? { style: spec.style } : {}) });
   }
   if (!projection.nodes.length) gaps.push("The chart plan contains no chart-specific elements; the offline model may not support this notation.");
   else if (!nodes.length) gaps.push("The chart plan's elements could not be grounded in current evidence.");
@@ -1133,9 +1150,12 @@ export function compileStructuredChartV2(o: { plan: ChartPlanV2; bundle: Evidenc
     const plan = o.plan;
     const participantIds = [...new Set(plan.participants.map(p => nodeMap.get(p.id)).filter((id): id is string => !!id))];
     const participantSet = new Set(participantIds);
+    const seenFragments = new Set<string>();
     const fragments = plan.fragments.flatMap(f => {
+      if (seenFragments.has(f.id)) { gaps.push(`Duplicate fragment ${f.id} was omitted; the first grounded declaration is retained.`); return []; }
       const evidenceIds = [...new Set(f.evidenceIds.filter(id => validEvidence.has(id)))];
       if (!evidenceIds.length) { gaps.push(`Fragment ${f.id} was omitted because it has no current evidence.`); return []; }
+      seenFragments.add(f.id);
       return [{ ...f, evidenceIds }];
     });
     const fragmentIds = new Set(fragments.map(f => f.id));
@@ -1163,7 +1183,7 @@ export function compileStructuredChartV2(o: { plan: ChartPlanV2; bundle: Evidenc
     cacheHit: o.diag?.cacheHit ?? false, schemaValidationPassed: o.diag?.schemaValidationPassed ?? true,
     suppliedEntities: o.bundle.entities.length, suppliedRelationships: o.bundle.relationships.length, suppliedEvidence: o.bundle.evidence.length,
     acceptedNodes: view.nodes.length, omittedNodes: projection.omittedNodes + projection.nodes.length - view.nodes.length, acceptedEdges: view.edges.length,
-    omittedEdges: projection.edges.length - edges.length, gaps,
+    omittedEdges: o.plan.chartId === "S28" ? o.plan.messages.length - view.edges.length : projection.edges.length - edges.length, gaps,
     ...(o.diag?.fallbackReason ? { fallbackReason: o.diag.fallbackReason } : {}),
   };
   return { view, claims: [], diagnostics };

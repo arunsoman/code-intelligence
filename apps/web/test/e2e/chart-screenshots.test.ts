@@ -269,11 +269,7 @@ const CHARTS: {
     ["S28", "UML sequence diagram", "Draw the UML sequence diagram for createPayment calling charge, reserve, and commit in the payments code."],
   ].map(([code, name, question]) => ({
     code, name, question,
-    waitFor: () => code === "S2"
-      ? `!!document.querySelector('.canvas') && !document.querySelector('.chip.busy') && document.body.innerText.includes(${JSON.stringify(question)})`
-      : code === "S5"
-        ? `document.body.innerText.includes('Test-guarantee matrix')`
-        : `!!document.querySelector('[aria-label="Chart type: ${code}"]')`,
+    waitFor: () => `!!document.querySelector('[aria-label="Chart type: ${code}"]')`,
     timeoutMs: 15_000,
     extraWait: 500,
   })),

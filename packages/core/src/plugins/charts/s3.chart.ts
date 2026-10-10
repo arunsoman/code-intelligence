@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "BatchId lifecycle state machine",
   "form": "GeneratedChart",
   "compiler": "specialized",
-  "version": 4,
+  "version": 5,
   "aliases": [
     "BatchId lifecycle state machine",
     "state machine",

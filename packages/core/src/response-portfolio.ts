@@ -10,6 +10,15 @@ const hash = (s: string) => createHash("sha256").update(s).digest("hex").slice(0
 export const viewCode = (view: ViewSpec, catalog: CatalogEntry[]) => typeof view.params?.chartId === "string"
   ? view.params.chartId : catalog.find((x) => x.formId === view.formId)?.code ?? view.formId;
 
+/** Preserve a user's registered chart choice when its native form supplies the result. */
+export function bindSelectedChart(view: ViewSpec, chartCode?: string): ViewSpec {
+  if (!chartCode || !Object.hasOwn(CHART_REGISTRY, chartCode)) return view;
+  const descriptor = CHART_REGISTRY[chartCode as ChartId];
+  if (descriptor.form !== view.formId) return view;
+  if (view.params?.chartId && view.params.chartId !== chartCode) return view;
+  return { ...view, params: { ...view.params, chartId: chartCode, chartType: descriptor.name } };
+}
+
 /** A deterministic portfolio over validated views. Availability means requestable, not proven evidence coverage. */
 export function responsePortfolio(input: { views: ViewSpec[]; catalog: CatalogEntry[]; question: string; evidenceKinds?: Record<string, number>; responseId?: string; context?: { scope: "subject" | "repository"; subject?: string; seeds?: string[] } }): ResponseManifest {
   const first = input.views[0];

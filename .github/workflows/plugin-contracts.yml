@@ -11,7 +11,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: node --test packages/core/test/chart-table-contract.test.ts packages/core/test/native-catalog-tables.test.ts packages/core/test/projected-semantics.test.ts apps/web/test/layout-deadline.test.ts packages/core/test/visual-contract-cleanup.test.ts apps/web/test/capture-report.test.ts apps/web/test/generation-queue.test.ts packages/core/test/response-ranking.test.ts packages/core/test/table-compiler.test.ts apps/web/test/table-renderer.test.ts apps/web/test/content-aware-links.test.ts apps/web/test/exploration-navigation.test.ts apps/web/test/exploration-choices.test.ts packages/core/test/activity-compiler.test.ts apps/web/test/activity-renderer.test.ts packages/core/test/state-compiler.test.ts apps/web/test/state-renderer.test.ts packages/core/test/er-compiler.test.ts apps/web/test/er-renderer.test.ts packages/core/test/sequence-compiler.test.ts apps/web/test/sequence-renderer.test.ts packages/core/test/answer-workflow.test.ts packages/core/test/plugin-architecture.test.ts apps/web/test/fisheye.test.ts apps/web/test/response-workspace.test.ts
+      - run: node --test packages/core/test/chart-rendering.test.ts packages/core/test/notation-consolidation.test.ts packages/core/test/chart-table-contract.test.ts packages/core/test/native-catalog-tables.test.ts packages/core/test/projected-semantics.test.ts apps/web/test/layout-deadline.test.ts packages/core/test/visual-contract-cleanup.test.ts apps/web/test/capture-report.test.ts apps/web/test/generation-queue.test.ts packages/core/test/response-ranking.test.ts packages/core/test/table-compiler.test.ts apps/web/test/table-renderer.test.ts apps/web/test/content-aware-links.test.ts apps/web/test/exploration-navigation.test.ts apps/web/test/exploration-choices.test.ts packages/core/test/activity-compiler.test.ts apps/web/test/activity-renderer.test.ts packages/core/test/state-compiler.test.ts apps/web/test/state-renderer.test.ts packages/core/test/er-compiler.test.ts apps/web/test/er-renderer.test.ts packages/core/test/sequence-compiler.test.ts apps/web/test/sequence-renderer.test.ts packages/core/test/answer-workflow.test.ts packages/core/test/plugin-architecture.test.ts apps/web/test/fisheye.test.ts apps/web/test/response-workspace.test.ts
       - run: npm run web:build
   browser-smoke:
     needs: architecture
@@ -33,7 +33,7 @@ jobs:
         run: test -n "$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser)"
       - name: Capture previously missing views and verify canvas focus
         env:
-          CIE_CHART_CODES: S1,S2,S9,S10,S14,S20,S24,S25,S26,S27,V15
+          CIE_CHART_CODES: S1,S2,S3,S7,S9,S10,S12,S14,S16,S20,S24,S25,S26,S27,S28,V15
         run: node --test --test-concurrency=1 apps/web/test/e2e/chart-screenshots.test.ts apps/web/test/e2e/canvas-space.test.ts
       - name: Verify populated CRC and metric tables
         env:

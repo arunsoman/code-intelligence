@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "BPMN process diagram",
   "form": "GeneratedChart",
   "compiler": "specialized",
-  "version": 3,
+  "version": 4,
   "aliases": [
     "BPMN process diagram",
     "bpmn diagram",

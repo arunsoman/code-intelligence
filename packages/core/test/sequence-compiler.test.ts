@@ -9,7 +9,7 @@ test("sequence compiler retains repeated messages, kind, order, fragments and cu
   assert.deepEqual(view.sequence?.messages.map(m=>m.order),[2,3,1,4]);
   assert.equal(view.sequence?.fragments[0].kind,"par");
   assert.ok(view.edges.every(e=>e.displayMode === "INFERENCE" && e.evidenceIds[0] === "ev:1"));
-  assert.match(view.gaps.at(-1)!,/does not prove runtime/);
+  assert.ok(view.gaps.some(gap => /does not prove runtime/.test(gap)));
   assert.ok(SequenceSpecSchema.safeParse(view.sequence).success);
 });
 test("sequence compiler drops unknown endpoints and stale evidence without inventing interactions", () => {

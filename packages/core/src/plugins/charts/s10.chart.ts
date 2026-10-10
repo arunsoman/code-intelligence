@@ -7,7 +7,7 @@ export const descriptor = {
   "name": "Data flow diagram",
   "form": "GeneratedChart",
   "compiler": "specialized",
-  "version": 3,
+  "version": 4,
   "aliases": [
     "Data flow diagram",
     "data flow diagram dfd",

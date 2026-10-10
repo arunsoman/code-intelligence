@@ -1,4 +1,4 @@
-import { responsePortfolio } from "./response-portfolio.ts";
+import { bindSelectedChart, responsePortfolio } from "./response-portfolio.ts";
 import type { ResponseManifest } from "@cie/schema";
 import { diagnostic, bundleDiagnostics, withDiagnostics } from "./diagnostics.ts";
 // Orchestration. Public operations return ApiResult (contracts §1). Every model call goes through callModel,
@@ -1758,6 +1758,7 @@ export class Service {
     return withDiagnostics({ requestId: ctx.requestId, traceId: ctx.traceId }, async () => {
       const result = await this.askInternal(ctx, req);
       if (!result.ok) return result;
+      result.value.view = bindSelectedChart(result.value.view, req.chartCode);
       result.value.view.params = { ...result.value.view.params, scope: req.scope ?? (req.overview ? "repository" : "subject"), ...(req.subject ? { subject: req.subject } : {}) };
       return { ...result, value: { ...result.value, manifest: this.manifestFor([result.value.view], req.question, { scope: req.scope ?? (req.overview ? "repository" : "subject"), subject: req.subject, seeds: req.seeds }) } };
     });

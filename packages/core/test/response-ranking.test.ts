@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {ResponseManifestSchema, CHART_REGISTRY} from "@cie/schema";
 import {matchConcerns, type PlanningContext} from "../src/answer-planning.ts";
 import {planResponse} from "../src/plugins/steps/index.ts";
-import {responsePortfolio} from "../src/response-portfolio.ts";
+import {bindSelectedChart, responsePortfolio} from "../src/response-portfolio.ts";
 import {compiledTable} from "./table-fixture.ts";
 const context=(question:string):PlanningContext=>({question,primaryCode:"S23",catalog:[],views:[],scope:"repository",availability:new Map()});
 test("whole-word classification avoids incidental matches",()=>{
@@ -42,3 +42,18 @@ test("preferred candidates are registered requestable notations",()=>{
 });
 
 test("singular and plural architecture and rule nouns map consistently",()=>{for(const q of ["class", "classes", "repository", "repositories"]){assert.equal(matchConcerns(q)[0].concern,"Structure");}for(const q of ["branch", "branches"]){assert.equal(matchConcerns(q)[0].concern,"State and rules");}});
+
+
+test("native gallery choices remain primary instead of becoming an on-demand duplicate tab", () => {
+ const original={...compiledTable("S11"),formId:"TestConfidence" as const,params:{}};
+ const selected=bindSelectedChart(original,"S5");
+ const portfolio=responsePortfolio({views:[selected],catalog:[],question:"Show the test-guarantee matrix"});
+ assert.equal(portfolio.views[0].code,"S5");
+ assert.equal(portfolio.views.filter(view=>view.code==="S5").length,1);
+ assert.equal(portfolio.views[0].primary,true);
+ assert.deepEqual(original.params,{});
+ assert.equal(bindSelectedChart(original,"S28"),original,"a different form is not mislabeled");
+ assert.equal(bindSelectedChart(original,"unknown"),original);
+ const conflicting={...original,params:{chartId:"S2"}};
+ assert.equal(bindSelectedChart(conflicting,"S5"),conflicting,"existing contradictory compiler identity is not overwritten");
+});

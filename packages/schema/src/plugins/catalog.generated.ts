@@ -76,7 +76,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S3",
     "name": "BatchId lifecycle state machine",
     "form": "GeneratedChart",
-    "version": 4,
+    "version": 5,
     "compiler": "specialized",
     "offline": "gap",
     "aliases": [
@@ -170,7 +170,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S7",
     "name": "BPMN process diagram",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "specialized",
     "offline": "gap",
     "aliases": [
@@ -242,7 +242,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S10",
     "name": "Data flow diagram",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "specialized",
     "offline": "derived",
     "aliases": [
@@ -290,7 +290,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S12",
     "name": "Saga / compensation graph",
     "form": "GeneratedChart",
-    "version": 5,
+    "version": 6,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -387,7 +387,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S16",
     "name": "UML class diagram",
     "form": "GeneratedChart",
-    "version": 3,
+    "version": 4,
     "compiler": "specialized",
     "offline": "gap",
     "aliases": [
@@ -678,7 +678,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S27",
     "name": "System context",
     "form": "GeneratedChart",
-    "version": 5,
+    "version": 6,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
@@ -705,7 +705,7 @@ export const CHART_DESCRIPTORS = {
     "id": "S28",
     "name": "UML sequence diagram",
     "form": "GeneratedChart",
-    "version": 6,
+    "version": 7,
     "compiler": "projected",
     "offline": "gap",
     "aliases": [
