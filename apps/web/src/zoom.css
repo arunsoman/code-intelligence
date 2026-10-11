@@ -2,6 +2,9 @@
 .canvas-hint { position: absolute; left: 12px; bottom: 12px; z-index: 3; max-width: calc(100% - 24px); display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center;
   padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font-size: 13px; box-shadow: 0 1px 4px rgba(0, 0, 0, .15); }
 .canvas-hint button { margin-left: 6px; }
+.g6-canvas { position: relative; overflow: hidden; }
+.g6-surface { position: absolute; inset: 0; z-index: 0; isolation: isolate; }
+.g6-selection { position: absolute; pointer-events: none; border: 1px solid #38bdf8; background: #38bdf822; z-index: 3; }
 .stage { --bg: #0b0f17; --panel: #111827; --ink: #e5e7eb; --muted: #94a3b8; --line: #1f2937; --accent: #38bdf8; background: #0b0f17; color: #e5e7eb; }
 .chart-lens-host { position: relative; background: #0b0f17; color: #e5e7eb; }
 .chart-lens-host .lens-controls { position: absolute; float: none; margin: 0; top: 12px; }

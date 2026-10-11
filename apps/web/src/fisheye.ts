@@ -160,6 +160,9 @@ export interface LensOptions {
 }
 export interface LensEngine {
   configure: (patch: Partial<LensState>) => void; focus: (point: Point) => void;
+  /** Renderer hit events supply identity; shared timing and capture remain here. */
+  hoverElement: (kind: "node" | "edge", id: string, point: Point) => void;
+  leaveElement: (id: string) => void;
   isActive: () => boolean;
   refresh: () => void; nextPage: (delta: number) => void; dispose: () => void;
 }
@@ -392,6 +395,12 @@ export function attachFisheye(host: HTMLElement, options: LensOptions): LensEngi
   return {
     configure(patch) { if (patch.enabled != null) state.enabled = patch.enabled; state.pinned = false; state.magnification = LENS_DEFAULTS.magnification; state.rings = true; state.easing = !matchMedia("(prefers-reduced-motion: reduce)").matches; geometry(); if (!state.enabled) { clearHover(); active = false; } notify(); },
     focus(point) { if (!state.enabled) return; mouse = { ...point }; const candidate = sourceHit(point); activate(candidate?.point ?? point, candidate?.node ? candidate.id : "", candidate && !candidate.node ? candidate.id : ""); },
+    hoverElement(kind, id, point) {
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || disposed || !state.enabled || active || options.interactive?.() === false || hoverId === id) return;
+      clearHover(); hoverId = id; mouse = { ...point };
+      hoverTimer = setTimeout(() => { if (!disposed && state.enabled && options.interactive?.() !== false) activate(point, kind === "node" ? id : "", kind === "edge" ? id : ""); }, Math.max(350, scrollUntil - performance.now() + 350));
+    },
+    leaveElement(id) { if (!active && hoverId === id) clearHover(); },
     isActive: () => active && state.enabled,
     refresh: schedule,
     nextPage(delta) { page = Math.max(0, page + delta); schedule(); },

@@ -2,12 +2,13 @@ import { layoutDeadline } from "./layout-deadline.ts";
 import { TableCanvas } from "./TableCanvas.tsx";
 import { SequenceCanvas } from "./SequenceCanvas.tsx";
 import { RaceCanvas } from "./RaceCanvas.tsx";
+import { usesG6 } from "./g6-adapter.ts";
 import cytoscape from "cytoscape";
 import ElkConstructor from "elkjs/lib/elk-api.js";
 import type { ELK as ElkEngine, ELKConstructorArguments } from "elkjs/lib/elk-api.js";
 import elkWorkerUrl from "elkjs/lib/elk-worker.min.js?url";
 import { arrangeElk, usesElk } from "./arrange.ts";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { describeNode, nextByDirection, viaToSegments, type Dir, type RenderEdge, type RenderNode, type Rendered } from "./graph.ts";
 import type { OverlayMark } from "./mapoverlays.ts";
 import { POLICY, fontPx, planTransition, readableFitZoom, visibility } from "./legibility.ts";
@@ -254,8 +255,9 @@ function captureAnchor(c: cytoscape.Core, rendered: Rendered, selected: Set<stri
 }
 
 export function Canvas(input: CanvasProps) {
-  return input.rendered.race ? <RaceCanvas {...input} /> : input.rendered.table ? <TableCanvas {...input} /> : input.rendered.sequence ? <SequenceCanvas {...input} /> : <GraphCanvas {...input} />;
+  return input.rendered.race ? <RaceCanvas {...input} /> : input.rendered.table ? <TableCanvas {...input} /> : input.rendered.sequence ? <SequenceCanvas {...input} /> : usesG6(input.chartId) ? <Suspense fallback={<div role="status">Loading graph renderer…</div>}><G6Canvas {...input} /></Suspense> : <GraphCanvas {...input} />;
 }
+const G6Canvas = lazy(() => import("./G6Canvas.tsx").then(m => ({ default: m.G6Canvas })));
 
 function GraphCanvas(input: CanvasProps) {
   const lens = useRef<LensEngine | null>(null);
