@@ -220,6 +220,7 @@ export interface ViewRoute {
   alternatives: { form: FormId; kind?: "failure" | "invariant"; name: string }[];
 }
 export interface ViewSpec {
+  compoundQuery?: import("./evidence-snapshot.ts").CompoundQueryResult;
   evidenceProjection?: EvidenceProjection;
   evidenceCoverage?: import("./evidence-snapshot.ts").EvidenceSnapshot["coverage"];
   findings?: CanonicalFinding[];

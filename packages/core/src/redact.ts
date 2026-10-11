@@ -35,6 +35,10 @@ export function redactBuilt<T extends { view: ViewSpec; claims: Claim[] }>(store
       v.evidenceInvestigation.outcome = roots.length ? "partial" : "unbound";
     }
   }
+  if (v.compoundQuery && (v.compoundQuery.rows.some(r=>isDenied(r.entityId)||mentions(r.label)) ||
+      [...v.compoundQuery.plan.left.entityIds,...v.compoundQuery.plan.right.entityIds].some(isDenied))) {
+    delete v.compoundQuery;
+  }
   if (v.findings) v.findings = v.findings.filter(f => !f.subjectIds.some(isDenied) && !mentions(f.assertion));
   if (v.evidenceCoverage) v.evidenceCoverage = { ...v.evidenceCoverage, gaps: v.evidenceCoverage.gaps.filter(g => !mentions(g)) };
   if (v.evidenceProjection) v.evidenceProjection = { ...v.evidenceProjection,

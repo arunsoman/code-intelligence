@@ -35,3 +35,9 @@
   .lens-controls { bottom: 52px; }
   .canvas-hint { max-width: calc(100% - 24px); }
 }
+
+.compound-query-panel { border: 1px solid var(--border, #cbd5e1); border-radius: 8px; margin: 8px 0; }
+.compound-query-panel > summary { cursor: pointer; padding: 8px 12px; }
+.compound-query-results { max-height: 220px; overflow: auto; padding: 0 12px 8px; }
+.compound-query-results table { width: 100%; border-collapse: collapse; text-align: left; }
+.compound-query-results th, .compound-query-results td { padding: 6px 10px; border-bottom: 1px solid var(--border, #cbd5e1); }

@@ -433,3 +433,35 @@ export function retrieveAround(store: Store, revision: string, ids: string[], ho
   }
   return assemble(store, revision, [...seen], [`${hops}-hop neighbourhood of selection`]);
 }
+
+/** Model projection from a validated checkpoint; no search, investigation or new evidence. */
+export function retrieveFromSnapshot(snapshot: import('@cie/schema').EvidenceSnapshot, options: { tokenBudget: number; requireKinds?: readonly string[]; resultIds?: string[]; subjectIds?: string[] }): Retrieval {
+  let bundle=structuredClone(snapshot.bundle);
+  const roots=new Set(options.subjectIds ?? bundle.investigation?.binding.roots ?? []);
+  const result=options.resultIds ? new Set([...options.resultIds,...roots]) : undefined;
+  const required=new Set(options.requireKinds);
+  const selected=bundle.entities.filter(e=>!result || result.has(e.entityId));
+  selected.sort((a,b)=>Number(roots.has(b.entityId))-Number(roots.has(a.entityId)) || Number(required.has(b.kind))-Number(required.has(a.kind)));
+  const keep=new Set(selected.map(e=>e.entityId));
+  const rebuild=()=>{
+    bundle.entities=selected.filter(e=>keep.has(e.entityId));
+    bundle.relationships=bundle.relationships.filter(r=>keep.has(r.from)&&keep.has(r.to));
+    bundle.facts=bundle.facts.filter(f=>keep.has(f.subject));
+    refreshModelBundle(bundle);
+  };
+  rebuild();
+  const before=bundle.tokenEstimate;
+  reduceModelDetail(bundle,options.tokenBudget);
+  const dropped:{entityId:string;label:string}[]=[];
+  while(bundle.tokenEstimate>options.tokenBudget && keep.size>1){
+    const next=[...selected].reverse().find(e=>keep.has(e.entityId)&&!roots.has(e.entityId));
+    if(!next)break;
+    keep.delete(next.entityId);dropped.push({entityId:next.entityId,label:next.name});rebuild();
+  }
+  bundle.projection=projectionOf(snapshot,bundle);
+  if(bundle.tokenEstimate>options.tokenBudget)bundle.coverage.push('Bound subjects exceed the prompt budget; generation requires a smaller scope.');
+  return {snapshot,bundle,tiers:new Map(bundle.entities.map(e=>[e.entityId,roots.has(e.entityId)?'RELEVANT':'CONTEXT'])),scored:new Map(),terms:[],
+    hidden:dropped.map(e=>({...e,reason:'omitted from snapshot projection for the model budget'})),inaccessible:0,provenance:new Map(),
+    ...(dropped.length||before>options.tokenBudget?{truncation:{budget:options.tokenBudget,before,after:bundle.tokenEstimate,dropped}}:{}),
+  };
+}

@@ -44,6 +44,15 @@ export class Store {
       .run(cacheKey, bundleId, question, JSON.stringify(parsed), new Date().toISOString());
   }
 
+  /** Internal checkpoint lookup; the service must reauthorize and verify source hashes before use. */
+  evidenceSnapshot(id: string): EvidenceSnapshot | null {
+    const row = this.db.prepare("select json from query_evidence_snapshots where id=?").get(id) as {json:string}|undefined;
+    if (!row) return null;
+    try { const value=JSON.parse(row.json) as EvidenceSnapshot;
+      return value.version === "evidence-snapshot.v1" && value.id === id ? value : null;
+    } catch { return null; }
+  }
+
   /** Internal collection checkpoint, never an authorization or freshness cache. */
   saveEvidenceSnapshot(snapshot: EvidenceSnapshot): void {
     this.db.prepare("insert into query_evidence_snapshots(id,revision,json) values (?,?,?) on conflict(id) do nothing")

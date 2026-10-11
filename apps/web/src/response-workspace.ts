@@ -63,3 +63,9 @@ export function workspaceExport(workspace: ResponseWorkspace): string {
 export function restoreWorkspace(frame: ResponseWorkspace): ResponseWorkspace {
   return { ...frame, tabs: frame.tabs.map(t => (t.status === "generating" || t.status === "queued") ? { ...t, status: "available" as const, reason: "Select this view to retry generation.", attempt: t.attempt + 1 } : t) };
 }
+
+/** Supporting charts add limitations without replacing the original response narrative or truth universe. */
+export function mergeSupportingManifest(workspace: ResponseWorkspace, fresh: ResponseManifest): ResponseWorkspace {
+  if(fresh.revision!==workspace.manifest.revision || (fresh.snapshotId && workspace.manifest.snapshotId && fresh.snapshotId!==workspace.manifest.snapshotId))return workspace;
+  return {...workspace,manifest:{...workspace.manifest,limitations:[...new Set([...workspace.manifest.limitations,...fresh.limitations])]}};
+}

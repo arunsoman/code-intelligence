@@ -1,3 +1,4 @@
+import { CompoundQueryPanel } from "./CompoundQueryPanel.tsx";
 import { tableEvidenceElements } from "./table-cell.ts";
 import { ExplorationPanel } from "./ExplorationPanel.tsx";
 import { explorationChoices, explorationTarget, explorationQuestion, explorationShortcut, type ExplorationEdge } from "./exploration-choices.ts";
@@ -580,7 +581,11 @@ export function App() {
       if (r.value.manifest) responseWorkspace.begin(r.value.manifest, [{ view: r.value.view, claims: r.value.claims }], target ? subject ?? "Selected scope" : undefined);
       else adoptView(r.value.view, r.value.claims, !!view && view.id === r.value.view.id);
       const summary = [r.value.view.caption, ...r.value.view.nodes.slice(0, 40).map((node) => `${node.label}: ${(node.notes ?? []).join(" ")}`), ...r.value.view.edges.slice(0, 40).map((edge) => `${edge.fromNodeId} ${edge.label ?? edge.kind} ${edge.toNodeId}`)].join("\n");
-      appendChartMessage(baseQuestion ?? question, summary, { text: `${r.value.view.formReason ?? ""} ${r.value.view.caption}`.trim(), at: now() });
+      const caption = `${r.value.view.formReason ?? ""} ${r.value.view.caption}`.trim();
+      const answer = r.value.view.answer?.trim();
+      appendChartMessage(baseQuestion ?? question, [answer, summary].filter(Boolean).join("\n"), {
+        text: answer || caption, ...(answer ? {thinking:caption} : {}), at: now(),
+      });
       log("ASK", `${form}: ${question.slice(0, 60)}`);
     } finally { if (generation === repoGeneration.current && responseToken === responseGeneration.current) setBusy(null); }
   };
@@ -997,6 +1002,9 @@ export function App() {
           </details>
         )}
         </div>
+        {!responseWorkspace.waiting && view?.compoundQuery && <CompoundQueryPanel result={view.compoundQuery} onEvidence={row => {
+          void evidence(row.evidenceIds).then(items => setDrawer({kind:"inspect",title:row.label,sub:"Direct static call evidence",notes:[`Result membership: ${row.result}. Unknown membership is not exclusion.`],claimIds:[],evidence:items}));
+        }} />}
         <div id="response-view-panel" role={responseWorkspace.workspace ? "tabpanel" : undefined} aria-labelledby={responseWorkspace.workspace ? `tab-${responseWorkspace.workspace.activeId}` : undefined} className="stage" aria-busy={responseWorkspace.waiting || phase === "composing" ? "true" : undefined}>
           {responseWorkspace.waiting ? <div className="empty-chart-state" role="status"><strong>{responseWorkspace.active?.label}</strong><p>{responseWorkspace.active?.status === "generating" ? "Generating this view from the same question and revision…" : responseWorkspace.active?.reason ?? "Select this tab to generate its view."}</p>{["failed","available"].includes(responseWorkspace.active?.status ?? "") && <button onClick={() => void responseWorkspace.generate(responseWorkspace.active!.id)}>{responseWorkspace.active?.status === "failed" ? "Retry this view" : "Generate this view"}</button>}</div> : view?.matrix && drawMode === "matrix" ? (
             <MatrixView matrix={eff!.view.matrix!} stale={eff!.stale} selected={new Set(cellSel)} onPick={(c, r, k, add) => void inspectCell(c, r, k, add)} />

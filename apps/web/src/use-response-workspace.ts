@@ -1,3 +1,4 @@
+import { mergeSupportingManifest } from "./response-workspace.ts";
 import { encodeCheckpoint, decodeCheckpoint } from "./workspace-checkpoint.ts";
 import { GenerationQueue } from "./generation-queue.ts";
 import { emptyNavigation, extendNavigation, jumpNavigation, navigationCrumbs, type NavigationHistory } from "./exploration-navigation.ts";
@@ -87,7 +88,8 @@ export function useResponseWorkspace(p: {
     const taskEpoch = epoch.current;
     set(updateTab(w, id, { status: "queued", reason: "Waiting for a generation slot. This view will start automatically.", attempt }));
     const outcome = await requests.enqueue(id, signal => call<{ view: ViewSpec; claims: Claim[]; manifest?: ResponseManifest }>("C19", "ask", {
-      question: tab!.questionAnswered, revision: token.revision, form: tab!.form,
+      question: w!.manifest.question, revision: token.revision, form: tab!.form,
+      ...((tab!.form === "GeneratedChart" || tab!.form === "SemanticMap") && w!.manifest.snapshotId ? {snapshotId:w!.manifest.snapshotId} : {}),
       subject: tab!.subject, scope: tab!.scope, seeds: tab!.seeds,
       ...(tab!.code.startsWith("S") ? { chartCode: tab!.code } : {}),
     }, undefined, "v1", signal), activate ? "foreground" : "supporting", () => {
@@ -99,10 +101,14 @@ export function useResponseWorkspace(p: {
     if(outcome.status === "failed") { set(updateTab(current.current!,id,{status:"failed",reason:outcome.message})); return; }
     const result=outcome.value;
     if (!result.ok) { set(updateTab(current.current!, id, { status: "failed", reason: result.error.message })); return; }
+    const expectedSnapshot=(tab!.form==="GeneratedChart"||tab!.form==="SemanticMap")?w!.manifest.snapshotId:undefined;
+    if(expectedSnapshot && result.value.view.evidenceProjection?.snapshotId!==expectedSnapshot){
+      set(updateTab(current.current!,id,{status:"failed",reason:"This view did not preserve the response evidence snapshot. Ask the original question again."}));return;
+    }
     let next = acceptCompletion(current.current!, token, result.value);
     const fresh = (result.value as { manifest?: ResponseManifest }).manifest;
     if (fresh?.revision === token.revision && next.tabs.find(t => t.id === id)?.view?.id === result.value.view.id)
-      next = { ...next, manifest: { ...next.manifest, sections: fresh.sections, limitations: fresh.limitations, interpretation: fresh.interpretation } };
+      next = mergeSupportingManifest(next,fresh);
     set(next);
     const completed = next.tabs.find((t) => t.id === id);
     if (next.activeId === id && completed?.view) latest.current.show(completed.view, completed.claims, completed.ui);

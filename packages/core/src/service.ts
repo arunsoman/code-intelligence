@@ -1,3 +1,6 @@
+import { parseCompoundQuestion, planCompoundQuestion, evaluateCompoundQuestion, compoundAnswer } from "./compound-query.ts";
+import { validateSnapshotReuse } from "./snapshot-reuse.ts";
+import { retrieveFromSnapshot } from "./retrieval.ts";
 import { validateImpactPolicy, explainImpactItem } from "./impact-report.ts";
 import { renderImpactComment } from "./impact-render.ts";
 import { ConversationActions, ConversationConflict } from "./conversation-actions.ts";
@@ -2267,9 +2270,15 @@ export class Service {
     return withDiagnostics({ requestId: ctx.requestId, traceId: ctx.traceId }, async () => {
       const result = await this.askInternal(ctx, req);
       if (!result.ok) return result;
+      if(req.snapshotId){
+        const finalRev=this.store.revision(result.value.view.revision),checkpoint=this.store.evidenceSnapshot(req.snapshotId);
+        if(!finalRev||!checkpoint)return fail(ctx,{code:"NOT_FOUND",message:"This source or evidence snapshot is no longer available.",retryable:false});
+        const issue=validateSnapshotReuse(this.store,checkpoint,finalRev,req.question.trim(),policyFor(this.store,finalRev.repoRoot),ev=>this.resolveEvidence(finalRev,ev));
+        if(issue)return fail(ctx,{code:issue==="access"?"FORBIDDEN":"STALE_REVISION",message:"Source or access changed while this chart was generated. Re-index and ask again.",retryable:false});
+      }
       result.value.view = bindSelectedChart(result.value.view, req.chartCode);
       result.value.view.params = { ...result.value.view.params, scope: req.scope ?? (req.overview ? "repository" : "subject"), ...(req.subject ? { subject: req.subject } : {}) };
-      return { ...result, value: { ...result.value, manifest: this.manifestFor([result.value.view], req.question, { scope: req.scope ?? (req.overview ? "repository" : "subject"), subject: req.subject, seeds: req.seeds }) } };
+      return { ...result, value: { ...result.value, manifest: this.manifestFor([result.value.view], req.question.trim(), { scope: req.scope ?? (req.overview ? "repository" : "subject"), subject: req.subject, seeds: req.seeds }) } };
     });
   }
 
@@ -2351,7 +2360,7 @@ export class Service {
     };
   }
 
-  private async askView(ctx: CallContext, req: { question: string; route?: ViewRoute; revision?: string; pins?: string[]; seeds?: string[]; overview?: boolean; level?: number; form?: string; kind?: "failure" | "invariant"; subject?: string; lens?: string; chartCode?: string; scope?: "repository" | "subject" }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
+  private async askView(ctx: CallContext, req: { question: string; snapshotId?: string; route?: ViewRoute; revision?: string; pins?: string[]; seeds?: string[]; overview?: boolean; level?: number; form?: string; kind?: "failure" | "invariant"; subject?: string; lens?: string; chartCode?: string; scope?: "repository" | "subject" }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
     const question = (req.question ?? "").trim();
     if (!question || question.length > 1000) return fail(ctx, { code: "INVALID_SCHEMA", message: "question must be 1–1000 characters", retryable: false });
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
@@ -2363,10 +2372,25 @@ export class Service {
         return fail(ctx, { code: "INSUFFICIENT_EVIDENCE", message, retryable: false });
       }
     }
+    const access = policyFor(this.store, rev.repoRoot);
+    if(this.store.isRevoked(rev.repoRoot))return fail(ctx,{code:"FORBIDDEN",message:"Access to this source was withdrawn.",retryable:false});
+    let reused: import("@cie/schema").EvidenceSnapshot | undefined;
+    if(req.snapshotId !== undefined){
+      if(typeof req.snapshotId !== "string" || !/^snapshot:[a-f0-9]{64}$/.test(req.snapshotId))return fail(ctx,{code:"INVALID_SCHEMA",message:"Invalid evidence snapshot identifier.",retryable:false});
+      reused=this.store.evidenceSnapshot(req.snapshotId) ?? undefined;
+      if(!reused)return fail(ctx,{code:"NOT_FOUND",message:"This evidence snapshot is unavailable. Ask the question again to collect fresh evidence.",retryable:false});
+      const issue=validateSnapshotReuse(this.store,reused,rev,question,access,ev=>this.resolveEvidence(rev,ev));
+      if(issue)return fail(ctx,{code:issue==="access"?"FORBIDDEN":issue==="question"?"INVALID_SCHEMA":"STALE_REVISION",message:issue==="access"?"Access changed since this evidence was collected. Ask again to collect permitted evidence.":issue==="question"?"This snapshot belongs to a different question.":"This evidence snapshot no longer matches the requested revision or current source. Re-index and ask again.",retryable:false});
+    }
+    const compound = planCompoundQuestion(question, (reused?.bundle.entities ?? this.store.entities(rev.id)).filter(e=>!access.denied(e.file)));
+    if(compound && compound.status!=="ready")return fail(ctx,{code:"INSUFFICIENT_EVIDENCE",message:`${compound.status==="ambiguous"?"Choose an exact operand":"Name an indexed operand"} before comparing: ${[compound.left,compound.right].filter(o=>!o.entityIds.length).map(o=>o.label+(o.candidates.length?" — "+o.candidates.join(", "):" — unresolved")).join("; ")}. Repeat the question with an exact entity ID.`,retryable:false});
+    if(compound && req.form && req.form!=="GeneratedChart")return fail(ctx,{code:"NOT_IMPLEMENTED",message:"This compound comparison supports generated static charts. The requested specialized view needs a separate analysis.",retryable:false});
+    if(compound)req={...req,seeds:[...compound.left.entityIds,...compound.right.entityIds],subject:undefined,scope:"subject",overview:false,form:"GeneratedChart",chartCode:req.chartCode??"S21"};
     const chartDefinition = req.chartCode ? CHART_REGISTRY[req.chartCode as ChartId] : undefined;
     if (req.chartCode && !chartDefinition) {
       return fail(ctx, { code: "INVALID_SCHEMA", message: `unknown chart id "${req.chartCode}"`, retryable: false });
     }
+    if(compound && chartDefinition && chartDefinition.form!=="GeneratedChart")return fail(ctx,{code:"NOT_IMPLEMENTED",message:"This compound comparison supports static generated charts. Choose its call graph or another generated chart tab.",retryable:false});
     // A requested chart owns the route unless a caller explicitly selected a visual form.
     // This keeps a query-intent chart code from being re-routed by a second model call.
     let route = req.form ? this.chosenRoute(req.form, req.kind) : req.route ?? (chartDefinition ? this.chosenRoute(chartDefinition.form) : await this.readQuestion(question));
@@ -2376,6 +2400,7 @@ export class Service {
       }
     }
     diagnostic("ask.route", { requestId: ctx.requestId, revision: rev.id, route, chartCode: req.chartCode, overview: !!req.overview, requiredKinds: chartDefinition?.requiredKinds, requiredAcrossRepository: chartDefinition?.requiredAcrossRepository });
+    if(reused && route.form!=="GeneratedChart" && route.form!=="SemanticMap")return fail(ctx,{code:"NOT_IMPLEMENTED",message:"This specialized view requires its own analysis and cannot reuse a static evidence snapshot.",retryable:false});
     const visual = route.source === "chosen" && route.form === "SemanticMap" ? null : visualByForm(route.form);
     if (visual?.build) {
       this.store.audit(actor(ctx), "ask", rev.id, { form: visual.formId, chars: question.length, route: route.source });
@@ -2455,9 +2480,15 @@ export class Service {
     }
 
     // Hybrid retrieval: exact names, semantic closeness, concept cards and the graph, over only what this caller may see, cut to the model's budget.
-    const semantic = req.overview || req.scope === "repository" ? undefined : await semanticScores(this.store, rev.id, question, this.embedder).catch(() => undefined);
+    const semantic = reused || req.overview || req.scope === "repository" ? undefined : await semanticScores(this.store, rev.id, question, this.embedder).catch(() => undefined);
     const retrievalOptions = { subject: req.subject, subjectSeeds: req.seeds ?? [], scope: req.scope ?? (req.overview ? "repository" as const : "subject" as const), forModel: true, resolveEvidence: (ev: EvidenceRef) => this.resolveEvidence(rev, ev), overview: req.overview, lens: req.lens, pins: new Set(req.pins ?? []), extraSeeds: [...(req.pins ?? []), ...(req.overview ? overviewSeeds(this.store, rev.id) : req.seeds ?? [])], semantic, access: policyFor(this.store, rev.repoRoot), requireKinds: chartDefinition?.requiredKinds, requireAcrossRepositoryKinds: chartDefinition?.requiredAcrossRepository };
-    const { snapshot, bundle, tiers, scored, hidden, inaccessible, truncation } = retrieveForQuestion(this.store, rev.id, question, { ...retrievalOptions, tokenBudget: chunkTokenBudget() });
+    const collected = reused ? retrieveFromSnapshot(reused, {tokenBudget:chunkTokenBudget(),requireKinds:[...(chartDefinition?.requiredKinds??[]),...(chartDefinition?.requiredAcrossRepository??[])]})
+      : retrieveForQuestion(this.store, rev.id, question, { ...retrievalOptions, tokenBudget: chunkTokenBudget() });
+    const compoundResult=compound ? evaluateCompoundQuestion(collected.snapshot,compound) : undefined;
+    const retrieval=compoundResult ? retrieveFromSnapshot(collected.snapshot,{tokenBudget:chunkTokenBudget(),requireKinds:[...(chartDefinition?.requiredKinds??[]),...(chartDefinition?.requiredAcrossRepository??[])],
+      subjectIds:[...compound!.left.entityIds,...compound!.right.entityIds],resultIds:compoundResult.rows.filter(r=>r.result==="present").map(r=>r.entityId)}) : collected;
+    const { snapshot, bundle, tiers, scored, hidden, inaccessible, truncation } = retrieval;
+    if((reused||compoundResult) && bundle.tokenEstimate>chunkTokenBudget())return fail(ctx,{code:"BUDGET_EXCEEDED",message:"The bound evidence exceeds the prompt budget. Narrow the operands or question before generating this view.",retryable:false});
     const modelBundle = bundle;
     if (req.chartCode === "S16") {
       const counts = (entities: { kind: string }[]) => Object.fromEntries(["class", "interface", "enum", "field", "method"].map((kind) => [kind, entities.filter((e) => e.kind === kind).length]));
@@ -2476,7 +2507,7 @@ export class Service {
     const warnings: string[] = [];
     if (route.form === "GeneratedChart") {
       // Answer the question from the same evidence independently of whether its diagram is renderable.
-      const evidenceAnswer = await this.answerFromEvidence(ctx, rev, question, modelBundle);
+      const evidenceAnswer = compoundResult ? {text:compoundAnswer(compoundResult),claims:[],warnings:[]} : await this.answerFromEvidence(ctx, rev, question, modelBundle);
       warnings.push(...evidenceAnswer.warnings);
       const cacheKey = chartPlanCacheKey(modelBundle, question, req.chartCode);
       let plan = matchingChartPlan(this.store.generatedChartPlan(cacheKey, modelBundle.id, question) ?? cachedChartPlan(modelBundle, question, req.chartCode), req.chartCode);
@@ -2546,6 +2577,8 @@ export class Service {
         if (!built.view.nodes.length && evidenceAnswer.text) built.view.gaps.push("The evidence supports the written explanation, but does not support the requested diagram.");
         if (truncation) built.view.gaps.push(`The evidence was cut to fit the model's budget (${truncation.before} → ${truncation.after} estimated tokens): ${truncation.dropped.length} element(s) were dropped after reducing detail.`);
         if (bundle.investigation && bundle.investigation.outcome !== "supported") built.view.gaps.push(...bundle.investigation.gaps.map(g => g.message));
+        built.view.compoundQuery = compoundResult;
+        if(compoundResult)built.view.gaps.push(...compoundResult.limitations);
         built.view.evidenceProjection = bundle.projection;
         built.view.evidenceCoverage = snapshot.coverage;
         built.view.findings = [...snapshot.findings, ...evidenceAnswer.claims.map(claim => ({
@@ -2581,6 +2614,8 @@ export class Service {
     view.hidden = hidden;
     if (inaccessible) view.gaps.push(`${inaccessible} match(es) are in code you do not have access to and were left out.`);
     if (truncation) view.gaps.push(`The evidence was cut to fit the model's budget (${truncation.before} → ${truncation.after} estimated tokens): ${truncation.dropped.length} element(s) were dropped, lowest-ranked first. "Why isn't X shown?" lists them.`);
+    view.compoundQuery = compoundResult;
+    if(compoundResult){view.answer=compoundAnswer(compoundResult);view.gaps.push(...compoundResult.limitations);}
     view.evidenceProjection = bundle.projection;
     view.evidenceCoverage = snapshot.coverage;
     view.findings = snapshot.findings;
@@ -3281,6 +3316,10 @@ export class Service {
       const hierarchy = navigateHierarchy(this.store, indexed.id, text, req.pins);
       diagnostic("conversation.hierarchy", { requestId: ctx.requestId, revision: indexed.id, hierarchyLevel: hierarchy.level,
         seeds: hierarchy.seeds, conceptIds: hierarchy.conceptIds, nodes: hierarchy.nodes });
+    }
+    if(indexed && parseCompoundQuestion(text)){
+      const result=await this.ask(ctx,{question:text,revision:indexed.id,chartCode:explicitChartCode(text)??"S21",pins:req.pins});
+      return result.ok ? ok(ctx,{kind:"view",view:result.value.view,claims:result.value.claims,manifest:result.value.manifest,message:result.value.view.answer??""},result.metadata) : result;
     }
     const chartCode = explicitChartCode(text);
     if (chartCode === "S16") process.stderr.write(`[uml] ${JSON.stringify({ stage: "dispatch", requestId: ctx.requestId, route: "chart", chartId: chartCode })}\n`);

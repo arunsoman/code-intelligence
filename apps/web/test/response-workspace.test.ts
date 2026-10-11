@@ -84,3 +84,17 @@ test("queued history jobs become retryable and invalidate late completions",()=>
  assert.equal(retry.status,"available");assert.equal(retry.attempt,3);
  assert.equal(acceptCompletion(restored,{responseId:w.manifest.responseId,revision:w.manifest.revision,tabId:tab.id,attempt:2},{view:view("next","r1","S16"),claims:[]}),restored);
 });
+
+test('supporting chart manifests preserve the primary question, narrative and snapshot',async()=>{
+  const {mergeSupportingManifest}=await import('../src/response-workspace.ts');
+  const original=manifest();original.snapshotId=`snapshot:${'a'.repeat(64)}`;
+  const workspace=createWorkspace(original,[{view:view(),claims:[]}]);
+  const fresh={...original,question:'a different chart caption',sections:[],interpretation:'different interpretation',limitations:['Supporting view has a gap']};
+  const merged=mergeSupportingManifest(workspace,fresh);
+  assert.equal(merged.manifest.question,original.question);
+  assert.deepEqual(merged.manifest.sections,original.sections);
+  assert.equal(merged.manifest.interpretation,original.interpretation);
+  assert.equal(merged.manifest.snapshotId,original.snapshotId);
+  assert.ok(merged.manifest.limitations.includes('Supporting view has a gap'));
+  assert.equal(mergeSupportingManifest(workspace,{...fresh,snapshotId:`snapshot:${'b'.repeat(64)}`}),workspace);
+});

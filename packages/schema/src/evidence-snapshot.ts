@@ -37,3 +37,15 @@ export type EvidenceSetExpression =
   | { kind: 'members'; entityIds: string[] }
   | { kind: 'neighbors'; subjectIds: string[]; relationshipKind: string; direction: 'outgoing' | 'incoming' }
   | { kind: 'operation'; operation: EvidenceSetOperation; left: EvidenceSetExpression; right: EvidenceSetExpression };
+export interface CompoundQueryPlan {
+  version: 'compound-query.v1'; operation: EvidenceSetOperation;
+  relationshipKind: 'calls'; direction: 'outgoing' | 'incoming';
+  left: { label: string; entityIds: string[]; candidates: string[] };
+  right: { label: string; entityIds: string[]; candidates: string[] };
+  status: 'ready' | 'ambiguous' | 'unbound';
+}
+export interface CompoundQueryResult {
+  plan: CompoundQueryPlan; snapshotId: string;
+  rows: { entityId: string; label: string; left: Membership; right: Membership; result: Membership; evidenceIds: string[] }[];
+  limitations: string[];
+}
