@@ -2457,7 +2457,7 @@ export class Service {
     // Hybrid retrieval: exact names, semantic closeness, concept cards and the graph, over only what this caller may see, cut to the model's budget.
     const semantic = req.overview || req.scope === "repository" ? undefined : await semanticScores(this.store, rev.id, question, this.embedder).catch(() => undefined);
     const retrievalOptions = { subject: req.subject, subjectSeeds: req.seeds ?? [], scope: req.scope ?? (req.overview ? "repository" as const : "subject" as const), forModel: true, resolveEvidence: (ev: EvidenceRef) => this.resolveEvidence(rev, ev), overview: req.overview, lens: req.lens, pins: new Set(req.pins ?? []), extraSeeds: [...(req.pins ?? []), ...(req.overview ? overviewSeeds(this.store, rev.id) : req.seeds ?? [])], semantic, access: policyFor(this.store, rev.repoRoot), requireKinds: chartDefinition?.requiredKinds, requireAcrossRepositoryKinds: chartDefinition?.requiredAcrossRepository };
-    const { bundle, tiers, scored, hidden, inaccessible, truncation } = retrieveForQuestion(this.store, rev.id, question, { ...retrievalOptions, tokenBudget: chunkTokenBudget() });
+    const { snapshot, bundle, tiers, scored, hidden, inaccessible, truncation } = retrieveForQuestion(this.store, rev.id, question, { ...retrievalOptions, tokenBudget: chunkTokenBudget() });
     const modelBundle = bundle;
     if (req.chartCode === "S16") {
       const counts = (entities: { kind: string }[]) => Object.fromEntries(["class", "interface", "enum", "field", "method"].map((kind) => [kind, entities.filter((e) => e.kind === kind).length]));
@@ -2546,6 +2546,13 @@ export class Service {
         if (!built.view.nodes.length && evidenceAnswer.text) built.view.gaps.push("The evidence supports the written explanation, but does not support the requested diagram.");
         if (truncation) built.view.gaps.push(`The evidence was cut to fit the model's budget (${truncation.before} → ${truncation.after} estimated tokens): ${truncation.dropped.length} element(s) were dropped after reducing detail.`);
         if (bundle.investigation && bundle.investigation.outcome !== "supported") built.view.gaps.push(...bundle.investigation.gaps.map(g => g.message));
+        built.view.evidenceProjection = bundle.projection;
+        built.view.evidenceCoverage = snapshot.coverage;
+        built.view.findings = [...snapshot.findings, ...evidenceAnswer.claims.map(claim => ({
+          id: `finding:answer:${createHash("sha256").update(JSON.stringify([rev.id, claim.draft.assertion, claim.draft.evidenceIds])).digest("hex")}`,
+          kind: "source-answer" as const, subjectIds: claim.draft.subjects ?? [], evidenceIds: claim.draft.evidenceIds,
+          assertion: claim.draft.assertion, validation: "citation-checked" as const,
+        }))];
         built.view.evidenceInvestigation = bundle.investigation;
         built.view.params = { ...built.view.params, overview: retrievalOptions.scope === "repository", ...(req.subject ? { subject: req.subject } : {}), scope: retrievalOptions.scope };
         diagnostic("chart.compiled", { requestId: ctx.requestId, chartId: req.chartCode, diagnostics: built.diagnostics, nodes: built.view.nodes.length, edges: built.view.edges.length, gaps: built.view.gaps });
@@ -2574,6 +2581,9 @@ export class Service {
     view.hidden = hidden;
     if (inaccessible) view.gaps.push(`${inaccessible} match(es) are in code you do not have access to and were left out.`);
     if (truncation) view.gaps.push(`The evidence was cut to fit the model's budget (${truncation.before} → ${truncation.after} estimated tokens): ${truncation.dropped.length} element(s) were dropped, lowest-ranked first. "Why isn't X shown?" lists them.`);
+    view.evidenceProjection = bundle.projection;
+    view.evidenceCoverage = snapshot.coverage;
+    view.findings = snapshot.findings;
     view.evidenceInvestigation = bundle.investigation;
     if (bundle.investigation && bundle.investigation.outcome !== "supported") view.gaps.push(...bundle.investigation.gaps.map(g => g.message));
     this.persist(claims);

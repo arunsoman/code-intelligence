@@ -1,3 +1,5 @@
+import { CHART_REGISTRY } from "@cie/schema";
+import { collectSnapshot, projectionOf } from "./evidence-snapshot.ts";
 import { investigate } from "./investigation.ts";
 import { diagnostic, diagnosticsEnabled, bundleDiagnostics } from "./diagnostics.ts";
 // Question → bounded, revision-bound evidence bundle (C09 projection + C10/C11 retrieval, keyword/graph only).
@@ -27,6 +29,7 @@ export function queryTerms(q: string): string[] {
 }
 
 export interface Retrieval {
+  snapshot: import("@cie/schema").EvidenceSnapshot;
   bundle: EvidenceBundle;
   tiers: Map<string, ViewNode["tier"]>;
   scored: Map<string, Scored>;
@@ -319,6 +322,18 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
     }
     return bundle;
   };
+  // Collect notation declarations once for every question, before prompt trimming.
+  // This superset is bounded and access-filtered; chart choice does not define its identity.
+  const files = new Set(picked.map(id => fileOf.get(id)));
+  const notationKinds = new Set<string>(Object.values(CHART_REGISTRY).flatMap(c => [...c.requiredKinds]));
+  const acrossKinds = new Set<string>(Object.values(CHART_REGISTRY).flatMap(c => [...c.requiredAcrossRepository]));
+  const supplemental = symbols.filter(e => notationKinds.has(e.kind) &&
+    (files.has(e.file) || acrossKinds.has(e.kind)) &&
+    !isDenied(e.entityId) && !opts.ignored?.has(e.entityId)).sort((a,b) => Number(files.has(b.file)) - Number(files.has(a.file)) || a.entityId.localeCompare(b.entityId)).map(e => e.entityId);
+  const collectionIds = [...new Set([...picked, ...(investigation?.seeds ?? []).filter(id => !isDenied(id) && !opts.ignored?.has(id)), ...supplemental.slice(0, 160)])];
+  const snapshot = collectSnapshot(question, build(collectionIds, notes));
+  if (supplemental.length > 160) snapshot.coverage.gaps.push("Notation collection reached its 160-entity supplement cap.");
+  store.saveEvidenceSnapshot(snapshot);
   let bundle = build(picked, notes);
 
   // Cut to the evidence budget, lowest-ranked first (pinned and critical last), and keep the list of what went.
@@ -370,7 +385,8 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
         }
       }
     }
-    for (const id of topUp.slice(0, opts.forModel && opts.scope === "repository" ? Math.max(0, maxNodes - picked.length) : 160)) {
+    const collected = new Set(snapshot.bundle.entities.map(e => e.entityId));
+    for (const id of topUp.filter(id => collected.has(id)).slice(0, opts.forModel && opts.scope === "repository" ? Math.max(0, maxNodes - picked.length) : 160)) {
       const candidate = build([...picked, id], [...notes, "chart notation kinds included"]);
       if (opts.tokenBudget && candidate.tokenEstimate > opts.tokenBudget) {
         const entity = byId.get(id)!;
@@ -396,7 +412,8 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
     for (let offset = 0; offset < visibleScores.length; offset += 100) diagnostic("retrieval.candidates", { revision, offset, total: visibleScores.length, candidates: visibleScores.slice(offset, offset + 100).map((sc) => ({ id: sc.id, name: byId.get(sc.id)?.name, file: byId.get(sc.id)?.file, score: sc.score, tier: sc.tier, factors: sc.factors, selected: picked.includes(sc.id), provenance: provenance.get(sc.id) })) });
   }
   if (bundle.investigation) diagnostic("investigation.complete", { ...bundle.investigation });
-  return { bundle, tiers, scored, terms, hidden, inaccessible, truncation, provenance };
+  bundle.projection = projectionOf(snapshot, bundle);
+  return { snapshot, bundle, tiers, scored, terms, hidden, inaccessible, truncation, provenance };
 }
 
 /** Neighbourhood around explicit entities, for "why are these connected?". */

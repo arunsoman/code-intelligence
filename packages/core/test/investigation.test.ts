@@ -152,3 +152,33 @@ test("token trimming reports omitted investigated context and retains the bound 
   assert.equal(r.bundle.investigation?.outcome,"partial");
   assert.ok(r.bundle.investigation?.gaps.some(g=>g.code==="CONTEXT_OMITTED"));
 });
+
+test("snapshot collection is chart-independent, survives trimming, and persists without exposing denied entities",async t=>{
+  const f=await fixture(t);
+  const options={forModel:true,subject:'runChatAgent',resolveEvidence:f.resolveEvidence};
+  const first=retrieveForQuestion(f.svc.store,f.revision,'runChatAgent flow',{...options,tokenBudget:100000});
+  const second=retrieveForQuestion(f.svc.store,f.revision,'runChatAgent flow',{...options,tokenBudget:150,requireKinds:['class','method']});
+  assert.equal(first.snapshot.id,second.snapshot.id);
+  assert.ok(second.snapshot.bundle.entities.length>second.bundle.entities.length);
+  assert.ok(second.bundle.projection!.omittedEntityIds.length>0);
+  assert.ok(second.snapshot.findings.some(f=>f.kind==='relationship'));
+  assert.ok(second.snapshot.findings.every(f=>f.evidenceIds.length>0));
+  const persisted=f.svc.store.db.prepare('select json from query_evidence_snapshots where id=?').get(second.snapshot.id) as {json:string};
+  assert.equal(JSON.parse(persisted.json).id,second.snapshot.id);
+  const denied=retrieveForQuestion(f.svc.store,f.revision,'runChatAgent flow',{...options,access:{...OPEN,deniedEntity:(id,getFile)=>(getFile?.(id) ?? /^[a-z]+:([^#]+)/.exec(id)?.[1])==='execution.ts'}});
+  assert.ok(!denied.snapshot.bundle.entities.some(e=>e.file==='execution.ts'));
+  assert.ok(!JSON.stringify(denied.snapshot.findings).includes('function:execution.ts'));
+});
+
+test('canonical findings exclude unresolved records and non-current evidence',async t=>{
+  const { collectSnapshot }=await import('../src/evidence-snapshot.ts');
+  const f=await fixture(t);
+  const r=retrieveForQuestion(f.svc.store,f.revision,'runChatAgent flow',{forModel:true,subject:'runChatAgent',resolveEvidence:f.resolveEvidence});
+  const copy=structuredClone(r.snapshot.bundle);
+  copy.relationships.forEach(edge=>{edge.resolution='UNRESOLVED';});
+  copy.facts.forEach(fact=>{fact.resolution='UNRESOLVED';});
+  assert.equal(collectSnapshot('flow',copy).findings.length,0);
+  const stale=structuredClone(r.snapshot.bundle);
+  stale.evidence.forEach(ev=>{ev.state='STALE';});
+  assert.equal(collectSnapshot('flow',stale).findings.length,0);
+});

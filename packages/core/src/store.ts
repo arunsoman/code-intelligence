@@ -1,3 +1,4 @@
+import type { EvidenceSnapshot } from "@cie/schema";
 // SQLite persistence (C31 slice) on node:sqlite. All reads are revision-bound.
 import { failpoint } from "./failpoint.ts";
 import { canTransition } from "./claim-ledger.ts";
@@ -41,6 +42,12 @@ export class Store {
     if (!parsed) return;
     this.db.prepare("insert into generated_chart_plans(cache_key, bundle_id, question, plan_json, created_at) values (?,?,?,?,?) on conflict(cache_key) do update set bundle_id=excluded.bundle_id, question=excluded.question, plan_json=excluded.plan_json, created_at=excluded.created_at")
       .run(cacheKey, bundleId, question, JSON.stringify(parsed), new Date().toISOString());
+  }
+
+  /** Internal collection checkpoint, never an authorization or freshness cache. */
+  saveEvidenceSnapshot(snapshot: EvidenceSnapshot): void {
+    this.db.prepare("insert into query_evidence_snapshots(id,revision,json) values (?,?,?) on conflict(id) do nothing")
+      .run(snapshot.id, snapshot.revision, JSON.stringify(snapshot));
   }
 
   constructor(path = process.env.CIE_DB ?? ".cie/cie.db") {

@@ -1,3 +1,4 @@
+import type { EvidenceProjection, CanonicalFinding } from "./evidence-snapshot.ts";
 import type { TableSpec } from "./table.ts";
 export { TableSpecSchema, type TableSpec } from "./table.ts";
 import type { ActivitySpec } from "./activity.ts";
@@ -74,6 +75,7 @@ export interface AnalysisBatch {
 export interface BaseRevision { revision: RevisionId; analyzerVersion: string; digests: Record<string, string> }
 
 export interface EvidenceBundle {
+  projection?: EvidenceProjection;
   id: Id; revision: RevisionId; evidence: EvidenceRef[];
   entities: Entity[]; relationships: Relationship[]; facts: Fact[];
   coverage: string[]; unresolved: string[]; tokenEstimate: number;
@@ -218,6 +220,9 @@ export interface ViewRoute {
   alternatives: { form: FormId; kind?: "failure" | "invariant"; name: string }[];
 }
 export interface ViewSpec {
+  evidenceProjection?: EvidenceProjection;
+  evidenceCoverage?: import("./evidence-snapshot.ts").EvidenceSnapshot["coverage"];
+  findings?: CanonicalFinding[];
   evidenceInvestigation?: InvestigationReport;
   id: Id; version: number; revision: RevisionId; taskId: Id; formId: FormId; caption: string;
   /** Prose that answers the question in words (maps only); the map and caption stay the visual part. */
@@ -2363,3 +2368,5 @@ export interface ReleaseView {
 export type { WorkflowStep } from "./plugins/workflow-step.ts";
 
 export * from "./feature-test-report.ts";
+
+export * from "./evidence-snapshot.ts";

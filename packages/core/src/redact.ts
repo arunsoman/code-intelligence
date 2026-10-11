@@ -35,6 +35,13 @@ export function redactBuilt<T extends { view: ViewSpec; claims: Claim[] }>(store
       v.evidenceInvestigation.outcome = roots.length ? "partial" : "unbound";
     }
   }
+  if (v.findings) v.findings = v.findings.filter(f => !f.subjectIds.some(isDenied) && !mentions(f.assertion));
+  if (v.evidenceCoverage) v.evidenceCoverage = { ...v.evidenceCoverage, gaps: v.evidenceCoverage.gaps.filter(g => !mentions(g)) };
+  if (v.evidenceProjection) v.evidenceProjection = { ...v.evidenceProjection,
+    omittedEntityIds: v.evidenceProjection.omittedEntityIds.filter(id => !isDenied(id)),
+    omittedRelationshipIds: v.evidenceProjection.omittedRelationshipIds.filter(id => !mentions(id)),
+    omittedFactIds: v.evidenceProjection.omittedFactIds.filter(id => !mentions(id)),
+  };
   // Nodes first: everything else is decided by which nodes are gone.
   const gone = new Set<string>(); const goneClaims = new Set<string>();
   v.nodes = v.nodes.filter((n) => { const bad = n.entityRefs.some(isDenied) || acc.denied(n.file) || mentions(n.label); if (bad) { gone.add(n.id); n.claimIds.forEach((c) => goneClaims.add(c)); removed++; } return !bad; });

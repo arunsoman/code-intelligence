@@ -9,6 +9,10 @@ export class MigrationError extends Error {
 }
 
 export const MIGRATIONS: Migration[] = [
+  { version: 50, name: "query-evidence-snapshots",
+    up: db => db.exec(`create table query_evidence_snapshots(id text primary key, revision text not null references revisions(id) on delete cascade, json text not null);`),
+    down: db => db.exec("drop table query_evidence_snapshots;"),
+  },
   {
     version: 5, name: "defect-workflow",
     up: (db) => db.exec(`
