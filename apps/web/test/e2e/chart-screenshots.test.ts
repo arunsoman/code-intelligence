@@ -481,10 +481,10 @@ test(
           stage="layout";
           await b.waitFor(() => `!document.querySelector('.canvas[aria-busy="true"]')`, RENDER_TIMEOUT, "graph layout finished");
           if (["S1"].includes(chart.code) && outcome === "shown") {
-            await b.waitFor(() => `document.querySelector('.canvas')?.dataset.layoutEngine === 'elk' && !document.querySelector('.canvas[aria-busy="true"]')`, RENDER_TIMEOUT, `${chart.code} uses the ELK worker`);
+            await b.waitFor(() => `document.querySelector('.canvas')?.dataset.layoutEngine === 'g6' && !document.querySelector('.canvas[aria-busy="true"]')`, RENDER_TIMEOUT, `${chart.code} uses G6`);
             if (chart.code === "S1") {
-              assert.ok(await b.eval(`document.querySelector('.canvas')._cyreg.cy.nodes().filter((n) => !n.isParent()).length > 1`), "architecture chart retains its detail");
-              assert.ok(await b.eval(`document.querySelector('.canvas')._cyreg.cy.edges().some((e) => e.style('curve-style') === 'segments')`), "ELK edge routes reach the renderer");
+              assert.ok(await b.eval(`Number(document.querySelector('.g6-canvas').dataset.nodeCount)>1`), "architecture chart retains its detail");
+              assert.ok(await b.eval(`Number(document.querySelector('.g6-canvas').dataset.edgeCount)>0`), "architecture relationships reach G6");
             }
           }
           if (chart.extraWait) await wait(chart.extraWait);
@@ -523,7 +523,7 @@ test(
           await b.eval(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
           await wait(200);
           if (chart.code === "S1" && outcome === "shown") {
-            assert.ok(await b.eval(`document.querySelector('.canvas')._cyreg.cy.edges().every(e => { const a=e.sourceEndpoint(), b=e.targetEndpoint(); return a && b && Number.isFinite(a.x) && Number.isFinite(a.y) && Number.isFinite(b.x) && Number.isFinite(b.y); })`), "routed links have drawable attachment endpoints");
+            assert.ok(await b.eval(`JSON.parse(document.querySelector('.g6-canvas').dataset.nodePositions).every(n=>Number.isFinite(n.x)&&Number.isFinite(n.y))`), "architecture nodes have finite positions");
           }
           stage="capture";
           // Screenshot.

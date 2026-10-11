@@ -5,6 +5,8 @@ import { g6Data, g6Layout } from "./g6-adapter.ts";
 import { attachFisheye, chartColor, LENS_DEFAULTS, type LensEngine, type LensScene } from "./fisheye.ts";
 import { describeNode, nextByDirection, type Dir } from "./graph.ts";
 import type { CanvasState } from "./response-workspace.ts";
+import { g6LensNotation, g6NodeSize } from "./g6-notation.ts";
+import { registerG6Notation } from "./g6-elements.ts";
 
 /** G6 owns graph geometry; the shared lens owns captured-element previews. */
 export function G6Canvas(p: CanvasProps) {
@@ -22,6 +24,9 @@ export function G6Canvas(p: CanvasProps) {
     camera.current = { zoom: g.getZoom(), pan: { x: pan[0], y: pan[1] }, lens: camera.current.lens };
     host.current!.dataset.zoom = String(g.getZoom());
     host.current!.dataset.nodePositions = JSON.stringify(cb.current.rendered.nodes.map(n => { const q = g.getViewportByCanvas(g.getElementPosition(n.id)); return { id: n.id, x: q[0], y: q[1] }; }));
+    const bounds = (id: string) => { const box = g.getElementRenderBounds(id); return { id, x1: box.min[0], y1: box.min[1], x2: box.max[0], y2: box.max[1] }; };
+    host.current!.dataset.nodeBounds = JSON.stringify(cb.current.rendered.nodes.map(n => bounds(n.id)));
+    host.current!.dataset.groupBounds = JSON.stringify(cb.current.rendered.groups.map(group => bounds(group.id)));
     cb.current.onState?.(camera.current);
     lens.current?.refresh();
     const w = host.current!.clientWidth, h = host.current!.clientHeight;
@@ -38,12 +43,13 @@ export function G6Canvas(p: CanvasProps) {
     if (g.getZoom() < .9) await g.zoomTo(.9, false);
     // The entry point of a large call graph must not disappear in a
     // label-preserving fit. Keep it visible and let the user pan downstream.
-    const root = cb.current.chartId === "S21" ? cb.current.rendered.nodes[0] : undefined;
+    const root = ["S1", "S16", "S21"].includes(cb.current.chartId ?? "") ? cb.current.rendered.nodes[0] : undefined;
     if (root) {
       const point = g.getViewportByCanvas(g.getElementPosition(root.id));
       const width = host.current?.clientWidth ?? 800, height = host.current?.clientHeight ?? 600;
-      if (point[0] < 110 || point[0] > width - 110 || point[1] < 85 || point[1] > height - 85)
-        await g.translateBy([Math.min(width / 2, 160) - point[0], Math.min(height / 2, 130) - point[1]], false);
+      const [nodeWidth, nodeHeight] = g6NodeSize(root), halfWidth = nodeWidth * g.getZoom() / 2, halfHeight = nodeHeight * g.getZoom() / 2;
+      if (point[0] < halfWidth + 16 || point[0] > width - halfWidth - 16 || point[1] < halfHeight + 52 || point[1] > height - halfHeight - 16)
+        await g.translateBy([Math.min(width / 2, halfWidth + 32) - point[0], Math.min(height / 2, halfHeight + 70) - point[1]], false);
     }
     save();
   };
@@ -53,19 +59,20 @@ export function G6Canvas(p: CanvasProps) {
     lastView.current = p.viewKey;
     let live = true;
     ready.current = false; delete element.dataset.nodeCount; delete element.dataset.chartId; setStatus("Arranging graph…");
+    registerG6Notation();
     const g = new Graph({ container, width: element.clientWidth, height: element.clientHeight, animation: false, padding: 48, zoomRange: [.15, 4],
       data: g6Data(p.rendered), layout: g6Layout(p.rendered, element.clientWidth, element.clientHeight),
-      node: { type: "rect", state: { selected: { stroke: "#38bdf8", lineWidth: 4 }, focused: { halo: true, haloStroke: "#fbbf24", haloLineWidth: 5 } } }, edge: { type: "polyline" }, combo: { type: "rect" },
+      node: { type: datum => datum.data?.classCard ? "cie-class-card" : datum.data?.role === "c4-person" ? "ellipse" : "rect", state: { selected: { stroke: "#38bdf8", lineWidth: 4 }, focused: { halo: true, haloStroke: "#fbbf24", haloLineWidth: 5 } } }, edge: { type: "polyline" }, combo: { type: "rect" },
       behaviors: [{ type: "drag-canvas", enable: () => !cb.current.boxSelect && !lens.current?.isActive() }], });
     graph.current = g;
     const scene = (): LensScene => {
       if (!ready.current || g.destroyed) return { nodes: [], edges: [] };
-      const nodes = cb.current.rendered.nodes.map(n => { const pt = g.getViewportByCanvas(g.getElementPosition(n.id)); return { id: n.id, ref: n, label: n.label, x: pt[0], y: pt[1], width: 220 * g.getZoom(), height: 70 * g.getZoom(), color: chartColor(n.node?.file ?? n.label, n.role), shape: "round-rectangle", displayMode: n.displayMode, selected: cb.current.selected.has(n.id), details: [n.role ?? "", ...(n.node?.notes ?? [])].filter(Boolean) }; });
+      const nodes = cb.current.rendered.nodes.map(n => { const pt = g.getViewportByCanvas(g.getElementPosition(n.id)), [width, height] = g6NodeSize(n); return { id: n.id, ref: n, label: n.label, x: pt[0], y: pt[1], width: width * g.getZoom(), height: height * g.getZoom(), color: chartColor(n.node?.file ?? n.label, n.role), shape: n.role === "c4-person" ? "ellipse" : "round-rectangle", displayMode: n.displayMode, selected: cb.current.selected.has(n.id), details: [n.role?.replace(/^(c4|uml)-/, "") ?? "", ...(n.node?.notes ?? [])].filter(Boolean) }; });
       const points = new Map(nodes.map(n => [n.id, n]));
       const edges = cb.current.rendered.edges.flatMap(e => {
         const a = points.get(e.from), b = points.get(e.to); if (!a || !b) return [];
         const data = g.getEdgeData(e.id), controls = data.style?.controlPoints as number[][] | undefined;
-        return [{ id: e.id, ref: e, from: e.from, to: e.to, label: e.label, color: e.displayMode === "FACT" ? "#94a3b8" : "#a78bfa", targetArrow: "triangle", dashed: e.displayMode !== "FACT" || e.kind?.includes("dependency"), points: [{ x: a.x, y: a.y }, ...(controls ?? []).map(pt => { const v = g.getViewportByCanvas([pt[0], pt[1]]); return { x: v[0], y: v[1] }; }), { x: b.x, y: b.y }] }];
+        return [{ id: e.id, ref: e, from: e.from, to: e.to, label: e.label, ...g6LensNotation(e), points: [{ x: a.x, y: a.y }, ...(controls ?? []).map(pt => { const v = g.getViewportByCanvas([pt[0], pt[1]]); return { x: v[0], y: v[1] }; }), { x: b.x, y: b.y }] }];
       });
       return { nodes, edges };
     };

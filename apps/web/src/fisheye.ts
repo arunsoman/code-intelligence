@@ -129,11 +129,14 @@ export function localChildren(parent: LensNode, children: RenderNode[], edges: R
 
 export type PreviewCapture = { kind: "node"; node: LensNode; children: RenderNode[]; edges: RenderEdge[] }
   | { kind: "edge"; edge: LensEdge; source?: LensNode; target?: LensNode };
+export const lensDetailCapacity = (radius: number) => Math.max(1, Math.min(12, Math.floor((radius * 1.3 - 32) / 16)));
 /** Isolated screen-space preview. It never reads or projects unrelated chart elements. */
 export function focusedPreview(capture: PreviewCapture, centre: Point, radius: number, page = 0): LensScene {
   if (capture.kind === "node") {
     if (capture.children.length) return localChildren(capture.node, capture.children, capture.edges, centre, radius, page);
-    const details = (capture.node.details ?? []).slice(0, Math.max(1, Math.min(12, Math.floor((radius * 1.3 - 32) / 16))));
+    const capacity = lensDetailCapacity(radius), all = capture.node.details ?? [];
+    const lastPage = Math.max(0, Math.ceil(all.length / capacity) - 1), offset = Math.max(0, Math.min(page, lastPage)) * capacity;
+    const details = all.slice(offset, offset + capacity);
     return { nodes: [{ ...capture.node, ...centre, width: radius * 1.45, height: Math.min(radius * 1.3, Math.max(48, 32 + details.length * 16)), details: details.length ? details : ["No deeper detail available"], focused: true }], edges: [] };
   }
   const width = Math.max(1, radius * .72), gap = Math.min(20, radius * .12);
@@ -225,7 +228,8 @@ export function attachFisheye(host: HTMLElement, options: LensOptions): LensEngi
     if (!captured) { active = false; publish(); return; }
     const title = captured.kind === "node" ? captured.node.label : captured.edge.label ?? "Relationship";
     const detail = captured.kind === "node" && captured.children.length ? captured : undefined;
-    if (detail) page = Math.min(page, Math.ceil(detail.children.length / childGrid(state.radius).capacity) - 1);
+    const pageCount = captured.kind === "node" ? Math.max(1, Math.ceil(detail ? detail.children.length / childGrid(state.radius).capacity : (captured.node.details?.length ?? 0) / lensDetailCapacity(state.radius))) : 1;
+    page = Math.max(0, Math.min(page, pageCount - 1));
     const preview = focusedPreview(captured, centre, state.radius, page);
     drawnNodes = preview.nodes; drawnEdges = preview.edges;
     if (detail) expandedId = detail.node.id;
@@ -255,6 +259,7 @@ export function attachFisheye(host: HTMLElement, options: LensOptions): LensEngi
     ctx.fillStyle = CHART_THEME.muted; ctx.font = "11px system-ui"; ctx.textAlign = "center";
     ctx.fillText(`Focused: ${title}`, centre.x, centre.y - radius + 18, state.radius * 1.6);
     if (detail) ctx.fillText(`${drawnNodes.length} of ${detail.children.length} · [ / ] pages`, centre.x, centre.y + radius - 18);
+    else if (pageCount > 1) ctx.fillText(`Details ${page + 1} / ${pageCount} · [ / ] pages`, centre.x, centre.y + radius - 18);
     ctx.restore();
     if (state.rings) { ctx.strokeStyle = "rgba(56,189,248,.35)"; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(centre.x, centre.y, state.radius, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([6, 7]); ctx.strokeStyle = "rgba(148,163,184,.4)"; ctx.beginPath(); ctx.arc(centre.x, centre.y, radius, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); }
     publish();
@@ -265,8 +270,9 @@ export function attachFisheye(host: HTMLElement, options: LensOptions): LensEngi
     ctx.beginPath(); ctx.moveTo(0, 0);
     if (shape === "diamond") { ctx.lineTo(-6, -4); ctx.lineTo(-12, 0); ctx.lineTo(-6, 4); }
     else if (shape === "tee") { ctx.moveTo(0, -5); ctx.lineTo(0, 5); }
+    else if (shape === "vee") { ctx.moveTo(-8, -4); ctx.lineTo(0, 0); ctx.lineTo(-8, 4); }
     else { ctx.lineTo(-8, -4); ctx.lineTo(-8, 4); }
-    if (shape !== "tee") { ctx.closePath(); ctx.fillStyle = fill === "hollow" ? CHART_THEME.background : color; ctx.fill(); }
+    if (shape !== "tee" && shape !== "vee") { ctx.closePath(); ctx.fillStyle = fill === "hollow" ? CHART_THEME.background : color; ctx.fill(); }
     ctx.strokeStyle = color; ctx.lineWidth = 1.2; ctx.stroke(); ctx.restore();
   }
   function drawNode(node: LensNode) {

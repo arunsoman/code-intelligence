@@ -22,4 +22,18 @@ Node and edge clicks retain source/evidence actions. Shift/Ctrl/Meta click and S
 
 Run `npm run typecheck`, the adapter/lens unit tests, `apps/web/test/e2e/g6.test.ts`, and the existing chart screenshot suite. Browser tests exercise indexed payment code with a stub provider; they do not validate a hosted model's interpretation.
 
-Architecture/class/ER/activity/sequence/concurrency migration, specialized routing and ports, comprehensive accessibility review, large-graph benchmarks, and removing legacy engines remain later work. Native tables should remain native tables. Full labels remain available through the captured lens and text outline.
+ER/activity/sequence/concurrency migration, specialized routing and ports, comprehensive accessibility review, large-graph benchmarks, and removing legacy engines remain later work. Native tables should remain native tables. Full labels remain available through the captured lens and text outline.
+
+## Second slice: architecture and UML classes
+
+S1 container/component architecture and S16 UML class diagrams now also use G6. Architecture groups preserve their original parent membership through compound Dagre layout and nested combos; group labels appear at the upper boundary. No new deployment or technology boundary is inferred by rendering.
+
+Class cards use a dedicated G6 node with stereotype, title, attribute and operation compartments and real separators. Dimensions reflect wrapped text. Both compartments receive a share of the visible member budget; excess members are counted explicitly and remain in source metadata for inspection. Empty compartments say that attributes/operations lack evidence. Connected classes use hierarchical layout; disconnected classes use a multi-column grid with actual card dimensions and spacing. The initial camera keeps the first class/component visible below the toolbar, while reporting off-screen content.
+
+Inheritance and realization use hollow target triangles; realization and dependency use dashed links. Aggregation uses a hollow source diamond; composition uses a filled source diamond. Association has no directional arrow unless a later contract supplies navigability. Dependency uses an open target arrow. The captured relationship preview uses the same arrow contract and evidence colors.
+
+The shared lens now pages long leaf detail lists using [ and ], as well as existing child-element pages. Paging retains the captured element and does not move the source graph. Its node hit boxes reflect actual class sizes rather than the old fixed graph-node size. Internal c4-/uml- role prefixes are removed from lens captions.
+
+`g6-notation.test.ts` checks compartments, omission, sizing, relation semantics and complete detail paging. The browser notation fixture directly renders the production G6Canvas with deliberately varied cards and nested boundaries: it checks non-overlap, containment, multi-column layout, keyboard evidence callbacks and captured paging. Its data is synthetic renderer test data, not a claim about repository evidence. Existing indexed-repository interaction tests and the full screenshot suite cover the surrounding application.
+
+Node and group world bounds are exposed as canvas data attributes for layout diagnostics. This slice does not add a new evidence extractor, class-member inference, group collapse navigation or image export API; existing response export and evidence actions remain in place. Other chart types still use their existing surfaces.

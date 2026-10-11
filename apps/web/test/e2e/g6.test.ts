@@ -42,7 +42,7 @@ test("G6 call and dependency graphs retain captured hover, zoom, keyboard eviden
       await b.waitFor(() => `document.querySelector('.g6-canvas').dataset.lensActive==='false'`, 5000);
       const saved = await b.eval<string>(`document.querySelector('.g6-canvas').dataset.nodePositions`);
       await b.eval(`document.querySelector('.response-tabs [role=tab][aria-selected=false]').click()`);
-      await b.waitFor(() => `!document.querySelector('.g6-canvas') && !document.querySelector('.stage[aria-busy="true"]') && !document.querySelector('.chip.busy')`, 30_000);
+      await b.waitFor(() => `(!document.querySelector('.g6-canvas') || document.querySelector('.g6-canvas').dataset.chartId!=='${name.startsWith("Call") ? "S21" : "S23"}') && !document.querySelector('.canvas[aria-busy="true"]') && !document.querySelector('.stage[aria-busy="true"]') && !document.querySelector('.chip.busy')`, 30_000);
       await b.eval(`[...document.querySelectorAll('.response-tabs [role=tab]')].find(e=>e.textContent.startsWith(${JSON.stringify(name)})).click()`);
       await b.waitFor(() => `document.querySelector('.g6-canvas')?.getAttribute('aria-busy')==='false' && Number(document.querySelector('.g6-canvas')?.dataset.nodeCount)>0`, 30_000);
       const restored = JSON.parse(await b.eval<string>(`document.querySelector('.g6-canvas').dataset.nodePositions`));
