@@ -436,9 +436,10 @@ export function retrieveAround(store: Store, revision: string, ids: string[], ho
 }
 
 /** Model projection from a validated checkpoint; no search, investigation or new evidence. */
-export function retrieveFromSnapshot(snapshot: import('@cie/schema').EvidenceSnapshot, options: { tokenBudget: number; requireKinds?: readonly string[]; resultIds?: string[]; subjectIds?: string[] }): Retrieval {
+export function retrieveFromSnapshot(snapshot: import('@cie/schema').EvidenceSnapshot, options: { tokenBudget: number; requireKinds?: readonly string[]; resultIds?: string[]; subjectIds?: string[]; protectedIds?: string[] }): Retrieval {
   let bundle=structuredClone(snapshot.bundle);
   const roots=new Set(options.subjectIds ?? bundle.investigation?.binding.roots ?? []);
+  const protectedIds=new Set([...roots,...(options.protectedIds??[])]);
   const result=options.resultIds ? new Set([...options.resultIds,...roots]) : undefined;
   const required=new Set(options.requireKinds);
   const selected=bundle.entities.filter(e=>!result || result.has(e.entityId));
@@ -456,7 +457,7 @@ export function retrieveFromSnapshot(snapshot: import('@cie/schema').EvidenceSna
   reduceModelDetail(bundle,options.tokenBudget);
   const dropped:{entityId:string;label:string}[]=[];
   while(bundle.tokenEstimate>options.tokenBudget && keep.size>1){
-    const next=[...selected].reverse().find(e=>keep.has(e.entityId)&&!roots.has(e.entityId));
+    const next=[...selected].reverse().find(e=>keep.has(e.entityId)&&!protectedIds.has(e.entityId));
     if(!next)break;
     keep.delete(next.entityId);dropped.push({entityId:next.entityId,label:next.name});rebuild();
   }

@@ -44,6 +44,16 @@ export function combineEvidenceSets(left: EvidenceSet, right: EvidenceSet, opera
   return { snapshotId: left.snapshotId, members };
 }
 
+/** A certificate closes only this body's direct static calls, never runtime dispatch. */
+export function currentDirectCallCoverage(snapshot: EvidenceSnapshot) {
+  const universe=new Set(snapshot.bundle.entities.map(e=>e.entityId));
+  const current=new Set(snapshot.bundle.evidence.filter(e=>e.state==='CURRENT').map(e=>e.id));
+  if(snapshot.bundle.revision!==snapshot.revision || snapshot.bundle.investigation?.revision!==snapshot.revision)return [];
+  return (snapshot.bundle.investigation.directCallCoverage ?? []).filter(c=>universe.has(c.entityId) && c.targetIds.every(id=>universe.has(id)) &&
+    !snapshot.bundle.relationships.some(r=>r.from===c.entityId && r.kind==='calls' && (r.resolution==='UNRESOLVED'||!c.targetIds.includes(r.to))) &&
+    c.evidence.length>0 && c.evidence.every(e=>current.has(e.id)&&e.state==='CURRENT'&&['STATIC_PARSED','STATIC_RESOLVED'].includes(e.class)));
+}
+
 /** Evaluate nested query algebra over one collection, without querying or changing evidence. */
 export function evaluateEvidenceSet(snapshot: EvidenceSnapshot, expression: import('@cie/schema').EvidenceSetExpression): EvidenceSet {
   const universe = new Set(snapshot.bundle.entities.map(e => e.entityId));
@@ -58,8 +68,7 @@ export function evaluateEvidenceSet(snapshot: EvidenceSnapshot, expression: impo
       const subjects = new Set(expr.subjectIds.filter(id => universe.has(id)));
       const current = new Set(snapshot.bundle.evidence.filter(e => e.state === 'CURRENT').map(e => e.id));
       if (expr.relationshipKind === 'calls' && expr.direction === 'outgoing' && subjects.size === expr.subjectIds.length && subjects.size > 0) {
-        const certificates = (snapshot.bundle.investigation?.revision === snapshot.revision ? snapshot.bundle.investigation.directCallCoverage ?? [] : [])
-          .filter(c => subjects.has(c.entityId) && c.targetIds.every(id=>universe.has(id)) && !snapshot.bundle.relationships.some(r=>r.from===c.entityId && r.kind==='calls' && (r.resolution==='UNRESOLVED' || !c.targetIds.includes(r.to))) && c.evidence.length > 0 && c.evidence.every(e => current.has(e.id) && e.state === 'CURRENT' && ['STATIC_PARSED','STATIC_RESOLVED'].includes(e.class)));
+        const certificates = currentDirectCallCoverage(snapshot).filter(c=>subjects.has(c.entityId));
         if ([...subjects].every(id => certificates.some(c => c.entityId === id))) {
           for (const id of universe) members[id] = certificates.some(c => c.targetIds.includes(id)) ? 'present' : 'absent';
         }

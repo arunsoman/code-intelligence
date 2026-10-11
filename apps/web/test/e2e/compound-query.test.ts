@@ -6,11 +6,12 @@ import { tmpdir } from 'node:os';
 import { Browser, CHROME } from './cdp.ts';
 import { startServer, REPO } from './harness.ts';
 
-test('compound membership is readable, inspectable and reused by a supporting chart tab', {skip:!existsSync(CHROME),timeout:150_000},async()=>{
+for(const mode of ['direct','transitive'] as const)test(`${mode} compound membership is readable, inspectable and reused by a supporting chart tab`, {skip:!existsSync(CHROME),timeout:150_000},async()=>{
   const repo=mkdtempSync(join(tmpdir(),'cie-compound-browser-'));cpSync(REPO,repo,{recursive:true});
   writeFileSync(join(repo,'comparison.ts'),`export function leftFlow(){commonHelper();leftHelper();}
 export function rightFlow(){commonHelper();rightHelper();}
-function commonHelper(){return 1;} function leftHelper(){return 2;} function rightHelper(){return 3;}`);
+function commonHelper(){return 1;} function leftHelper(){return 2;} function rightHelper(){return 3;}
+export function leftRoot(){leftFlow()} export function rightRoot(){rightFlow()}`);
   const server=await startServer({CIE_PROVIDER:'stub',CIE_ROUTER:'off'}),b=await Browser.launch();
   const click=(label:string)=>b.eval(`(()=>{const button=[...document.querySelectorAll('button')].find(e=>e.textContent.trim().startsWith(${JSON.stringify(label)})&&!e.disabled);if(!button)throw new Error('Missing button '+${JSON.stringify(label)});button.click();})()`);
   try{
@@ -21,17 +22,25 @@ function commonHelper(){return 1;} function leftHelper(){return 2;} function rig
     await b.waitFor(()=>`[...document.querySelectorAll('button')].some(e=>e.textContent.trim().startsWith('Build concept hierarchy')&&!e.disabled)`,60_000);
     await click('Build concept hierarchy');await b.waitFor(()=>`/[1-9]\\d* hierarchy concepts/.test(document.querySelector('header')?.innerText??'')`,60_000);
     await click('Visuals');await b.waitFor(()=>`!!document.querySelector('.gallery')`);
-    const question='functions called by both leftFlow and rightFlow';
+    const question=mode==='direct'?'functions called by both leftFlow and rightFlow':'functions reachable from both leftRoot and rightRoot';
     await b.eval(`(()=>{const li=[...document.querySelectorAll('.gallery li')].find(e=>e.querySelector('strong')?.innerText==='Call graph');const input=li.querySelector('input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(question)});input.dispatchEvent(new Event('input',{bubbles:true}));[...li.querySelectorAll('button')].find(e=>e.textContent.trim()==='Show').click();})()`);
     await b.waitFor(()=>`document.querySelector('.compound-query-panel summary')?.textContent.includes('1 supported')`,40_000);
     assert.ok((await b.eval<string>(`document.querySelector('.conversation')?.innerText ?? document.body.innerText`)).includes('Supported matches (1): commonHelper'));
     const rows=await b.eval<string[]>(`[...document.querySelectorAll('.compound-query-panel tbody tr')].map(r=>r.innerText)`);
     assert.ok(rows.some(r=>r.includes('commonHelper')&&r.match(/Supported/g)?.length===3));
     assert.ok(rows.some(r=>r.includes('leftHelper')&&r.match(/Excluded/g)?.length===2));
+    if(mode==='transitive'){
+      await b.eval(`(()=>{const row=[...document.querySelectorAll('.compound-query-panel tbody tr')].find(r=>r.querySelector('th').textContent==='commonHelper');row.querySelector('details summary').click();})()`);
+      const path=await b.eval<string>(`[...document.querySelectorAll('.compound-query-panel tbody tr')].find(r=>r.querySelector('th').textContent==='commonHelper').querySelector('details').innerText`);
+      assert.ok(path.includes('leftRoot')&&path.includes('leftFlow')&&path.includes('commonHelper'));
+      const response=await b.eval<{value:{view:{compoundQuery:{traversalCoverage:{left:{complete:boolean};right:{complete:boolean}}}}}}>(`window.__asks.find(a=>a.result.ok).result`);
+      assert.equal(response.value.view.compoundQuery.traversalCoverage.left.complete,true);
+      assert.equal(response.value.view.compoundQuery.traversalCoverage.right.complete,true);
+    }
     if(process.env.CIE_SCREENSHOT_DIR){
       mkdirSync(process.env.CIE_SCREENSHOT_DIR,{recursive:true});
       const {data}=await b.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
-      writeFileSync(join(process.env.CIE_SCREENSHOT_DIR,'compound-query.png'),Buffer.from(data,'base64'));
+      writeFileSync(join(process.env.CIE_SCREENSHOT_DIR,`compound-${mode}.png`),Buffer.from(data,'base64'));
     }
     await b.eval(`document.querySelector('[aria-label="Inspect call evidence for commonHelper"]').click()`);
     await b.waitFor(()=>`document.querySelectorAll('.drawer figure.evidence').length>0`,10_000);

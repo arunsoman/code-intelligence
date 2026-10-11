@@ -40,12 +40,18 @@ export type EvidenceSetExpression =
 export interface CompoundQueryPlan {
   version: 'compound-query.v1'; operation: EvidenceSetOperation;
   relationshipKind: 'calls'; direction: 'outgoing' | 'incoming';
+  /** Omitted in older saved results: direct calls. */
+  traversal?: 'direct' | 'transitive';
   left: { label: string; entityIds: string[]; candidates: string[] };
   right: { label: string; entityIds: string[]; candidates: string[] };
   status: 'ready' | 'ambiguous' | 'unbound';
 }
 export interface CompoundQueryResult {
   plan: CompoundQueryPlan; snapshotId: string;
-  rows: { entityId: string; label: string; left: Membership; right: Membership; result: Membership; evidenceIds: string[] }[];
+  rows: { entityId: string; label: string; left: Membership; right: Membership; result: Membership; evidenceIds: string[]; paths?: {left?: CallPath; right?: CallPath} }[];
+  traversalCoverage?: {left: CallTraversalCoverage; right: CallTraversalCoverage};
   limitations: string[];
 }
+
+export interface CallPath { entityIds: string[]; labels: string[]; evidenceIds: string[] }
+export interface CallTraversalCoverage { complete: boolean; visited: number; unknownFrontier: number; budgetExhausted: boolean }

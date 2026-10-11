@@ -197,3 +197,14 @@ test("source coverage is per body: unresolved callbacks do not invalidate comple
   const stale=investigate(f.svc.store,f.revision,"runChatAgent flow",{subject:"runChatAgent",access:OPEN,resolveEvidence:ev=>({...f.resolveEvidence(ev),state:"STALE"})});
   assert.equal(stale.report.callObligations![0]!.status,"unknown");
 });
+
+
+test("source expansion uses the reserved deadline after indexed traversal runs out of time",async t=>{
+  const f=await fixture(t);
+  let reads=0;t.mock.method(performance,"now",()=>reads++===0?0:40);
+  const r=investigate(f.svc.store,f.revision,"runChatAgent flow",{subject:"runChatAgent",access:OPEN,resolveEvidence:f.resolveEvidence,budget:{maxMs:100}});
+  assert.ok(r.report.gaps.some(g=>g.code==="BUDGET_EXHAUSTED"));
+  assert.ok(r.seeds.includes(f.id("runChatAgent")));
+  assert.ok(r.report.directCallCoverage!.some(c=>c.entityId===f.id("runChatAgent")));
+  assert.ok(r.relationships.some(edge=>edge.from===f.id("runChatAgent")&&edge.to===f.id("executeChatPlan")));
+});

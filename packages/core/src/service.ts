@@ -2486,7 +2486,7 @@ export class Service {
       : retrieveForQuestion(this.store, rev.id, question, { ...retrievalOptions, tokenBudget: chunkTokenBudget() });
     const compoundResult=compound ? evaluateCompoundQuestion(collected.snapshot,compound) : undefined;
     const retrieval=compoundResult ? retrieveFromSnapshot(collected.snapshot,{tokenBudget:chunkTokenBudget(),requireKinds:[...(chartDefinition?.requiredKinds??[]),...(chartDefinition?.requiredAcrossRepository??[])],
-      subjectIds:[...compound!.left.entityIds,...compound!.right.entityIds],resultIds:compoundResult.rows.filter(r=>r.result==="present").map(r=>r.entityId)}) : collected;
+      subjectIds:[...compound!.left.entityIds,...compound!.right.entityIds],protectedIds:compoundResult.rows.filter(r=>r.result==="present").flatMap(r=>[...(r.paths?.left?.entityIds??[]),...(r.paths?.right?.entityIds??[])]),resultIds:compoundResult.rows.filter(r=>r.result==="present").flatMap(r=>[r.entityId,...(r.paths?.left?.entityIds??[]),...(r.paths?.right?.entityIds??[])])}) : collected;
     const { snapshot, bundle, tiers, scored, hidden, inaccessible, truncation } = retrieval;
     if((reused||compoundResult) && bundle.tokenEstimate>chunkTokenBudget())return fail(ctx,{code:"BUDGET_EXCEEDED",message:"The bound evidence exceeds the prompt budget. Narrow the operands or question before generating this view.",retryable:false});
     const modelBundle = bundle;

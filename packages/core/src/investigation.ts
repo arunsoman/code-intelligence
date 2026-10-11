@@ -77,9 +77,11 @@ export function investigate(store:Store,revision:string,question:string,options:
     }
   }
   if(queue.length || performance.now()>=graphUntil)report.gaps.push({code:"BUDGET_EXHAUSTED",message:"Indexed tracing reached its entity or time budget."});
+  // Bound operands stay in the collection even when indexed walking uses its reserved time.
+  for(const id of binding.roots.slice(0,budget.maxEntities)){seen.add(id);depths.set(id,0);contextOnly.delete(id);}
   // Inspect reachable implementations even when indexed edges exist: an index may omit only some calls.
   const roots=[...new Set([...binding.roots,...seen])].map(id=>byId.get(id)!).filter(e=>["function","method"].includes(e.kind)&&!contextOnly.has(e.entityId));
-  if(options.resolveEvidence && roots.length && performance.now()<graphUntil){
+  if(options.resolveEvidence && roots.length && performance.now()<until){
     const rev=store.revision(revision)!;
     const recovered=sourceRecovery({revision,roots,depths,entities,budget,until,resolve:options.resolveEvidence,observedAt:rev.createdAt,accessScopeId:rev.repoRoot});
     for(const r of recovered.relationships){

@@ -15,6 +15,8 @@ test('explicit grammar preserves direction and does not guess ordinary conjuncti
   assert.equal(parseCompoundQuestion('Which functions call both leftFlow and rightFlow?')?.direction,'incoming');
   assert.equal(parseCompoundQuestion('Which functions are called by both leftFlow and rightFlow?')?.direction,'outgoing');
   assert.equal(parseCompoundQuestion('functions called by leftFlow but not rightFlow')?.operation,'difference');
+  assert.equal(parseCompoundQuestion('functions reachable from both leftFlow and rightFlow')?.traversal,'transitive');
+  assert.equal(parseCompoundQuestion('functions that can reach either leftFlow or rightFlow')?.direction,'incoming');
   assert.equal(parseCompoundQuestion('explain leftFlow and rightFlow'),null);
   assert.equal(parseCompoundQuestion('functions called by both A and B or C'),null);
   assert.equal(planCompoundQuestion('functions called by both leftFlow and rightFlow',[entity('leftFlow'),entity('rightFlow')])?.status,'ready');
@@ -27,7 +29,8 @@ async function fixture(t:import('node:test').TestContext,provider:import('@cie/s
   writeFileSync(join(repo,'flow.ts'),`export function leftFlow(){ commonHelper(); leftHelper(); }
 export function rightFlow(){ commonHelper(); rightHelper(); }
 function commonHelper(){return 1;} function leftHelper(){return 2;} function rightHelper(){return 3;}
-export function unrelatedFlow(){return 4;}`);
+export function unrelatedFlow(){return 4;}
+export function leftRoot(){leftFlow()} export function rightRoot(){rightFlow()}`);
   const f=await setup(provider,repo);
   t.after(()=>{f.worker.close();f.svc.store.db.close();rmSync(repo,{recursive:true,force:true});});
   assert.ok((await f.svc.buildConceptHierarchy(ctx(),{revision:f.revision})).ok);
@@ -117,4 +120,44 @@ test('compound exclusions recover missing indexed edges and include inspectable 
   assert.ok(row.evidenceIds.some(id=>id.startsWith('investigation-source:') && !/:[0-9]+$/.test(id)));
   const snapshot=f.svc.store.evidenceSnapshot(r.value.manifest!.snapshotId!)!;
   assert.equal(snapshot.bundle.investigation!.callObligations!.filter(o=>o.status==='complete').length,2);
+});
+
+
+test('transitive conversation preserves intermediate witnesses, excludes only closed branches, and reuses the same snapshot',async t=>{
+  const f=await fixture(t),question='functions reachable from both leftRoot and rightRoot';
+  const r=await f.svc.converse(ctx(),{text:question,revision:f.revision});assert.ok(r.ok);assert.equal(r.value.kind,'view');if(r.value.kind!=='view')return;
+  const view=r.value.view,result=view.compoundQuery!;
+  assert.equal(result.plan.traversal,'transitive');
+  assert.deepEqual(result.rows.filter(r=>r.result==='present').map(r=>r.label),['commonHelper']);
+  assert.equal(result.traversalCoverage!.left.complete,true);assert.equal(result.traversalCoverage!.right.complete,true);
+  const row=result.rows.find(r=>r.label==='commonHelper')!;
+  assert.deepEqual(row.paths!.left!.labels,['leftRoot','leftFlow','commonHelper']);
+  assert.equal(row.paths!.left!.evidenceIds.length,2);
+  const snapshot=f.svc.store.evidenceSnapshot(view.evidenceProjection!.snapshotId)!;
+  const second=await f.svc.ask(ctx(),{question,revision:f.revision,chartCode:'S28',snapshotId:snapshot.id});assert.ok(second.ok);
+  assert.deepEqual(second.value.view.compoundQuery,result);
+  const missing=new Set(second.value.view.evidenceProjection!.omittedEntityIds);
+  assert.ok(!row.paths!.left!.entityIds.some(id=>missing.has(id)));assert.ok(!row.paths!.right!.entityIds.some(id=>missing.has(id)));
+  for(const [clause,label] of [['leftRoot but not rightRoot','leftHelper'],['rightRoot but not leftRoot','rightHelper']] as const){
+    const diff=await f.svc.ask(ctx(),{question:`functions reachable from ${clause}`,revision:f.revision,chartCode:'S21'});assert.ok(diff.ok);
+    assert.ok(diff.value.view.compoundQuery!.rows.some(r=>r.label===label&&r.result==='present'));
+  }
+});
+
+
+test('redaction removes paths and coverage certificates that reference inaccessible intermediates',async t=>{
+  const {redactBuilt}=await import('../src/redact.ts');
+  const f=await fixture(t),question='functions reachable from both leftRoot and rightRoot';
+  const r=await f.svc.ask(ctx(),{question,revision:f.revision,chartCode:'S21'});assert.ok(r.ok);
+  const view=r.value.view;
+  const forbidden=f.svc.store.entities(f.revision).find(e=>e.file==='src/db/users.ts'&&e.kind==='function')!;
+  const row=view.compoundQuery!.rows.find(r=>r.label==='commonHelper')!;
+  row.paths!.left!.entityIds[1]=forbidden.entityId;row.paths!.left!.labels[1]=forbidden.name;
+  view.evidenceInvestigation!.directCallCoverage!.push({entityId:forbidden.entityId,targetIds:[],evidence:[]});
+  view.evidenceInvestigation!.callObligations!.push({entityId:forbidden.entityId,status:'unknown',reason:'unavailable'});
+  const rev=f.svc.store.revision(f.revision)!;f.svc.store.denyPath(rev.repoRoot,'src/db/users.ts');
+  const redacted=redactBuilt(f.svc.store,rev,{view,claims:[]}).view;
+  assert.equal(redacted.compoundQuery,undefined);
+  assert.ok(!redacted.evidenceInvestigation!.directCallCoverage!.some(c=>c.entityId===forbidden.entityId));
+  assert.ok(!redacted.evidenceInvestigation!.callObligations!.some(c=>c.entityId===forbidden.entityId));
 });

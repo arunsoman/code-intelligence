@@ -29,13 +29,13 @@ export function redactBuilt<T extends { view: ViewSpec; claims: Claim[] }>(store
     const report = v.evidenceInvestigation;
     const roots = report.binding.roots.filter(id => !isDenied(id));
     const candidates = report.binding.candidates.filter(id => !isDenied(id));
-    v.evidenceInvestigation = { ...report, binding: { ...report.binding, roots, candidates }, gaps: report.gaps.filter(g => (!g.entityId || !isDenied(g.entityId)) && !mentions(g.message)) };
+    v.evidenceInvestigation = { ...report, binding: { ...report.binding, roots, candidates }, directCallCoverage: report.directCallCoverage?.filter(c=>!isDenied(c.entityId)&&!c.targetIds.some(isDenied)&&!c.evidence.some(e=>acc.denied(e.sourceId))), callObligations: report.callObligations?.filter(o=>!isDenied(o.entityId)&&!mentions(o.reason)), gaps: report.gaps.filter(g => (!g.entityId || !isDenied(g.entityId)) && !mentions(g.message)) };
     if (roots.length !== report.binding.roots.length) {
       v.evidenceInvestigation.binding.status = roots.length ? "bound" : "unbound";
       v.evidenceInvestigation.outcome = roots.length ? "partial" : "unbound";
     }
   }
-  if (v.compoundQuery && (v.compoundQuery.rows.some(r=>isDenied(r.entityId)||mentions(r.label)) ||
+  if (v.compoundQuery && (v.compoundQuery.rows.some(r=>isDenied(r.entityId)||mentions(r.label)||[r.paths?.left,r.paths?.right].some(p=>p && (p.entityIds.some(isDenied)||p.labels.some(mentions)))) ||
       [...v.compoundQuery.plan.left.entityIds,...v.compoundQuery.plan.right.entityIds].some(isDenied))) {
     delete v.compoundQuery;
   }
