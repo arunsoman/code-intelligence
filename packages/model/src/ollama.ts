@@ -61,6 +61,7 @@ export function modelEvidence(req: Pick<ModelRequest, "purpose" | "bundle">) {
       .map((f) => ({ subject: f.subject, predicate: f.predicate, value: "value" in f.object ? f.object.value : f.object, evidenceIds: f.evidence.map((e) => e.id) })),
     unresolved: bundle.unresolved,
     coverage: bundle.coverage,
+    ...(bundle.investigation ? { investigation: { version: bundle.investigation.version, revision: bundle.investigation.revision, goal: bundle.investigation.goal, binding: bundle.investigation.binding, outcome: bundle.investigation.outcome, scope: bundle.investigation.scope, gaps: bundle.investigation.gaps } } : {}),
   };
 }
 

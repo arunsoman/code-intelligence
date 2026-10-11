@@ -2308,18 +2308,24 @@ export class Service {
   private async answerFromEvidence(ctx: CallContext, rev: RevisionRow, question: string, bundle: EvidenceBundle) {
     const { result, note } = await this.callModel<SourceOverviewOutput>(ctx, rev, {
       purpose: "SOURCE_OVERVIEW", schemaId: SCHEMA_SOURCE_OVERVIEW, question, bundle,
+      instructions: bundle.investigation ? "Explain the bound subject first. Investigation gaps are limitations of the analysis, never proof of repository absence. Do not assert only, always, never, no implementation, or impossibility of a complete diagram from a bounded static investigation." : undefined,
     });
     const fallback = () => inferSourceOverview(bundle);
     let output = result.ok ? result.value : fallback();
     const current = new Map(bundle.evidence.filter((ev) => ev.state === "CURRENT").map((ev) => [ev.id, ev]));
     const entityIds = new Set(bundle.entities.map((entity) => entity.entityId));
-    const accept = (candidate: SourceOverviewOutput) => candidate.statements.filter((statement) => statement.entityIds.every((id) => entityIds.has(id)) &&
+    const unsafeScopeClaim = (text: string) => /\b(only|always|never)\b|\b(?:no|none|cannot|can.t)\b.*\b(?:relationship|implementation|call.flow|diagram|function)\b|\b(?:diagram|call.flow)\b.*\b(?:cannot|can.t)\b/i.test(text);
+    const accept = (candidate: SourceOverviewOutput) => candidate.statements.filter((statement) =>
+      (!bundle.investigation || !unsafeScopeClaim(statement.text)) && statement.entityIds.every((id) => entityIds.has(id)) &&
       statement.evidenceIds.every((id) => current.has(id)) && statement.entityIds.every((id) =>
         bundle.facts.some((fact) => fact.predicate !== "concept_guidance" && fact.subject === id && fact.evidence.some((ev) => statement.evidenceIds.includes(ev.id))) ||
         bundle.relationships.some((rel) => (rel.from === id || rel.to === id) && rel.evidence.some((ev) => statement.evidenceIds.includes(ev.id)))));
+    const rejectedCount = output.statements.length - accept(output).length;
+    diagnostic("source-summary.rejected", { requestId: ctx.requestId, rejectedCount, investigation: bundle.investigation?.outcome });
     let accepted = accept(output);
-    const usedModel = result.ok && accepted.length > 0;
-    if (!accepted.length) { output = fallback(); accepted = accept(output); }
+    let usedModel = result.ok && accepted.length > 0;
+    const roots = bundle.investigation?.binding.roots ?? [];
+    if (!accepted.length || (roots.length && !accepted.some(statement => statement.entityIds.some(id => roots.includes(id))))) { output = fallback(); accepted = accept(output); usedModel = false; }
     const concepts = bundle.facts.filter((f) => f.predicate === "concept_guidance");
     const citedSubjects = new Set(accepted.flatMap((s) => s.entityIds));
     const covered = concepts.filter((f) => ((f.object.value as { members: string[] }).members).some((id) => citedSubjects.has(id)));
@@ -2331,6 +2337,7 @@ export class Service {
       rationaleSummary: "Inferred from production source excerpts and static call relationships; documentation was excluded.",
     }, bundle, { ...(usedModel && result.ok ? { run: result.run } : {}), store: this.store }));
     this.persist(claims);
+    const limits = output.limits.filter(text => !bundle.investigation || !unsafeScopeClaim(text));
     const paragraphs = accepted.map((statement, index) => {
       const ev = current.get(statement.evidenceIds[0]!);
       const source = ev ? this.resolveEvidence(rev, ev) : null;
@@ -2338,7 +2345,7 @@ export class Service {
       return `${index ? "• " : ""}${statement.text}${citation}`;
     });
     return {
-      text: paragraphs.length ? `Inferred from the source code:\n\n${paragraphs.join("\n\n")}${output.limits.length ? `\n\n${output.limits[0]}` : ""}` :
+      text: paragraphs.length ? `Inferred from the source code:\n\n${paragraphs.join("\n\n")}${limits.length ? `\n\n${limits[0]}` : ""}` :
         undefined,
       claims, warnings: [...(note ? [note] : []), ...bundle.unresolved, ...(!usedModel ? ["Source answering used the offline fallback."] : [])],
     };
@@ -2449,7 +2456,7 @@ export class Service {
 
     // Hybrid retrieval: exact names, semantic closeness, concept cards and the graph, over only what this caller may see, cut to the model's budget.
     const semantic = req.overview || req.scope === "repository" ? undefined : await semanticScores(this.store, rev.id, question, this.embedder).catch(() => undefined);
-    const retrievalOptions = { scope: req.scope ?? (req.overview ? "repository" as const : "subject" as const), forModel: true, resolveEvidence: (ev: EvidenceRef) => this.resolveEvidence(rev, ev), overview: req.overview, lens: req.lens, pins: new Set(req.pins ?? []), extraSeeds: [...(req.pins ?? []), ...(req.overview ? overviewSeeds(this.store, rev.id) : req.seeds ?? [])], semantic, access: policyFor(this.store, rev.repoRoot), requireKinds: chartDefinition?.requiredKinds, requireAcrossRepositoryKinds: chartDefinition?.requiredAcrossRepository };
+    const retrievalOptions = { subject: req.subject, subjectSeeds: req.seeds ?? [], scope: req.scope ?? (req.overview ? "repository" as const : "subject" as const), forModel: true, resolveEvidence: (ev: EvidenceRef) => this.resolveEvidence(rev, ev), overview: req.overview, lens: req.lens, pins: new Set(req.pins ?? []), extraSeeds: [...(req.pins ?? []), ...(req.overview ? overviewSeeds(this.store, rev.id) : req.seeds ?? [])], semantic, access: policyFor(this.store, rev.repoRoot), requireKinds: chartDefinition?.requiredKinds, requireAcrossRepositoryKinds: chartDefinition?.requiredAcrossRepository };
     const { bundle, tiers, scored, hidden, inaccessible, truncation } = retrieveForQuestion(this.store, rev.id, question, { ...retrievalOptions, tokenBudget: chunkTokenBudget() });
     const modelBundle = bundle;
     if (req.chartCode === "S16") {
@@ -2538,6 +2545,8 @@ export class Service {
         built.claims.push(...evidenceAnswer.claims);
         if (!built.view.nodes.length && evidenceAnswer.text) built.view.gaps.push("The evidence supports the written explanation, but does not support the requested diagram.");
         if (truncation) built.view.gaps.push(`The evidence was cut to fit the model's budget (${truncation.before} → ${truncation.after} estimated tokens): ${truncation.dropped.length} element(s) were dropped after reducing detail.`);
+        if (bundle.investigation && bundle.investigation.outcome !== "supported") built.view.gaps.push(...bundle.investigation.gaps.map(g => g.message));
+        built.view.evidenceInvestigation = bundle.investigation;
         built.view.params = { ...built.view.params, overview: retrievalOptions.scope === "repository", ...(req.subject ? { subject: req.subject } : {}), scope: retrievalOptions.scope };
         diagnostic("chart.compiled", { requestId: ctx.requestId, chartId: req.chartCode, diagnostics: built.diagnostics, nodes: built.view.nodes.length, edges: built.view.edges.length, gaps: built.view.gaps });
         if (req.chartCode === "S16") process.stderr.write(`[uml] ${JSON.stringify({ stage: "compiled", requestId: ctx.requestId, nodes: built.view.nodes.length, nodesWithMembers: built.view.nodes.filter((n) => (n.notes?.length ?? 0) > 0).length, renderedMembers: built.view.nodes.reduce((n, node) => n + (node.notes?.length ?? 0), 0), edges: built.view.edges.length, gaps: built.view.gaps.length })}\n`);
@@ -2565,6 +2574,8 @@ export class Service {
     view.hidden = hidden;
     if (inaccessible) view.gaps.push(`${inaccessible} match(es) are in code you do not have access to and were left out.`);
     if (truncation) view.gaps.push(`The evidence was cut to fit the model's budget (${truncation.before} → ${truncation.after} estimated tokens): ${truncation.dropped.length} element(s) were dropped, lowest-ranked first. "Why isn't X shown?" lists them.`);
+    view.evidenceInvestigation = bundle.investigation;
+    if (bundle.investigation && bundle.investigation.outcome !== "supported") view.gaps.push(...bundle.investigation.gaps.map(g => g.message));
     this.persist(claims);
     const mapBuilt = redactBuilt(this.store, rev, { view, claims });
     return ok(ctx, { view: mapBuilt.view, claims: mapBuilt.claims }, { revision: rev.id, warnings, completeness: mapBuilt.view.gaps.length ? "PARTIAL" : "COMPLETE" });

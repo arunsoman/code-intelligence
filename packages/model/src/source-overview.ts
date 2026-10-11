@@ -30,7 +30,8 @@ export function inferSourceOverview(bundle: EvidenceBundle): SourceOverviewOutpu
     const match = supported.find(({ entity }) => pattern.test(words(entity.name)));
     return match ? [{ ...match, label }] : [];
   });
-  const selected = (workflows.length >= 2 ? workflows : activities.length ? activities : supported).slice(0, 5);
+  const bound = (bundle.investigation?.binding.roots ?? []).flatMap(id => supported.filter(item => item.entity.entityId === id));
+  const selected = (bound.length ? bound : workflows.length >= 2 ? workflows : activities.length ? activities : supported).slice(0, 5);
   const statements: SourceOverviewOutput["statements"] = [];
   const labels = new Set(workflows.map((workflow) => workflow.label));
   const purpose = labels.has("indexing source repositories") && (labels.has("handling conversational queries") || labels.has("extracting concepts from code"))

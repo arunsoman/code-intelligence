@@ -1,3 +1,4 @@
+import { investigate } from "./investigation.ts";
 import { diagnostic, diagnosticsEnabled, bundleDiagnostics } from "./diagnostics.ts";
 // Question → bounded, revision-bound evidence bundle (C09 projection + C10/C11 retrieval, keyword/graph only).
 import { createHash } from "node:crypto";
@@ -41,6 +42,10 @@ export interface Retrieval {
 }
 export interface RetrieveOptions {
   scope?: "repository" | "subject";
+  subject?: string;
+  /** Explicit subjects, distinct from context pins. */
+  subjectSeeds?: string[];
+  investigation?: boolean;
   /** Use the same compact payload used by the model provider when measuring its budget. */
   forModel?: boolean;
   resolveEvidence?: (ev: EvidenceRef) => ResolvedEvidence;
@@ -187,9 +192,12 @@ export function bundleFor(store: Store, revision: string, entityIds: string[], n
 }
 
 export function retrieveForQuestion(store: Store, revision: string, question: string, opts: RetrieveOptions = {}): Retrieval {
+  const investigation = opts.forModel && opts.scope !== "repository" && !opts.overview && opts.investigation !== false
+    ? investigate(store, revision, question, { subject: opts.subject, seeds: opts.subjectSeeds ?? opts.extraSeeds, access: opts.access ?? OPEN, resolveEvidence: opts.resolveEvidence }) : undefined;
+  if (investigation) opts = { ...opts, extraSeeds: [...new Set([...(opts.extraSeeds ?? []), ...investigation.seeds])] };
   if (opts.forModel && answerConcepts(store, revision).length) {
     const hierarchy = navigateHierarchy(store, revision, question, opts.scope === "repository" || opts.overview ? [] : opts.extraSeeds);
-    opts = { ...opts, extraSeeds: [...new Set([...(opts.pins ?? []), ...hierarchy.seeds])] };
+    opts = { ...opts, extraSeeds: [...new Set([...(opts.pins ?? []), ...(opts.extraSeeds ?? []), ...hierarchy.seeds])] };
     diagnostic("retrieval.hierarchy", { revision, hierarchyLevel: hierarchy.level, conceptIds: hierarchy.conceptIds, seeds: hierarchy.seeds, nodes: hierarchy.nodes });
   }
   if (opts.scope === "repository") opts = { ...opts, overview: true, extraSeeds: opts.extraSeeds ?? overviewSeeds(store, revision) };
@@ -249,6 +257,10 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
   const note = (id: string, why: string) => provenance.set(id, [...new Set([...(provenance.get(id) ?? []), why])]);
   const isSeed = (id: string) => overrides.get(id) === "pin" || factor(id, "TASK_MATCH") > 0 || factor(id, "SEMANTIC_JUDGMENT") > 0 || (opts.frames?.has(id) ?? false) || (opts.extraSeeds ?? []).includes(id);
   const candidates = [...scored.values()].filter((s) => isSeed(s.id)).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+  if (investigation?.report.binding.status === "bound") {
+    const order = new Map(investigation.report.binding.roots.map((id,i) => [id,i]));
+    candidates.sort((a,b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity) || b.score-a.score || a.id.localeCompare(b.id));
+  }
   if (opts.overview) {
     const order = new Map((opts.extraSeeds ?? []).map((id, i) => [id, i]));
     candidates.sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity) || b.score - a.score || a.id.localeCompare(b.id));
@@ -262,7 +274,9 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
   // are more of them than maxNodes the strongest still wins; everything else fills whatever capacity is left.
   const guaranteed = (id: string) => overrides.get(id) === "pin" || (opts.extraSeeds ?? []).includes(id);
   const [first, rest] = [candidates.filter((c) => guaranteed(c.id)), candidates.filter((c) => !guaranteed(c.id))];
+  const subjectScope = investigation?.report.binding.status === "bound" ? new Set([ ...investigation.seeds, ...(opts.pins ?? []), ...(opts.subjectSeeds ?? []) ]) : undefined;
   for (const c of [...first, ...rest]) {
+    if (subjectScope && !subjectScope.has(c.id)) continue;
     const label = byId.get(c.id)!.name;
     // A denied match is counted and dropped before anything else can mention it: not in the picks, not in "why hidden".
     if (isDenied(c.id)) { inaccessible++; continue; }
@@ -282,14 +296,29 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
   const idx = revisionIndex(store, revision);
   const inPicked = new Set(picked);
   const neighbours = new Map<string, number>();
-  for (const id of picked) for (const n of idx.neighbors.get(id) ?? []) if (!inPicked.has(n) && scored.has(n) && !opts.ignored?.has(n)) { if (isDenied(n)) { inaccessible++; continue; } neighbours.set(n, Math.max(neighbours.get(n) ?? 0, scored.get(n)!.score)); }
+  for (const id of picked) for (const n of idx.neighbors.get(id) ?? []) if (!inPicked.has(n) && scored.has(n) && !opts.ignored?.has(n) && (!subjectScope || subjectScope.has(n))) { if (isDenied(n)) { inaccessible++; continue; } neighbours.set(n, Math.max(neighbours.get(n) ?? 0, scored.get(n)!.score)); }
   for (const [n] of [...neighbours].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) {
     if (picked.length >= maxNodes) { hidden.push({ entityId: n, label: byId.get(n)!.name, reason: `direct neighbour of a shown element, cut by the ${maxNodes}-node cap` }); continue; }
     picked.push(n); note(n, "graph neighbour");
   }
   const notes = terms.length ? [`matched on terms: ${terms.join(", ")}`] : ["no searchable terms in question"];
   if (opts.semantic?.size) notes.push(`${opts.semantic.size} element(s) were also found by semantic similarity`);
-  const build = (ids: string[], coverage: string[]) => assemble(store, revision, ids, coverage, !opts.forModel, opts.forModel ? opts : undefined);
+  const build = (ids: string[], coverage: string[]) => {
+    const bundle = assemble(store, revision, ids, coverage, !opts.forModel, opts.forModel ? opts : undefined);
+    if (investigation) {
+      const available = new Set(bundle.entities.map(e => e.entityId));
+      const pairs = new Set(bundle.relationships.map(r => `${r.kind}|${r.from}|${r.to}`));
+      const recovered = investigation.relationships.filter(r => available.has(r.from) && available.has(r.to) && !pairs.has(`${r.kind}|${r.from}|${r.to}`));
+      bundle.relationships.push(...recovered);
+      for (const r of recovered) for (const ev of r.evidence) store.putEvidence(revision, ev);
+      const omitted = investigation.seeds.filter(id => !available.has(id));
+      bundle.investigation = { ...investigation.report, gaps: [...investigation.report.gaps, ...(omitted.length ? [{code: "CONTEXT_OMITTED" as const, message: `${omitted.length} investigated entities were omitted from this model context.`}] : [])] };
+      if (omitted.length && bundle.investigation.outcome === "supported") bundle.investigation.outcome = "partial";
+      bundle.coverage.push(`Investigation: ${bundle.investigation.outcome}; bounded static neighborhood, not exhaustive execution coverage.`, ...bundle.investigation.gaps.map(g => g.message));
+      refreshModelBundle(bundle);
+    }
+    return bundle;
+  };
   let bundle = build(picked, notes);
 
   // Cut to the evidence budget, lowest-ranked first (pinned and critical last), and keep the list of what went.
@@ -300,7 +329,7 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
     // A pin or an explicit seed is exempt from the maxNodes cutoff above for the same reason it must not be the
     // first thing a token squeeze throws away: it is not a weak match to be weighed against stronger ones, it is
     // the thing the caller named.
-    const rank = (id: string) => (guaranteed(id) ? 3 : scored.get(id)!.tier === "CRITICAL" ? 2 : scored.get(id)!.tier === "RELEVANT" ? 1 : 0);
+    const rank = (id: string) => (investigation?.report.binding.roots.includes(id) ? 4 : guaranteed(id) ? 3 : scored.get(id)!.tier === "CRITICAL" ? 2 : scored.get(id)!.tier === "RELEVANT" ? 1 : 0);
     const order = [...picked].sort((a, b) => rank(a) - rank(b) || scored.get(a)!.score - scored.get(b)!.score || a.localeCompare(b));
     const dropped: { entityId: string; label: string }[] = [];
     let keep = new Set(picked);
@@ -366,6 +395,7 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
     const visibleScores = [...scored.values()].filter((sc) => !isDenied(sc.id));
     for (let offset = 0; offset < visibleScores.length; offset += 100) diagnostic("retrieval.candidates", { revision, offset, total: visibleScores.length, candidates: visibleScores.slice(offset, offset + 100).map((sc) => ({ id: sc.id, name: byId.get(sc.id)?.name, file: byId.get(sc.id)?.file, score: sc.score, tier: sc.tier, factors: sc.factors, selected: picked.includes(sc.id), provenance: provenance.get(sc.id) })) });
   }
+  if (bundle.investigation) diagnostic("investigation.complete", { ...bundle.investigation });
   return { bundle, tiers, scored, terms, hidden, inaccessible, truncation, provenance };
 }
 

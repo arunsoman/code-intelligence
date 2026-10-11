@@ -25,6 +25,16 @@ export function redactBuilt<T extends { view: ViewSpec; claims: Claim[] }>(store
   };
   const v = built.view;
   let removed = 0;
+  if (v.evidenceInvestigation) {
+    const report = v.evidenceInvestigation;
+    const roots = report.binding.roots.filter(id => !isDenied(id));
+    const candidates = report.binding.candidates.filter(id => !isDenied(id));
+    v.evidenceInvestigation = { ...report, binding: { ...report.binding, roots, candidates }, gaps: report.gaps.filter(g => (!g.entityId || !isDenied(g.entityId)) && !mentions(g.message)) };
+    if (roots.length !== report.binding.roots.length) {
+      v.evidenceInvestigation.binding.status = roots.length ? "bound" : "unbound";
+      v.evidenceInvestigation.outcome = roots.length ? "partial" : "unbound";
+    }
+  }
   // Nodes first: everything else is decided by which nodes are gone.
   const gone = new Set<string>(); const goneClaims = new Set<string>();
   v.nodes = v.nodes.filter((n) => { const bad = n.entityRefs.some(isDenied) || acc.denied(n.file) || mentions(n.label); if (bad) { gone.add(n.id); n.claimIds.forEach((c) => goneClaims.add(c)); removed++; } return !bad; });

@@ -19,6 +19,8 @@ export * from "./response.ts";
 import { z } from "zod";
 export * from "./defect.ts";
 export * from "./task.ts";
+export * from "./investigation.ts";
+import type { InvestigationReport } from "./investigation.ts";
 export * from "./twin.ts";
 
 export type Id = string;
@@ -75,6 +77,7 @@ export interface EvidenceBundle {
   id: Id; revision: RevisionId; evidence: EvidenceRef[];
   entities: Entity[]; relationships: Relationship[]; facts: Fact[];
   coverage: string[]; unresolved: string[]; tokenEstimate: number;
+  investigation?: InvestigationReport;
 }
 
 // ---- Envelope (contracts §1) ----
@@ -215,6 +218,7 @@ export interface ViewRoute {
   alternatives: { form: FormId; kind?: "failure" | "invariant"; name: string }[];
 }
 export interface ViewSpec {
+  evidenceInvestigation?: InvestigationReport;
   id: Id; version: number; revision: RevisionId; taskId: Id; formId: FormId; caption: string;
   /** Prose that answers the question in words (maps only); the map and caption stay the visual part. */
   answer?: string;
