@@ -42,15 +42,15 @@ test('conversational compound intersection/union/difference have deterministic a
   const result=intersection.value.view.compoundQuery!;
   assert.ok(result);
   assert.deepEqual(result.rows.filter(r=>r.result==='present').map(r=>r.label),['commonHelper']);
-  assert.equal(result.rows.find(r=>r.label==='leftHelper')!.result,'unknown');
+  assert.equal(result.rows.find(r=>r.label==='leftHelper')!.result,'absent');
   assert.ok(result.rows.find(r=>r.label==='commonHelper')!.evidenceIds.length>=2);
   assert.ok(intersection.value.view.answer?.includes('Supported matches (1): commonHelper'));
   const incoming=await f.svc.ask(ctx(),{question:'functions calling both commonHelper and leftHelper',revision:f.revision,chartCode:'S21'});assert.ok(incoming.ok);
   assert.deepEqual(incoming.value.view.compoundQuery!.rows.filter(r=>r.result==='present').map(r=>r.label),['leftFlow']);
-  for(const [clause,expected] of [['either leftFlow or rightFlow',3],['leftFlow but not rightFlow',0],['rightFlow but not leftFlow',0]] as const){
+  for(const [clause,expected] of [['either leftFlow or rightFlow',3],['leftFlow but not rightFlow',1],['rightFlow but not leftFlow',1]] as const){
     const r=await f.svc.ask(ctx(),{question:`functions called by ${clause}`,revision:f.revision,chartCode:'S21'});assert.ok(r.ok);
     assert.equal(r.value.view.compoundQuery!.rows.filter(r=>r.result==='present').length,expected);
-    if(expected===0)assert.ok(r.value.view.compoundQuery!.rows.some(r=>r.result==='unknown'));
+    assert.equal(r.value.view.compoundQuery!.rows.filter(r=>r.result==='unknown').length,0);
   }
 });
 test('chart reuse keeps the collection and original query, but refuses changed source, access, question and revision',async t=>{
@@ -104,4 +104,17 @@ test('static compound membership excludes runtime-only call observations',async(
   const snapshot=collectSnapshot('functions called by either leftFlow or rightFlow',{id:'b',revision:'r',entities,evidence:[ev],facts:[],relationships:[{id:'observed-call',kind:'calls',from:entities[0]!.entityId,to:entities[2]!.entityId,evidence:[ev],resolution:'RUNTIME'}],coverage:[],unresolved:[],tokenEstimate:0});
   const plan=planCompoundQuestion(snapshot.question,entities)!;
   assert.equal(evaluateCompoundQuestion(snapshot,plan).rows.length,0);
+});
+
+
+test('compound exclusions recover missing indexed edges and include inspectable source proof', async t=>{
+  const f=await fixture(t);
+  f.svc.store.db.prepare("delete from relationships where revision=? and kind='calls'").run(f.revision);
+  const r=await f.svc.ask(ctx(),{question:'functions called by leftFlow but not rightFlow',revision:f.revision,chartCode:'S21'});
+  assert.ok(r.ok);
+  const row=r.value.view.compoundQuery!.rows.find(r=>r.label==='leftHelper')!;
+  assert.equal(row.result,'present'); assert.equal(row.right,'absent');
+  assert.ok(row.evidenceIds.some(id=>id.startsWith('investigation-source:') && !/:[0-9]+$/.test(id)));
+  const snapshot=f.svc.store.evidenceSnapshot(r.value.manifest!.snapshotId!)!;
+  assert.equal(snapshot.bundle.investigation!.callObligations!.filter(o=>o.status==='complete').length,2);
 });

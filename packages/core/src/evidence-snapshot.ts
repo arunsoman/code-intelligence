@@ -9,7 +9,7 @@ export function collectSnapshot(question: string, input: EvidenceBundle): Eviden
   const identity = { revision: bundle.revision, question,
     entities: [...bundle.entities].sort((a,b) => a.entityId.localeCompare(b.entityId)),
     relationships: sorted(bundle.relationships), facts: sorted(bundle.facts), evidence: sorted(bundle.evidence),
-    binding: bundle.investigation?.binding, gaps: bundle.investigation?.gaps, unresolved: bundle.unresolved };
+    binding: bundle.investigation?.binding, directCallCoverage: bundle.investigation?.directCallCoverage, gaps: bundle.investigation?.gaps, unresolved: bundle.unresolved };
   const id = `snapshot:${digest(identity)}`;
   const current = new Set(bundle.evidence.filter(e => e.state === 'CURRENT').map(e => e.id));
   const findings: CanonicalFinding[] = [
@@ -57,6 +57,13 @@ export function evaluateEvidenceSet(snapshot: EvidenceSnapshot, expression: impo
     } else {
       const subjects = new Set(expr.subjectIds.filter(id => universe.has(id)));
       const current = new Set(snapshot.bundle.evidence.filter(e => e.state === 'CURRENT').map(e => e.id));
+      if (expr.relationshipKind === 'calls' && expr.direction === 'outgoing' && subjects.size === expr.subjectIds.length && subjects.size > 0) {
+        const certificates = (snapshot.bundle.investigation?.revision === snapshot.revision ? snapshot.bundle.investigation.directCallCoverage ?? [] : [])
+          .filter(c => subjects.has(c.entityId) && c.targetIds.every(id=>universe.has(id)) && !snapshot.bundle.relationships.some(r=>r.from===c.entityId && r.kind==='calls' && (r.resolution==='UNRESOLVED' || !c.targetIds.includes(r.to))) && c.evidence.length > 0 && c.evidence.every(e => current.has(e.id) && e.state === 'CURRENT' && ['STATIC_PARSED','STATIC_RESOLVED'].includes(e.class)));
+        if ([...subjects].every(id => certificates.some(c => c.entityId === id))) {
+          for (const id of universe) members[id] = certificates.some(c => c.targetIds.includes(id)) ? 'present' : 'absent';
+        }
+      }
       for (const r of snapshot.bundle.relationships) {
         if (r.kind !== expr.relationshipKind || r.resolution === 'UNRESOLVED' || !r.evidence.length || !r.evidence.every(e => current.has(e.id))) continue;
         const source = expr.direction === 'outgoing' ? r.from : r.to;

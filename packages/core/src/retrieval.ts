@@ -167,7 +167,7 @@ function assemble(store: Store, revision: string, entityIds: string[], notes: st
 }
 
 function refreshModelBundle(bundle: EvidenceBundle) {
-  bundle.evidence = [...new Map([...bundle.relationships, ...bundle.facts].flatMap((item) => item.evidence).map((ev) => [ev.id, ev])).values()];
+  bundle.evidence = [...new Map([...bundle.relationships, ...bundle.facts, ...(bundle.investigation?.directCallCoverage ?? [])].flatMap((item) => item.evidence).map((ev) => [ev.id, ev])).values()];
   const payload = modelEvidence({ purpose: "CHART", bundle });
   bundle.tokenEstimate = estimateTokens(payload);
   bundle.id = `bundle:model-v2:${createHash("sha256").update(bundle.revision + JSON.stringify(payload)).digest("hex").slice(0, 20)}`;
@@ -313,9 +313,10 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
       const pairs = new Set(bundle.relationships.map(r => `${r.kind}|${r.from}|${r.to}`));
       const recovered = investigation.relationships.filter(r => available.has(r.from) && available.has(r.to) && !pairs.has(`${r.kind}|${r.from}|${r.to}`));
       bundle.relationships.push(...recovered);
+      for (const certificate of investigation.report.directCallCoverage ?? []) for (const ev of certificate.evidence) store.putEvidence(revision, ev);
       for (const r of recovered) for (const ev of r.evidence) store.putEvidence(revision, ev);
       const omitted = investigation.seeds.filter(id => !available.has(id));
-      bundle.investigation = { ...investigation.report, gaps: [...investigation.report.gaps, ...(omitted.length ? [{code: "CONTEXT_OMITTED" as const, message: `${omitted.length} investigated entities were omitted from this model context.`}] : [])] };
+      bundle.investigation = { ...investigation.report, directCallCoverage: investigation.report.directCallCoverage?.filter(c => available.has(c.entityId) && c.targetIds.every(id => available.has(id))), gaps: [...investigation.report.gaps, ...(omitted.length ? [{code: "CONTEXT_OMITTED" as const, message: `${omitted.length} investigated entities were omitted from this model context.`}] : [])] };
       if (omitted.length && bundle.investigation.outcome === "supported") bundle.investigation.outcome = "partial";
       bundle.coverage.push(`Investigation: ${bundle.investigation.outcome}; bounded static neighborhood, not exhaustive execution coverage.`, ...bundle.investigation.gaps.map(g => g.message));
       refreshModelBundle(bundle);
@@ -447,6 +448,7 @@ export function retrieveFromSnapshot(snapshot: import('@cie/schema').EvidenceSna
     bundle.entities=selected.filter(e=>keep.has(e.entityId));
     bundle.relationships=bundle.relationships.filter(r=>keep.has(r.from)&&keep.has(r.to));
     bundle.facts=bundle.facts.filter(f=>keep.has(f.subject));
+    if(bundle.investigation)bundle.investigation.directCallCoverage=bundle.investigation.directCallCoverage?.filter(c=>keep.has(c.entityId)&&c.targetIds.every(id=>keep.has(id)));
     refreshModelBundle(bundle);
   };
   rebuild();

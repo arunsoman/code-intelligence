@@ -182,3 +182,18 @@ test('canonical findings exclude unresolved records and non-current evidence',as
   stale.evidence.forEach(ev=>{ev.state='STALE';});
   assert.equal(collectSnapshot('flow',stale).findings.length,0);
 });
+
+
+test("source coverage is per body: unresolved callbacks do not invalidate completed helper scans",async t=>{
+  const f=await fixture(t);
+  const r=investigate(f.svc.store,f.revision,"runChatAgent flow",{subject:"runChatAgent",access:OPEN,resolveEvidence:f.resolveEvidence,budget:{maxMs:3000}});
+  const coverage=r.report.directCallCoverage!;
+  assert.ok(coverage.some(c=>c.entityId===f.id("runChatAgent")));
+  assert.ok(coverage.some(c=>c.entityId===f.id("systemPrompt")&&c.targetIds.length===0));
+  assert.ok(!coverage.some(c=>c.entityId===f.id("shadow")));
+  const limited=investigate(f.svc.store,f.revision,"runChatAgent flow",{subject:"runChatAgent",access:OPEN,resolveEvidence:f.resolveEvidence,budget:{maxSourceFiles:0}});
+  assert.equal(limited.report.callObligations![0]!.status,"unknown");
+  assert.equal(limited.report.directCallCoverage?.length??0,0);
+  const stale=investigate(f.svc.store,f.revision,"runChatAgent flow",{subject:"runChatAgent",access:OPEN,resolveEvidence:ev=>({...f.resolveEvidence(ev),state:"STALE"})});
+  assert.equal(stale.report.callObligations![0]!.status,"unknown");
+});

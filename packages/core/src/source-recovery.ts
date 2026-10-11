@@ -78,13 +78,22 @@ export function sourceRecovery(input: {
   const mutable = new Set<ts.Symbol>();
   const scanWrites = (node: ts.Node) => {
     if (performance.now() >= input.until) { limited = true; return; }
-    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment && ts.isIdentifier(node.left)) {
-      const symbol = checker.getSymbolAtLocation(node.left); if (symbol) mutable.add(symbol);
-    }
+    const assignment = ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment ? node.left
+      : (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) && [ts.SyntaxKind.PlusPlusToken,ts.SyntaxKind.MinusMinusToken].includes(node.operator) ? node.operand
+      : (ts.isForInStatement(node) || ts.isForOfStatement(node)) && !ts.isVariableDeclarationList(node.initializer) ? node.initializer : undefined;
+    const mark = (target: ts.Node) => {
+      if(ts.isShorthandPropertyAssignment(target)){const symbol=checker.getShorthandAssignmentValueSymbol(target);if(symbol)mutable.add(symbol);}
+      if(ts.isIdentifier(target)){const symbol=checker.getSymbolAtLocation(target);if(symbol)mutable.add(symbol);}
+      ts.forEachChild(target,mark);
+    };
+    if(assignment)mark(assignment);
     ts.forEachChild(node,scanWrites);
   };
   for (const sf of program.getSourceFiles()) scanWrites(sf);
   const relationships: Relationship[] = [];
+  const directCallCoverage: NonNullable<import('@cie/schema').InvestigationReport['directCallCoverage']> = [];
+  // An interrupted mutation scan cannot certify immutable bindings.
+  const writesComplete = !limited;
   const visited = new Set<string>();
   const pending = input.roots.map(e => ({entity: e, depth: input.depths?.get(e.entityId) ?? 0}));
   while (pending.length && performance.now() < input.until && visited.size < input.budget.maxEntities) {
@@ -94,8 +103,20 @@ export function sourceRecovery(input: {
     if (!/\.[cm]?[jt]sx?$/.test(entity.file)) { gaps.push({code:"UNSUPPORTED_LANGUAGE",entityId:entity.entityId,message:"Source recovery currently supports TypeScript and JavaScript; indexed relationships remain available for other languages."}); continue; }
     const sf = program.getSourceFile(virtual(entity.file));
     if (!sf) continue;
+    let bodyFound = false, complete = writesComplete;
+    const targets = new Set<string>();
     const visit = (node: ts.Node) => {
-      if (performance.now() >= input.until) { limited = true; return; }
+      if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isVariableDeclaration(node)) && mapped(node)?.entityId === entity.entityId) {
+        const implementation = ts.isVariableDeclaration(node) ? node.initializer : node;
+        if (implementation && ts.isFunctionLike(implementation) && 'body' in implementation && implementation.body) bodyFound = true;
+      }
+      if (performance.now() >= input.until) { limited = true; complete = false; return; }
+      if (ts.isNewExpression(node) || ts.isTaggedTemplateExpression(node) || ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node) || ts.isDecorator(node)) {
+        let owner: ts.Node | undefined = node.parent;
+        while(owner && !ts.isFunctionLike(owner))owner=owner.parent;
+        const declaration=owner && (ts.isArrowFunction(owner)||ts.isFunctionExpression(owner)) && ts.isVariableDeclaration(owner.parent) ? owner.parent : owner;
+        if(declaration && (ts.isFunctionDeclaration(declaration)||ts.isMethodDeclaration(declaration)||ts.isVariableDeclaration(declaration)) && mapped(declaration)?.entityId===entity.entityId)complete=false;
+      }
       if (ts.isCallExpression(node)) {
         let owner: ts.Node | undefined = node.parent;
         while (owner && !ts.isFunctionLike(owner)) owner = owner.parent;
@@ -110,6 +131,7 @@ export function sourceRecovery(input: {
         const declaration = !node.questionDotToken && symbol && !mutable.has(symbol) && immutableFunction ? candidate : undefined;
         const target = declaration ? mapped(declaration) : undefined;
         if (target && evidenceByFile.has(target.file)) {
+          targets.add(target.entityId);
           const ev = evidenceByFile.get(entity.file)!;
           const callSpan = { ...entity.spans[0]!, startByte: Buffer.byteLength(sf.text.slice(0,node.getStart(sf))), endByteExclusive: Buffer.byteLength(sf.text.slice(0,node.end)) };
           const evidence = { ...ev, id: `${ev.id}:${callSpan.startByte}`, location: {kind:"CodeLocation",span:callSpan} };
@@ -117,15 +139,16 @@ export function sourceRecovery(input: {
           if (depth < input.budget.maxDepth) pending.push({entity:target,depth:depth+1});
           else if (!visited.has(target.entityId)) limited = true;
         } else {
-          unresolved++;
+          complete = false; unresolved++;
           if (gaps.filter(g=>g.code==="CALL_UNRESOLVED").length < 12) gaps.push({code:"CALL_UNRESOLVED",entityId:entity.entityId,message:`A call site in ${entity.name} could not be resolved by bounded direct-binding analysis.`});
         }
       }
       ts.forEachChild(node,visit);
     };
     visit(sf);
+    if (bodyFound && complete) directCallCoverage.push({entityId:entity.entityId,targetIds:[...targets].sort(),evidence:[evidenceByFile.get(entity.file)!]});
   }
   if (pending.length) limited = true;
   if (limited) gaps.push({code:"BUDGET_EXHAUSTED",message:"Source tracing reached its time, depth, entity, file or byte budget; unexplored paths remain."});
-  return {relationships,gaps,sourceFiles:loaded.size,sourceBytes:bytes,unresolved};
+  return {relationships,directCallCoverage,gaps,sourceFiles:loaded.size,sourceBytes:bytes,unresolved};
 }

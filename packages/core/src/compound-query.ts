@@ -46,17 +46,19 @@ export function evaluateCompoundQuestion(snapshot: EvidenceSnapshot, plan: Compo
   const left=operand(plan.left.entityIds),right=operand(plan.right.entityIds);
   const combined=combineEvidenceSets(left,right,plan.operation);
   const byId=new Map(snapshot.bundle.entities.map(e=>[e.entityId,e]));
-  const rows=Object.keys(combined.members).sort().map(entityId=>({entityId,label:byId.get(entityId)?.name??entityId,
+  // Candidate rows are observed calls, not every unrelated entity in the collection.
+  const candidates=new Set(staticSnapshot.bundle.relationships.filter(r=>r.kind==='calls' && r.resolution!=='UNRESOLVED' && r.evidence.every(e=>e.state==='CURRENT')).flatMap(r=>plan.direction==='outgoing' ? [...plan.left.entityIds,...plan.right.entityIds].includes(r.from)?[r.to]:[] : [...plan.left.entityIds,...plan.right.entityIds].includes(r.to)?[r.from]:[]));
+  const rows=Object.keys(combined.members).filter(id=>candidates.has(id)).sort().map(entityId=>({entityId,label:byId.get(entityId)?.name??entityId,
     left:left.members[entityId]??'unknown',right:right.members[entityId]??'unknown',result:combined.members[entityId]!,
     evidenceIds:[...new Set(staticSnapshot.bundle.relationships.filter(r=>r.kind===plan.relationshipKind && r.resolution!=="UNRESOLVED" &&
       (plan.direction==="outgoing" ? r.to===entityId && [...plan.left.entityIds,...plan.right.entityIds].includes(r.from)
         : r.from===entityId && [...plan.left.entityIds,...plan.right.entityIds].includes(r.to)) &&
       r.evidence.length>0 && r.evidence.every(ev=>snapshot.bundle.evidence.some(e=>e.id===ev.id&&e.state==="CURRENT")))
-      .flatMap(r=>r.evidence.map(e=>e.id)))],
+      .flatMap(r=>r.evidence.map(e=>e.id))), ...(plan.direction==='outgoing' ? (snapshot.bundle.investigation?.directCallCoverage ?? []).filter(c=>[...plan.left.entityIds,...plan.right.entityIds].includes(c.entityId) && !c.targetIds.includes(entityId)).flatMap(c=>c.evidence.filter(e=>snapshot.bundle.evidence.some(b=>b.id===e.id&&b.state==='CURRENT')).map(e=>e.id)) : [])],
   }));
   return {plan,snapshotId:snapshot.id,rows,limitations:[
     'Membership is based on current direct static call evidence; runtime dispatch and transitive calls are not included.',
-    'A missing call is unknown, not an established exclusion. Difference can therefore contain no proven members while still having unknown candidates.',
+    'Exclusions require a complete current source-body scan of direct calls. Uninspected or unresolved calls remain unknown; incoming comparisons have no repository-wide absence proof.',
   ]};
 }
 export function compoundAnswer(result: CompoundQueryResult): string {

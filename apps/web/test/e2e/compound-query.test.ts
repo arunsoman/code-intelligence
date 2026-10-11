@@ -27,7 +27,7 @@ function commonHelper(){return 1;} function leftHelper(){return 2;} function rig
     assert.ok((await b.eval<string>(`document.querySelector('.conversation')?.innerText ?? document.body.innerText`)).includes('Supported matches (1): commonHelper'));
     const rows=await b.eval<string[]>(`[...document.querySelectorAll('.compound-query-panel tbody tr')].map(r=>r.innerText)`);
     assert.ok(rows.some(r=>r.includes('commonHelper')&&r.match(/Supported/g)?.length===3));
-    assert.ok(rows.some(r=>r.includes('leftHelper')&&r.includes('Unknown')));
+    assert.ok(rows.some(r=>r.includes('leftHelper')&&r.match(/Excluded/g)?.length===2));
     if(process.env.CIE_SCREENSHOT_DIR){
       mkdirSync(process.env.CIE_SCREENSHOT_DIR,{recursive:true});
       const {data}=await b.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});

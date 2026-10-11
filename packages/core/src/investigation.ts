@@ -41,6 +41,8 @@ export function bindSubjects(entities:Entity[],question:string,subject?:string,s
 export function investigate(store:Store,revision:string,question:string,options:{subject?:string;seeds?:string[];access:AccessPolicy;resolveEvidence?:(ev:EvidenceRef)=>ResolvedEvidence;budget?:Partial<InvestigationBudget>}) {
   const started=performance.now(), budget={...INVESTIGATION_BUDGET,...options.budget};
   const until=started+budget.maxMs;
+  // Reserve most of the shared deadline for source expansion and operand coverage.
+  const graphUntil=started+budget.maxMs*0.35;
   const entities=store.entities(revision).filter(e=>!options.access.denied(e.file) && !options.access.deniedEntity(e.entityId));
   const byId=new Map(entities.map(e=>[e.entityId,e]));
   const binding=bindSubjects(entities,question,options.subject,options.seeds);
@@ -53,12 +55,12 @@ export function investigate(store:Store,revision:string,question:string,options:
   const queue=binding.roots.slice(0,budget.maxEntities).map(id=>({id,depth:0}));
   if(binding.roots.length>budget.maxEntities) report.gaps.push({code:"BUDGET_EXHAUSTED",message:"Subject count exceeds the investigation entity budget."});
   const current = (r:Relationship) => r.evidence.filter(ev=>ev.state==="CURRENT" && (!options.resolveEvidence || options.resolveEvidence(ev).state==="CURRENT"));
-  while(queue.length && seen.size<budget.maxEntities && performance.now()<until){
+  while(queue.length && seen.size<budget.maxEntities && performance.now()<graphUntil){
     const {id,depth}=queue.shift()!;
     if(seen.has(id)||!byId.has(id))continue;
     seen.add(id); depths.set(id,depth);
     for(const r of store.relationshipsFor(revision,id)){
-      if(performance.now()>=until)break;
+      if(performance.now()>=graphUntil)break;
       if(!byId.has(r.from)||!byId.has(r.to))continue;
       const evidence=current(r); if(!evidence.length) {report.gaps.push({code:"SOURCE_STALE",entityId:id,message:"An indexed relationship has no current supporting source; refresh its file before using it."});continue;}
       if(r.kind==="contains" && r.from!==id)continue;
@@ -74,19 +76,31 @@ export function investigate(store:Store,revision:string,question:string,options:
       else if(!seen.has(other))report.gaps.push({code:"BUDGET_EXHAUSTED",entityId:id,message:"Indexed tracing reached its depth boundary."});
     }
   }
-  if(queue.length || performance.now()>=until)report.gaps.push({code:"BUDGET_EXHAUSTED",message:"Indexed tracing reached its entity or time budget."});
+  if(queue.length || performance.now()>=graphUntil)report.gaps.push({code:"BUDGET_EXHAUSTED",message:"Indexed tracing reached its entity or time budget."});
   // Inspect reachable implementations even when indexed edges exist: an index may omit only some calls.
-  const roots=[...seen].map(id=>byId.get(id)!).filter(e=>["function","method"].includes(e.kind)&&!contextOnly.has(e.entityId));
-  if(options.resolveEvidence && roots.length && performance.now()<until){
+  const roots=[...new Set([...binding.roots,...seen])].map(id=>byId.get(id)!).filter(e=>["function","method"].includes(e.kind)&&!contextOnly.has(e.entityId));
+  if(options.resolveEvidence && roots.length && performance.now()<graphUntil){
     const rev=store.revision(revision)!;
     const recovered=sourceRecovery({revision,roots,depths,entities,budget,until,resolve:options.resolveEvidence,observedAt:rev.createdAt,accessScopeId:rev.repoRoot});
     for(const r of recovered.relationships){
-      if(!seen.has(r.to)&&seen.size>=budget.maxEntities){report.gaps.push({code:"BUDGET_EXHAUSTED",message:"Recovered targets exceed the entity budget."});continue;}
+      if(!seen.has(r.to)&&seen.size>=budget.maxEntities){
+        // Direct targets satisfy the question before incoming caller context does.
+        const context=[...contextOnly].find(id=>!binding.roots.includes(id));
+        if(context){
+          seen.delete(context);contextOnly.delete(context);
+          for(const [id,edge] of relationships)if(edge.from===context||edge.to===context)relationships.delete(id);
+          report.gaps.push({code:"CONTEXT_OMITTED",message:"Incoming caller context was replaced by source-resolved direct targets within the entity budget."});
+        } else {report.gaps.push({code:"BUDGET_EXHAUSTED",message:"Recovered targets exceed the entity budget."});continue;}
+      }
       seen.add(r.to);
       if(![...relationships.values()].some(old=>old.from===r.from&&old.to===r.to&&old.kind===r.kind)){relationships.set(r.id,r);report.counts.recoveredRelationships++;}
     }
+    report.directCallCoverage = recovered.directCallCoverage;
     report.gaps.push(...recovered.gaps);report.counts.sourceFiles=recovered.sourceFiles;report.counts.sourceBytes=recovered.sourceBytes;report.counts.unresolvedCalls=recovered.unresolved;
   } else if(roots.length)report.gaps.push({code:"SOURCE_UNAVAILABLE",message:"Current source inspection was unavailable or its investigation time budget was exhausted."});
+  report.callObligations = binding.roots.map(entityId => ({entityId,
+    status: report.directCallCoverage?.some(c => c.entityId === entityId) ? "complete" : "unknown",
+    reason: report.directCallCoverage?.some(c => c.entityId === entityId) ? "Current implementation inspected; all direct call sites resolved." : "Direct-call coverage was not established; inspect diagnostics or refresh source before excluding targets."}));
   report.counts.entities=seen.size;report.counts.indexedRelationships=relationships.size-report.counts.recoveredRelationships;
   report.gaps=[...new Map(report.gaps.map(g=>[`${g.code}|${g.entityId??""}|${g.message}`,g])).values()];
   if(binding.status==="bound"&&report.gaps.length)report.outcome="partial";

@@ -16,5 +16,8 @@ export interface InvestigationReport {
   budget: InvestigationBudget;
   counts: { entities: number; indexedRelationships: number; recoveredRelationships: number; sourceFiles: number; sourceBytes: number; unresolvedCalls: number };
   timings: { bindingMs: number; investigationMs: number };
+  /** Completed source scans; absence is scoped to direct calls in this body, never runtime behavior. */
+  directCallCoverage?: { entityId: string; targetIds: string[]; evidence: import('./index.ts').EvidenceRef[] }[];
+  callObligations?: { entityId: string; status: "complete" | "unknown"; reason: string }[];
   gaps: InvestigationGap[];
 }
