@@ -44,6 +44,29 @@ test("G6 renders real class compartments, variable cards, UML relations and nest
     for (const node of nodes) assert.ok(contains(node.id === "Database" ? storage : services, node), `${node.id} is contained in its boundary`);
     assert.ok(contains(system, services) && contains(system, storage), "nested system boundary contains both groups");
     await capture("nested-architecture.png");
+    for (const mode of ["Packages", "Communication"]) {
+      await b.eval(`[...document.querySelectorAll('button')].find(b=>b.textContent==='${mode}').click()`); await ready();
+      await assertNoOverlap();
+      await b.eval(`document.querySelector('.g6-canvas').focus()`); await b.key("Home"); await b.key("Enter");
+      assert.equal(await b.eval(`document.querySelector('[aria-label="Evidence action"]').textContent`), mode === "Packages" ? "payments" : "API");
+      await capture(`${mode.toLowerCase()}.png`);
+    }
+    const messages = JSON.parse(await b.eval<string>(`document.querySelector('.g6-canvas').dataset.edgeRoutes`));
+    assert.deepEqual(messages.map((m: {label:string}) => m.label), ["1. reserve()", "2. reservation", "3. commit()", "4. committed"]);
+    assert.equal(messages.length, 4, "parallel and return messages retain separate identities");
+    assert.ok(new Set(messages.slice(0, 3).map((m: {curveOffset:number}) => m.curveOffset)).size > 1, "parallel messages use distinct routes");
+    for(const mode of ["sequence","replay","er","lifecycle"]) {
+      await b.eval(`[...document.querySelectorAll('button')].find(b=>b.textContent==='${mode}').click()`);await ready();
+      await capture(`${mode}.png`);
+      await b.eval(`document.querySelector('.g6-canvas').focus()`);await b.key("Home");await b.key("Enter");
+      assert.ok(await b.eval(`document.querySelector('[aria-label="Evidence action"]').textContent.length>0`));
+      if(mode==="er") {const links=JSON.parse(await b.eval<string>(`document.querySelector('.g6-canvas').dataset.edgeRoutes`));assert.equal(links[0].type,"cie-er-link");assert.equal(links[0].sourceCardinality,"N?");assert.equal(links[0].targetCardinality,"1?");}
+      if(mode==="sequence"||mode==="replay") {
+        await b.eval(`[...document.querySelectorAll('button')].find(b=>b.textContent==='${mode==="sequence"?"Message table":"Table view"}').click()`);
+        assert.ok(await b.eval(`document.querySelector('.sequence-table tbody tr').textContent.length>0`));
+        await b.eval(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Close table').click()`);
+      }
+    }
     assert.equal(b.console.filter(line => /exception:|\[g6-render\]/.test(line)).length, 0, b.console.join("\n"));
   } finally { await b.close(); await server.close(); }
 });

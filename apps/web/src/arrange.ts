@@ -7,19 +7,23 @@
 import type { ViewSpec } from "@cie/schema";
 import { callDepth, forceLayout, geometricCrossings, gutterRoutes, laneGrid, layered, pathClear, orderColumns, marginArcs, orderLanes, routeEdges, separate, wrapColumns, type Item } from "./layout.ts";
 import type { Pos, Rendered } from "./graph.ts";
+import { g6NodeSize } from "./g6-notation.ts";
 import { measure, nodeSize } from "./layoutmetrics.ts";
 import { columnFlow } from "./layout.ts";
 import type { ElkNode, ELK } from "elkjs/lib/elk-api.js";
 
 // Automatic topology layouts must not erase time, bands or swim-lane ordering.
 const TOPOLOGY_CHARTS = new Set(["S1", "S2", "S3", "S4", "S6", "S7", "S9", "S10", "S12", "S13", "S15", "S16", "S17", "S18", "S19", "S21", "S23", "S26", "S27"]);
-export function usesElk(r: Rendered, formId?: string, chartId?: string): boolean {
+export function usesTopologyLayout(r: Rendered, formId?: string, chartId?: string): boolean {
   if (!r.nodes.length || r.groups.some((g) => g.kind === "lane")) return false;
   if (["RaceWindow", "Archaeology", "SemanticDiff", "TransactionJourney"].includes(formId ?? "")) return false;
   return r.nodes.some((n) => n.kind === "agg" || n.kind === "ext") ||
     formId === "SemanticMap" ||
     (formId === "GeneratedChart" && TOPOLOGY_CHARTS.has(chartId ?? ""));
 }
+
+/** Legacy test-oracle API; the production canvas uses G6. */
+export const usesElk = usesTopologyLayout;
 
 /** ELK owns graph geometry; all identities, evidence, grouping and selection stay intact. */
 async function arrangeDirection(r: Rendered, engine: Pick<ELK, "layout">, viewport: { width: number; height: number }, direction: "DOWN" | "RIGHT"): Promise<Rendered> {
@@ -132,11 +136,12 @@ const AMBIENT_FORMS = new Set<string>(["Ownership", "DataLineage"]);
 
 export function arrange(r: Rendered, view: ViewSpec, level: number, deferTopology = false): Rendered {
   if (r.nodes.length === 0) return r;
-  // The browser sends these graphs to ELK's worker rather than also running a force simulation here.
-  if (deferTopology && usesElk(r, view.formId, typeof view.params?.chartId === "string" ? view.params.chartId : undefined)) {
+  // Topology graphs are arranged by G6 in the browser; ordered geometry stays here.
+  if (deferTopology && usesTopologyLayout(r, view.formId, typeof view.params?.chartId === "string" ? view.params.chartId : undefined)) {
     return AMBIENT_FORMS.has(view.formId) ? { ...r, edges: r.edges.map((e) => e.kind === "imports" ? { ...e, ambient: true } : e) } : r;
   }
-  const items: Item[] = r.nodes.map((n) => ({ id: n.id, ...nodeSize(n), x: n.pos.x, y: n.pos.y }));
+  const sizing = deferTopology ? (n: Rendered["nodes"][number]) => {const [w,h]=g6NodeSize(n);return {w,h};} : nodeSize;
+  const items: Item[] = r.nodes.map((n) => ({ id: n.id, ...sizing(n), x: n.pos.x, y: n.pos.y }));
   const links = r.edges.map((e) => ({ from: e.from, to: e.to }));
   const aggregated = r.nodes.some((n) => n.kind === "agg" || n.kind === "ext");
   const layeredForm = !aggregated && view.nodes.some((n) => n.layer != null) && !view.nodes.every((n) => n.pos);
@@ -180,7 +185,7 @@ export function arrange(r: Rendered, view: ViewSpec, level: number, deferTopolog
     separate(items, 28);
   } else if (layeredForm) {
     const ranked = [...r.nodes].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99) || a.label.localeCompare(b.label));
-    const res = layered(ranked.map((n, i) => ({ id: n.id, layer: n.node?.layer ?? 0, ...nodeSize(n), order: i })), links);
+    const res = layered(ranked.map((n, i) => ({ id: n.id, layer: n.node?.layer ?? 0, ...sizing(n), order: i })), links);
     for (const it of items) { const p = res.pos.get(it.id); if (p) { it.x = p.x; it.y = p.y; } }
     via = res.via;
     separate(items, 12); // same-layer neighbours already clear; this only guards ghost/ext nodes

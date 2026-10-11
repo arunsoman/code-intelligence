@@ -36,3 +36,12 @@ test("long labels reserve header and message space, including a last-participant
   assert.ok(scene.messages[0].y>scene.headerHeight+50);
   assert.ok(scene.width>=scene.messages.at(-1)!.x1+350);
 });
+
+test("G6 sequence presentation preserves fixed time, fragments and evidence bindings", async()=>{
+  const {timelinePresentation}=await import("../src/g6-drawing.ts");
+  const view=compiledSequence(),r=renderer.render(view,5,basePositions(view),new Set()),before=structuredClone(r),p=timelinePresentation(r);
+  assert.deepEqual(r,before);assert.equal(p.messages.size,r.sequence!.messages.length);
+  for(const part of r.sequence!.participants){const card=p.rendered.nodes.find(n=>n.id===part.node.id)!;assert.equal(card.pos.x,part.x);assert.equal(p.nodes.get(card.id),part.node);}
+  for(const message of r.sequence!.messages){const graphic=p.rendered.nodes.find(n=>n.id===message.edge.id)!;assert.equal(p.messages.get(graphic.id),message.edge);assert.ok(graphic.drawing!.shapes.some(s=>s.type==="path"));}
+  assert.ok(p.rendered.nodes.some(n=>n.decorative));assert.equal(p.rendered.edges.length,0,"message graphics use fixed paths rather than topology edges");
+});

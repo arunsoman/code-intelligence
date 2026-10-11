@@ -40,3 +40,28 @@ test("captured member detail pages expose every note without changing the source
   const shown = Array.from({ length: Math.ceil(details.length / capacity) }, (_, page) => focusedPreview(capture, { x: 150, y: 150 }, 150, page).nodes[0].details!).flat();
   assert.deepEqual(shown, details); assert.deepEqual(capture.node.details, details);
 });
+
+test("package and communication notation preserves dependencies, numbers and direction", () => {
+  assert.deepEqual(g6NodeSize({ ...node, role: "package" }), [260, 100]);
+  const messages = ["sync-flow", "async-flow", "return"].map((kind, i) => ({ ...edge, id: `message${i}`, kind, label: `${i + 1}. transfer()`, from: "a", to: "b" }));
+  const scene = { nodes: [{ ...node, id: "a", role: "participant" }, { ...node, id: "b", role: "participant" }], edges: messages, groups: [] };
+  const before = structuredClone(scene), data = g6Data(scene);
+  assert.deepEqual(data.edges!.map(e => e.style!.labelText), ["1. transfer()", "2. transfer()", "3. transfer()"]);
+  assert.deepEqual(scene, before);
+  assert.equal(g6EdgeNotation(messages[0]).endArrowType, "triangle");
+  for (const message of messages.slice(1)) { assert.equal(g6LensNotation(message).targetArrow, "vee"); assert.equal(g6LensNotation(message).dashed, true); }
+  assert.equal(g6LensNotation({ ...edge, kind: "package-dependency" }).targetArrow, "vee");
+  assert.equal(g6LensNotation({ ...edge, kind: "forbidden-transition" }).targetArrow, "tee");
+});
+
+test("fixed layouts retain routes and ER endpoints; topology layouts discard stale routes", () => {
+  const n = { ...node, id:"a" }, e={...edge,id:"er",from:"a",to:"a",kind:"er-inferred",sourceLabel:"1?",targetLabel:"N?",via:[{x:30,y:40}]};
+  const scene={nodes:[n],edges:[e],groups:[]};
+  assert.equal(g6Data(scene).edges![0].type,"cie-er-link");
+  assert.equal(g6Data(scene).edges![0].style!.sourceCardinality,"1?");
+  assert.equal(g6Data(scene).edges![0].style!.targetCardinality,"N?");
+  assert.deepEqual(g6Data(scene).edges![0].style!.controlPoints,[[30,40]]);
+  assert.equal(g6Data(scene,false).edges![0].style!.controlPoints,undefined);
+  assert.equal(g6Layout(scene,800,600,"TransactionJourney"),undefined);
+  assert.equal(g6Layout(scene,800,600,"GeneratedChart","S22"),undefined);
+});

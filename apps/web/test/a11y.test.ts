@@ -44,7 +44,7 @@ test("index.html declares a language, a title and a viewport", () => {
 // Their ARIA is asserted as a written convention in the source (and exercised during manual runs).
 test("a11y audit: view-dependent controls follow the dialog/toolbar/toggle conventions in source", () => {
   const app = readFileSync(join(webRoot, "src/App.tsx"), "utf8");
-  const canvas = readFileSync(join(webRoot, "src/Canvas.tsx"), "utf8");
+  const canvas = readFileSync(join(webRoot, "src/G6Canvas.tsx"), "utf8");
   const modal = readFileSync(join(webRoot, "src/Modal.tsx"), "utf8");
   assert.match(modal, /role="dialog"\s*aria-modal="true"/);
   assert.match(app, /role="toolbar" aria-label="Canvas tools"/);

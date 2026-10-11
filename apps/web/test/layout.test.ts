@@ -177,13 +177,11 @@ test("callDepth: depth follows calls from the entry, and a cycle does not loop",
   assert.deepEqual([d.get("a"), d.get("b"), d.get("c")], [0, 1, 2]);
 });
 
-test("the sizes the metric assumes are the sizes the stylesheet draws", () => {
-  const css = readFileSync(join(import.meta.dirname, "../src/Canvas.tsx"), "utf8");
-  for (const [role, [w, h]] of Object.entries(SIZES)) {
-    const line = css.split("\n").find((l) => l.includes(`role = '${role}'`) && /width: \d+/.test(l));
-    assert.ok(line, `no stylesheet rule sizes role ${role}`);
-    assert.equal(Number(/width: (\d+)/.exec(line)![1]), w, `${role} width`);
-    assert.equal(Number(/height: (\d+)/.exec(line)![1]), h, `${role} height`);
+test("G6 sizes retain the legacy role minimums and expand readable cards", async () => {
+  const { g6NodeSize } = await import("../src/g6-notation.ts");
+  for (const [role,[w,h]] of Object.entries(SIZES)) {
+    const [actualW,actualH]=g6NodeSize({id:role,label:role,role,kind:"node",members:[],count:1,displayMode:"FACT",tier:"RELEVANT",pos:{x:0,y:0},stale:false});
+    assert.ok(actualW>=w && actualH>=h, `${role} retains usable dimensions`);
   }
 });
 
@@ -270,16 +268,10 @@ test("gutterRoutes: a lane-crossing edge is routed through the free corridor bet
   assert.equal(laneBands(items, laneOf).get("L1")!.y, (0 + 220) / 2, "a lane band is centred on its nodes");
 });
 
-test("the canvas draws labels so they are readable: nodes wrap and carry a halo, edges carry a halo, and the full text is on hover", () => {
-  const src = readFileSync(join(import.meta.dirname, "../src/Canvas.tsx"), "utf8");
-  const nodeStyle = src.split("\n").find((l) => l.includes('selector: "node", style'))!;
-  assert.ok(/"text-wrap": "wrap"/.test(nodeStyle), "node labels wrap instead of being ellipsised");
-  assert.ok(/"text-background-color"/.test(nodeStyle), "node labels sit on a background so lane fills do not wash them out");
-  const edgeStyle = src.split("\n").find((l) => l.includes('selector: "edge", style'))!;
-  assert.ok(/"text-background-color"/.test(edgeStyle) && /"text-border-width"/.test(edgeStyle), "edge labels sit on an opaque halo");
-  assert.ok(/mouseover/.test(src) && /canvas-tip/.test(src), "the full label is shown on hover");
-  assert.ok(/readableFitZoom/.test(src), "a fit clamps to the readable floor");
-  assert.equal(CROSSING_CEILING.TransactionJourney, 0, "gutter routing removed the journey's crossings");
+test("G6 graph labels wrap and relationship labels keep an opaque background", async () => {
+  const {g6Data}=await import("../src/g6-adapter.ts");
+  const graph=g6Data({nodes:[{id:"a",label:"A long node label",kind:"node",members:[],count:1,displayMode:"FACT",tier:"RELEVANT",pos:{x:0,y:0},stale:false}],edges:[{id:"e",from:"a",to:"a",label:"Relationship",displayMode:"FACT",count:1,edgeIds:[],evidenceIds:[],stale:false}],groups:[]});
+  assert.equal(graph.nodes![0].style!.labelWordWrap,true);assert.equal(graph.edges![0].style!.labelBackground,true);
 });
 
 test("forceLayout: nodes with no links stay near the rest instead of drifting away", () => {

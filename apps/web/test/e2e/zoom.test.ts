@@ -30,17 +30,17 @@ async function prepare(b: Browser, url: string) {
   assert.ok(await click(b, "Build concept hierarchy"));
   await b.waitFor(() => `/[1-9]\\d* hierarchy concepts/.test(document.querySelector('header').innerText)`, 60_000);
   await b.eval(`document.getElementById('chat-input').focus()`); await b.type("how does createPayment work"); await b.key("Enter");
-  await b.waitFor(() => `document.querySelector('.canvas')?._cyreg?.cy.nodes().length > 0 && document.querySelector('.canvas').getAttribute('aria-busy') === 'false'`, 30_000);
+  await b.waitFor(() => `Number(document.querySelector('.g6-canvas')?.dataset.nodeCount) > 0 && document.querySelector('.canvas').getAttribute('aria-busy') === 'false'`, 30_000);
   await wait(200);
 }
-const graphSnapshot = (b: Browser) => b.eval(`(() => {
-  const cy = document.querySelector('.canvas')._cyreg.cy;
-  return { level: document.querySelector('[aria-label="Chart context level"]')?.value, zoom: cy.zoom(), pan: cy.pan(), nodes: cy.nodes().map((n) => ({id:n.id(),position:n.position()})), edges: cy.edges().map((e) => e.id()) };
+const graphSnapshot = (b: Browser) => b.eval<{level:string;zoom:number;pan:unknown;nodes:unknown;edges:unknown}>(`(() => {
+  const host = document.querySelector('.g6-canvas');
+  return { level: document.querySelector('[aria-label="Chart context level"]')?.value, zoom: Number(host.dataset.zoom), pan: JSON.parse(host.dataset.pan), nodes: JSON.parse(host.dataset.worldNodes), edges: JSON.parse(host.dataset.edgeIds) };
 })()`);
 const lensPoint = (b: Browser) => b.eval<{ x: number; y: number }>(`(() => {
-  const host = document.querySelector('.canvas'), cy = host._cyreg.cy, rect = host.getBoundingClientRect();
-  const node = cy.nodes().filter((n) => !n.isParent() && n.renderedPosition().x > 0 && n.renderedPosition().y > 70 && n.renderedPosition().x < cy.width()-260 && n.renderedPosition().y < cy.height()-30)[0] || cy.nodes().filter((n)=>!n.isParent())[0];
-  const p = node.renderedPosition(); return {x:rect.left+p.x,y:rect.top+p.y};
+  const host = document.querySelector('.g6-canvas'), rect = host.getBoundingClientRect();
+  const points=JSON.parse(host.dataset.nodePositions), p=points.find(p=>p.x>20&&p.y>70&&p.x<rect.width-260&&p.y<rect.height-30)||points.find(p=>p.x>0&&p.y>0&&p.x<rect.width&&p.y<rect.height);
+  if(!p)throw new Error('No visible graph node');return {x:rect.left+p.x,y:rect.top+p.y};
 })()`);
 
 test("automatic hover expands without moving the graph and removes lens configuration", { skip: !existsSync(CHROME), timeout: 180_000 }, async () => {
@@ -68,7 +68,7 @@ test("automatic hover expands without moving the graph and removes lens configur
     const next = await lensPoint(b);
     await b.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...next });
     await b.send("Input.dispatchMouseEvent", { type: "mouseWheel", ...next, deltaX: 0, deltaY: -180 });
-    await b.waitFor(() => `document.querySelector('.canvas')._cyreg.cy.zoom() > ${zoom}`, 5000);
+    await b.waitFor(() => `Number(document.querySelector('.g6-canvas').dataset.zoom) > ${zoom}`, 5000);
     assert.equal(await b.eval(`document.querySelector('.canvas').dataset.lensActive`), "false");
     const after = await graphSnapshot(b);
     assert.deepEqual(after.nodes, before.nodes);
@@ -95,7 +95,7 @@ test("lens expands only a hovered aggregate and keeps member selection linked to
     await wait(300);
     const before = await graphSnapshot(b), point = await lensPoint(b);
     await b.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
-    await b.waitFor(() => `document.querySelector('.canvas').dataset.lensExpanded.startsWith('agg:') && Number(document.querySelector('.canvas').dataset.lensChildren) > 0`, 5000);
+    await b.waitFor(() => `document.querySelector('.canvas').dataset.lensExpanded.startsWith('agg:') && Number(document.querySelector('.canvas').dataset.lensChildren) > 0`, 5000).catch(async e=>{throw new Error(e.message+' '+JSON.stringify(await b.eval(`({data:{...document.querySelector('.canvas').dataset},hit:document.elementFromPoint(${point.x},${point.y})?.outerHTML.slice(0,200)})`))+' '+b.console.join('\n'));});
     assert.deepEqual(await graphSnapshot(b), before);
     const childPoint = await firstChildPoint(b, ".canvas");
     const { data } = await b.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
@@ -121,7 +121,7 @@ test("concept tree zoom and preview expansion leave the background tree unchange
     const before = await snapshot();
     const point = await b.eval<{x:number;y:number}>(`(() => {const host=document.querySelector('.tree-lens-stage'),hr=host.getBoundingClientRect();const node=[...host.querySelectorAll('.tnode[aria-expanded]')].find(n=>{const r=n.getBoundingClientRect();return r.x>hr.x && r.right<hr.right-250 && r.y>hr.y && r.bottom<hr.bottom}) || host.querySelector('.tnode[aria-expanded]');const r=node.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
     await b.send("Input.dispatchMouseEvent", {type:"mouseMoved",...point});
-    await b.waitFor(() => `document.querySelector('.tree-lens-stage').dataset.lensExpanded !== ''`,5000);
+    await b.waitFor(() => `document.querySelector('.tree-lens-stage').dataset.lensActive === 'true' && Number(document.querySelector('.tree-lens-stage').dataset.lensChildren)>0`,5000).catch(async e=>{throw new Error(e.message+' '+JSON.stringify(await b.eval(`({data:{...document.querySelector('.tree-lens-stage').dataset},hit:document.elementFromPoint(${point.x},${point.y})?.outerHTML.slice(0,200)})`)));});
     assert.deepEqual(await snapshot(),before);
     assert.equal(await b.eval(`document.querySelector('.tree-bar [aria-label="Zoom in"], .tree-lens-stage input[type=range]')`), null);
     const childPoint = await firstChildPoint(b, ".tree-lens-stage");

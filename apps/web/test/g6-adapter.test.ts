@@ -15,8 +15,9 @@ test("G6 adapter preserves entity and relationship identity without modifying so
 });
 test("G6 migration and layout are explicit and content aware", () => {
   assert.equal(usesG6("S21"), true); assert.equal(usesG6("S23"), true);
+  assert.equal(usesG6("S17"), true); assert.equal(usesG6("S18"), true);
   assert.equal(usesG6("S1"), true); assert.equal(usesG6("S16"), true);
-  for (const id of ["S28", "generic", undefined]) assert.equal(usesG6(id), false);
+  for (const id of ["S28", "generic", undefined]) assert.equal(usesG6(id), true);
   assert.equal((g6Layout(scene, 1000, 500) as { rankdir: string }).rankdir, "LR");
   assert.equal((g6Layout(scene, 500, 1000) as { rankdir: string }).rankdir, "TB");
   assert.equal((g6Layout({ ...scene, edges: [], groups: [] }, 800, 500) as { type: string }).type, "grid");

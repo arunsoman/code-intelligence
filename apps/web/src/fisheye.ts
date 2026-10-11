@@ -115,7 +115,7 @@ export function localChildren(parent: LensNode, children: RenderNode[], edges: R
   const columns = Math.max(1, Math.min(grid.columns, shown.length)), rows = Math.ceil(shown.length / columns);
   const width = Math.min(180, (grid.side - (columns - 1) * 12) / columns), stepY = 64;
   const nodes: LensNode[] = shown.map((n, index) => ({
-    id: n.id, ref: n, label: n.label, details: [n.node?.kind ?? n.role ?? "", ...(n.node?.notes ?? [])].filter(Boolean),
+    id: n.id, ref: n, label: n.label, focused: true, details: [n.node?.kind ?? n.role ?? "", ...(n.node?.notes ?? [])].filter(Boolean),
     color: chartColor(n.node?.file ?? parent.ref?.node?.file, n.role), displayMode: n.displayMode,
     x: centre.x + ((index % columns) - (columns - 1) / 2) * (width + 12),
     y: centre.y + (Math.floor(index / columns) - (rows - 1) / 2) * stepY, width, height: 46,
@@ -268,7 +268,8 @@ export function attachFisheye(host: HTMLElement, options: LensOptions): LensEngi
   function arrow(a: Point, b: Point, shape: string, color: string, fill = "filled") {
     ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(Math.atan2(b.y - a.y, b.x - a.x));
     ctx.beginPath(); ctx.moveTo(0, 0);
-    if (shape === "diamond") { ctx.lineTo(-6, -4); ctx.lineTo(-12, 0); ctx.lineTo(-6, 4); }
+    if (shape === "circle") { ctx.arc(-4,0,4,0,Math.PI*2); }
+    else if (shape === "diamond") { ctx.lineTo(-6, -4); ctx.lineTo(-12, 0); ctx.lineTo(-6, 4); }
     else if (shape === "tee") { ctx.moveTo(0, -5); ctx.lineTo(0, 5); }
     else if (shape === "vee") { ctx.moveTo(-8, -4); ctx.lineTo(0, 0); ctx.lineTo(-8, 4); }
     else { ctx.lineTo(-8, -4); ctx.lineTo(-8, 4); }

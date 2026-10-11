@@ -258,8 +258,8 @@ test("identity-preserving zoom: element ids, evidence and selection survive goin
 test("levels are driven by legibility, not by a relative zoom table", () => {
   const src = readFileSync(join(import.meta.dirname, "../src/graph.ts"), "utf8");
   assert.doesNotMatch(src, /export function nextLevel|export const zoomForLevel/, "the relative-zoom level mechanism is gone");
-  const canvas = readFileSync(join(import.meta.dirname, "../src/Canvas.tsx"), "utf8");
-  assert.match(canvas, /readableFitZoom\(|planTransition\(|renderedLevelFromGraph\(/, "the canvas asks the legibility rule which way the level moves");
+  const canvas = readFileSync(join(import.meta.dirname, "../src/G6Canvas.tsx"), "utf8");
+  assert.match(canvas, /focusMembers/, "the graph camera retains semantic membership across representations");
 });
 
 test("file identity stays factual while unresolved call coverage remains visible", () => {

@@ -162,13 +162,8 @@ async function screenshot(b: Browser, name: string): Promise<string> {
 }
 
 // ── Selector shortcuts ───────────────────────────────────────────────────────────────
-/** True once the canvas has drawn at least one node. */
-const canvasReady = () =>
-  `document.querySelectorAll('.canvas [data-id]').length > 0 || document.querySelectorAll('.canvas .cy-node').length > 0 || (document.querySelector('.canvas') && document.querySelector('.canvas')._cyreg && document.querySelector('.canvas')._cyreg.cy.nodes().length > 0)`;
-
-/** True once a cytoscape instance has at least one rendered node (more robust). */
-const cyReady = () =>
-  `(() => { if(document.querySelector('.typed-table table')) return true; if (document.querySelectorAll("[data-sequence-element=participant]").length) return true; if(Number(document.querySelector('.g6-canvas')?.dataset.nodeCount)>0 && document.querySelector('.g6-canvas')?.getAttribute('aria-busy')==='false') return true; try { const cy = document.querySelector('.canvas')?._cyreg?.cy; return !!cy && cy.nodes().length > 0; } catch { return false; } })()`;
+/** A diagram is ready after G6 finishes arranging; native tables stay native. */
+const cyReady = () => `!!document.querySelector('.typed-table table') || (Number(document.querySelector('.g6-canvas')?.dataset.nodeCount)>0 && document.querySelector('.g6-canvas')?.getAttribute('aria-busy')==='false')`;
 
 /** True once the terrain treemap is rendered. */
 const terrainReady = () => `document.querySelectorAll('.treemap-cell').length > 0 || document.querySelectorAll('.terrain rect').length > 0 || document.querySelector('.terrain-view')?.children.length > 0`;

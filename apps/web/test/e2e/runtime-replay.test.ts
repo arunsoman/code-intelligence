@@ -21,25 +21,32 @@ test("recorded replay scrubs with keyboard, preserves the map, and high contrast
       window: { from: t, to: t + 5000 }, backendHandle: "test://replay", signalKind: "trace", samplingRate: 0.5,
       spans: [0, 1].map((i) => ({ traceId: "trace", spanId: `s${i}`, name: "fraud", startMs: t + 1000 + i * 1000, endMs: t + 1050 + i * 1000, file: "src/payments/fraud.ts", line: 5, fn: "checkFraud", error: i === 1 })),
     } });
+    await api("C24", "reportException", {trace:`Error: fraud test\n    at checkFraud (${join(ROOT,"fixtures/payments-repo/src/payments/fraud.ts")}:5:1)`,source:"browser-fixture"});
     const b = browser = await Browser.launch();
     await b.goto(server.url);
     await b.waitFor(() => `document.querySelector('header').innerText.includes('rev ')`);
-    await b.tabTo(`el.id === 'chat-input'`); await b.type("What has been going wrong lately?"); await b.key("Enter");
+    await b.waitFor(()=>`[...document.querySelectorAll('button')].some(b=>b.textContent.startsWith('Build concept hierarchy')&&!b.disabled)`);
+    await b.eval(`[...document.querySelectorAll('button')].find(b=>b.textContent.startsWith('Build concept hierarchy')&&!b.disabled).click()`);
+    await b.waitFor(()=>`/[1-9]\\d* hierarchy concepts/.test(document.querySelector('header').innerText)`,60_000);
+    await b.eval(`[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Visuals').click()`);
+    await b.waitFor(()=>`!!document.querySelector('[data-visual-code="V9"]')`);
+    await b.eval(`(()=>{const item=document.querySelector('[data-visual-code="V9"]');if(!item)throw new Error('Runtime overlay not found');[...item.querySelectorAll('button')].find(e=>e.textContent.trim()==='Show').click();})()`);
     await b.waitFor(() => `!!document.querySelector('.runtime-replay')`, 30_000);
     assert.match(await b.eval(`document.querySelector('.epistemic-summary').textContent`), /Inference/);
+    await b.tabTo(`el.tagName === 'SUMMARY' && el.textContent === 'View controls'`); await b.key("Enter");
     await b.tabTo(`el.tagName === 'SUMMARY' && el.textContent === 'Replay recorded runtime'`); await b.key("Enter");
     await b.tabTo(`el.tagName === 'BUTTON' && el.textContent === 'Load replay'`); await b.key("Enter");
     await b.waitFor(() => `document.querySelector('.replay-result')?.textContent.includes('0 attributed span(s)')`);
     await b.tabTo(`el.id === 'replay-cursor'`); await b.key("End");
     await b.waitFor(() => `document.querySelector('.replay-result')?.textContent.includes('2 attributed span(s)')`);
     assert.match(await b.eval(`document.querySelector('.replay-result').textContent`), /1 error\(s\).*sampled/is);
-    const cy = `document.querySelector('.canvas')._cyreg.cy`;
-    assert.ok(await b.eval(`${cy}.nodes('.replay-error').length > 0`));
-    const camera = await b.eval(`({zoom: ${cy}.zoom(), pan: ${cy}.pan(), positions: ${cy}.nodes().map(n => ({id: n.id(), pos: n.position()}))})`);
+    const host = `document.querySelector('.g6-canvas')`;
+    assert.ok(await b.eval(`JSON.parse(${host}.dataset.replayErrors).length > 0`));
+    const camera = await b.eval(`({zoom: ${host}.dataset.zoom, positions: ${host}.dataset.nodePositions})`);
     await b.key("Home");
     await b.waitFor(() => `document.querySelector('.replay-result')?.textContent.includes('0 attributed span(s)')`);
-    assert.equal(await b.eval(`${cy}.nodes('.replay-observed').length`), 0);
-    assert.deepEqual(await b.eval(`({zoom: ${cy}.zoom(), pan: ${cy}.pan(), positions: ${cy}.nodes().map(n => ({id: n.id(), pos: n.position()}))})`), camera);
+    assert.equal(await b.eval(`JSON.parse(${host}.dataset.replayObserved).length`), 0);
+    assert.deepEqual(await b.eval(`({zoom: ${host}.dataset.zoom, positions: ${host}.dataset.nodePositions})`), camera);
     // An older replay response must not overwrite a newer cursor.
     await b.eval(`window.__originalFetch = window.fetch; window.__delayed = false; window.fetch = async (...args) => {
       if (String(args[0]).endsWith('/C24/replay') && !window.__delayed) {
@@ -65,16 +72,17 @@ test("recorded replay scrubs with keyboard, preserves the map, and high contrast
       : window.__originalFetch(...args)`);
     await b.tabTo(`el.id === 'replay-cursor'`); await b.key("End");
     await b.waitFor(() => `document.querySelector('.runtime-replay [role=alert]')?.textContent === 'Replay unavailable'`);
-    assert.equal(await b.eval(`${cy}.nodes('.replay-observed').length`), 0);
+    assert.equal(await b.eval(`JSON.parse(${host}.dataset.replayObserved).length`), 0);
     await b.eval(`window.fetch = window.__originalFetch`);
     await b.tabTo(`el.tagName === 'BUTTON' && el.textContent === 'Load replay'`); await b.key("Enter");
     await b.waitFor(() => `!!document.querySelector('.replay-result')`);
-    await b.tabTo(`el.tagName === 'BUTTON' && el.textContent === 'High contrast'`); await b.key("Enter");
+    await b.tabTo(`el.tagName === 'SUMMARY' && el.getAttribute('aria-label') === 'Settings'`); await b.key("Enter");
+    await b.tabTo(`el.tagName === 'BUTTON' && el.textContent.trim().startsWith('High contrast')`); await b.key("Enter");
     await b.waitFor(() => `document.documentElement.dataset.contrast === 'high'`);
     assert.equal(await b.eval(`getComputedStyle(document.documentElement).getPropertyValue('--ink').trim()`), "#000000");
     await b.goto(server.url);
     await b.waitFor(() => `document.documentElement.dataset.contrast === 'high'`);
-    assert.equal(await b.eval(`Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'High contrast').getAttribute('aria-pressed')`), "true");
+    assert.equal(await b.eval(`Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim().startsWith('High contrast')).getAttribute('aria-pressed')`), "true");
     assert.deepEqual(b.console.filter((x) => x.startsWith("exception:")), []);
   } finally { browser?.close(); server.proc.kill(); }
 });

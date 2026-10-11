@@ -146,6 +146,7 @@ export function basePositions(view: ViewSpec): Map<string, Pos> {
 // ------------------------------------------------------------------ semantic zoom
 export interface RenderNode {
   id: string; label: string; kind: "node" | "agg" | "ext"; evidenceIds?: string[]; members: string[]; count: number; displayMode: DisplayMode;
+  drawing?: import("./g6-drawing.ts").Drawing; decorative?: boolean;
   tier: ViewNode["tier"]; pos: Pos; node?: ViewNode; role?: string; parent?: string; rank?: number; stale: boolean; inTx?: boolean; unresolvedCalls?: number;
 }
 export interface RenderEdge { sourceLabel?: string; targetLabel?: string; id: string; kind?: string; from: string; to: string; displayMode: DisplayMode; label: string; count: number; edgeIds: string[]; evidenceIds: string[]; stale: boolean; ghost?: boolean; ret?: boolean; via?: Pos[]; ambient?: boolean }
