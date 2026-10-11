@@ -40,6 +40,24 @@ test("sequence SVG supports evidence, captured hover, keyboard and tab camera re
     const bounds=await b.eval<{x:number;y:number}>(`(() => { const r=document.querySelector('[data-sequence-element="participant"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
     await b.send("Input.dispatchMouseEvent",{type:"mouseMoved",...bounds});
     await b.waitFor(()=>`!!document.querySelector('.sequence-preview')`,5_000);
+    const wheel = async (pt: {x:number;y:number}, deltaY: number) => b.send("Input.dispatchMouseEvent",{type:"mouseWheel",...pt,deltaX:0,deltaY});
+    const cameraNow = () => b.eval<string>(`document.querySelector('.sequence-canvas > g').getAttribute('transform')`);
+    const locked = await cameraNow();
+    await wheel(bounds,-100);
+    await new Promise(r=>setTimeout(r,100));
+    assert.equal(await cameraNow(),locked,"preview blocks wheel zoom");
+    await b.key("Escape");
+    await b.send("Input.dispatchMouseEvent",{type:"mouseMoved",x:1,y:1});
+    await b.waitFor(()=>`!document.querySelector('.sequence-preview')`);
+    await b.send("Input.dispatchMouseEvent",{type:"mouseMoved",...bounds});
+    await wheel(bounds,-100);
+    await b.waitFor(()=>`document.querySelector('.sequence-canvas > g').getAttribute('transform') !== ${JSON.stringify(locked)}`);
+    assert.equal(await b.eval(`!!document.querySelector('.sequence-preview')`),false,"zoom wins over pending hover");
+    const blank = await b.eval<{x:number;y:number}>(`(() => {const r=document.querySelector('.sequence-canvas').getBoundingClientRect();return {x:r.right-12,y:r.top+12};})()`);
+    await b.send("Input.dispatchMouseEvent",{type:"mouseMoved",...blank});
+    const unzoomed = await cameraNow();
+    await wheel(blank,-100);
+    await b.waitFor(()=>`document.querySelector('.sequence-canvas > g').getAttribute('transform') !== ${JSON.stringify(unzoomed)}`);
     assert.equal(b.console.filter(line=>line.startsWith("exception:")).length,0);
   } finally { await b.close();server.proc.kill("SIGKILL"); }
 });

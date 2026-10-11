@@ -928,7 +928,7 @@ export function App() {
           {exploreOpen && <ExplorationPanel key={`${view?.id}:${selection.join("|")}`} target={exploreTarget} choices={exploreChoices} onExplore={explore} onSource={()=>void openSource()} onOther={()=>{setChatSeed({text:`Explain ${exploreTarget?.label ?? "the selected scope"}`,n:Date.now()});document.getElementById("chat-input")?.focus();}} />}
         </div>}
         <div className="sr" role="status" aria-live="polite" aria-atomic="true">{announcement}</div>
-        <p id="canvas-help" className="sr">Keyboard: arrow keys move between elements, Enter inspects, Space selects, E expands the focused element, L pauses or resumes hover expansion, O opens a text outline of the whole map, Escape dismisses the lens or clears the selection.</p>
+        <p id="canvas-help" className="sr">Scroll zooms until the hover preview opens. Move off the lens to resume zoom. Keyboard: + and - zoom while the preview is closed; arrow keys move between elements, Enter inspects, Space selects, E expands the focused element, L pauses or resumes hover expansion, O opens a text outline of the whole map, Escape dismisses the lens or clears the selection.</p>
         {error && <div className="banner error" role="alert">{error} <button className="link" onClick={() => setError(null)}>dismiss</button></div>}
         {notice && <div className="banner ok" role="status">{notice}</div>}
         {changes && changes.changed && (

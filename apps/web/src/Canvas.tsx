@@ -328,6 +328,7 @@ function GraphCanvas(input: CanvasProps) {
     c.on("mouseover", "node", (e) => e.target.addClass("lens-hover"));
     c.on("mouseout", "node", (e) => e.target.removeClass("lens-hover"));
     const fisheye = attachFisheye(host.current, {
+      blockWheelWhenActive: true,
       interactive: () => !cb.current.boxSelect,
       onChange: (state) => { lensStateRef.current = state; setLensState(state); cb.current.onState?.({ zoom: c.zoom(), pan: c.pan(), lens: state }); },
       scene: () => {
@@ -368,7 +369,18 @@ function GraphCanvas(input: CanvasProps) {
     const schedule = () => { if (!raf) raf = requestAnimationFrame(refresh); };
     c.on("pan zoom resize", schedule);
     refreshRef.current = refresh;
-    host.current.addEventListener("wheel", (e) => { const r = host.current!.getBoundingClientRect(); pointer.current = { x: e.clientX - r.left, y: e.clientY - r.top }; }, { passive: true, capture: true });
+    const wheelHost = host.current;
+    const wheel = (e: WheelEvent) => {
+      if ((e.target as Element).closest?.("button,input,textarea,select,a")) return;
+      e.preventDefault();
+      if (fisheye.isActive()) return;
+      const r = wheelHost.getBoundingClientRect();
+      const at = { x: e.clientX - r.left, y: e.clientY - r.top };
+      pointer.current = at;
+      const delta = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? c.height() : 1);
+      c.zoom({ level: Math.max(c.minZoom(), Math.min(c.maxZoom(), c.zoom() * Math.exp(-Math.max(-240, Math.min(240, delta)) * .002))), renderedPosition: at });
+    };
+    wheelHost.addEventListener("wheel", wheel, { passive: false });
     // The stage can be resized after mount (caption wraps, panels resize); keep cytoscape's measurements current.
     const ro = new ResizeObserver(() => {
       c.resize();
@@ -377,7 +389,7 @@ function GraphCanvas(input: CanvasProps) {
       setAspect(Math.round(ratio * 4) / 4);
     });
     ro.observe(host.current);
-    return () => { fisheye.dispose(); lens.current = null; ro.disconnect(); if (raf) cancelAnimationFrame(raf); c.destroy(); cy.current = null; };
+    return () => { wheelHost.removeEventListener("wheel", wheel); fisheye.dispose(); lens.current = null; ro.disconnect(); if (raf) cancelAnimationFrame(raf); c.destroy(); cy.current = null; };
   }, []);
 
   /** "Bring into view": fit everything; labels that would be too small to read are then not drawn, and the outline keeps the names. */
@@ -542,7 +554,10 @@ function GraphCanvas(input: CanvasProps) {
     const nodes = cb.current.rendered.nodes;
     const dirs: Record<string, Dir> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
     const cur = nodes.find((n) => n.id === focusId.current) ?? null;
-    if (dirs[e.key]) {
+    if (["+", "=", "-"].includes(e.key)) {
+      e.preventDefault();
+      if (!lens.current?.isActive()) c.zoom({ level: Math.max(c.minZoom(), Math.min(c.maxZoom(), c.zoom() * (e.key === "-" ? 1 / 1.15 : 1.15))), renderedPosition: { x: c.width() / 2, y: c.height() / 2 } });
+    } else if (dirs[e.key]) {
       e.preventDefault();
       const items = nodes.map((n) => { const q = c.getElementById(n.id).position(); return { id: n.id, x: q.x, y: q.y }; });
       const next = nextByDirection(items, focusId.current, dirs[e.key]);
@@ -569,7 +584,7 @@ function GraphCanvas(input: CanvasProps) {
     {!layoutReady && <div className="canvas-hint" role="status">Arranging graph…</div>}
     <div className="lens-controls" role="group" aria-label="Hover expansion">
       <button type="button" aria-pressed={!lensState.enabled} onClick={() => lens.current?.configure({ enabled: !lensState.enabled })}>{lensState.enabled ? "Pause hover expansion" : "Resume hover expansion"}</button>
-      <span>Hover: expand · E: focused element · Esc: dismiss · L: pause · [ / ]: pages</span>
+      <span>Scroll: zoom · pause: expand · move off lens: zoom · + / −: zoom · E: focused element · Esc: dismiss · L: pause · [ / ]: pages</span>
     </div>
     {layoutReady && (hint.off > 0 || hint.labelsHidden || (automatic && layout?.engine === "fallback")) && (
       <div className="canvas-hint" role="status">

@@ -127,7 +127,7 @@ test("automatic hover waits, holds focus, leaves wheel unchanged, and cancels pe
       scene: () => ({ nodes: [{ id: "focus", label: sceneLabel, x: 400, y: 300, width: 80, height: 40, color: "#60a5fa" }, { id: "neighbor", label: "Unrelated neighbor", x: 450, y: 330, width: 80, height: 40, color: "#60a5fa" }], edges: [] }),
       onNode: (node) => { picked = node.id; },
     });
-    flush(); pointer(400, 300); t.mock.timers.tick(199); flush(); assert.equal(text.length, 0);
+    flush(); pointer(400, 300); t.mock.timers.tick(349); flush(); assert.equal(text.length, 0);
     t.mock.timers.tick(1); flush(); assert.ok(text.includes("Focus"));
     assert.ok(arcs.some((r) => Math.abs(r - 211.75) < 1e-8)); assert.ok(arcs.some((r) => Math.abs(r - 186.34) < 1e-8));
     sceneLabel = "Changed after capture"; pointer(450, 330); flush();
@@ -137,9 +137,14 @@ test("automatic hover waits, holds focus, leaves wheel unchanged, and cancels pe
     const wheel = new Event("wheel", { cancelable: true }); host.dispatchEvent(wheel); assert.equal(wheel.defaultPrevented, false);
     engine.configure({ radius: 60, falloff: 3, magnification: 4, rings: false }); flush();
     assert.equal(host.dataset.lensMagnification, "2.2"); assert.ok(Math.abs(Number(host.dataset.lensOuterRadius) - 211.75) < 1e-8);
-    engine.configure({ enabled: false }); flush(); text.length = 0; pointer(400, 300); t.mock.timers.tick(250); flush(); assert.equal(text.length, 0);
-    engine.configure({ enabled: true }); flush(); pointer(400, 300); engine.dispose();
-    t.mock.timers.tick(250); flush(); assert.equal(text.length, 0); assert.equal(canvas.removed, true);
+    engine.configure({ enabled: false }); flush(); text.length = 0; pointer(400, 300); t.mock.timers.tick(550); flush(); assert.equal(text.length, 0);
+    engine.configure({ enabled: true }); flush(); pointer(400, 300);
+    host.dispatchEvent(Object.assign(new Event("wheel", { cancelable: true }), { clientX: 400, clientY: 300 }));
+    t.mock.timers.tick(349); flush(); assert.equal(engine.isActive(), false);
+    t.mock.timers.tick(161); flush(); assert.equal(engine.isActive(), true);
+    host.dispatchEvent(new Event("pointerleave")); flush();
+    text.length = 0; pointer(400, 300); engine.dispose();
+    t.mock.timers.tick(550); flush(); assert.equal(text.length, 0); assert.equal(canvas.removed, true);
   } finally {
     t.mock.timers.reset();
     for (const [name, descriptor] of descriptors) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name);

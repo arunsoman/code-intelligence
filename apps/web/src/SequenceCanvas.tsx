@@ -16,6 +16,7 @@ export function SequenceCanvas(p: CanvasProps) {
   const [tableOpen,setTableOpen] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const scrollUntil = useRef(0);
   const drag = useRef<{ x: number; y: number; pan: { x: number; y: number }; selecting: boolean } | undefined>(undefined);
   const [box, setBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const ids = useId().replace(/:/g, ""), fit = useRef(p.fitTick), initial = useRef(true);
@@ -31,7 +32,7 @@ export function SequenceCanvas(p: CanvasProps) {
       setSize({ width, height });
       if (initial.current) { initial.current = false; if (!p.initialState) fitCamera(width,height); }
     });
-    const preventZoom = (event: WheelEvent) => { if (event.ctrlKey || event.metaKey) event.preventDefault(); };
+    const preventZoom = (event: WheelEvent) => { if ((event.target as Element).closest(".sequence-canvas")) event.preventDefault(); };
     element.addEventListener("wheel",preventZoom,{ passive: false });
     observer.observe(element); return () => { observer.disconnect(); clearTimeout(timer.current); element.removeEventListener("wheel",preventZoom); };
   }, []);
@@ -51,7 +52,7 @@ export function SequenceCanvas(p: CanvasProps) {
       }
     }
     p.announce(value.label + (edge ? ". Message order is inferred." : ". Participant."));
-    timer.current = setTimeout(() => setPreview(value), 200);
+    timer.current = setTimeout(() => setPreview(value), Math.max(350, scrollUntil.current - performance.now() + 350));
   };
   const point = (event: React.PointerEvent | React.MouseEvent) => { const rect = host.current!.getBoundingClientRect(); return { x: event.clientX - rect.left, y: event.clientY - rect.top }; };
   const activate = (node?: RenderNode, edge?: RenderEdge) => { if (node) p.onTapNode(node); else if (edge) p.onTapEdge(edge); };
@@ -69,12 +70,23 @@ export function SequenceCanvas(p: CanvasProps) {
           if (index >= 0) { event.preventDefault(); const next = event.key === "Home" ? 0 : event.key === "End" ? elements.length - 1 : Math.max(0,Math.min(elements.length-1,index+(["ArrowLeft","ArrowUp"].includes(event.key)?-1:1))); elements[next]?.focus(); }
         }
         else if (event.target === svg.current && ["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(event.key)) { event.preventDefault(); setCamera(c => ({ ...c, pan: { x: c.pan.x + (event.key === "ArrowLeft" ? 60 : event.key === "ArrowRight" ? -60 : 0), y: c.pan.y + (event.key === "ArrowUp" ? 60 : event.key === "ArrowDown" ? -60 : 0) } })); }
-        else if (event.target === svg.current && ["+","-"].includes(event.key)) { event.preventDefault(); setCamera(c => ({ ...c, zoom: Math.max(.35,Math.min(3,c.zoom * (event.key === "+" ? 1.15 : 1 / 1.15))) })); }
+        else if (event.target === svg.current && ["+","-"].includes(event.key)) { event.preventDefault(); if (preview) return; clearTimeout(timer.current); setCamera(c => ({ ...c, zoom: Math.max(.35,Math.min(3,c.zoom * (event.key === "+" ? 1.15 : 1 / 1.15))) })); }
         else if (event.target === svg.current && event.key.toLowerCase() === "o") p.onOpenOutline();
       }}
       onWheel={event => {
-        if (event.ctrlKey || event.metaKey) { event.preventDefault(); const rect = host.current!.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top; setCamera(c => { const zoom = Math.max(.35,Math.min(3,c.zoom * Math.exp(-event.deltaY * .002))); return { ...c, zoom, pan: { x: x - (x-c.pan.x) * zoom/c.zoom, y: y - (y-c.pan.y) * zoom/c.zoom } }; }); }
-        else setCamera(c => ({ ...c, pan: { x: c.pan.x - event.deltaX, y: c.pan.y - event.deltaY } }));
+        event.preventDefault();
+        if (preview) return;
+        clearTimeout(timer.current); scrollUntil.current = performance.now() + 160;
+        const rect = host.current!.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
+        const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? size.height : 1);
+        setCamera(c => { const zoom = Math.max(.35,Math.min(3,c.zoom * Math.exp(-Math.max(-240,Math.min(240,delta)) * .002))); return { ...c, zoom, pan: { x: x - (x-c.pan.x) * zoom/c.zoom, y: y - (y-c.pan.y) * zoom/c.zoom } }; });
+        const clientX = event.clientX, clientY = event.clientY;
+        timer.current = setTimeout(() => {
+          const element = document.elementFromPoint(clientX,clientY)?.closest("[data-sequence-element]") as HTMLElement | null;
+          if (!element || !svg.current?.contains(element)) return;
+          const node = nodeById.get(element.dataset.nodeId ?? ""), edge = p.rendered.edges.find(e => e.id === element.dataset.edgeId);
+          if (node || edge) capture(node,edge,{x,y});
+        }, 160);
       }}
       onPointerDown={event => {
         if (event.button !== 0 || (event.target as Element).closest("[data-sequence-element]")) return;
@@ -108,7 +120,7 @@ export function SequenceCanvas(p: CanvasProps) {
         <g clipPath={`url(#${ids}-lens)`}><text x={center.x} y={center.y-60} textAnchor="middle">{wrapSequenceText(preview.label,28).slice(0,3).map((line,i)=><tspan x={center.x} dy={i?20:0} key={i}>{line}</tspan>)}</text><text x={center.x} y={center.y+10} textAnchor="middle" className="sequence-preview-detail">{preview.lines.flatMap(line=>wrapSequenceText(line,30)).slice(0,5).map((line,i)=><tspan x={center.x} dy={i?18:0} key={i}>{line}</tspan>)}</text></g>
       </g>}
     </svg>
-    <div className="sequence-notice"><button className="secondary small" aria-expanded={tableOpen} onClick={()=>{setTableOpen(!tableOpen);setPreview(null);clearTimeout(timer.current);}}>Message table</button>Time ↓ · order inferred from static evidence · scroll or drag to pan · Ctrl+scroll to zoom <button className="secondary small" aria-pressed={!camera.lens.enabled} onClick={()=>{setPreview(null);clearTimeout(timer.current);setCamera(c=>({...c,lens:{...c.lens,enabled:!c.lens.enabled}}));}}>{camera.lens.enabled?"Pause preview":"Resume preview"}</button></div>
+    <div className="sequence-notice"><button className="secondary small" aria-expanded={tableOpen} onClick={()=>{setTableOpen(!tableOpen);setPreview(null);clearTimeout(timer.current);}}>Message table</button>Time ↓ · inferred order · scroll: zoom · drag: pan · hover: preview · Esc: dismiss <button className="secondary small" aria-pressed={!camera.lens.enabled} onClick={()=>{setPreview(null);clearTimeout(timer.current);setCamera(c=>({...c,lens:{...c.lens,enabled:!c.lens.enabled}}));}}>{camera.lens.enabled?"Pause preview":"Resume preview"}</button></div>
     {tableOpen && <section className="sequence-table" aria-label="Sequence messages as a table"><button className="secondary small" onClick={()=>setTableOpen(false)}>Close message table</button><table><caption>Message order is inferred from the static plan.</caption><thead><tr>{["Order","From","To","Message","Kind","Evidence"].map(label=><th scope="col" key={label}>{label}</th>)}</tr></thead><tbody>{scene.messages.map(m=><tr key={m.edge.id}><td>{m.order}</td><td>{nodeById.get(m.edge.from)?.label}</td><td>{nodeById.get(m.edge.to)?.label}</td><td>{m.edge.label}</td><td>{m.kind}</td><td><button className="link small" onClick={()=>p.onTapEdge(m.edge)} aria-label={`Inspect evidence for message ${m.order}`}>{m.edge.evidenceIds.length} links</button></td></tr>)}</tbody></table></section>}
   </div>;
 }

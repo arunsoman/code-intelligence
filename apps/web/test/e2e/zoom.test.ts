@@ -61,7 +61,20 @@ test("automatic hover expands without moving the graph and removes lens configur
     await b.waitFor(() => `document.querySelector('.canvas').dataset.lensActive === 'true'`, 5000);
     const zoom = (await graphSnapshot(b)).zoom;
     await b.send("Input.dispatchMouseEvent", { type: "mouseWheel", ...point, deltaX: 0, deltaY: -180 });
-    await b.waitFor(() => `document.querySelector('.canvas')._cyreg.cy.zoom() !== ${zoom}`, 5000);
+    await wait(250);
+    assert.equal((await graphSnapshot(b)).zoom, zoom, "active lens blocks camera zoom");
+    await b.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 1, y: 1 });
+    await b.waitFor(() => `document.querySelector('.canvas').dataset.lensActive === 'false'`, 5000);
+    const next = await lensPoint(b);
+    await b.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...next });
+    await b.send("Input.dispatchMouseEvent", { type: "mouseWheel", ...next, deltaX: 0, deltaY: -180 });
+    await b.waitFor(() => `document.querySelector('.canvas')._cyreg.cy.zoom() > ${zoom}`, 5000);
+    assert.equal(await b.eval(`document.querySelector('.canvas').dataset.lensActive`), "false");
+    const after = await graphSnapshot(b);
+    assert.deepEqual(after.nodes, before.nodes);
+    assert.deepEqual(after.edges, before.edges);
+    assert.equal(after.level, before.level);
+    await b.waitFor(() => `document.querySelector('.canvas').dataset.lensActive === 'true'`, 5000);
     assert.equal(await b.eval(`Number(document.querySelector('.canvas').dataset.lensMagnification)`), 2.2);
     assert.deepEqual(b.console.filter((line) => /^exception|^error/.test(line)), []);
   } finally { b.close(); server.proc.kill(); }

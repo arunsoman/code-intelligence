@@ -154,10 +154,13 @@ export interface LensOptions {
   onEdge?: (edge: LensEdge) => void;
   onChange?: (state: LensState) => void;
   controls?: boolean;
+  /** Camera surfaces consume wheel input while their preview is open. Tables keep native scrolling. */
+  blockWheelWhenActive?: boolean;
   interactive?: () => boolean;
 }
 export interface LensEngine {
   configure: (patch: Partial<LensState>) => void; focus: (point: Point) => void;
+  isActive: () => boolean;
   refresh: () => void; nextPage: (delta: number) => void; dispose: () => void;
 }
 
@@ -179,6 +182,7 @@ export function attachFisheye(host: HTMLElement, options: LensOptions): LensEngi
   let currentM = state.magnification, raf = 0, last = 0, disposed = false, page = 0, expandedId = "", lastFocusedId = "";
   let drawnNodes: LensNode[] = [], drawnEdges: LensEdge[] = [];
   let hoverTimer: ReturnType<typeof setTimeout> | undefined, hoverId = "";
+  let scrollUntil = 0;
   let anchor: Point = { x: 0, y: 0 };
   let captured: PreviewCapture | undefined;
   const clearHover = () => { clearTimeout(hoverTimer); hoverTimer = undefined; hoverId = ""; };
@@ -329,8 +333,22 @@ export function attachFisheye(host: HTMLElement, options: LensOptions): LensEngi
     if (!candidate) { clearHover(); return; }
     if (candidate.id === hoverId) return;
     clearHover(); hoverId = candidate.id;
-    hoverTimer = setTimeout(() => { if (!disposed && state.enabled && options.interactive?.() !== false) activate(candidate.point, candidate.node ? candidate.id : "", candidate.node ? "" : candidate.id); }, 200);
+    hoverTimer = setTimeout(() => { if (!disposed && state.enabled && options.interactive?.() !== false) activate(candidate.point, candidate.node ? candidate.id : "", candidate.node ? "" : candidate.id); }, Math.max(350, scrollUntil - performance.now() + 350));
   };
+  const wheel = (e: WheelEvent) => {
+    if (ignored(e)) return;
+    if (active && state.enabled) { if (options.blockWheelWhenActive) { e.preventDefault(); e.stopImmediatePropagation(); } return; }
+    clearHover(); scrollUntil = performance.now() + 160;
+    // Re-hit-test after the camera has settled: the source may have moved.
+    mouse = position(e);
+    hoverTimer = setTimeout(() => {
+      hoverTimer = undefined;
+      if (disposed || !state.enabled || options.interactive?.() === false) return;
+      const candidate = sourceHit(mouse);
+      if (candidate) activate(candidate.point, candidate.node ? candidate.id : "", candidate.node ? "" : candidate.id);
+    }, 510);
+  };
+  host.addEventListener("wheel", wheel, { capture: true, passive: false });
   const leave = () => { clearHover(); if (!state.pinned) { active = false; lastFocusedId = ""; schedule(); } };
   const edgeHit = (edges: LensEdge[], point: Point) => edges.find((edge) => edge.points.slice(1).some((b, i) => {
     const a = edge.points[i], dx = b.x - a.x, dy = b.y - a.y, length = dx * dx + dy * dy;
@@ -374,9 +392,10 @@ export function attachFisheye(host: HTMLElement, options: LensOptions): LensEngi
   return {
     configure(patch) { if (patch.enabled != null) state.enabled = patch.enabled; state.pinned = false; state.magnification = LENS_DEFAULTS.magnification; state.rings = true; state.easing = !matchMedia("(prefers-reduced-motion: reduce)").matches; geometry(); if (!state.enabled) { clearHover(); active = false; } notify(); },
     focus(point) { if (!state.enabled) return; mouse = { ...point }; const candidate = sourceHit(point); activate(candidate?.point ?? point, candidate?.node ? candidate.id : "", candidate && !candidate.node ? candidate.id : ""); },
+    isActive: () => active && state.enabled,
     refresh: schedule,
     nextPage(delta) { page = Math.max(0, page + delta); schedule(); },
-    dispose() { disposed = true; clearHover(); cancelAnimationFrame(raf); observer.disconnect(); canvas.remove(); controls?.remove(); host.removeEventListener("pointermove", move); host.removeEventListener("pointerleave", leave); host.removeEventListener("pointerdown", touch); host.removeEventListener("focusin", focusElement); host.removeEventListener("pointerdown", down, true); host.removeEventListener("mousedown", down, true); host.removeEventListener("mouseup", down, true); host.removeEventListener("click", click, true); host.removeEventListener("keydown", key, true); window.removeEventListener("blur", blur); },
+    dispose() { host.removeEventListener("wheel", wheel, true); disposed = true; clearHover(); cancelAnimationFrame(raf); observer.disconnect(); canvas.remove(); controls?.remove(); host.removeEventListener("pointermove", move); host.removeEventListener("pointerleave", leave); host.removeEventListener("pointerdown", touch); host.removeEventListener("focusin", focusElement); host.removeEventListener("pointerdown", down, true); host.removeEventListener("mousedown", down, true); host.removeEventListener("mouseup", down, true); host.removeEventListener("click", click, true); host.removeEventListener("keydown", key, true); window.removeEventListener("blur", blur); },
   };
 }
 
