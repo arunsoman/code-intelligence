@@ -106,6 +106,7 @@ import type { WorkerClient } from "./worker.ts";
 import { WorkerError } from "./worker.ts";
 import { DefectError, DefectWorkflow, type DraftForge } from "./defect-workflow.ts";
 import { DefectRequests } from "./defect-requests.ts";
+import { SavedWorkspaces } from "./saved-workspaces.ts";
 import { Profiling } from "./profiling.ts";
 import { Campaigns, CampaignError, type CampaignAdapters } from "./campaigns.ts";
 import { GitHubPublisher, JointRunner, RecipeRunner, repositoryInventory, validateCandidate } from "./campaign-runner.ts";
@@ -255,6 +256,8 @@ export class Service {
   readonly jobsAdmin: JobsAdmin;
   /** C26 Phase A: report-only defect detection requests and benchmarking. */
   readonly defectRequests: DefectRequests;
+  /** C13: saved investigations - save, list, resume. */
+  readonly savedWorkspaces: SavedWorkspaces;
   /** Operations the screens need that have no other home: revision and source lists, the evaluation registry, and local team administration. */
   readonly screenOps: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>> | ApiResult<unknown>> = {
     "C07/listRevisions": (c, b) => ok(c, (this.store.db.prepare("select id, repo_root, created_at, file_count from revisions " + (b?.repoRoot ? "where repo_root = ? " : "") + "order by rowid desc limit 30").all(...(b?.repoRoot ? [b.repoRoot] : [])) as any[]).map((r) => ({ id: r.id, repoRoot: r.repo_root, createdAt: r.created_at, files: r.file_count }))),
@@ -751,6 +754,7 @@ export class Service {
     this.gitBrowsing = new GitBrowsing(this);
     this.jobsAdmin = new JobsAdmin(this);
     this.defectRequests = new DefectRequests(this);
+    this.savedWorkspaces = new SavedWorkspaces(this);
     this.evaluator = new Evaluator(store);
     this.workspaceLog = new WorkspaceLog(store, {
       evidenceState: (revision, evidenceId) => { const rev = this.store.revision(revision), ev = rev ? this.store.evidence(revision, evidenceId) : null; if (!rev || !ev) return "UNAVAILABLE"; const st = this.resolveEvidence(rev, ev).state; return st === "CURRENT" ? "CURRENT" : st === "STALE" ? "STALE" : "UNAVAILABLE"; },
@@ -2833,50 +2837,12 @@ export class Service {
   }
 
   // ---------------------------------------------------------------- workspaces (investigation memory)
-  saveWorkspace(ctx: CallContext, req: { workspaceId?: string; name: string; expectedVersion: number; revision?: string; state: SavedState }): ApiResult<{ workspaceId: string; receipt: CommitReceipt; replayed: boolean }> {
-    const name = (req.name ?? "").trim();
-    if (!name || name.length > 120) return fail(ctx, { code: "INVALID_SCHEMA", message: "name must be 1–120 characters", retryable: false });
-    const workspaceId = req.workspaceId ?? `ws:${randomUUID()}`;
-    const r = this.journal.submit(ctx, { id: ctx.requestId, type: "UPDATE_WORKSPACE", subjectId: workspaceId, expectedVersion: req.expectedVersion ?? 0, payload: { name, revision: req.revision, state: req.state } });
-    if (!r.ok) return fail(ctx, r.error);
-    if (!r.replayed) this.store.audit(actor(ctx), "workspace.save", workspaceId, { version: r.receipt.resourceVersion });
-    return ok(ctx, { workspaceId, receipt: r.receipt, replayed: r.replayed }, { resourceVersion: r.receipt.resourceVersion, revision: req.revision });
-  }
+  saveWorkspace(ctx: CallContext, req: { workspaceId?: string; name: string; expectedVersion: number; revision?: string; state: SavedState }): ApiResult<{ workspaceId: string; receipt: CommitReceipt; replayed: boolean }> { return this.savedWorkspaces.saveWorkspace(ctx, req); }
 
-  listWorkspaces(ctx: CallContext): ApiResult<{ id: string; name: string; version: number; revision: string | null; updatedAt: string }[]> {
-    const rows = (this.store.db.prepare("select id, name, version, revision, updated_at from workspaces order by updated_at desc").all() as any[])
-      .filter((r) => { const o = r.revision ? this.store.revision(r.revision, true) : null; return !(o && this.store.isRevoked(o.repoRoot)); });
-    return ok(ctx, rows.map((r) => ({ id: r.id, name: r.name, version: r.version, revision: r.revision, updatedAt: r.updated_at })));
-  }
+  listWorkspaces(ctx: CallContext): ApiResult<{ id: string; name: string; version: number; revision: string | null; updatedAt: string }[]> { return this.savedWorkspaces.listWorkspaces(ctx); }
 
   /** Resume: saved state plus staleness (evidence whose source changed) and the current state of every saved claim. */
-  openWorkspace(ctx: CallContext, req: { workspaceId: string }): ApiResult<{ id: string; name: string; version: number; revision: string | null; state: SavedState; staleEvidence: string[]; staleFiles: string[]; revisionIndexed: boolean; claimStates: Claim[] }> {
-    const row = this.store.db.prepare("select * from workspaces where id = ?").get(req.workspaceId) as any;
-    if (!row) return fail(ctx, { code: "NOT_FOUND", message: "no such workspace", retryable: false });
-    // A saved investigation over a source whose permission was withdrawn is not served, even before it is purged.
-    const owner = row.revision ? this.store.revision(row.revision, true) : null;
-    if (owner && this.store.isRevoked(owner.repoRoot)) return fail(ctx, { code: "FORBIDDEN", message: "access to the source this was saved against was withdrawn", retryable: false });
-    const state: SavedState = JSON.parse(row.json);
-    const rev = row.revision ? this.store.revision(row.revision) : null;
-    const ids = new Set<string>();
-    for (const n of state.view?.nodes ?? []) n.evidenceIds.forEach((i) => ids.add(i));
-    for (const e of state.view?.edges ?? []) e.evidenceIds.forEach((i) => ids.add(i));
-    for (const c of [...state.claims, ...(state.explanation?.claims ?? [])]) c.draft.evidenceIds.forEach((i) => ids.add(i));
-    const staleEvidence: string[] = [];
-    const staleFiles = new Set<string>();
-    if (rev) {
-      for (const id of ids) {
-        const ev = this.store.evidence(rev.id, id);
-        if (!ev) continue;
-        const res = this.resolveEvidence(rev, ev);
-        if (res.state === "STALE" || res.state === "UNAVAILABLE") { staleEvidence.push(id); staleFiles.add(res.file); }
-      }
-    }
-    const claimIds = [...new Set([...state.claims, ...(state.explanation?.claims ?? [])].map((c) => c.draft.id))];
-    this.store.audit(actor(ctx), "workspace.open", row.id, { stale: staleEvidence.length });
-    return ok(ctx, { id: row.id, name: row.name, version: row.version, revision: row.revision, state, staleEvidence, staleFiles: [...staleFiles].sort(), revisionIndexed: !!rev, claimStates: this.store.getClaims(claimIds) },
-      { revision: row.revision ?? undefined, resourceVersion: row.version, completeness: staleEvidence.length ? "PARTIAL" : "COMPLETE", warnings: staleEvidence.length ? [`${staleEvidence.length} evidence span(s) changed since this was saved`] : [] });
-  }
+  openWorkspace(ctx: CallContext, req: { workspaceId: string }): ApiResult<{ id: string; name: string; version: number; revision: string | null; state: SavedState; staleEvidence: string[]; staleFiles: string[]; revisionIndexed: boolean; claimStates: Claim[] }> { return this.savedWorkspaces.openWorkspace(ctx, req); }
 
   /** "What changed since I left": re-index the repository and diff against the saved revision. */
   changesSince(ctx: CallContext, req: { workspaceId: string }): Promise<ApiResult<ChangesSince>> { return this.revisionDiff.changesSince(ctx, req); }
