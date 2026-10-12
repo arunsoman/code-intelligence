@@ -878,9 +878,11 @@ export class Answering {
       r.ok ? ok(ctx, { kind: "explanation", explanation: r.value, message: `${lead}${r.value.summary}`.trim() }, r.metadata) : (r as ApiResult<never>);
     const needsView = () => fail<ConverseResult>(ctx, { code: "INVALID_SCHEMA", message: "Ask a question first, then I can talk about what's on the map.", retryable: false });
 
-    // The conversational agent runs only on the legacy single-view route. A classified query
-    // reaches its selected chart branch below and cannot be replaced by an agent-built map.
-    if (intent.type === "ask" && !chartCode && (this.svc.router?.converse || this.svc.router?.plan) && !looksLikeTrace(text)) {
+    // The conversational agent runs on the legacy single-view route, and also as the fallback when
+    // classification couldn't confidently map the question to one of the fixed intents: confidence
+    // should only decide which specialized chart renders, never whether an answer is attempted at all.
+    // A classified query reaches its selected chart branch below and cannot be replaced by an agent-built map.
+    if ((intent.type === "ask" || intent.type === "newIntent") && !chartCode && (this.svc.router?.converse || this.svc.router?.plan) && !looksLikeTrace(text)) {
       const rev = revision ? this.store.revision(revision) : this.store.latestRevision();
       if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index a repository first", retryable: false });
       const history = session.turns.filter((turn) => turn.seq > session.context.openedAtSeq && (turn.role === "user" || turn.role === "assistant")).slice(0, -1).slice(-6).map((turn) => ({ role: turn.role, text: turn.text.slice(0, 1500) }));

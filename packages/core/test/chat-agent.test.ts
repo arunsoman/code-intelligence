@@ -247,3 +247,30 @@ test("answer findings supersede an earlier architecture view while preserving it
     assert.equal(r.value.manifest!.views[0].code, "S12");
   } finally { worker.close(); }
 });
+
+// A question the 34-intent classifier can't confidently place should still get an attempted answer
+// (via the same agent the "ask" route already uses), not a bare refusal: confidence should only pick
+// which specialized chart renders, never whether an answer is attempted at all.
+test("a question the intent classifier reports as new_intent still reaches the chat agent and gets answered", async () => {
+  const { svc, worker, revision } = await setup();
+  try {
+    svc.router = {
+      ...scripted([() => call("answer", { text: "The concept hierarchy groups entities into zoom levels L0-L6.", cites: [] })]),
+      classify: async () => ({ intent_id: "new_intent", intent: "unknown", confidence: 0.2, reason: "unsupported query" }),
+    };
+    const r = await svc.converse(ctx(), { text: "what's the hierarchy concept in this project?", revision });
+    assert.ok(r.ok && r.value.kind === "analysis", "the agent answered instead of a flat refusal");
+  } finally { worker.close(); }
+});
+
+test("a new_intent question the chat agent declines still falls back to the original refusal message", async () => {
+  const { svc, worker, revision } = await setup();
+  try {
+    svc.router = {
+      ...scripted([() => call("not_analysis", { reason: "not a question about this code" })]),
+      classify: async () => ({ intent_id: "new_intent", intent: "unknown", confidence: 0.2, reason: "unsupported query" }),
+    };
+    const r = await svc.converse(ctx(), { text: "what's the hierarchy concept in this project?", revision });
+    assert.ok(r.ok && r.value.kind === "message" && /unsupported query/.test(r.value.message), "falls through to the classifier's own refusal, unchanged");
+  } finally { worker.close(); }
+});
