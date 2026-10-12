@@ -2,6 +2,11 @@
 // means for the business — "debit", "credit", "increment" and friends are deliberately absent; they
 // emerge from composition rules in semantic-concepts.ts, never from a lexicon. Each matcher returns
 // the nodes it matched and the variables it bound, or null.
+import { randomUUID } from "node:crypto";
+import { rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { defaultWorkerPath } from "../worker.ts";
 import type { MotifMatch, Pdg, PdgNode } from "./types.ts";
 
 export interface MotifPattern {
@@ -200,4 +205,31 @@ export const MOTIF_PATTERNS: MotifPattern[] = [
 /** Every motif occurrence in one function, in catalogue order. */
 export function matchMotifs(pdg: Pdg): MotifMatch[] {
   return MOTIF_PATTERNS.flatMap((p) => p.match(pdg).map((m) => ({ ...m, entityId: pdg.entityId })));
+}
+
+/** The same computation, batched for a whole repository and computed by the Rust worker (contracts
+ *  §10): one-shot `worker conceptMotifs <pdgs.json>` — one process per hierarchy build, preserving
+ *  input order and each graph's catalogue order (the TypeScript matchers above remain the reference;
+ *  the parity fixtures pin both runtimes occurrence-for-occurrence). Results carry `entityId` from
+ *  the caller's own graphs, like matchMotifs. */
+export type MotifBatchMatcher = (pdgs: Pdg[]) => MotifMatch[][];
+
+/** The TypeScript matchers run in-process: the hermetic path for tests (and any environment without
+ *  a built worker binary). Production calls take the worker by default. */
+export const localMotifBatch: MotifBatchMatcher = (pdgs) => pdgs.map(matchMotifs);
+
+export function matchMotifsBatch(pdgs: Pdg[]): MotifMatch[][] {
+  const input = `${tmpdir()}/cie-motif-${process.pid}-${randomUUID()}.json`;
+  writeFileSync(input, JSON.stringify(pdgs));
+  try {
+    const r = spawnSync(defaultWorkerPath(), ["conceptMotifs", input], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    let parsed: { results: { entityId: string; matches: Omit<MotifMatch, "entityId">[] }[]; error?: { code: string; message: string } } | null = null;
+    try { parsed = r.stdout?.trim() ? JSON.parse(r.stdout) : null; } catch { /* fall through to the failure below */ }
+    if ((parsed as { error?: { code: string; message: string } } | null)?.error) throw new Error(`${parsed!.error!.code}: ${parsed!.error!.message}`);
+    const results = parsed?.results;
+    if (!Array.isArray(results) || results.length !== pdgs.length) {
+      throw new Error(`worker conceptMotifs failed (exit ${r.status}${r.stderr ? `: ${String(r.stderr).slice(0, 200)}` : ""})`);
+    }
+    return results.map((res, i) => res.matches.map((mt) => ({ ...mt, entityId: pdgs[i].entityId })));
+  } finally { rmSync(input, { force: true }); }
 }

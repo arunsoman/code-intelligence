@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { EvidenceRef } from "@cie/schema";
 import { buildAllPdgs } from "../src/concept-hierarchy/pdg.ts";
+import { localMotifBatch } from "../src/concept-hierarchy/motifs.ts";
 import { buildSemanticConcepts } from "../src/concept-hierarchy/semantic-concepts.ts";
 import { Store } from "../src/store.ts";
 import { LEDGER, RESOURCES, makeRepo, putRevision } from "./concept-hierarchy-helpers.ts";
@@ -13,7 +14,7 @@ const conceptsOf = (files: Record<string, string>) => {
   const store = new Store(":memory:");
   putRevision(store, "rev-a", repo, files);
   const { pdgs } = buildAllPdgs(store, "rev-a", repo);
-  return buildSemanticConcepts(store, "rev-a", pdgs).concepts;
+  return buildSemanticConcepts(store, "rev-a", pdgs, [], localMotifBatch).concepts;
 };
 
 test("a guarded subtraction composes into a debit-form; a guarded addition into a credit-form", () => {
@@ -92,7 +93,7 @@ test("concepts carry real store evidence when facts exist, and never fabricate e
   const fact = { id: "fact:w1", subject: "function:src/ledger.ts#withdraw", predicate: "writes", object: { kind: "field", value: "balance" }, evidence: [evRef], resolution: "RESOLVED" };
   store.db.prepare("insert into facts(revision, id, subject, predicate, resolution, json, file, ev) values (?,?,?,?,?,?,?,?)").run("rev-a", fact.id, fact.subject, fact.predicate, fact.resolution, JSON.stringify(fact), "src/ledger.ts", JSON.stringify(["ev:w1"]));
   const { pdgs } = buildAllPdgs(store, "rev-a", repo);
-  const { concepts } = buildSemanticConcepts(store, "rev-a", pdgs);
+  const { concepts } = buildSemanticConcepts(store, "rev-a", pdgs, [], localMotifBatch);
   const transfer = concepts.find((c) => c.kind === "transfer-form")!;
   assert.deepEqual(transfer.evidenceIds, ["ev:w1"], "evidence comes only from the store");
   assert.ok(concepts.every((c) => c.evidenceIds.every((e) => e === "ev:w1")), "no fabricated evidence anywhere");

@@ -5,7 +5,7 @@
 //! approximating. Every bound (deadline, match cap, file cap) is enforced here.
 
 use regex::bytes::RegexBuilder as BytesRegexBuilder;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -26,7 +26,11 @@ fn unsupported_construct(err: &regex::Error) -> Option<&'static str> {
     if s.contains("backreference") || s.contains("back reference") || s.contains("backreferences") {
         return Some("backreference");
     }
-    if s.contains("look-around") || s.contains("lookaround") || s.contains("look-ahead") || s.contains("lookahead") {
+    if s.contains("look-around")
+        || s.contains("lookaround")
+        || s.contains("look-ahead")
+        || s.contains("lookahead")
+    {
         return Some("lookaround");
     }
     None
@@ -51,13 +55,21 @@ fn parse(params: &Value) -> Result<Input, (&'static str, String)> {
     let files = params
         .get("files")
         .and_then(Value::as_array)
-        .ok_or_else(|| ("INVALID_SCHEMA", "params.files must be an array".to_string()))?
+        .ok_or_else(|| {
+            (
+                "INVALID_SCHEMA",
+                "params.files must be an array".to_string(),
+            )
+        })?
         .iter()
         .filter_map(Value::as_str)
         .map(str::to_string)
         .collect::<Vec<_>>();
     if files.len() > MAX_FILES_PER_CALL {
-        return Err(("BUDGET_EXCEEDED", format!("more than {MAX_FILES_PER_CALL} files were passed per call; split the request")));
+        return Err((
+            "BUDGET_EXCEEDED",
+            format!("more than {MAX_FILES_PER_CALL} files were passed per call; split the request"),
+        ));
     }
     let pattern = params
         .get("pattern")
@@ -68,20 +80,32 @@ fn parse(params: &Value) -> Result<Input, (&'static str, String)> {
         return Err(("INVALID_SCHEMA", "the empty pattern matches every position and is refused; search with a literal instead".to_string()));
     }
     if pattern.len() > MAX_PATTERN_BYTES {
-        return Err(("BUDGET_EXCEEDED", format!("pattern is longer than the {MAX_PATTERN_BYTES}-byte limit")));
+        return Err((
+            "BUDGET_EXCEEDED",
+            format!("pattern is longer than the {MAX_PATTERN_BYTES}-byte limit"),
+        ));
     }
     Ok(Input {
         root: PathBuf::from(root),
         files,
         pattern,
-        case_sensitive: params.get("caseSensitive").and_then(Value::as_bool).unwrap_or(false),
+        case_sensitive: params
+            .get("caseSensitive")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         deadline_ms: params
             .get("deadlineMs")
             .and_then(Value::as_u64)
             .unwrap_or(DEFAULT_DEADLINE_MS)
             .min(DEFAULT_DEADLINE_MS),
-        max_matches_per_file: params.get("maxMatchesPerFile").and_then(Value::as_u64).unwrap_or(200) as usize,
-        max_total_matches: params.get("maxTotalMatches").and_then(Value::as_u64).unwrap_or(MAX_TOTAL_MATCHES as u64) as usize,
+        max_matches_per_file: params
+            .get("maxMatchesPerFile")
+            .and_then(Value::as_u64)
+            .unwrap_or(200) as usize,
+        max_total_matches: params
+            .get("maxTotalMatches")
+            .and_then(Value::as_u64)
+            .unwrap_or(MAX_TOTAL_MATCHES as u64) as usize,
     })
 }
 
@@ -220,7 +244,10 @@ mod tests {
     #[test]
     fn finds_matches_with_lines() {
         let dir = std::env::temp_dir().join(format!("cie-rx-{}", std::process::id()));
-        project(&dir, &[("src/a.ts", "const createPayment = 1;\ncreatePayment(x);\n")]);
+        project(
+            &dir,
+            &[("src/a.ts", "const createPayment = 1;\ncreatePayment(x);\n")],
+        );
         let v = regex_verify(&dir, &json!({"root": dir, "files": ["src/a.ts"], "pattern": "createPayment", "caseSensitive": true})).unwrap();
         assert_eq!(v["matches"].as_array().unwrap().len(), 2);
         assert_eq!(v["matches"][0]["line"], 1);
@@ -233,7 +260,11 @@ mod tests {
     fn case_insensitive_by_default() {
         let dir = std::env::temp_dir().join(format!("cie-rxc-{}", std::process::id()));
         project(&dir, &[("a.txt", "CreatePayment\n")]);
-        let v = regex_verify(&dir, &json!({"root": dir, "files": ["a.txt"], "pattern": "createpayment"})).unwrap();
+        let v = regex_verify(
+            &dir,
+            &json!({"root": dir, "files": ["a.txt"], "pattern": "createpayment"}),
+        )
+        .unwrap();
         assert_eq!(v["matches"].as_array().unwrap().len(), 1);
         let v2 = regex_verify(&dir, &json!({"root": dir, "files": ["a.txt"], "pattern": "createpayment", "caseSensitive": true})).unwrap();
         assert_eq!(v2["matches"].as_array().unwrap().len(), 0);
@@ -243,7 +274,11 @@ mod tests {
     #[test]
     fn backreference_is_rejected_with_the_construct_named() {
         let dir = std::env::temp_dir().join(format!("cie-rxb-{}", std::process::id()));
-        let e = regex_verify(&dir, &json!({"root": dir, "files": [], "pattern": "(a)\\1"})).unwrap_err();
+        let e = regex_verify(
+            &dir,
+            &json!({"root": dir, "files": [], "pattern": "(a)\\1"}),
+        )
+        .unwrap_err();
         assert_eq!(e.0, "INVALID_SCHEMA");
         assert!(e.1.to_lowercase().contains("backreference"), "{e:?}");
         std::fs::remove_dir_all(&dir).ok();
@@ -252,7 +287,11 @@ mod tests {
     #[test]
     fn lookaround_is_rejected() {
         let dir = std::env::temp_dir().join(format!("cie-rxl-{}", std::process::id()));
-        let e = regex_verify(&dir, &json!({"root": dir, "files": [], "pattern": "a(?=b)"})).unwrap_err();
+        let e = regex_verify(
+            &dir,
+            &json!({"root": dir, "files": [], "pattern": "a(?=b)"}),
+        )
+        .unwrap_err();
         assert_eq!(e.0, "INVALID_SCHEMA");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -269,9 +308,21 @@ mod tests {
         body.push('x');
         project(&dir, &[("big.txt", body.as_str())]);
         let t0 = Instant::now();
-        let v = regex_verify(&dir, &json!({"root": dir, "files": ["big.txt"], "pattern": "(a+)+$", "deadlineMs": 3000})).unwrap();
-        assert!(t0.elapsed().as_millis() < 4500, "took {}ms", t0.elapsed().as_millis());
-        assert_eq!(v["matches"].as_array().unwrap().len(), 0, "no match: the trailing x spoils (a+)+$");
+        let v = regex_verify(
+            &dir,
+            &json!({"root": dir, "files": ["big.txt"], "pattern": "(a+)+$", "deadlineMs": 3000}),
+        )
+        .unwrap();
+        assert!(
+            t0.elapsed().as_millis() < 4500,
+            "took {}ms",
+            t0.elapsed().as_millis()
+        );
+        assert_eq!(
+            v["matches"].as_array().unwrap().len(),
+            0,
+            "no match: the trailing x spoils (a+)+$"
+        );
         assert_eq!(v["filesScanned"], 1);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -280,8 +331,15 @@ mod tests {
     fn missing_files_are_counted_not_errors_and_paths_must_stay_inside_the_root() {
         let dir = std::env::temp_dir().join(format!("cie-rxm-{}", std::process::id()));
         project(&dir, &[("keep.txt", "needle here\n")]);
-        let v = regex_verify(&dir, &json!({"root": dir, "files": ["gone.txt", "../../etc/hosts"], "pattern": "root"})).unwrap();
-        assert_eq!(v["filesMissing"], 2, "missing and out-of-root files are skipped and counted");
+        let v = regex_verify(
+            &dir,
+            &json!({"root": dir, "files": ["gone.txt", "../../etc/hosts"], "pattern": "root"}),
+        )
+        .unwrap();
+        assert_eq!(
+            v["filesMissing"], 2,
+            "missing and out-of-root files are skipped and counted"
+        );
         assert_eq!(v["filesScanned"], 0);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -290,7 +348,11 @@ mod tests {
     fn match_caps_are_reported_as_truncated() {
         let dir = std::env::temp_dir().join(format!("cie-rxt-{}", std::process::id()));
         project(&dir, &[("x.txt", "aa aa aa aa\n")]);
-        let v = regex_verify(&dir, &json!({"root": dir, "files": ["x.txt"], "pattern": "aa", "maxMatchesPerFile": 2})).unwrap();
+        let v = regex_verify(
+            &dir,
+            &json!({"root": dir, "files": ["x.txt"], "pattern": "aa", "maxMatchesPerFile": 2}),
+        )
+        .unwrap();
         assert_eq!(v["matches"].as_array().unwrap().len(), 2);
         assert_eq!(v["truncated"], true);
         std::fs::remove_dir_all(&dir).ok();
@@ -301,9 +363,17 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("cie-rxu-{}", std::process::id()));
         project(&dir, &[("bin.dat", "")]);
         std::fs::write(dir.join("bin.dat"), [0x61u8, 0x62, 0xFF, 0x63, 0x62, 0x61]).unwrap();
-        let v = regex_verify(&dir, &json!({"root": dir, "files": ["bin.dat"], "pattern": "ba"})).unwrap();
+        let v = regex_verify(
+            &dir,
+            &json!({"root": dir, "files": ["bin.dat"], "pattern": "ba"}),
+        )
+        .unwrap();
         let ms = v["matches"].as_array().unwrap();
-        assert_eq!(ms.len(), 1, "one match over the raw bytes (position 4): 0xFF is not matched past");
+        assert_eq!(
+            ms.len(),
+            1,
+            "one match over the raw bytes (position 4): 0xFF is not matched past"
+        );
         assert_eq!(ms[0]["startByte"], 4);
         std::fs::remove_dir_all(&dir).ok();
     }

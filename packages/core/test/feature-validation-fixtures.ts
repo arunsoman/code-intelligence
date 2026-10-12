@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../src/store.ts";
 import { SqliteFeatureStore } from "../src/feature/store.ts";
-import { contentRoot, entriesFromDirectory, rawHash } from "../src/feature/canon.ts";
+import { contentRootOfTree, rawHash } from "../src/feature/canon.ts";
 import { record } from "./feature-fixtures.ts";
 import type { CandidateRecord, FeatureContract, RunRequest, RunResult, Runner } from "../src/feature/types.ts";
 import type { ValidationPlan, ValidationCheck } from "../src/feature/validation.ts";
@@ -14,8 +14,8 @@ export class ValidationRunner implements Runner {
 }
 export function validationFixture() {
   const root = mkdtempSync(join(tmpdir(), "pf-validation-fixture-")); mkdirSync(join(root, "src")); writeFileSync(join(root, "src/app.ts"), "export const version = 1;\n");
-  const before = contentRoot(entriesFromDirectory(root, { exclude: [] }));
-  writeFileSync(join(root, "src/app.ts"), "export const version = 2;\n"); const after = contentRoot(entriesFromDirectory(root, { exclude: [] })); writeFileSync(join(root, "src/app.ts"), "export const version = 1;\n");
+  const before = contentRootOfTree(root, { exclude: [] }).digest;
+  writeFileSync(join(root, "src/app.ts"), "export const version = 2;\n"); const after = contentRootOfTree(root, { exclude: [] }).digest; writeFileSync(join(root, "src/app.ts"), "export const version = 1;\n");
   const store = new Store(":memory:"), fs = new SqliteFeatureStore(store); const rec = record({ requestId: "req:validation", repositoryId: root, state: "IMPLEMENTING", mode: "BUILD_PREVIEW", contractVersion: 1 });
   const contract: FeatureContract = { schemaVersion: 1, id: "contract:req:validation", version: 1, hash: "contract-hash", requestId: rec.requestId, snapshot: rec.source, authorityPolicyHash: "authority", assumptions: [], obligationIds: [],
     requirements: [{ id: "r1", text: "Only current tenant data", source: { artifactId: "prompt", version: "1", locator: "prompt", contentHash: "prompt-hash" }, origin: "USER", type: "ACCESS", status: "ACTIVE", actorIds: ["member"], conditions: [], dependsOn: [], acceptanceIds: ["a1"] }],

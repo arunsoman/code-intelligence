@@ -14,7 +14,7 @@ import { makeScratch, removeScratch, safeJoin, sha256 } from "../isolated-exec.t
 import { MAX_BINARY_BYTES, applyCandidateToDir, changedPaths, copyTreeKeepLinks, passesThroughLink, readEntry, symlinkProblem } from "./tree.ts";
 import { policyFor } from "../access.ts";
 import type { Store } from "../store.ts";
-import { canonHash, contentRoot, defineSchema, entriesFromDirectory } from "./canon.ts";
+import { canonHash, contentRootOfTree, defineSchema } from "./canon.ts";
 import { FeatureError } from "./errors.ts";
 import { eventFor } from "./lifecycle.ts";
 import { snapshotOf } from "./intake.ts";
@@ -211,7 +211,7 @@ export function exportFeaturePatch(d: ExportDeps, actor: Id, i: { candidateHash:
 
 // ------------------------------------------------------------------------------------------------ destination
 
-const rootOfDir = (dir: string) => contentRoot(entriesFromDirectory(dir, { exclude: [] }));
+const rootOfDir = (dir: string) => contentRootOfTree(dir, { exclude: [] }).digest;
 /** What is at `rel` in the destination: kind, mode and hash (a symlink is compared by target, never followed). */
 const hereOf = (root: string, rel: string): { hash: string; mode: string; kind: string } | null => { try { const e = readEntry(root, rel); return e ? { hash: e.hash, mode: e.mode, kind: e.kind === "SYMLINK" ? "SYMLINK" : "FILE" } : null; } catch { return null; } };
 const wasHere = (m: FileMutation) => ({ mode: m.beforeMode ?? "100644", kind: (m.beforeKind ?? m.entryKind) === "SYMLINK" ? "SYMLINK" : "FILE" });

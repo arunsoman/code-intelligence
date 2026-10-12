@@ -7,7 +7,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { materializeCandidate, type FeatureEdit } from "../src/feature/candidate.ts";
-import { contentRoot, entriesFromDirectory, rawHash } from "../src/feature/canon.ts";
+import { contentRootOfTree, rawHash } from "../src/feature/canon.ts";
 import { assessConcurrentChanges } from "../src/feature/coordination.ts";
 import { securityGate } from "../src/feature/gates.ts";
 import { gateContextFor } from "../src/feature/security-handlers.ts";
@@ -22,7 +22,7 @@ import { boot, createEdit, none } from "./feature-boot.ts";
 
 const b = (...n: number[]) => Buffer.from(n);
 const PNG1 = b(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 1, 2, 3, 0xff), PNG2 = b(0x89, 0x50, 0x4e, 0x47, 0, 9, 9, 9, 0xfe), PNG3 = b(0x89, 0x50, 0x4e, 0x47, 0, 7, 7, 7, 0xfd, 0x00);
-const root = (dir: string) => contentRoot(entriesFromDirectory(dir, { exclude: [] }));
+const root = (dir: string) => contentRootOfTree(dir, { exclude: [] }).digest;
 
 function prepare(repo: string): void {
   mkdirSync(join(repo, "assets"), { recursive: true }); mkdirSync(join(repo, "scripts"), { recursive: true }); mkdirSync(join(repo, "docs"), { recursive: true });

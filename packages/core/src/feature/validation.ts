@@ -6,7 +6,7 @@ import { dirname } from "node:path";
 import type { RoleRunRecord } from "../execution.ts";
 import { makeScratch, removeScratch, safeJoin, walkFiles } from "../isolated-exec.ts";
 import { applyCandidateToDir, copyTreeKeepLinks } from "./tree.ts";
-import { canonHash, contentRoot, defineSchema, entriesFromDirectory, parseStrictJson, rawHash, type Canon } from "./canon.ts";
+import { canonHash, contentRootOfTree, defineSchema, parseStrictJson, rawHash, type Canon } from "./canon.ts";
 import { FeatureError } from "./errors.ts";
 import { classifyTier } from "./tiers.ts";
 import type { CandidateRecord, DecisionRecord, EvidenceRecord, FeatureContract, FeatureRecord, FeatureStore, PublicationDecision, RunManifest, Runner, RunResult, ValidationKind, ValidationResult, ValidationStatus } from "./types.ts";
@@ -98,7 +98,7 @@ export async function runFeatureValidation(d: ValidationDependencies, i: { candi
   let baseReady = false; let blockedAt = Number.POSITIVE_INFINITY; // earliest phase index with a mandatory non-pass (issue #82)
   try {
     // Copy/hash operations never execute repository code. Check both roots before any runner call.
-    try { copyTreeKeepLinks(request.repositoryId, root); baseReady = contentRoot(entriesFromDirectory(root, { exclude: [] })) === candidate.binding.baseContentHash; } catch { baseReady = false; }
+    try { copyTreeKeepLinks(request.repositoryId, root); baseReady = contentRootOfTree(root, { exclude: [] }).digest === candidate.binding.baseContentHash; } catch { baseReady = false; }
     for (const check of [...i.plan.checks].sort((a, b) => phases.indexOf(a.phase) - phases.indexOf(b.phase))) {
       const startedAt = new Date().toISOString(); const runId = `run:${randomUUID()}`;
       let status: ValidationStatus = "INCOMPLETE"; let baselineHealth: BaselineHealth = "NOT_RUN";
@@ -128,7 +128,7 @@ export async function runFeatureValidation(d: ValidationDependencies, i: { candi
           }
           copyTreeKeepLinks(root, scratch);
           applyCandidateToDir(scratch, candidate);
-          if (contentRoot(entriesFromDirectory(scratch, { exclude: [] })) !== candidate.binding.candidateContentHash) { status = "STALE"; gaps.push("materialized candidate content does not match binding"); }
+          if (contentRootOfTree(scratch, { exclude: [] }).digest !== candidate.binding.candidateContentHash) { status = "STALE"; gaps.push("materialized candidate content does not match binding"); }
           else if (Date.now() >= deadline || i.signal?.aborted) gaps.push("budget exhausted or cancelled after baseline; candidate not run");
           else {
             run = await runAt(scratch); const capture = captureOutcomes(run, check); outcomes = capture.outcomes; complete = capture.complete;

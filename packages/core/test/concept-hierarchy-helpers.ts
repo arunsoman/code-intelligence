@@ -10,6 +10,7 @@ import type { AnalysisBatch, Entity } from "@cie/schema";
 import { Service } from "../src/service.ts";
 import { Store } from "../src/store.ts";
 import { WorkerClient } from "../src/worker.ts";
+import { localMotifBatch } from "../src/concept-hierarchy/motifs.ts";
 import { clearPdgSourceCache } from "../src/concept-hierarchy/pdg.ts";
 
 export const sha = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -53,7 +54,9 @@ export function putRevision(store: Store, rev: string, repoRoot: string, files: 
 }
 
 let fakeWorker: string | null = null;
-/** A worker binary that never answers: the Service never calls it during a hierarchy build. */
+/** A worker binary that never answers: hierarchy builds never speak the frames protocol (the motif
+ *  batch is injected as a local matcher to keep these tests hermetic); the Service still holds the
+ *  client so an accidental call fails loudly instead of passing silently. */
 export function fakeWorkerPath(): string {
   if (fakeWorker) return fakeWorker;
   fakeWorker = join(tmpdir(), `cie-fake-worker-${process.pid}`);
@@ -62,10 +65,10 @@ export function fakeWorkerPath(): string {
   return fakeWorker;
 }
 
-export function setupService(repoRoot: string) {
+export function setupService(repoRoot: string, motifBatch?: import("../src/concept-hierarchy/motifs.ts").MotifBatchMatcher) {
   const store = new Store(":memory:");
   const worker = new WorkerClient(fakeWorkerPath());
-  const svc = new Service(store, worker, new StubProvider());
+  const svc = new Service(store, worker, new StubProvider(), undefined, motifBatch ?? localMotifBatch);
   return { svc, store, worker };
 }
 

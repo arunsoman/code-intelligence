@@ -35,7 +35,12 @@ pub enum SampleKind {
 }
 
 impl SampleKind {
-    fn from_declared(raw_type: &str, raw_unit: &str, period_ns: Option<i64>, profiler: Option<&str>) -> Self {
+    fn from_declared(
+        raw_type: &str,
+        raw_unit: &str,
+        period_ns: Option<i64>,
+        profiler: Option<&str>,
+    ) -> Self {
         let t = raw_type.to_lowercase();
         let u = raw_unit.to_lowercase();
         if t.contains("cpu") {
@@ -235,11 +240,18 @@ pub fn artifact_hash(bytes: &[u8]) -> String {
 }
 
 /// Parse an unknown profile by sniffing the first bytes.
-pub fn parse_profile(bytes: &[u8], service_hint: Option<&str>) -> Result<ParsedProfile, Vec<Diagnostic>> {
+pub fn parse_profile(
+    bytes: &[u8],
+    service_hint: Option<&str>,
+) -> Result<ParsedProfile, Vec<Diagnostic>> {
     if bytes.len() > MAX_PROFILE_BYTES {
         return Err(vec![Diagnostic {
             code: "RESOURCE_LIMIT".into(),
-            message: format!("profile size {} exceeds {} bytes", bytes.len(), MAX_PROFILE_BYTES),
+            message: format!(
+                "profile size {} exceeds {} bytes",
+                bytes.len(),
+                MAX_PROFILE_BYTES
+            ),
         }]);
     }
     if bytes.is_empty() {
@@ -262,11 +274,16 @@ pub fn parse_profile(bytes: &[u8], service_hint: Option<&str>) -> Result<ParsedP
 
 // ---------- Folded stacks ----------
 
-fn parse_folded(bytes: &[u8], service_hint: Option<&str>) -> Result<ParsedProfile, Vec<Diagnostic>> {
-    let text = std::str::from_utf8(bytes).map_err(|e| vec![Diagnostic {
-        code: "INVALID_SCHEMA".into(),
-        message: format!("folded stacks must be UTF-8: {e}"),
-    }])?;
+fn parse_folded(
+    bytes: &[u8],
+    service_hint: Option<&str>,
+) -> Result<ParsedProfile, Vec<Diagnostic>> {
+    let text = std::str::from_utf8(bytes).map_err(|e| {
+        vec![Diagnostic {
+            code: "INVALID_SCHEMA".into(),
+            message: format!("folded stacks must be UTF-8: {e}"),
+        }]
+    })?;
 
     let mut diagnostics = Vec::new();
     let mut function_names: Vec<String> = Vec::new();
@@ -291,10 +308,12 @@ fn parse_folded(bytes: &[u8], service_hint: Option<&str>) -> Result<ParsedProfil
             });
             continue;
         }
-        let count: i64 = parts[0].parse().map_err(|e| vec![Diagnostic {
-            code: "INVALID_SCHEMA".into(),
-            message: format!("line {}: invalid count '{}': {e}", line_no + 1, parts[0]),
-        }])?;
+        let count: i64 = parts[0].parse().map_err(|e| {
+            vec![Diagnostic {
+                code: "INVALID_SCHEMA".into(),
+                message: format!("line {}: invalid count '{}': {e}", line_no + 1, parts[0]),
+            }]
+        })?;
         if count < 0 {
             return Err(vec![Diagnostic {
                 code: "INVALID_SCHEMA".into(),
@@ -420,11 +439,16 @@ struct V8Profile {
     sample_interval: Option<f64>,
 }
 
-fn parse_v8_cpuprofile(bytes: &[u8], service_hint: Option<&str>) -> Result<ParsedProfile, Vec<Diagnostic>> {
-    let profile: V8Profile = serde_json::from_slice(bytes).map_err(|e| vec![Diagnostic {
-        code: "INVALID_SCHEMA".into(),
-        message: format!("V8 cpuprofile parse error: {e}"),
-    }])?;
+fn parse_v8_cpuprofile(
+    bytes: &[u8],
+    service_hint: Option<&str>,
+) -> Result<ParsedProfile, Vec<Diagnostic>> {
+    let profile: V8Profile = serde_json::from_slice(bytes).map_err(|e| {
+        vec![Diagnostic {
+            code: "INVALID_SCHEMA".into(),
+            message: format!("V8 cpuprofile parse error: {e}"),
+        }]
+    })?;
 
     if profile.samples.is_empty() {
         return Err(vec![Diagnostic {
@@ -468,7 +492,11 @@ fn parse_v8_cpuprofile(bytes: &[u8], service_hint: Option<&str>) -> Result<Parse
         let loc_id = locations.len() as u64 + 1;
         loc_by_node.insert(n.id, loc_id);
         // V8 line numbers are 0-based; the canonical line field is 1-based (F05-D2). -1 means "unknown" and stays 0.
-        let line = if n.call_frame.line_number >= 0 { n.call_frame.line_number + 1 } else { 0 };
+        let line = if n.call_frame.line_number >= 0 {
+            n.call_frame.line_number + 1
+        } else {
+            0
+        };
         locations.push(Location {
             id: loc_id,
             mapping_id: 0,
@@ -486,7 +514,11 @@ fn parse_v8_cpuprofile(bytes: &[u8], service_hint: Option<&str>) -> Result<Parse
     let mut truncated_total: i64 = 0;
 
     for (i, node_id) in profile.samples.iter().enumerate() {
-        let value = if i < profile.time_deltas.len() { profile.time_deltas[i].max(0) } else { 1 };
+        let value = if i < profile.time_deltas.len() {
+            profile.time_deltas[i].max(0)
+        } else {
+            1
+        };
         let mut stack: Vec<u64> = Vec::new();
         let mut cur = *node_id;
         let mut depth = 0;
@@ -520,7 +552,13 @@ fn parse_v8_cpuprofile(bytes: &[u8], service_hint: Option<&str>) -> Result<Parse
     let start_ns = (profile.start_time * 1_000.0) as i64;
     let end_ns = (profile.end_time * 1_000.0) as i64;
     let period_ns = profile.sample_interval.map(|ms| (ms * 1_000.0) as i64);
-    let sampling_rate_hz = period_ns.map(|p| if p > 0 { 1_000_000_000.0 / p as f64 } else { 0.0 });
+    let sampling_rate_hz = period_ns.map(|p| {
+        if p > 0 {
+            1_000_000_000.0 / p as f64
+        } else {
+            0.0
+        }
+    });
 
     Ok(ParsedProfile {
         format: "v8-cpuprofile".into(),
@@ -703,8 +741,18 @@ fn parse_pprof(bytes: &[u8], service_hint: Option<&str>) -> Result<ParsedProfile
             let raw_type = pprof_string(&strings, get_var(m, 1).unwrap_or(0));
             let raw_unit = pprof_string(&strings, get_var(m, 2).unwrap_or(0));
             let kind = SampleKind::from_declared(&raw_type, &raw_unit, period, Some("pprof"));
-            let unit = if raw_unit.is_empty() { "samples".into() } else { raw_unit.clone() };
-            SampleTypeInternal { ordinal: i, kind, unit, raw_type, raw_unit }
+            let unit = if raw_unit.is_empty() {
+                "samples".into()
+            } else {
+                raw_unit.clone()
+            };
+            SampleTypeInternal {
+                ordinal: i,
+                kind,
+                unit,
+                raw_type,
+                raw_unit,
+            }
         })
         .collect();
 
@@ -714,7 +762,15 @@ fn parse_pprof(bytes: &[u8], service_hint: Option<&str>) -> Result<ParsedProfile
         let name = pprof_string(&strings, get_var(&m, 2).unwrap_or(0));
         let file = pprof_string(&strings, get_var(&m, 4).unwrap_or(0));
         let line = get_var(&m, 5).unwrap_or(0);
-        functions.insert(id, Line { function_id: id, function_name: name, file, line });
+        functions.insert(
+            id,
+            Line {
+                function_id: id,
+                function_name: name,
+                file,
+                line,
+            },
+        );
     }
 
     let mut mappings: Vec<Mapping> = Vec::new();
@@ -756,7 +812,12 @@ fn parse_pprof(bytes: &[u8], service_hint: Option<&str>) -> Result<ParsedProfile
         }
         let new_id = locations.len() as u64 + 1;
         loc_by_id.insert(id, new_id);
-        locations.push(Location { id: new_id, mapping_id, address, lines });
+        locations.push(Location {
+            id: new_id,
+            mapping_id,
+            address,
+            lines,
+        });
     }
 
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
@@ -780,7 +841,14 @@ fn parse_pprof(bytes: &[u8], service_hint: Option<&str>) -> Result<ParsedProfile
         }
         let values: Vec<i64> = m
             .get(&2)
-            .map(|v| v.iter().filter_map(|x| match x { PbValue::Var(n) => Some(*n), _ => None }).collect())
+            .map(|v| {
+                v.iter()
+                    .filter_map(|x| match x {
+                        PbValue::Var(n) => Some(*n),
+                        _ => None,
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
         samples.push(Sample {
             location_ids: location_ids.into_iter().take(MAX_STACK_DEPTH).collect(),
@@ -800,7 +868,10 @@ fn parse_pprof(bytes: &[u8], service_hint: Option<&str>) -> Result<ParsedProfile
         .first()
         .map(|st| st.kind.clone())
         .unwrap_or(SampleKind::Other);
-    let unit0 = sample_types.first().map(|st| st.unit.clone()).unwrap_or_else(|| "samples".into());
+    let unit0 = sample_types
+        .first()
+        .map(|st| st.unit.clone())
+        .unwrap_or_else(|| "samples".into());
 
     Ok(ParsedProfile {
         format: "pprof".into(),
@@ -813,7 +884,13 @@ fn parse_pprof(bytes: &[u8], service_hint: Option<&str>) -> Result<ParsedProfile
         start_ns: time_nanos,
         end_ns: time_nanos + duration_nanos,
         period_ns: period,
-        sampling_rate_hz: period.map(|p| if p > 0 { 1_000_000_000.0 / p as f64 } else { 0.0 }),
+        sampling_rate_hz: period.map(|p| {
+            if p > 0 {
+                1_000_000_000.0 / p as f64
+            } else {
+                0.0
+            }
+        }),
         declared_overhead_percent: None,
         dropped_samples: None,
         truncated: truncated_total,
@@ -827,10 +904,12 @@ fn parse_pprof(bytes: &[u8], service_hint: Option<&str>) -> Result<ParsedProfile
 fn gzip_decompress(bytes: &[u8]) -> Result<Vec<u8>, Vec<Diagnostic>> {
     let mut decoder = flate2::read::GzDecoder::new(bytes);
     let mut out = Vec::new();
-    decoder.read_to_end(&mut out).map_err(|e| vec![Diagnostic {
-        code: "INVALID_SCHEMA".into(),
-        message: format!("gzip decompression failed: {e}"),
-    }])?;
+    decoder.read_to_end(&mut out).map_err(|e| {
+        vec![Diagnostic {
+            code: "INVALID_SCHEMA".into(),
+            message: format!("gzip decompression failed: {e}"),
+        }]
+    })?;
     Ok(out)
 }
 
@@ -843,7 +922,7 @@ fn normalise_function_key(name: &str, file: &str, line: i64) -> String {
 fn frame_at_location(profile: &ParsedProfile, loc_id: u64) -> Option<(&str, &str, i64)> {
     let loc = profile.locations.iter().find(|l| l.id == loc_id)?;
     let line = loc.lines.first()?;
-    Some((&line.function_name,&line.file, line.line))
+    Some((&line.function_name, &line.file, line.line))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -941,13 +1020,19 @@ fn population_hash(spec: &PopulationSpec, chunk_ids: &[String]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn aggregate_profile(profile: &ParsedProfile, ordinal: usize) -> (HashMap<String, HotspotRow>, f64, i64) {
+fn aggregate_profile(
+    profile: &ParsedProfile,
+    ordinal: usize,
+) -> (HashMap<String, HotspotRow>, f64, i64) {
     let mut rows: HashMap<String, HotspotRow> = HashMap::new();
     let mut total_value: f64 = 0.0;
     let mut sample_count: i64 = 0;
 
     for sample in &profile.samples {
-        let value = *sample.values.get(ordinal).unwrap_or(&sample.values.first().copied().unwrap_or(0)) as f64;
+        let value = *sample
+            .values
+            .get(ordinal)
+            .unwrap_or(&sample.values.first().copied().unwrap_or(0)) as f64;
         if value <= 0.0 {
             continue;
         }
@@ -1033,8 +1118,16 @@ fn rank_hotspots(
     let total = total_value.max(0.0);
 
     for row in rows.values_mut() {
-        row.self_share = if total > 0.0 { row.self_value / total } else { 0.0 };
-        row.total_share = if total > 0.0 { row.total_value / total } else { 0.0 };
+        row.self_share = if total > 0.0 {
+            row.self_value / total
+        } else {
+            0.0
+        };
+        row.total_share = if total > 0.0 {
+            row.total_value / total
+        } else {
+            0.0
+        };
         let (lo, hi) = wilson_interval(row.sample_count as f64, sample_count as f64, 1.96);
         row.uncertainty_low = lo;
         row.uncertainty_high = hi;
@@ -1042,8 +1135,16 @@ fn rank_hotspots(
 
     let mut ordered: Vec<HotspotRow> = rows.into_values().collect();
     match order {
-        "TOTAL" => ordered.sort_by(|a, b| b.total_value.partial_cmp(&a.total_value).unwrap_or(std::cmp::Ordering::Equal)),
-        _ => ordered.sort_by(|a, b| b.self_value.partial_cmp(&a.self_value).unwrap_or(std::cmp::Ordering::Equal)),
+        "TOTAL" => ordered.sort_by(|a, b| {
+            b.total_value
+                .partial_cmp(&a.total_value)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        _ => ordered.sort_by(|a, b| {
+            b.self_value
+                .partial_cmp(&a.self_value)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
     }
     for (i, r) in ordered.iter_mut().enumerate() {
         r.rank = i + 1;
@@ -1054,11 +1155,21 @@ fn rank_hotspots(
         .period_ns
         .filter(|p| *p > 0)
         .map(|p| (profile.end_ns - profile.start_ns) / p);
-    let collection_ratio = expected_samples.map(|e| if e > 0 { sample_count_i as f64 / e as f64 } else { 0.0 });
+    let collection_ratio = expected_samples.map(|e| {
+        if e > 0 {
+            sample_count_i as f64 / e as f64
+        } else {
+            0.0
+        }
+    });
 
     HotspotResult {
         rows: output_rows,
-        unit: profile.sample_types.get(ordinal).map(|st| st.unit.clone()).unwrap_or_else(|| "samples".into()),
+        unit: profile
+            .sample_types
+            .get(ordinal)
+            .map(|st| st.unit.clone())
+            .unwrap_or_else(|| "samples".into()),
         sample_count,
         population_value: total,
         coverage: Coverage {
@@ -1123,7 +1234,10 @@ fn build_flamegraph_tree(profile: &ParsedProfile, ordinal: usize) -> FlameTreeRe
     let mut population_value: f64 = 0.0;
 
     for sample in &profile.samples {
-        let value = *sample.values.get(ordinal).unwrap_or(&sample.values.first().copied().unwrap_or(0)) as f64;
+        let value = *sample
+            .values
+            .get(ordinal)
+            .unwrap_or(&sample.values.first().copied().unwrap_or(0)) as f64;
         if value <= 0.0 {
             continue;
         }
@@ -1197,14 +1311,25 @@ fn build_flamegraph_tree(profile: &ParsedProfile, ordinal: usize) -> FlameTreeRe
                 self_value: *self_values.get(c).unwrap_or(&0.0),
                 total_value: e.total_value,
                 children: build_children(
-                    edges, self_values, c, depth + 1, threshold, pruned, node_count,
+                    edges,
+                    self_values,
+                    c,
+                    depth + 1,
+                    threshold,
+                    pruned,
+                    node_count,
                 ),
                 other_value: 0.0,
             };
             *node_count += 1;
             children.push(child);
         }
-        children.sort_by(|a, b| b.total_value.partial_cmp(&a.total_value).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.name.cmp(&b.name)));
+        children.sort_by(|a, b| {
+            b.total_value
+                .partial_cmp(&a.total_value)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.name.cmp(&b.name))
+        });
         if children.len() > PRUNE_NODE_COUNT {
             let removed: Vec<FlameNode> = children.split_off(PRUNE_NODE_COUNT);
             for r in removed {
@@ -1216,7 +1341,13 @@ fn build_flamegraph_tree(profile: &ParsedProfile, ordinal: usize) -> FlameTreeRe
 
     let mut node_count: usize = 1;
     let children = build_children(
-        &edges, &self_values, &root_key, 0, threshold, &mut pruned_value, &mut node_count,
+        &edges,
+        &self_values,
+        &root_key,
+        0,
+        threshold,
+        &mut pruned_value,
+        &mut node_count,
     );
 
     let root = FlameNode {
@@ -1240,7 +1371,11 @@ fn build_flamegraph_tree(profile: &ParsedProfile, ordinal: usize) -> FlameTreeRe
         tree: root,
         node_count,
         pruned_value,
-        pruned_share: if population_value > 0.0 { pruned_value / population_value } else { 0.0 },
+        pruned_share: if population_value > 0.0 {
+            pruned_value / population_value
+        } else {
+            0.0
+        },
         unit,
         population_value,
     }
@@ -1321,11 +1456,19 @@ pub fn correlate_profile_trace(
     let mut evidence_ids: Vec<String> = Vec::new();
 
     if let Some(bid) = build_id {
-        state = if revision_match { "MATCHED" } else { "MISMATCH" };
+        state = if revision_match {
+            "MATCHED"
+        } else {
+            "MISMATCH"
+        };
         evidence_ids.push(format!("build:{bid}"));
     }
 
-    if !service_match || (trace.instance.is_some() && !instance_match) || overlap_ms.is_none() || !revision_match {
+    if !service_match
+        || (trace.instance.is_some() && !instance_match)
+        || overlap_ms.is_none()
+        || !revision_match
+    {
         let reason = if !service_match {
             "service does not match".into()
         } else if trace.instance.is_some() && !instance_match {
@@ -1455,7 +1598,13 @@ fn compute_population(
         .period_ns
         .filter(|p| *p > 0)
         .map(|p| (profile.end_ns - profile.start_ns) / p);
-    let collection_ratio = expected_samples.map(|e| if e > 0 { samples as f64 / e as f64 } else { 0.0 });
+    let collection_ratio = expected_samples.map(|e| {
+        if e > 0 {
+            samples as f64 / e as f64
+        } else {
+            0.0
+        }
+    });
     Population {
         population_hash: hash,
         service: spec.service.clone(),
@@ -1521,8 +1670,12 @@ pub fn compare_profiles(
     let b_pop = compute_population("baseline", bp, bo, bspec);
     let c_pop = compute_population("candidate", cp, co, cspec);
 
-    let b_requests = baseline_trace.and_then(|t| Some((t.to_ns - t.from_ns) / 1_000_000)).unwrap_or(1);
-    let c_requests = candidate_trace.and_then(|t| Some((t.to_ns - t.from_ns) / 1_000_000)).unwrap_or(1);
+    let b_requests = baseline_trace
+        .and_then(|t| Some((t.to_ns - t.from_ns) / 1_000_000))
+        .unwrap_or(1);
+    let c_requests = candidate_trace
+        .and_then(|t| Some((t.to_ns - t.from_ns) / 1_000_000))
+        .unwrap_or(1);
 
     let b_error_rate = b_pop
         .error_count
@@ -1533,13 +1686,18 @@ pub fn compare_profiles(
         .and_then(|e| Some(e as f64 / c_requests as f64))
         .unwrap_or(0.0);
 
-    if (c_error_rate - b_error_rate).abs() > 0.01 || (c_error_rate > 0.0 && c_error_rate >= 2.0 * b_error_rate) {
+    if (c_error_rate - b_error_rate).abs() > 0.01
+        || (c_error_rate > 0.0 && c_error_rate >= 2.0 * b_error_rate)
+    {
         reasons.push("error populations differ".into());
         return CompareResult {
             verdict: "NOT_COMPARABLE".into(),
             reasons,
             rows: Vec::new(),
-            populations: PopulationCompare { baseline: b_pop, candidate: c_pop },
+            populations: PopulationCompare {
+                baseline: b_pop,
+                candidate: c_pop,
+            },
             limitations,
         };
     }
@@ -1549,7 +1707,8 @@ pub fn compare_profiles(
     }
 
     let per_request = cspec.window_to_ns - cspec.window_from_ns != 0;
-    let use_per_request = c_requests != 0 && b_requests != 0 && (cspec.window_to_ns - cspec.window_from_ns) != 0;
+    let use_per_request =
+        c_requests != 0 && b_requests != 0 && (cspec.window_to_ns - cspec.window_from_ns) != 0;
 
     let mut rows: Vec<DeltaRow> = Vec::new();
     let mut keys: HashSet<String> = HashSet::new();
@@ -1563,13 +1722,27 @@ pub fn compare_profiles(
         if b.is_none() && c.is_none() {
             continue;
         }
-        let name = b.map(|r| r.name.clone()).or_else(|| c.map(|r| r.name.clone())).unwrap_or_default();
-        let file = b.map(|r| r.file.clone()).or_else(|| c.map(|r| r.file.clone())).unwrap_or_default();
+        let name = b
+            .map(|r| r.name.clone())
+            .or_else(|| c.map(|r| r.name.clone()))
+            .unwrap_or_default();
+        let file = b
+            .map(|r| r.file.clone())
+            .or_else(|| c.map(|r| r.file.clone()))
+            .unwrap_or_default();
         let line = b.map(|r| r.line).or_else(|| c.map(|r| r.line)).unwrap_or(0);
         let bval = b.map(|r| r.self_value).unwrap_or(0.0);
         let cval = c.map(|r| r.self_value).unwrap_or(0.0);
-        let bnorm = if use_per_request { bval / b_requests as f64 } else { bval };
-        let cnorm = if use_per_request { cval / c_requests as f64 } else { cval };
+        let bnorm = if use_per_request {
+            bval / b_requests as f64
+        } else {
+            bval
+        };
+        let cnorm = if use_per_request {
+            cval / c_requests as f64
+        } else {
+            cval
+        };
         rows.push(DeltaRow {
             function_key: key.clone(),
             name,
@@ -1588,7 +1761,12 @@ pub fn compare_profiles(
         });
     }
 
-    rows.sort_by(|a, b| b.delta_per_request.abs().partial_cmp(&a.delta_per_request.abs()).unwrap_or(std::cmp::Ordering::Equal));
+    rows.sort_by(|a, b| {
+        b.delta_per_request
+            .abs()
+            .partial_cmp(&a.delta_per_request.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let verdict = if reasons.is_empty() {
         if rows.iter().any(|r| r.share_change.abs() > 0.01) {
@@ -1604,14 +1782,20 @@ pub fn compare_profiles(
         verdict,
         reasons,
         rows,
-        populations: PopulationCompare { baseline: b_pop, candidate: c_pop },
+        populations: PopulationCompare {
+            baseline: b_pop,
+            candidate: c_pop,
+        },
         limitations,
     }
 }
 
 // ---------- Public API ----------
 
-pub fn ingest_profile(bytes: &[u8], service_hint: Option<&str>) -> Result<IngestProfileResult, Vec<Diagnostic>> {
+pub fn ingest_profile(
+    bytes: &[u8],
+    service_hint: Option<&str>,
+) -> Result<IngestProfileResult, Vec<Diagnostic>> {
     let parsed = parse_profile(bytes, service_hint)?;
     let artifact_hash = artifact_hash(bytes);
 
@@ -1632,8 +1816,16 @@ pub fn ingest_profile(bytes: &[u8], service_hint: Option<&str>) -> Result<Ingest
         .iter()
         .map(|m| MappingView {
             mapping_id: m.id as usize,
-            build_id: if m.build_id.is_empty() { None } else { Some(m.build_id.clone()) },
-            file: if m.file.is_empty() { None } else { Some(m.file.clone()) },
+            build_id: if m.build_id.is_empty() {
+                None
+            } else {
+                Some(m.build_id.clone())
+            },
+            file: if m.file.is_empty() {
+                None
+            } else {
+                Some(m.file.clone())
+            },
             has_functions: m.has_functions,
             has_filenames: m.has_filenames,
             has_line_numbers: m.has_line_numbers,
@@ -1647,7 +1839,10 @@ pub fn ingest_profile(bytes: &[u8], service_hint: Option<&str>) -> Result<Ingest
     if parsed.truncated > 0 {
         diagnostics.push(Diagnostic {
             code: "TRUNCATED_STACKS".into(),
-            message: format!("{} frames truncated at depth {}", parsed.truncated, MAX_STACK_DEPTH),
+            message: format!(
+                "{} frames truncated at depth {}",
+                parsed.truncated, MAX_STACK_DEPTH
+            ),
         });
     }
     if parsed.dropped_samples.is_none() {
@@ -1687,7 +1882,10 @@ pub fn query_hotspots_from_bytes(
     let parsed = parse_profile(bytes, service_hint)?;
     let artifact_hash = artifact_hash(bytes);
     let spec = PopulationSpec {
-        service: parsed.service.clone().unwrap_or_else(|| service_hint.unwrap_or("unknown").to_string()),
+        service: parsed
+            .service
+            .clone()
+            .unwrap_or_else(|| service_hint.unwrap_or("unknown").to_string()),
         window_from_ns: parsed.start_ns,
         window_to_ns: parsed.end_ns,
         revision: None,
@@ -1751,7 +1949,15 @@ mod tests {
         assert_eq!(p.samples.len(), 3);
         assert_eq!(p.sample_types[0].kind, SampleKind::Cpu);
         // V8 line numbers are 0-based; we normalise to 1-based.
-        let loc = p.locations.iter().find(|l| l.lines.iter().any(|line| line.function_name == "computeTax")).unwrap();
+        let loc = p
+            .locations
+            .iter()
+            .find(|l| {
+                l.lines
+                    .iter()
+                    .any(|line| line.function_name == "computeTax")
+            })
+            .unwrap();
         assert_eq!(loc.lines[0].line, 88);
         assert_eq!(p.start_ns, 1_000_000);
         assert_eq!(p.end_ns, 4_000_000);
@@ -1765,7 +1971,11 @@ mod tests {
         assert_eq!(res.rows[0].name, "parseRules");
         assert_eq!(res.rows[0].self_value, 12.0);
         assert_eq!(res.rows[1].name, "evaluateRule");
-        assert!(res.rows.iter().any(|r| r.name == "computeTax" && r.total_value == 20.0));
+        assert!(
+            res.rows
+                .iter()
+                .any(|r| r.name == "computeTax" && r.total_value == 20.0)
+        );
     }
 
     #[test]

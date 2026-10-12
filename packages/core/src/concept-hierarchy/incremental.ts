@@ -70,7 +70,7 @@ const lap = <T,>(phases: Record<string, number>, name: string, fn: () => T): T =
 export async function buildHierarchy(
   store: Store,
   revision: string,
-  opts: { repoRoot: string; adapter: NamingAdapter | null; control?: HierarchyProgress; provider?: string },
+  opts: { repoRoot: string; adapter: NamingAdapter | null; control?: HierarchyProgress; provider?: string; /** Hermetic override of the motif batch (tests); production defaults to the Rust worker. */ motifBatch?: import("./motifs.ts").MotifBatchMatcher },
 ): Promise<HierarchyBuildResult> {
   const cfg = conceptConfig();
   const phases: Record<string, number> = {};
@@ -101,7 +101,7 @@ export async function buildHierarchy(
   // --- phase 2: semantic concepts, anchored to the previous set
   progress?.({ phase: "concepts", message: "Matching motifs and composing concepts…" });
   const previousConcepts = fullRebuild || !prev ? [] : store.semanticConcepts(prev.id);
-  const sem = lap(phases, "semantic", () => buildSemanticConcepts(store, revision, g.pdgs, previousConcepts));
+  const sem = lap(phases, "semantic", () => buildSemanticConcepts(store, revision, g.pdgs, previousConcepts, opts.motifBatch));
   checkpoint?.();
 
   // --- phase 3: invariants

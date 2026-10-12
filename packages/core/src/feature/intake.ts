@@ -1,10 +1,10 @@
 // Task 1.C — submitFeature and discoverFeatureContext (PF-001, PF-002, PF-004, PF-043; AT-01, AT-33).
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import type { Store } from "../store.ts";
-import { assertSafeExclusions, contentRoot, entriesFromDirectory, rawHash } from "./canon.ts";
+import { assertSafeExclusions, contentRootOfTree, rawHash, type KnownHashes } from "./canon.ts";
 import { loadFeatureConfig, trackingFor, type FeatureConfig } from "./config.ts";
 import { discover } from "./discovery.ts";
 import { FeatureError } from "./errors.ts";
@@ -24,21 +24,25 @@ const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f‪-‮⁦-⁩]/g;
 /** Directory names left out of the content root (build output, VCS internals and this tool's own state, which changes on every operation). Source and configuration are never excluded; the authority policy is hashed separately into the contract. */
 export const CONTENT_ROOT_EXCLUDE = [".git", "node_modules", "dist", "target", "coverage", ".cache", ".cie"] as const;
 
-const blobCache = new Map<string, string>();
-/** Snapshot of the repository as it is now: indexed revision, git head and a pf-canon-v1 content root (hashes cached by path/size/mtime, plan S9). */
+const blobCache = new Map<string, { hash: string; size: number; mtimeMs: number }>();
+/** Snapshot of the repository as it is now: indexed revision, git head and a pf-canon-v1 content root (hashes cached by path/size/mtime, plan S9).
+ *  The walk and hashing run in the Rust worker; unchanged files are never re-read or re-hashed because the cache rides along. */
 export function snapshotOf(store: Store, repoRoot: string): Snapshot {
   const rev = store.latestRevision(repoRoot);
   if (!rev) throw new FeatureError("NOT_FOUND", "that repository is not indexed (or access to it was withdrawn); index it first");
   assertSafeExclusions([...CONTENT_ROOT_EXCLUDE]);
   const root = realpathSync(repoRoot);
-  const entries = entriesFromDirectory(root, { exclude: CONTENT_ROOT_EXCLUDE, known: (rel, size, mtime) => blobCache.get(`${root}\0${rel}\0${size}\0${mtime}`) });
-  // remember hashes for next time (entriesFromDirectory hashed what was not known)
-  for (const e of entries) if (e.kind === "file" && e.hash) { try { const st = lstatSync(join(root, e.path)); blobCache.set(`${root}\0${e.path}\0${st.size}\0${st.mtimeMs}`, e.hash); } catch { /* changed under us */ } }
+  const prefix = `${root}\0`;
+  const known: KnownHashes = {};
+  for (const [key, value] of blobCache) if (key.startsWith(prefix)) known[key.slice(prefix.length)] = value;
+  // The worker re-hashes what was not known and reports size/mtimeMs for every file, so the cache refreshes for next time.
+  const { digest, entries } = contentRootOfTree(root, { exclude: CONTENT_ROOT_EXCLUDE, known });
+  for (const e of entries) if (e.kind === "file" && e.hash && e.size !== undefined && e.mtimeMs !== undefined) blobCache.set(`${root}\0${e.path}`, { hash: e.hash, size: e.size, mtimeMs: e.mtimeMs });
   if (blobCache.size > 200_000) blobCache.clear();
   let head = rev.gitHead;
   try { head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] }).trim() || head; } catch { /* not a git repository */ }
   return {
-    repositoryId: repoRoot, commitHash: head ?? rev.id, contentRootHash: contentRoot(entries), indexGeneration: store.revisionsOf(repoRoot).length,
+    repositoryId: repoRoot, commitHash: head ?? rev.id, contentRootHash: digest, indexGeneration: store.revisionsOf(repoRoot).length,
     toolchainHash: rawHash(JSON.stringify({ node: process.version, platform: process.platform, arch: process.arch })),
   };
 }

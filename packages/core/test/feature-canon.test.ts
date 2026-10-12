@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { asSet, canonDecimal, canonDigest, canonicalize, CanonError, contentRoot, defineSchema, entriesFromDirectory, parseStrictJson, rawHash, type Canon, type ManifestEntry } from "../src/feature/canon.ts";
+import { asSet, canonDecimal, canonDigest, canonicalize, CanonError, contentRoot, contentRootOfTree, defineSchema, parseStrictJson, rawHash, type Canon, type ManifestEntry } from "../src/feature/canon.ts";
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -95,14 +95,14 @@ test("stored identity names its protocol and schema; the digest matches an indep
   void schema;
 });
 
-test("a directory walk records symlinks without following them and refuses to exclude source", () => {
+test("a directory walk (offloaded to the worker) records symlinks without following them and refuses to exclude source", () => {
   const dir = mkdtempSync(join(tmpdir(), "canon-"));
   try {
     mkdirSync(join(dir, "src")); writeFileSync(join(dir, "src", "a.ts"), "export {}\n"); symlinkSync("../../outside", join(dir, "src", "link"));
-    const entries = entriesFromDirectory(dir);
-    assert.deepEqual(entries.map((e) => [e.path, e.kind]).sort(), [["src/a.ts", "file"], ["src/link", "symlink"]]);
-    assert.equal(code(() => entriesFromDirectory(dir, { exclude: ["src"] })), "BAD_EXCLUSION");
-    const a = contentRoot(entries); writeFileSync(join(dir, "src", "a.ts"), "export {}\r\n");
-    assert.notEqual(contentRoot(entriesFromDirectory(dir)), a, "a newline change in raw code changes identity");
+    const walk = contentRootOfTree(dir);
+    assert.deepEqual(walk.entries.map((e) => [e.path, e.kind]).sort(), [["src/a.ts", "file"], ["src/link", "symlink"]]);
+    assert.equal(code(() => contentRootOfTree(dir, { exclude: ["src"] })), "BAD_EXCLUSION");
+    const a = walk.digest; writeFileSync(join(dir, "src", "a.ts"), "export {}\r\n");
+    assert.notEqual(contentRootOfTree(dir).digest, a, "a newline change in raw code changes identity");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

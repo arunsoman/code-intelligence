@@ -6,7 +6,9 @@
 //!   - YAML / properties config under `spring.cloud.gateway.routes`
 //!
 //! Cross-file resolution and graph construction are left to `index.rs`.
-use crate::frameworks::{FrameworkContext, FrameworkEntityKind, FrameworkExtension, RawFrameworkMetadata};
+use crate::frameworks::{
+    FrameworkContext, FrameworkEntityKind, FrameworkExtension, RawFrameworkMetadata,
+};
 use crate::language::RawFile;
 use serde_json::json;
 use std::collections::HashMap;
@@ -15,14 +17,26 @@ use tree_sitter::{Node, Tree};
 pub struct SpringCloudGatewayExtension;
 
 impl FrameworkExtension for SpringCloudGatewayExtension {
-    fn framework(&self) -> &'static str { "spring-cloud-gateway" }
+    fn framework(&self) -> &'static str {
+        "spring-cloud-gateway"
+    }
 
-    fn matches(&self, rel: &str) -> bool { rel.ends_with(".java") || rel.ends_with(".yml") || rel.ends_with(".yaml") || rel.ends_with(".properties") }
+    fn matches(&self, rel: &str) -> bool {
+        rel.ends_with(".java")
+            || rel.ends_with(".yml")
+            || rel.ends_with(".yaml")
+            || rel.ends_with(".properties")
+    }
 
     fn extract(&self, ctx: FrameworkContext, raw: &mut RawFile) {
         if ctx.rel.ends_with(".java") {
             if let Some(tree) = parse_java(ctx.src) {
-                let mut w = GatewayWalker { src: ctx.src.as_bytes(), rel: ctx.rel, raw, class_stack: Vec::new() };
+                let mut w = GatewayWalker {
+                    src: ctx.src.as_bytes(),
+                    rel: ctx.rel,
+                    raw,
+                    class_stack: Vec::new(),
+                };
                 w.visit(tree.root_node());
             }
         } else if ctx.rel.ends_with(".yml") || ctx.rel.ends_with(".yaml") {
@@ -35,7 +49,9 @@ impl FrameworkExtension for SpringCloudGatewayExtension {
 
 fn parse_java(src: &str) -> Option<Tree> {
     let mut parser = tree_sitter::Parser::new();
-    parser.set_language(&tree_sitter_java::LANGUAGE.into()).ok()?;
+    parser
+        .set_language(&tree_sitter_java::LANGUAGE.into())
+        .ok()?;
     parser.parse(src, None)
 }
 
@@ -52,7 +68,15 @@ impl<'a> GatewayWalker<'a> {
     }
 
     fn simple_type(&self, n: Node) -> String {
-        self.text(n).split('<').next().unwrap_or("").rsplit('.').next().unwrap_or("").trim().to_string()
+        self.text(n)
+            .split('<')
+            .next()
+            .unwrap_or("")
+            .rsplit('.')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string()
     }
 
     fn string_arg(&self, n: Node) -> Option<String> {
@@ -72,7 +96,9 @@ impl<'a> GatewayWalker<'a> {
         let args = args?;
         let mut c = args.walk();
         for a in args.named_children(&mut c) {
-            if let Some(s) = self.string_arg(a) { return Some(s); }
+            if let Some(s) = self.string_arg(a) {
+                return Some(s);
+            }
         }
         None
     }
@@ -86,27 +112,43 @@ impl<'a> GatewayWalker<'a> {
         let f = n.child_by_field_name("function")?;
         match f.kind() {
             "identifier" => Some(self.text(f)),
-            "member_access" | "field_access" => f.child_by_field_name("field").or_else(|| f.child_by_field_name("name")).map(|p| self.text(p)),
+            "member_access" | "field_access" => f
+                .child_by_field_name("field")
+                .or_else(|| f.child_by_field_name("name"))
+                .map(|p| self.text(p)),
             "member_expression" => f.child_by_field_name("property").map(|p| self.text(p)),
             _ => None,
         }
     }
 
     fn is_route_locator_return(&self, n: Node) -> bool {
-        n.child_by_field_name("type").map(|t| self.simple_type(t) == "RouteLocator").unwrap_or(false)
+        n.child_by_field_name("type")
+            .map(|t| self.simple_type(t) == "RouteLocator")
+            .unwrap_or(false)
     }
 
-    fn push_meta(&mut self, kind: FrameworkEntityKind, name: String, subject_symbol: Option<usize>, start: usize, end: usize, properties: serde_json::Value, parent: Option<String>) {
-        self.raw.framework_metadata.push(crate::frameworks::RawFrameworkMetadata {
-            framework: "spring-cloud-gateway",
-            kind,
-            name,
-            subject_symbol,
-            start,
-            end,
-            properties,
-            parent,
-        });
+    fn push_meta(
+        &mut self,
+        kind: FrameworkEntityKind,
+        name: String,
+        subject_symbol: Option<usize>,
+        start: usize,
+        end: usize,
+        properties: serde_json::Value,
+        parent: Option<String>,
+    ) {
+        self.raw
+            .framework_metadata
+            .push(crate::frameworks::RawFrameworkMetadata {
+                framework: "spring-cloud-gateway",
+                kind,
+                name,
+                subject_symbol,
+                start,
+                end,
+                properties,
+                parent,
+            });
     }
 
     fn visit(&mut self, n: Node) {
@@ -118,7 +160,15 @@ impl<'a> GatewayWalker<'a> {
                     let is_filter_factory = self.implements(&n, "GatewayFilterFactory");
                     if is_filter || is_filter_factory {
                         let idx = self.symbol_index(&nm);
-                        self.push_meta(FrameworkEntityKind::GatewayFilter, nm.clone(), idx, n.start_byte(), n.end_byte(), json!({"kind": if is_filter { "filter" } else { "filter_factory" }}), None);
+                        self.push_meta(
+                            FrameworkEntityKind::GatewayFilter,
+                            nm.clone(),
+                            idx,
+                            n.start_byte(),
+                            n.end_byte(),
+                            json!({"kind": if is_filter { "filter" } else { "filter_factory" }}),
+                            None,
+                        );
                     }
                     self.class_stack.push(nm);
                     self.kids(n);
@@ -139,19 +189,27 @@ impl<'a> GatewayWalker<'a> {
 
     fn kids(&mut self, n: Node) {
         let mut c = n.walk();
-        for ch in n.named_children(&mut c) { self.visit(ch); }
+        for ch in n.named_children(&mut c) {
+            self.visit(ch);
+        }
     }
 
     fn implements(&self, class: &Node, interface: &str) -> bool {
-        class.child_by_field_name("interfaces").map(|ifs| {
-            let mut c = ifs.walk();
-            let list: Vec<_> = ifs.named_children(&mut c).collect();
-            list.iter().any(|i| self.simple_type(*i) == interface)
-        }).unwrap_or(false)
+        class
+            .child_by_field_name("interfaces")
+            .map(|ifs| {
+                let mut c = ifs.walk();
+                let list: Vec<_> = ifs.named_children(&mut c).collect();
+                list.iter().any(|i| self.simple_type(*i) == interface)
+            })
+            .unwrap_or(false)
     }
 
     fn symbol_index(&self, qualified: &str) -> Option<usize> {
-        self.raw.symbols.iter().position(|s| s.qualified == qualified)
+        self.raw
+            .symbols
+            .iter()
+            .position(|s| s.qualified == qualified)
     }
 
     fn has_route_calls(&self, method: Node) -> bool {
@@ -187,7 +245,9 @@ impl<'a> GatewayWalker<'a> {
     fn extract_route(&mut self, route_call: Node) {
         let route_id = self.first_string_arg(route_call.child_by_field_name("arguments"));
         let route_span = (route_call.start_byte(), route_call.end_byte());
-        let route_name = route_id.clone().unwrap_or_else(|| format!("route:{}", route_call.start_byte()));
+        let route_name = route_id
+            .clone()
+            .unwrap_or_else(|| format!("route:{}", route_call.start_byte()));
 
         // Walk inside the route lambda / arguments, but do not descend into the
         // receiver chain (the `object` child) because that contains earlier routes.
@@ -195,10 +255,14 @@ impl<'a> GatewayWalker<'a> {
         let mut filters = Vec::new();
         let mut uri = None;
 
-        let mut stack: Vec<Node> = route_call.child_by_field_name("arguments").into_iter().flat_map(|args| {
-            let mut c = args.walk();
-            args.named_children(&mut c).collect::<Vec<_>>().into_iter()
-        }).collect();
+        let mut stack: Vec<Node> = route_call
+            .child_by_field_name("arguments")
+            .into_iter()
+            .flat_map(|args| {
+                let mut c = args.walk();
+                args.named_children(&mut c).collect::<Vec<_>>().into_iter()
+            })
+            .collect();
         // Also visit the route name node (the span covers the .route method name).
         if let Some(name_node) = route_call.child_by_field_name("name") {
             stack.push(name_node);
@@ -208,8 +272,11 @@ impl<'a> GatewayWalker<'a> {
             if n.kind() == "method_invocation" {
                 if let Some(name) = self.callee_name(n) {
                     match name.as_str() {
-                        "path" | "predicate" | "host" | "method" | "cookie" | "header" | "query" | "remoteAddr" => {
-                            if let Some(arg) = self.first_string_arg(n.child_by_field_name("arguments")) {
+                        "path" | "predicate" | "host" | "method" | "cookie" | "header"
+                        | "query" | "remoteAddr" => {
+                            if let Some(arg) =
+                                self.first_string_arg(n.child_by_field_name("arguments"))
+                            {
                                 predicates.push(json!({"kind": name, "value": arg}));
                             }
                         }
@@ -298,7 +365,9 @@ impl<'a> GatewayWalker<'a> {
                     while let Some(x) = stack.pop() {
                         if x.kind() == "method_invocation" {
                             if let Some(mname) = self.callee_name(x) {
-                                if let Some(val) = self.first_string_arg(x.child_by_field_name("arguments")) {
+                                if let Some(val) =
+                                    self.first_string_arg(x.child_by_field_name("arguments"))
+                                {
                                     map.insert(mname, val);
                                 }
                             }
@@ -317,17 +386,41 @@ impl<'a> GatewayWalker<'a> {
 }
 
 fn is_filter_method(name: &str) -> bool {
-    matches!(name,
-        "stripPrefix" | "addRequestHeader" | "addResponseHeader" | "addRequestParameter" | "addResponseParameter" |
-        "circuitBreaker" | "retry" | "rewritePath" | "setPath" | "setStatus" | "requestRateLimiter" |
-        "hystrix" | "prefixPath" | "removeRequestHeader" | "removeResponseHeader" | "removeRequestParameter" |
-        "setRequestHeader" | "setResponseHeader" | "dedupeResponseHeader" | "setRequestSize" | "modifyRequestBody" |
-        "modifyResponseBody" | "mapRequestHeader" | "mapResponseHeader" | "secureHeaders" | "setRequestHostHeader"
+    matches!(
+        name,
+        "stripPrefix"
+            | "addRequestHeader"
+            | "addResponseHeader"
+            | "addRequestParameter"
+            | "addResponseParameter"
+            | "circuitBreaker"
+            | "retry"
+            | "rewritePath"
+            | "setPath"
+            | "setStatus"
+            | "requestRateLimiter"
+            | "hystrix"
+            | "prefixPath"
+            | "removeRequestHeader"
+            | "removeResponseHeader"
+            | "removeRequestParameter"
+            | "setRequestHeader"
+            | "setResponseHeader"
+            | "dedupeResponseHeader"
+            | "setRequestSize"
+            | "modifyRequestBody"
+            | "modifyResponseBody"
+            | "mapRequestHeader"
+            | "mapResponseHeader"
+            | "secureHeaders"
+            | "setRequestHostHeader"
     )
 }
 
 fn parse_yml(_rel: &str, src: &str, raw: &mut RawFile) {
-    let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(src) else { return };
+    let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(src) else {
+        return;
+    };
     let routes = yaml
         .get("spring")
         .and_then(|v| v.get("cloud"))
@@ -338,28 +431,52 @@ fn parse_yml(_rel: &str, src: &str, raw: &mut RawFile) {
         .unwrap_or_default();
 
     for route in routes {
-        let Some(map) = route.as_mapping() else { continue };
-        let id = map.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let Some(map) = route.as_mapping() else {
+            continue;
+        };
+        let id = map
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let uri = map.get("uri").and_then(|v| v.as_str()).map(String::from);
-        let predicates: Vec<String> = map.get("predicates")
-            .and_then(|v| v.as_sequence())
-            .map(|seq| seq.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-            .unwrap_or_default();
-        let filters: Vec<serde_json::Value> = map.get("filters")
+        let predicates: Vec<String> = map
+            .get("predicates")
             .and_then(|v| v.as_sequence())
             .map(|seq| {
-                seq.iter().filter_map(|x| {
-                    if let Some(s) = x.as_str() { Some(json!({"name": s.split('=').next().unwrap_or(s), "raw": s})) }
-                    else if let Some(fmap) = x.as_mapping() {
-                        let name = fmap.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                        let args = serde_json::to_value(fmap.get("args")).unwrap_or(serde_json::Value::Null);
-                        Some(json!({"name": name, "args": args}))
-                    } else { None }
-                }).collect()
+                seq.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let filters: Vec<serde_json::Value> = map
+            .get("filters")
+            .and_then(|v| v.as_sequence())
+            .map(|seq| {
+                seq.iter()
+                    .filter_map(|x| {
+                        if let Some(s) = x.as_str() {
+                            Some(json!({"name": s.split('=').next().unwrap_or(s), "raw": s}))
+                        } else if let Some(fmap) = x.as_mapping() {
+                            let name = fmap
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let args = serde_json::to_value(fmap.get("args"))
+                                .unwrap_or(serde_json::Value::Null);
+                            Some(json!({"name": name, "args": args}))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
             })
             .unwrap_or_default();
 
-        if id.is_empty() { continue; }
+        if id.is_empty() {
+            continue;
+        }
         let start = byte_pos(src, &id).unwrap_or(0);
         let end = start + id.len();
 
@@ -398,15 +515,23 @@ fn split_filters(s: &str) -> Vec<String> {
     let mut chars = s.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch == ',' {
-            if chars.peek().map(|c| c.is_ascii_uppercase()).unwrap_or(false) {
-                if !cur.is_empty() { out.push(cur.trim().to_string()); }
+            if chars
+                .peek()
+                .map(|c| c.is_ascii_uppercase())
+                .unwrap_or(false)
+            {
+                if !cur.is_empty() {
+                    out.push(cur.trim().to_string());
+                }
                 cur.clear();
                 continue;
             }
         }
         cur.push(ch);
     }
-    if !cur.is_empty() { out.push(cur.trim().to_string()); }
+    if !cur.is_empty() {
+        out.push(cur.trim().to_string());
+    }
     out
 }
 
@@ -415,23 +540,32 @@ fn parse_properties(_rel: &str, src: &str, raw: &mut RawFile) {
     let mut routes: HashMap<String, HashMap<String, String>> = HashMap::new();
     for line in src.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') { continue; }
-        let Some((k, v)) = line.split_once('=') else { continue };
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
         let k = k.trim();
         let v = v.trim();
         if let Some(idx) = k.strip_prefix("spring.cloud.gateway.routes[") {
             if let Some((n, rest)) = idx.split_once("].") {
-                routes.entry(n.to_string()).or_default().insert(rest.to_string(), v.to_string());
+                routes
+                    .entry(n.to_string())
+                    .or_default()
+                    .insert(rest.to_string(), v.to_string());
             }
         }
     }
     for (n, props) in routes {
         let id = props.get("id").cloned().unwrap_or_else(|| n.clone());
         let uri = props.get("uri").cloned();
-        let predicates: Vec<String> = props.get("predicates")
+        let predicates: Vec<String> = props
+            .get("predicates")
             .map(|s| s.split(',').map(|x| x.trim().to_string()).collect())
             .unwrap_or_default();
-        let filters: Vec<String> = props.get("filters")
+        let filters: Vec<String> = props
+            .get("filters")
             .map(|s| split_filters(s))
             .unwrap_or_default();
 
@@ -451,16 +585,17 @@ fn parse_properties(_rel: &str, src: &str, raw: &mut RawFile) {
 
         for (i, f) in filters.iter().enumerate() {
             let fname = f.split('=').next().unwrap_or(f.as_str()).to_string();
-            raw.framework_metadata.push(crate::frameworks::RawFrameworkMetadata {
-                framework: "spring-cloud-gateway",
-                kind: FrameworkEntityKind::GatewayFilter,
-                name: format!("{}.{}", id, fname),
-                subject_symbol: None,
-                start: start + i,
-                end,
-                properties: json!({"name": fname, "raw": f}),
-                parent: Some(id.clone()),
-            });
+            raw.framework_metadata
+                .push(crate::frameworks::RawFrameworkMetadata {
+                    framework: "spring-cloud-gateway",
+                    kind: FrameworkEntityKind::GatewayFilter,
+                    name: format!("{}.{}", id, fname),
+                    subject_symbol: None,
+                    start: start + i,
+                    end,
+                    properties: json!({"name": fname, "raw": f}),
+                    parent: Some(id.clone()),
+                });
         }
     }
 }
@@ -477,7 +612,11 @@ mod tests {
     fn extract_java(src: &str) -> Vec<RawFrameworkMetadata> {
         let mut raw = crate::language::RawFile::default();
         let ext = SpringCloudGatewayExtension;
-        let ctx = FrameworkContext { rel: "src/GatewayConfig.java", src, project_root: std::path::Path::new(".") };
+        let ctx = FrameworkContext {
+            rel: "src/GatewayConfig.java",
+            src,
+            project_root: std::path::Path::new("."),
+        };
         ext.extract(ctx, &mut raw);
         raw.framework_metadata
     }
@@ -503,20 +642,43 @@ public class GatewayConfig {
 }
 "#;
         let m = extract_java(src);
-        let route = m.iter().find(|x| x.kind == FrameworkEntityKind::GatewayRoute).unwrap();
+        let route = m
+            .iter()
+            .find(|x| x.kind == FrameworkEntityKind::GatewayRoute)
+            .unwrap();
         assert_eq!(route.name, "payments");
         assert_eq!(route.properties["uri"], "http://payments");
-        let filters: Vec<String> = m.iter().filter(|x| x.kind == FrameworkEntityKind::GatewayFilter).map(|x| x.name.clone()).collect();
-        assert!(filters.iter().any(|n| n.contains("stripPrefix")), "filters: {:?}", filters);
-        assert!(filters.iter().any(|n| n.contains("circuitBreaker")), "filters: {:?}", filters);
+        let filters: Vec<String> = m
+            .iter()
+            .filter(|x| x.kind == FrameworkEntityKind::GatewayFilter)
+            .map(|x| x.name.clone())
+            .collect();
+        assert!(
+            filters.iter().any(|n| n.contains("stripPrefix")),
+            "filters: {:?}",
+            filters
+        );
+        assert!(
+            filters.iter().any(|n| n.contains("circuitBreaker")),
+            "filters: {:?}",
+            filters
+        );
     }
 
     #[test]
     fn extracts_fixture_gateway_config() {
-        let src = include_str!("../../../../fixtures/spring-repo/src/main/java/com/example/gateway/GatewayConfig.java");
+        let src = include_str!(
+            "../../../../fixtures/spring-repo/src/main/java/com/example/gateway/GatewayConfig.java"
+        );
         let m = extract_java(src);
-        assert!(m.iter().any(|x| x.kind == FrameworkEntityKind::GatewayRoute && x.name == "payments"));
-        assert!(m.iter().any(|x| x.kind == FrameworkEntityKind::GatewayRoute && x.name == "orders"));
+        assert!(
+            m.iter()
+                .any(|x| x.kind == FrameworkEntityKind::GatewayRoute && x.name == "payments")
+        );
+        assert!(
+            m.iter()
+                .any(|x| x.kind == FrameworkEntityKind::GatewayRoute && x.name == "orders")
+        );
     }
 
     #[test]
@@ -531,7 +693,10 @@ public class AuthFilter implements GatewayFilter {
 }
 "#;
         let m = extract_java(src);
-        let f = m.iter().find(|x| x.kind == FrameworkEntityKind::GatewayFilter).unwrap();
+        let f = m
+            .iter()
+            .find(|x| x.kind == FrameworkEntityKind::GatewayFilter)
+            .unwrap();
         assert_eq!(f.name, "AuthFilter");
     }
 
@@ -554,10 +719,18 @@ spring:
 "#;
         let mut raw = crate::language::RawFile::default();
         parse_yml("application.yml", src, &mut raw);
-        let routes: Vec<_> = raw.framework_metadata.iter().filter(|x| x.kind == FrameworkEntityKind::GatewayRoute).collect();
+        let routes: Vec<_> = raw
+            .framework_metadata
+            .iter()
+            .filter(|x| x.kind == FrameworkEntityKind::GatewayRoute)
+            .collect();
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0].name, "payments-route");
-        let filters: Vec<_> = raw.framework_metadata.iter().filter(|x| x.kind == FrameworkEntityKind::GatewayFilter).collect();
+        let filters: Vec<_> = raw
+            .framework_metadata
+            .iter()
+            .filter(|x| x.kind == FrameworkEntityKind::GatewayFilter)
+            .collect();
         assert_eq!(filters.len(), 2);
     }
 
@@ -571,10 +744,18 @@ spring.cloud.gateway.routes[0].filters=StripPrefix=1,RewritePath=/api/(?<segment
 "#;
         let mut raw = crate::language::RawFile::default();
         parse_properties("application.properties", src, &mut raw);
-        let routes: Vec<_> = raw.framework_metadata.iter().filter(|x| x.kind == FrameworkEntityKind::GatewayRoute).collect();
+        let routes: Vec<_> = raw
+            .framework_metadata
+            .iter()
+            .filter(|x| x.kind == FrameworkEntityKind::GatewayRoute)
+            .collect();
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0].name, "orders-route");
-        let filters: Vec<_> = raw.framework_metadata.iter().filter(|x| x.kind == FrameworkEntityKind::GatewayFilter).collect();
+        let filters: Vec<_> = raw
+            .framework_metadata
+            .iter()
+            .filter(|x| x.kind == FrameworkEntityKind::GatewayFilter)
+            .collect();
         assert_eq!(filters.len(), 2);
     }
 }

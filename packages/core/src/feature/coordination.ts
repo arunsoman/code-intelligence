@@ -15,7 +15,7 @@ import { applyCandidateToDir, copyTreeKeepLinks } from "./tree.ts";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Store } from "../store.ts";
-import { contentRoot, entriesFromDirectory } from "./canon.ts";
+import { contentRootOfTree } from "./canon.ts";
 import { FeatureError } from "./errors.ts";
 import { unsafePath } from "./patch-export.ts";
 import { snapshotOf } from "./intake.ts";
@@ -134,7 +134,7 @@ export function assessConcurrentChanges(d: CoordDeps, actor: Id, i: { requestIds
     try {
       copyTreeKeepLinks(i.snapshot.repositoryId, scratch);
       for (const c of cands) applyCandidateToDir(scratch, c);
-      integrated = contentRoot(entriesFromDirectory(scratch, { exclude: [] }));
+      integrated = contentRootOfTree(scratch, { exclude: [] }).digest;
     } finally { removeScratch(scratch); }
   }
   const reverify = cands.length > 1;

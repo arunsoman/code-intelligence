@@ -57,11 +57,12 @@ test("concept hierarchy over the gateway: build as a job, read it back, and leav
     assert.equal((await post("C11", "conceptHierarchy", { version: 1 })).status, 200);
     assert.equal((await post("C11", "conceptHierarchy", { version: 99 })).status, 404);
 
-    // The other way of discovering concepts is untouched: no card version appeared.
-    const cards = await post("C11", "conceptStore", {});
-    assert.equal(cards.status, 200);
-    assert.equal(cards.body.value.versions.length, 0, "building the hierarchy writes no concept-card version");
-    assert.deepEqual((await post("C11", "listConcepts", {})).body.value, []);
+    // The other way of discovering concepts: the concept-card pipeline was deliberately retired
+    // (487415f), so its op must stay unreachable over HTTP, and listConcepts sees exactly the rows
+    // the hierarchy itself wrote — nothing else.
+    assert.equal((await post("C11", "conceptStore", {})).status, 404);
+    const listed = (await post("C11", "listConcepts", {})).body?.value as { id: string }[];
+    assert.deepEqual(listed.map((c) => c.id).sort(), built.concepts.map((c) => c.id).sort());
   } finally { srv.close(); worker.close(); }
 });
 

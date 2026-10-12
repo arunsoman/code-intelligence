@@ -7,7 +7,7 @@ import type { SemanticConcept } from "@cie/schema";
 import type { Store } from "../store.ts";
 import { conceptConfig } from "./config.ts";
 import { canonicalMotifHash } from "./canonicalize.ts";
-import { matchMotifs } from "./motifs.ts";
+import { matchMotifsBatch, type MotifBatchMatcher } from "./motifs.ts";
 import type { Pdg } from "./types.ts";
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -62,11 +62,14 @@ const hashOf = (d: Draft) => canonicalMotifHash({ motifs: d.motifs, features: d.
  * One pass over the graphs. A function contributes one concept per distinct motif shape; composed
  * forms (debit/credit/transfer, leak candidates) replace the plain motif concept they specialise.
  */
-export function buildSemanticConcepts(store: Store, revision: string, pdgs: Pdg[], previous: SemanticConcept[] = []): SemanticBuildResult {
+export function buildSemanticConcepts(store: Store, revision: string, pdgs: Pdg[], previous: SemanticConcept[] = [], motifBatch: MotifBatchMatcher = matchMotifsBatch): SemanticBuildResult {
   const minMembers = conceptConfig().composedMinMembers.value;
   const drafts: Draft[] = [];
-  for (const pdg of pdgs) {
-    const matches = matchMotifs(pdg);
+  // The per-function graph scans come from the injected batch (the Rust worker in production, the
+  // local matchers in hermetic tests); the composition below is unchanged.
+  const matchesPerPdg = motifBatch(pdgs);
+  for (const [i, pdg] of pdgs.entries()) {
+    const matches = matchesPerPdg[i];
     const byMotif = new Map<string, number>();
     for (const m of matches) byMotif.set(m.motif, (byMotif.get(m.motif) ?? 0) + 1);
     const ops: Record<string, number> = {};

@@ -1,10 +1,17 @@
-//! pf-canon-v1 (Prompt-to-feature §29): the Rust half of the cross-runtime identity protocol. It must produce the same
+//! pf-canon-v1 (Prompt-to-feature §29): the cross-runtime identity protocol. It must produce the same
 //! bytes and digests as `packages/core/src/feature/canon.ts` for every vector in `fixtures/canon/canon-vectors.json`;
 //! `cargo test` and `node --test` read that one file, and exact-bound publication stays disabled until both agree.
 //!
+//! Since the tree offload, the Rust side owns everything compute-heavy: `content_root_of_tree` walks a directory and
+//! hashes every file with native SHA-256 (the TS side calls it one-shot via `worker contentRoot <path>` or over the
+//! frames protocol as op "contentRoot"). The strict-JSON parser, decimals and raw hash functions remain protocol parity
+//! code, pinned by the shared fixture vectors; their production runtime is still TypeScript.
+//!
 //! The parser is hand-written on purpose: serde_json cannot report duplicate keys or `-0`, and it normalises numbers.
-#![allow(dead_code)]
 use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
+use std::os::unix::fs::MetadataExt;
+use std::path::Path;
 
 pub const PROTOCOL: &str = "pf-canon-v1";
 const MAX_DEPTH: usize = 128;
@@ -25,23 +32,51 @@ pub enum Canon {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Code {
-    UnsupportedValue, UnsafeNumber, NegativeZero, BadString, BadKey, DuplicateKey, DuplicateSetElement,
-    BadUtf8, BadJson, BadSchema, BadDecimal, BadPath,
+    UnsupportedValue,
+    UnsafeNumber,
+    NegativeZero,
+    BadString,
+    BadKey,
+    DuplicateKey,
+    DuplicateSetElement,
+    BadUtf8,
+    BadJson,
+    BadSchema,
+    BadDecimal,
+    BadPath,
+    BadExclusion,
 }
 impl Code {
     /// The same identifiers the TypeScript implementation throws.
     pub fn name(self) -> &'static str {
         match self {
-            Code::UnsupportedValue => "UNSUPPORTED_VALUE", Code::UnsafeNumber => "UNSAFE_NUMBER", Code::NegativeZero => "NEGATIVE_ZERO",
-            Code::BadString => "BAD_STRING", Code::BadKey => "BAD_KEY", Code::DuplicateKey => "DUPLICATE_KEY",
-            Code::DuplicateSetElement => "DUPLICATE_SET_ELEMENT", Code::BadUtf8 => "BAD_UTF8", Code::BadJson => "BAD_JSON",
-            Code::BadSchema => "BAD_SCHEMA", Code::BadDecimal => "BAD_DECIMAL", Code::BadPath => "BAD_PATH",
+            Code::UnsupportedValue => "UNSUPPORTED_VALUE",
+            Code::UnsafeNumber => "UNSAFE_NUMBER",
+            Code::NegativeZero => "NEGATIVE_ZERO",
+            Code::BadString => "BAD_STRING",
+            Code::BadKey => "BAD_KEY",
+            Code::DuplicateKey => "DUPLICATE_KEY",
+            Code::DuplicateSetElement => "DUPLICATE_SET_ELEMENT",
+            Code::BadUtf8 => "BAD_UTF8",
+            Code::BadJson => "BAD_JSON",
+            Code::BadSchema => "BAD_SCHEMA",
+            Code::BadDecimal => "BAD_DECIMAL",
+            Code::BadPath => "BAD_PATH",
+            Code::BadExclusion => "BAD_EXCLUSION",
         }
     }
 }
 #[derive(Debug, Clone, PartialEq)]
-pub struct CanonError { pub code: Code, pub message: String }
-fn err<T>(code: Code, message: impl Into<String>) -> Result<T, CanonError> { Err(CanonError { code, message: message.into() }) }
+pub struct CanonError {
+    pub code: Code,
+    pub message: String,
+}
+fn err<T>(code: Code, message: impl Into<String>) -> Result<T, CanonError> {
+    Err(CanonError {
+        code,
+        message: message.into(),
+    })
+}
 
 // ---------------------------------------------------------------------------------------------- canonical bytes
 
@@ -58,38 +93,73 @@ fn quote(s: &str, out: &mut String) {
     out.push('"');
 }
 
-pub fn canonicalize(v: &Canon) -> Result<String, CanonError> { let mut s = String::new(); write(v, 0, &mut s)?; Ok(s) }
+pub fn canonicalize(v: &Canon) -> Result<String, CanonError> {
+    let mut s = String::new();
+    write(v, 0, &mut s)?;
+    Ok(s)
+}
 
 fn write(v: &Canon, depth: usize, out: &mut String) -> Result<(), CanonError> {
-    if depth > MAX_DEPTH { return err(Code::UnsupportedValue, "value is nested too deeply"); }
+    if depth > MAX_DEPTH {
+        return err(Code::UnsupportedValue, "value is nested too deeply");
+    }
     match v {
         Canon::Null => out.push_str("null"),
         Canon::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         Canon::Str(s) => quote(s, out),
         Canon::Int(n) => {
-            if n.abs() > MAX_SAFE { return err(Code::UnsafeNumber, "only safe integers are allowed"); }
+            if n.abs() > MAX_SAFE {
+                return err(Code::UnsafeNumber, "only safe integers are allowed");
+            }
             out.push_str(&n.to_string());
         }
         Canon::Arr(items) => {
             out.push('[');
-            for (i, e) in items.iter().enumerate() { if i > 0 { out.push(','); } write(e, depth + 1, out)?; }
+            for (i, e) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write(e, depth + 1, out)?;
+            }
             out.push(']');
         }
         Canon::Set(items) => {
             let mut parts = Vec::with_capacity(items.len());
-            for e in items { let mut s = String::new(); write(e, depth + 1, &mut s)?; parts.push(s); }
+            for e in items {
+                let mut s = String::new();
+                write(e, depth + 1, &mut s)?;
+                parts.push(s);
+            }
             parts.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
-            if parts.windows(2).any(|w| w[0] == w[1]) { return err(Code::DuplicateSetElement, "a set holds the same canonical element twice"); }
-            out.push('['); out.push_str(&parts.join(",")); out.push(']');
+            if parts.windows(2).any(|w| w[0] == w[1]) {
+                return err(
+                    Code::DuplicateSetElement,
+                    "a set holds the same canonical element twice",
+                );
+            }
+            out.push('[');
+            out.push_str(&parts.join(","));
+            out.push(']');
         }
         Canon::Obj(fields) => {
             let mut sorted: Vec<&(String, Canon)> = fields.iter().collect();
-            for (k, _) in &sorted { if k.is_empty() || !k.is_ascii() { return err(Code::BadKey, format!("object keys are non-empty ASCII schema field names: {k:?}")); } }
+            for (k, _) in &sorted {
+                if k.is_empty() || !k.is_ascii() {
+                    return err(
+                        Code::BadKey,
+                        format!("object keys are non-empty ASCII schema field names: {k:?}"),
+                    );
+                }
+            }
             sorted.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
             out.push('{');
             for (i, (k, val)) in sorted.iter().enumerate() {
-                if i > 0 { out.push(','); }
-                quote(k, out); out.push(':'); write(val, depth + 1, out)?;
+                if i > 0 {
+                    out.push(',');
+                }
+                quote(k, out);
+                out.push(':');
+                write(val, depth + 1, out)?;
             }
             out.push('}');
         }
@@ -97,139 +167,341 @@ fn write(v: &Canon, depth: usize, out: &mut String) -> Result<(), CanonError> {
     Ok(())
 }
 
-pub fn sha_hex(bytes: &[u8]) -> String { Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect() }
+pub fn sha_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
 
 /// Digest over: protocol, NUL, schema, NUL, version, NUL, canonical payload.
 pub fn canon_digest(schema: &str, version: &str, canonical: &str) -> String {
     let mut pre = Vec::new();
-    pre.extend_from_slice(PROTOCOL.as_bytes()); pre.push(0);
-    pre.extend_from_slice(schema.as_bytes()); pre.push(0);
-    pre.extend_from_slice(version.as_bytes()); pre.push(0);
+    pre.extend_from_slice(PROTOCOL.as_bytes());
+    pre.push(0);
+    pre.extend_from_slice(schema.as_bytes());
+    pre.push(0);
+    pre.extend_from_slice(version.as_bytes());
+    pre.push(0);
     pre.extend_from_slice(canonical.as_bytes());
     sha_hex(&pre)
 }
-pub fn raw_hash(bytes: &[u8]) -> String { sha_hex(bytes) }
+/// Protocol parity only: the production runtime for raw bytes hashing is still TypeScript.
+#[allow(dead_code)]
+pub fn raw_hash(bytes: &[u8]) -> String {
+    sha_hex(bytes)
+}
 
 // ---------------------------------------------------------------------------------------------- decimals
 
+/// Protocol parity only: the production runtime for decimals is still TypeScript.
+#[allow(dead_code)]
 pub fn canon_decimal(input: &str) -> Result<String, CanonError> {
     let b = input.as_bytes();
     let mut i = 0;
-    let neg = if i < b.len() && (b[i] == b'+' || b[i] == b'-') { i += 1; b[0] == b'-' } else { false };
+    let neg = if i < b.len() && (b[i] == b'+' || b[i] == b'-') {
+        i += 1;
+        b[0] == b'-'
+    } else {
+        false
+    };
     let int_start = i;
-    while i < b.len() && b[i].is_ascii_digit() { i += 1; }
-    if i == int_start { return err(Code::BadDecimal, format!("not a decimal: {input:?}")); }
+    while i < b.len() && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == int_start {
+        return err(Code::BadDecimal, format!("not a decimal: {input:?}"));
+    }
     let int = &input[int_start..i];
     let mut frac = "";
     if i < b.len() && b[i] == b'.' {
-        let fs = i + 1; i = fs;
-        while i < b.len() && b[i].is_ascii_digit() { i += 1; }
-        if i == fs { return err(Code::BadDecimal, format!("not a decimal: {input:?}")); }
+        let fs = i + 1;
+        i = fs;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == fs {
+            return err(Code::BadDecimal, format!("not a decimal: {input:?}"));
+        }
         frac = &input[fs..i];
     }
-    if i != b.len() { return err(Code::BadDecimal, format!("not a decimal: {input:?}")); }
-    let int = { let t = int.trim_start_matches('0'); if t.is_empty() { "0" } else { t } };
+    if i != b.len() {
+        return err(Code::BadDecimal, format!("not a decimal: {input:?}"));
+    }
+    let int = {
+        let t = int.trim_start_matches('0');
+        if t.is_empty() { "0" } else { t }
+    };
     let frac = frac.trim_end_matches('0');
     let zero = int == "0" && frac.is_empty();
-    Ok(format!("{}{}{}{}", if neg && !zero { "-" } else { "" }, int, if frac.is_empty() { "" } else { "." }, frac))
+    Ok(format!(
+        "{}{}{}{}",
+        if neg && !zero { "-" } else { "" },
+        int,
+        if frac.is_empty() { "" } else { "." },
+        frac
+    ))
 }
 
 // ---------------------------------------------------------------------------------------------- strict JSON ingress
 
+/// Protocol parity only: the production runtime for strict JSON ingress is still TypeScript.
+#[allow(dead_code)]
 pub fn parse_strict_json(input: &[u8]) -> Result<Canon, CanonError> {
-    let text = match std::str::from_utf8(input) { Ok(t) => t, Err(_) => return err(Code::BadUtf8, "input is not valid UTF-8") };
-    let mut p = P { b: text.as_bytes(), t: text, i: 0 };
-    let v = p.value(0)?; p.ws();
-    if p.i != p.b.len() { return p.fail("trailing characters"); }
+    let text = match std::str::from_utf8(input) {
+        Ok(t) => t,
+        Err(_) => return err(Code::BadUtf8, "input is not valid UTF-8"),
+    };
+    let mut p = P {
+        b: text.as_bytes(),
+        t: text,
+        i: 0,
+    };
+    let v = p.value(0)?;
+    p.ws();
+    if p.i != p.b.len() {
+        return p.fail("trailing characters");
+    }
     Ok(v)
 }
 
-struct P<'a> { b: &'a [u8], t: &'a str, i: usize }
+struct P<'a> {
+    b: &'a [u8],
+    t: &'a str,
+    i: usize,
+}
 impl<'a> P<'a> {
-    fn fail<T>(&self, m: &str) -> Result<T, CanonError> { err(Code::BadJson, format!("{m} at offset {}", self.i)) }
-    fn ws(&mut self) { while self.i < self.b.len() && matches!(self.b[self.i], b' ' | b'\t' | b'\n' | b'\r') { self.i += 1; } }
-    fn peek(&self) -> Option<u8> { self.b.get(self.i).copied() }
+    fn fail<T>(&self, m: &str) -> Result<T, CanonError> {
+        err(Code::BadJson, format!("{m} at offset {}", self.i))
+    }
+    fn ws(&mut self) {
+        while self.i < self.b.len() && matches!(self.b[self.i], b' ' | b'\t' | b'\n' | b'\r') {
+            self.i += 1;
+        }
+    }
+    fn peek(&self) -> Option<u8> {
+        self.b.get(self.i).copied()
+    }
     fn value(&mut self, depth: usize) -> Result<Canon, CanonError> {
-        if depth > MAX_DEPTH { return self.fail("nested too deeply"); }
+        if depth > MAX_DEPTH {
+            return self.fail("nested too deeply");
+        }
         self.ws();
         match self.peek() {
             Some(b'{') => {
-                self.i += 1; let mut o: Vec<(String, Canon)> = Vec::new(); self.ws();
-                if self.peek() == Some(b'}') { self.i += 1; return Ok(Canon::Obj(o)); }
+                self.i += 1;
+                let mut o: Vec<(String, Canon)> = Vec::new();
+                self.ws();
+                if self.peek() == Some(b'}') {
+                    self.i += 1;
+                    return Ok(Canon::Obj(o));
+                }
                 loop {
-                    self.ws(); if self.peek() != Some(b'"') { return self.fail("expected a key"); }
+                    self.ws();
+                    if self.peek() != Some(b'"') {
+                        return self.fail("expected a key");
+                    }
                     let k = self.string()?;
-                    if o.iter().any(|(e, _)| *e == k) { return err(Code::DuplicateKey, format!("duplicate key {k:?}")); }
-                    self.ws(); if self.peek() != Some(b':') { return self.fail("expected ':'"); } self.i += 1;
-                    let v = self.value(depth + 1)?; o.push((k, v)); self.ws();
-                    match self.peek() { Some(b',') => { self.i += 1; } Some(b'}') => { self.i += 1; return Ok(Canon::Obj(o)); } _ => return self.fail("expected ',' or '}'") }
+                    if o.iter().any(|(e, _)| *e == k) {
+                        return err(Code::DuplicateKey, format!("duplicate key {k:?}"));
+                    }
+                    self.ws();
+                    if self.peek() != Some(b':') {
+                        return self.fail("expected ':'");
+                    }
+                    self.i += 1;
+                    let v = self.value(depth + 1)?;
+                    o.push((k, v));
+                    self.ws();
+                    match self.peek() {
+                        Some(b',') => {
+                            self.i += 1;
+                        }
+                        Some(b'}') => {
+                            self.i += 1;
+                            return Ok(Canon::Obj(o));
+                        }
+                        _ => return self.fail("expected ',' or '}'"),
+                    }
                 }
             }
             Some(b'[') => {
-                self.i += 1; let mut a = Vec::new(); self.ws();
-                if self.peek() == Some(b']') { self.i += 1; return Ok(Canon::Arr(a)); }
+                self.i += 1;
+                let mut a = Vec::new();
+                self.ws();
+                if self.peek() == Some(b']') {
+                    self.i += 1;
+                    return Ok(Canon::Arr(a));
+                }
                 loop {
-                    a.push(self.value(depth + 1)?); self.ws();
-                    match self.peek() { Some(b',') => { self.i += 1; } Some(b']') => { self.i += 1; return Ok(Canon::Arr(a)); } _ => return self.fail("expected ',' or ']'") }
+                    a.push(self.value(depth + 1)?);
+                    self.ws();
+                    match self.peek() {
+                        Some(b',') => {
+                            self.i += 1;
+                        }
+                        Some(b']') => {
+                            self.i += 1;
+                            return Ok(Canon::Arr(a));
+                        }
+                        _ => return self.fail("expected ',' or ']'"),
+                    }
                 }
             }
             Some(b'"') => Ok(Canon::Str(self.string()?)),
             _ => {
                 let rest = &self.b[self.i..];
-                if rest.starts_with(b"true") { self.i += 4; return Ok(Canon::Bool(true)); }
-                if rest.starts_with(b"false") { self.i += 5; return Ok(Canon::Bool(false)); }
-                if rest.starts_with(b"null") { self.i += 4; return Ok(Canon::Null); }
+                if rest.starts_with(b"true") {
+                    self.i += 4;
+                    return Ok(Canon::Bool(true));
+                }
+                if rest.starts_with(b"false") {
+                    self.i += 5;
+                    return Ok(Canon::Bool(false));
+                }
+                if rest.starts_with(b"null") {
+                    self.i += 4;
+                    return Ok(Canon::Null);
+                }
                 self.number()
             }
         }
     }
     fn number(&mut self) -> Result<Canon, CanonError> {
-        let s = self.i; let mut j = s;
-        if self.b.get(j) == Some(&b'-') { j += 1; }
+        let s = self.i;
+        let mut j = s;
+        if self.b.get(j) == Some(&b'-') {
+            j += 1;
+        }
         match self.b.get(j) {
-            Some(b'0') => { j += 1; }
-            Some(c) if c.is_ascii_digit() => { while self.b.get(j).map_or(false, |c| c.is_ascii_digit()) { j += 1; } }
+            Some(b'0') => {
+                j += 1;
+            }
+            Some(c) if c.is_ascii_digit() => {
+                while self.b.get(j).map_or(false, |c| c.is_ascii_digit()) {
+                    j += 1;
+                }
+            }
             _ => return self.fail("unexpected token"),
         }
         let int_end = j;
-        let frac = self.b.get(j) == Some(&b'.') && self.b.get(j + 1).map_or(false, |c| c.is_ascii_digit());
-        let exp = matches!(self.b.get(j), Some(b'e') | Some(b'E')) && { let k = if matches!(self.b.get(j + 1), Some(b'+') | Some(b'-')) { j + 2 } else { j + 1 }; self.b.get(k).map_or(false, |c| c.is_ascii_digit()) };
+        let frac =
+            self.b.get(j) == Some(&b'.') && self.b.get(j + 1).map_or(false, |c| c.is_ascii_digit());
+        let exp = matches!(self.b.get(j), Some(b'e') | Some(b'E')) && {
+            let k = if matches!(self.b.get(j + 1), Some(b'+') | Some(b'-')) {
+                j + 2
+            } else {
+                j + 1
+            };
+            self.b.get(k).map_or(false, |c| c.is_ascii_digit())
+        };
         let mut e = j; // fraction / exponent presence is decided before the zero and range checks, as in the TS regex
-        if frac { e += 1; while self.b.get(e).map_or(false, |c| c.is_ascii_digit()) { e += 1; } }
+        if frac {
+            e += 1;
+            while self.b.get(e).map_or(false, |c| c.is_ascii_digit()) {
+                e += 1;
+            }
+        }
         let exp2 = matches!(self.b.get(e), Some(b'e') | Some(b'E'));
-        if frac || exp || exp2 { let _ = int_end; return err(Code::UnsafeNumber, "floating-point and exponent numbers are not allowed"); }
+        if frac || exp || exp2 {
+            let _ = int_end;
+            return err(
+                Code::UnsafeNumber,
+                "floating-point and exponent numbers are not allowed",
+            );
+        }
         let lit = &self.t[s..int_end];
-        if lit == "-0" { return err(Code::NegativeZero, "negative zero is not allowed"); }
-        let n: i64 = match lit.parse() { Ok(n) => n, Err(_) => return err(Code::UnsafeNumber, "integer outside the safe range") };
-        if n.abs() > MAX_SAFE { return err(Code::UnsafeNumber, "integer outside the safe range"); }
-        self.i = int_end; Ok(Canon::Int(n))
+        if lit == "-0" {
+            return err(Code::NegativeZero, "negative zero is not allowed");
+        }
+        let n: i64 = match lit.parse() {
+            Ok(n) => n,
+            Err(_) => return err(Code::UnsafeNumber, "integer outside the safe range"),
+        };
+        if n.abs() > MAX_SAFE {
+            return err(Code::UnsafeNumber, "integer outside the safe range");
+        }
+        self.i = int_end;
+        Ok(Canon::Int(n))
     }
     fn hex4(&mut self) -> Result<u32, CanonError> {
-        let h = self.t.get(self.i..self.i + 4).filter(|h| h.bytes().all(|c| c.is_ascii_hexdigit()));
-        match h { Some(h) => { self.i += 4; Ok(u32::from_str_radix(h, 16).unwrap()) } None => self.fail("bad \\u escape") }
+        let h = self
+            .t
+            .get(self.i..self.i + 4)
+            .filter(|h| h.bytes().all(|c| c.is_ascii_hexdigit()));
+        match h {
+            Some(h) => {
+                self.i += 4;
+                Ok(u32::from_str_radix(h, 16).unwrap())
+            }
+            None => self.fail("bad \\u escape"),
+        }
     }
     fn string(&mut self) -> Result<String, CanonError> {
-        self.i += 1; let mut out = String::new();
+        self.i += 1;
+        let mut out = String::new();
         loop {
-            let c = match self.t[self.i..].chars().next() { Some(c) => c, None => return self.fail("unterminated string") };
+            let c = match self.t[self.i..].chars().next() {
+                Some(c) => c,
+                None => return self.fail("unterminated string"),
+            };
             self.i += c.len_utf8();
-            if c == '"' { return Ok(out); }
-            if (c as u32) < 0x20 { return self.fail("raw control character in string"); }
-            if c != '\\' { out.push(c); continue; }
-            let e = match self.peek() { Some(e) => e, None => return self.fail("bad escape") }; self.i += 1;
+            if c == '"' {
+                return Ok(out);
+            }
+            if (c as u32) < 0x20 {
+                return self.fail("raw control character in string");
+            }
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            let e = match self.peek() {
+                Some(e) => e,
+                None => return self.fail("bad escape"),
+            };
+            self.i += 1;
             match e {
-                b'"' => out.push('"'), b'\\' => out.push('\\'), b'/' => out.push('/'),
-                b'b' => out.push('\u{8}'), b'f' => out.push('\u{c}'), b'n' => out.push('\n'), b'r' => out.push('\r'), b't' => out.push('\t'),
+                b'"' => out.push('"'),
+                b'\\' => out.push('\\'),
+                b'/' => out.push('/'),
+                b'b' => out.push('\u{8}'),
+                b'f' => out.push('\u{c}'),
+                b'n' => out.push('\n'),
+                b'r' => out.push('\r'),
+                b't' => out.push('\t'),
                 b'u' => {
                     let u = self.hex4()?;
                     if (0xd800..0xdc00).contains(&u) {
-                        if self.b.get(self.i) == Some(&b'\\') && self.b.get(self.i + 1) == Some(&b'u') {
-                            self.i += 2; let lo = self.hex4()?;
-                            if !(0xdc00..0xe000).contains(&lo) { return err(Code::BadString, "escape sequence produced an unpaired surrogate"); }
-                            out.push(char::from_u32(0x10000 + ((u - 0xd800) << 10) + (lo - 0xdc00)).unwrap());
-                        } else { return err(Code::BadString, "escape sequence produced an unpaired surrogate"); }
-                    } else if (0xdc00..0xe000).contains(&u) { return err(Code::BadString, "escape sequence produced an unpaired surrogate"); }
-                    else { out.push(char::from_u32(u).unwrap()); }
+                        if self.b.get(self.i) == Some(&b'\\')
+                            && self.b.get(self.i + 1) == Some(&b'u')
+                        {
+                            self.i += 2;
+                            let lo = self.hex4()?;
+                            if !(0xdc00..0xe000).contains(&lo) {
+                                return err(
+                                    Code::BadString,
+                                    "escape sequence produced an unpaired surrogate",
+                                );
+                            }
+                            out.push(
+                                char::from_u32(0x10000 + ((u - 0xd800) << 10) + (lo - 0xdc00))
+                                    .unwrap(),
+                            );
+                        } else {
+                            return err(
+                                Code::BadString,
+                                "escape sequence produced an unpaired surrogate",
+                            );
+                        }
+                    } else if (0xdc00..0xe000).contains(&u) {
+                        return err(
+                            Code::BadString,
+                            "escape sequence produced an unpaired surrogate",
+                        );
+                    } else {
+                        out.push(char::from_u32(u).unwrap());
+                    }
                 }
                 _ => return self.fail("bad escape"),
             }
@@ -240,16 +512,34 @@ impl<'a> P<'a> {
 // ---------------------------------------------------------------------------------------------- content root
 
 #[derive(Debug, Clone)]
-pub struct ManifestEntry { pub path: String, pub kind: String, pub mode: String, pub hash: Option<String>, pub target: Option<String>, pub commit: Option<String> }
+pub struct ManifestEntry {
+    pub path: String,
+    pub kind: String,
+    pub mode: String,
+    pub hash: Option<String>,
+    pub target: Option<String>,
+    pub commit: Option<String>,
+}
 
 fn check_path(p: &str) -> Result<(), CanonError> {
     let b = p.as_bytes();
     let drive = b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':';
-    if p.is_empty() || p.starts_with('/') || drive || p.contains('\\') || p.chars().any(|c| (c as u32) < 0x20) { return err(Code::BadPath, format!("unsafe path {p:?}")); }
-    if p.split('/').any(|s| s.is_empty() || s == "." || s == "..") { return err(Code::BadPath, format!("unsafe path segment in {p:?}")); }
+    if p.is_empty()
+        || p.starts_with('/')
+        || drive
+        || p.contains('\\')
+        || p.chars().any(|c| (c as u32) < 0x20)
+    {
+        return err(Code::BadPath, format!("unsafe path {p:?}"));
+    }
+    if p.split('/').any(|s| s.is_empty() || s == "." || s == "..") {
+        return err(Code::BadPath, format!("unsafe path segment in {p:?}"));
+    }
     Ok(())
 }
-fn is_hex(s: &str, min: usize, max: usize) -> bool { s.len() >= min && s.len() <= max && s.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')) }
+fn is_hex(s: &str, min: usize, max: usize) -> bool {
+    s.len() >= min && s.len() <= max && s.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
+}
 
 /// Canonical identity of a tree. `case_sensitive = false` folds ASCII case only (see the TypeScript note on the known gap).
 pub fn content_root(entries: &[ManifestEntry], case_sensitive: bool) -> Result<String, CanonError> {
@@ -259,20 +549,292 @@ pub fn content_root(entries: &[ManifestEntry], case_sensitive: bool) -> Result<S
     let mut rows = Vec::new();
     for e in sorted {
         check_path(&e.path)?;
-        let key = if case_sensitive { e.path.clone() } else { e.path.to_ascii_lowercase() };
-        if !seen.insert(key) { return err(Code::BadPath, format!("colliding path {:?}", e.path)); }
-        let mode_ok = match e.kind.as_str() { "file" => e.mode == "100644" || e.mode == "100755", "symlink" => e.mode == "120000", "submodule" => e.mode == "160000", _ => false };
-        if !mode_ok { return err(Code::BadSchema, format!("mode {} is not valid for a {}", e.mode, e.kind)); }
+        let key = if case_sensitive {
+            e.path.clone()
+        } else {
+            e.path.to_ascii_lowercase()
+        };
+        if !seen.insert(key) {
+            return err(Code::BadPath, format!("colliding path {:?}", e.path));
+        }
+        let mode_ok = match e.kind.as_str() {
+            "file" => e.mode == "100644" || e.mode == "100755",
+            "symlink" => e.mode == "120000",
+            "submodule" => e.mode == "160000",
+            _ => false,
+        };
+        if !mode_ok {
+            return err(
+                Code::BadSchema,
+                format!("mode {} is not valid for a {}", e.mode, e.kind),
+            );
+        }
         let s = |v: &str| Canon::Str(v.to_string());
-        let mut f = vec![("kind".to_string(), s(&e.kind)), ("mode".to_string(), s(&e.mode)), ("path".to_string(), s(&e.path))];
+        let mut f = vec![
+            ("kind".to_string(), s(&e.kind)),
+            ("mode".to_string(), s(&e.mode)),
+            ("path".to_string(), s(&e.path)),
+        ];
         match e.kind.as_str() {
-            "file" => match &e.hash { Some(h) if is_hex(h, 64, 64) => f.push(("hash".into(), s(h))), _ => return err(Code::BadSchema, format!("file {} needs a raw sha-256", e.path)) },
-            "symlink" => match &e.target { Some(t) => f.push(("target".into(), s(t))), None => return err(Code::BadSchema, format!("symlink {} needs a target", e.path)) },
-            _ => match &e.commit { Some(c) if is_hex(c, 40, 64) => f.push(("commit".into(), s(c))), _ => return err(Code::BadSchema, format!("submodule {} needs a pinned commit", e.path)) },
+            "file" => match &e.hash {
+                Some(h) if is_hex(h, 64, 64) => f.push(("hash".into(), s(h))),
+                _ => {
+                    return err(
+                        Code::BadSchema,
+                        format!("file {} needs a raw sha-256", e.path),
+                    );
+                }
+            },
+            "symlink" => match &e.target {
+                Some(t) => f.push(("target".into(), s(t))),
+                None => {
+                    return err(
+                        Code::BadSchema,
+                        format!("symlink {} needs a target", e.path),
+                    );
+                }
+            },
+            _ => match &e.commit {
+                Some(c) if is_hex(c, 40, 64) => f.push(("commit".into(), s(c))),
+                _ => {
+                    return err(
+                        Code::BadSchema,
+                        format!("submodule {} needs a pinned commit", e.path),
+                    );
+                }
+            },
         }
         rows.push(Canon::Obj(f));
     }
-    Ok(format!("{PROTOCOL}/pf.contentRoot@1:{}", canon_digest("pf.contentRoot", "1", &canonicalize(&Canon::Arr(rows))?)))
+    Ok(format!(
+        "{PROTOCOL}/pf.contentRoot@1:{}",
+        canon_digest("pf.contentRoot", "1", &canonicalize(&Canon::Arr(rows))?)
+    ))
+}
+
+// ---------------------------------------------------------------------------------------------- directory content roots
+
+/// A hash the caller already holds (intake plan S9): sent alongside the walk request so unchanged
+/// files are never re-read or re-hashed. Keyed by repository-relative path.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct KnownHash {
+    pub size: u64,
+    #[serde(rename = "mtimeMs")]
+    pub mtime_ms: f64,
+    pub hash: String,
+}
+
+/// One entry of a walked tree, as returned over the wire. `size`/`mtimeMs` are only meaningful for
+/// files (the TS side refreshes its known-hash cache from them).
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeEntry {
+    pub path: String,
+    pub kind: &'static str,
+    pub mode: &'static str,
+    pub hash: Option<String>,
+    pub target: Option<String>,
+    pub size: Option<u64>,
+    pub mtime_ms: Option<f64>,
+}
+
+impl TreeEntry {
+    fn as_manifest_entry(&self) -> ManifestEntry {
+        ManifestEntry {
+            path: self.path.clone(),
+            kind: self.kind.to_string(),
+            mode: self.mode.to_string(),
+            hash: self.hash.clone(),
+            target: self.target.clone(),
+            commit: None,
+        }
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeRoot {
+    pub digest: String,
+    pub entries: Vec<TreeEntry>,
+}
+
+/// Walk errors either use a canon code (the identity rules fired) or "IO"/"NOT_FOUND" (the tree
+/// itself is unreadable/absent) — never a mixture.
+#[derive(Debug)]
+pub struct TreeError {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl From<CanonError> for TreeError {
+    fn from(e: CanonError) -> Self {
+        TreeError {
+            code: e.code.name(),
+            message: e.message,
+        }
+    }
+}
+
+type TreeResult<T> = Result<T, TreeError>;
+
+fn io_error(path: &Path, e: std::io::Error) -> TreeError {
+    TreeError {
+        code: "IO",
+        message: format!("{}: {e}", path.display()),
+    }
+}
+
+/// Same millisecond double the TypeScript runtime derives from the same stat fields, so a cache
+/// entry round-trips. A mismatch costs a re-hash, never a wrong identity.
+fn mtime_ms(md: &std::fs::Metadata) -> f64 {
+    md.mtime() as f64 * 1000.0 + md.mtime_nsec() as f64 / 1_000_000.0
+}
+
+/// Exclusions (build caches) are declared, and may never cover source or configuration that validation depends on.
+const NEVER_EXCLUDE: [&str; 15] = [
+    "src",
+    "lib",
+    "app",
+    "apps",
+    "packages",
+    "crates",
+    "test",
+    "tests",
+    "spec",
+    "package.json",
+    "tsconfig.json",
+    "Cargo.toml",
+    "Cargo.lock",
+    "package-lock.json",
+    "go.mod",
+];
+
+pub fn assert_safe_exclusions(exclude: &[String]) -> TreeResult<()> {
+    for x in exclude {
+        if NEVER_EXCLUDE.contains(&x.as_str()) {
+            return Err(TreeError {
+                code: "BAD_EXCLUSION",
+                message: format!(
+                    "{x} holds validation-relevant source or configuration and cannot be excluded"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn walk_tree(
+    dir: &Path,
+    rel: &str,
+    exclude: &HashSet<&str>,
+    known: Option<&HashMap<String, KnownHash>>,
+    out: &mut Vec<TreeEntry>,
+) -> TreeResult<()> {
+    let rd = std::fs::read_dir(dir).map_err(|e| io_error(dir, e))?;
+    for entry in rd {
+        let de = entry.map_err(|e| io_error(dir, e))?;
+        let name = de.file_name().to_string_lossy().to_string();
+        if exclude.contains(name.as_str()) {
+            continue;
+        }
+        let child = if rel.is_empty() {
+            name
+        } else {
+            format!("{rel}/{name}")
+        };
+        // lstat semantics: symlinks are recorded, never followed.
+        let md = std::fs::symlink_metadata(de.path()).map_err(|e| io_error(&de.path(), e))?;
+        let ft = md.file_type();
+        if ft.is_symlink() {
+            let target = std::fs::read_link(de.path())
+                .map_err(|e| io_error(&de.path(), e))?
+                .to_string_lossy()
+                .to_string();
+            out.push(TreeEntry {
+                path: child,
+                kind: "symlink",
+                mode: "120000",
+                hash: None,
+                target: Some(target),
+                size: None,
+                mtime_ms: None,
+            });
+        } else if ft.is_dir() {
+            walk_tree(&de.path(), &child, exclude, known, out)?;
+        } else if ft.is_file() {
+            let ms = mtime_ms(&md);
+            let hash = match known.and_then(|m| m.get(&child)) {
+                Some(k)
+                    if k.size == md.len()
+                        && k.mtime_ms == ms
+                        && k.hash.len() == 64
+                        && k.hash.bytes().all(|c| c.is_ascii_hexdigit()) =>
+                {
+                    k.hash.clone()
+                }
+                _ => sha_hex(&std::fs::read(de.path()).map_err(|e| io_error(&de.path(), e))?),
+            };
+            out.push(TreeEntry {
+                path: child,
+                kind: "file",
+                mode: if md.mode() & 0o111 != 0 {
+                    "100755"
+                } else {
+                    "100644"
+                },
+                hash: Some(hash),
+                target: None,
+                size: Some(md.len()),
+                mtime_ms: Some(ms),
+            });
+        } else {
+            return Err(TreeError {
+                code: "BAD_PATH",
+                message: format!("special file {child} cannot be part of a content root"),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Walk `root` and compute its canonical content root (§29.2). Excludes are exact directory-entry
+/// names, matching every tree level, as the TypeScript walker did. `exclude` given means exactly
+/// that set (possibly empty); `None` falls back to `".git"`. Symlinks, special files and path
+/// policy are validated exactly as in `content_root`.
+pub fn content_root_of_tree(
+    root: &Path,
+    exclude: Option<&[String]>,
+    known: Option<&HashMap<String, KnownHash>>,
+) -> TreeResult<TreeRoot> {
+    if let Some(list) = exclude {
+        assert_safe_exclusions(list)?;
+    }
+    let set: HashSet<&str> = match exclude {
+        Some(list) => list.iter().map(|s| s.as_str()).collect(),
+        None => HashSet::from([".git"]),
+    };
+    let md = match std::fs::symlink_metadata(root) {
+        Ok(m) => m,
+        Err(_) => {
+            return Err(TreeError {
+                code: "NOT_FOUND",
+                message: format!("content root {} does not exist", root.display()),
+            });
+        }
+    };
+    if !md.is_dir() {
+        return Err(TreeError {
+            code: "NOT_FOUND",
+            message: format!("content root {} is not a directory", root.display()),
+        });
+    }
+    let mut entries = Vec::new();
+    walk_tree(root, "", &set, known, &mut entries)?;
+    let manifest: Vec<ManifestEntry> = entries.iter().map(TreeEntry::as_manifest_entry).collect();
+    Ok(TreeRoot {
+        digest: content_root(&manifest, false)?,
+        entries,
+    })
 }
 
 #[cfg(test)]
@@ -285,7 +847,9 @@ mod tests {
             Canon::Arr(a) => Canon::Arr(a.into_iter().map(revive).collect()),
             Canon::Obj(mut o) => {
                 if o.len() == 1 && o[0].0 == "$set" {
-                    if let Canon::Arr(items) = o.remove(0).1 { return Canon::Set(items.into_iter().map(revive).collect()); }
+                    if let Canon::Arr(items) = o.remove(0).1 {
+                        return Canon::Set(items.into_iter().map(revive).collect());
+                    }
                     unreachable!("$set holds an array");
                 }
                 Canon::Obj(o.into_iter().map(|(k, v)| (k, revive(v))).collect())
@@ -293,16 +857,31 @@ mod tests {
             other => other,
         }
     }
-    fn unhex(s: &str) -> Vec<u8> { (0..s.len() / 2).map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap()).collect() }
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len() / 2)
+            .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap())
+            .collect()
+    }
     fn entry(v: &Value) -> ManifestEntry {
         let g = |k: &str| v.get(k).and_then(|x| x.as_str()).map(String::from);
-        ManifestEntry { path: g("path").unwrap(), kind: g("kind").unwrap(), mode: g("mode").unwrap(), hash: g("hash"), target: g("target"), commit: g("commit") }
+        ManifestEntry {
+            path: g("path").unwrap(),
+            kind: g("kind").unwrap(),
+            mode: g("mode").unwrap(),
+            hash: g("hash"),
+            target: g("target"),
+            commit: g("commit"),
+        }
     }
 
     #[test]
     fn shared_vectors_match_the_typescript_implementation() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/canon/canon-vectors.json");
-        let doc: Value = serde_json::from_str(&std::fs::read_to_string(path).expect("vectors file")).unwrap();
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/canon/canon-vectors.json"
+        );
+        let doc: Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("vectors file")).unwrap();
         assert_eq!(doc["protocol"], PROTOCOL);
         let mut digests = std::collections::HashMap::new();
         let mut ran = 0;
@@ -311,19 +890,47 @@ mod tests {
             let expect_err = v.get("expectError").and_then(|e| e.as_str());
             let outcome: Result<String, CanonError> = (|| match v["op"].as_str().unwrap() {
                 "hash" | "reject" => {
-                    let input: Vec<u8> = match v.get("inputHex") { Some(h) => unhex(h.as_str().unwrap()), None => v["inputText"].as_str().unwrap().as_bytes().to_vec() };
+                    let input: Vec<u8> = match v.get("inputHex") {
+                        Some(h) => unhex(h.as_str().unwrap()),
+                        None => v["inputText"].as_str().unwrap().as_bytes().to_vec(),
+                    };
                     let mut value = revive(parse_strict_json(&input)?);
                     if let Some(keep) = v.get("project") {
-                        let keep: Vec<&str> = keep.as_array().unwrap().iter().map(|k| k.as_str().unwrap()).collect();
-                        if let Canon::Obj(o) = value { value = Canon::Obj(o.into_iter().filter(|(k, _)| keep.contains(&k.as_str())).collect()); }
+                        let keep: Vec<&str> = keep
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|k| k.as_str().unwrap())
+                            .collect();
+                        if let Canon::Obj(o) = value {
+                            value = Canon::Obj(
+                                o.into_iter()
+                                    .filter(|(k, _)| keep.contains(&k.as_str()))
+                                    .collect(),
+                            );
+                        }
                     }
                     let text = canonicalize(&value)?;
-                    if v["op"] == "hash" { assert_eq!(text, v["expectedCanonical"].as_str().unwrap(), "{id}: canonical bytes"); }
-                    Ok(canon_digest(v.get("schema").and_then(|s| s.as_str()).unwrap_or(""), v.get("version").and_then(|s| s.as_str()).unwrap_or(""), &text))
+                    if v["op"] == "hash" {
+                        assert_eq!(
+                            text,
+                            v["expectedCanonical"].as_str().unwrap(),
+                            "{id}: canonical bytes"
+                        );
+                    }
+                    Ok(canon_digest(
+                        v.get("schema").and_then(|s| s.as_str()).unwrap_or(""),
+                        v.get("version").and_then(|s| s.as_str()).unwrap_or(""),
+                        &text,
+                    ))
                 }
                 "decimal" => canon_decimal(v["input"].as_str().unwrap()),
                 "raw" => Ok(raw_hash(&unhex(v["inputHex"].as_str().unwrap()))),
-                "root" => { let es: Vec<ManifestEntry> = v["entries"].as_array().unwrap().iter().map(entry).collect(); content_root(&es, false).map(|r| r.rsplit(':').next().unwrap().to_string()) }
+                "root" => {
+                    let es: Vec<ManifestEntry> =
+                        v["entries"].as_array().unwrap().iter().map(entry).collect();
+                    content_root(&es, false).map(|r| r.rsplit(':').next().unwrap().to_string())
+                }
                 other => panic!("unknown op {other}"),
             })();
             match (expect_err, outcome) {
@@ -341,9 +948,25 @@ mod tests {
             ran += 1;
         }
         for r in doc["relations"].as_array().unwrap() {
-            let (ids, same) = match r.get("same") { Some(s) => (s, true), None => (&r["different"], false) };
-            let ds: Vec<&String> = ids.as_array().unwrap().iter().map(|i| digests.get(i.as_str().unwrap()).expect("related vector ran")).collect();
-            if same { assert!(ds.iter().all(|d| *d == ds[0])); } else { assert_ne!(ds[0], ds[1]); }
+            let (ids, same) = match r.get("same") {
+                Some(s) => (s, true),
+                None => (&r["different"], false),
+            };
+            let ds: Vec<&String> = ids
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|i| {
+                    digests
+                        .get(i.as_str().unwrap())
+                        .expect("related vector ran")
+                })
+                .collect();
+            if same {
+                assert!(ds.iter().all(|d| *d == ds[0]));
+            } else {
+                assert_ne!(ds[0], ds[1]);
+            }
         }
         assert!(ran >= 70, "ran {ran} vectors");
     }

@@ -16,7 +16,7 @@ import { makeScratch, removeScratch, sha256 } from "../isolated-exec.ts";
 import { applyCandidateToDir, copyTreeKeepLinks } from "./tree.ts";
 import type { Store } from "../store.ts";
 import { authorizePublish, type AuthorityConfig } from "./authority.ts";
-import { contentRoot, entriesFromDirectory } from "./canon.ts";
+import { contentRootOfTree } from "./canon.ts";
 import { FeatureError } from "./errors.ts";
 import { snapshotOf } from "./intake.ts";
 import { guardOutgoing } from "./issue-trail.ts";
@@ -126,7 +126,7 @@ export async function publishFeaturePR(d: PublishDeps, actor: Id, i: PublishInpu
   git(cloneDir, ["reset", "--quiet", "--hard", candidate.binding.baseCommitHash]); git(cloneDir, ["clean", "-fdq"]);
   applyCandidateToDir(cloneDir, candidate);
   const scratch = makeScratch("pf-pub-");
-  try { copyTreeKeepLinks(cloneDir, scratch); if (contentRoot(entriesFromDirectory(scratch, { exclude: [] })) !== candidate.binding.candidateContentHash) throw new FeatureError("STALE_REVISION", "the clone's content does not equal the validated candidate (the base may include files that are not committed); nothing was pushed"); }
+  try { copyTreeKeepLinks(cloneDir, scratch); if (contentRootOfTree(scratch, { exclude: [] }).digest !== candidate.binding.candidateContentHash) throw new FeatureError("STALE_REVISION", "the clone's content does not equal the validated candidate (the base may include files that are not committed); nothing was pushed"); }
   finally { removeScratch(scratch); }
   git(cloneDir, ["add", "-A"]);
   if ((tryGit(cloneDir, ["status", "--porcelain"]) ?? "").trim()) {

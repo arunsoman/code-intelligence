@@ -10,9 +10,9 @@ use serde_json::Value;
 
 pub mod config;
 pub mod express;
-pub mod nextjs;
-pub mod nestjs;
 pub mod java_gateway;
+pub mod nestjs;
+pub mod nextjs;
 pub mod spring;
 
 /// Framework-specific metadata emitted per source file.

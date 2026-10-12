@@ -188,24 +188,56 @@ pub struct RawFile {
 
 fn heritage_type_name(t: &str) -> String {
     let base = t.trim().split('<').next().unwrap_or(t).trim();
-    base.rsplit(|c| c == '.' || c == ':').next().unwrap_or(base).to_string()
+    base.rsplit(|c| c == '.' || c == ':')
+        .next()
+        .unwrap_or(base)
+        .to_string()
 }
 
 pub(crate) fn multiplicity_of(t: &str) -> (&'static str, String) {
-    let tt = t.trim().trim_start_matches(':').trim().trim_end_matches(';');
-    let (mut mult, inner): (&'static str, &str) =
-        if tt.starts_with("Array<") && tt.ends_with('>') { ("0..*", &tt[6..tt.len() - 1]) }
-        else if tt.ends_with("[]") { ("0..*", &tt[..tt.len() - 2]) }
-        else if tt.starts_with("Set<") && tt.ends_with('>') { ("0..*", &tt[4..tt.len() - 1]) }
-        else if tt.starts_with("Vec<") && tt.ends_with('>') { ("0..*", &tt[4..tt.len() - 1]) }
-        else if tt.starts_with("List<") && tt.ends_with('>') { ("0..*", &tt[5..tt.len() - 1]) }
-        else if tt.starts_with("Map<") && tt.ends_with('>') { ("0..*", &tt[4..tt.len() - 1]) }
-        else { ("1", tt) };
+    let tt = t
+        .trim()
+        .trim_start_matches(':')
+        .trim()
+        .trim_end_matches(';');
+    let (mut mult, inner): (&'static str, &str) = if tt.starts_with("Array<") && tt.ends_with('>') {
+        ("0..*", &tt[6..tt.len() - 1])
+    } else if tt.ends_with("[]") {
+        ("0..*", &tt[..tt.len() - 2])
+    } else if tt.starts_with("Set<") && tt.ends_with('>') {
+        ("0..*", &tt[4..tt.len() - 1])
+    } else if tt.starts_with("Vec<") && tt.ends_with('>') {
+        ("0..*", &tt[4..tt.len() - 1])
+    } else if tt.starts_with("List<") && tt.ends_with('>') {
+        ("0..*", &tt[5..tt.len() - 1])
+    } else if tt.starts_with("Map<") && tt.ends_with('>') {
+        ("0..*", &tt[4..tt.len() - 1])
+    } else {
+        ("1", tt)
+    };
     let inner = inner.trim();
-    if mult == "1" && (inner.starts_with("Option<") || inner.ends_with('?') || inner.contains("| null") || inner.contains("?:")) { mult = "0..1"; }
+    if mult == "1"
+        && (inner.starts_with("Option<")
+            || inner.ends_with('?')
+            || inner.contains("| null")
+            || inner.contains("?:"))
+    {
+        mult = "0..1";
+    }
     let inner = inner.split('|').next().unwrap_or(inner).trim();
-    let base = inner.split('<').next().unwrap_or(inner).trim().trim_end_matches('?').trim_end_matches("[]").trim();
-    let name = base.rsplit(|c| c == '.' || c == ':').next().unwrap_or(base).to_string();
+    let base = inner
+        .split('<')
+        .next()
+        .unwrap_or(inner)
+        .trim()
+        .trim_end_matches('?')
+        .trim_end_matches("[]")
+        .trim();
+    let name = base
+        .rsplit(|c| c == '.' || c == ':')
+        .next()
+        .unwrap_or(base)
+        .to_string();
     (mult, name)
 }
 
@@ -221,7 +253,14 @@ pub struct RawSemantic {
 pub fn semantic_event(node: Node, caller: Option<usize>, src: &[u8]) -> Option<RawSemantic> {
     let kind = match node.kind() {
         "await_expression" | "await" => "AWAIT",
-        "for_statement" | "for_in_statement" | "while_statement" | "do_statement" | "for_expression" | "while_expression" | "loop_expression" | "enhanced_for_statement" => "LOOP",
+        "for_statement"
+        | "for_in_statement"
+        | "while_statement"
+        | "do_statement"
+        | "for_expression"
+        | "while_expression"
+        | "loop_expression"
+        | "enhanced_for_statement" => "LOOP",
         "if_statement" | "if_expression" => "BRANCH",
         "call_expression" | "method_invocation" | "call" => "CALL",
         _ => return None,
@@ -230,31 +269,101 @@ pub fn semantic_event(node: Node, caller: Option<usize>, src: &[u8]) -> Option<R
     let mut conditions = Vec::new();
     let mut parent = node.parent();
     while let Some(p) = parent {
-        if matches!(p.kind(), "function_declaration" | "function_item" | "arrow_function" | "function_expression" | "method_definition" | "closure_expression" | "method_declaration" | "function_definition" | "func_literal" | "lambda_expression" | "lambda" | "constructor_declaration") { break; }
-        if matches!(p.kind(), "for_statement" | "for_in_statement" | "while_statement" | "do_statement" | "for_expression" | "while_expression" | "loop_expression" | "enhanced_for_statement") { loops.push(p.start_byte()); }
+        if matches!(
+            p.kind(),
+            "function_declaration"
+                | "function_item"
+                | "arrow_function"
+                | "function_expression"
+                | "method_definition"
+                | "closure_expression"
+                | "method_declaration"
+                | "function_definition"
+                | "func_literal"
+                | "lambda_expression"
+                | "lambda"
+                | "constructor_declaration"
+        ) {
+            break;
+        }
+        if matches!(
+            p.kind(),
+            "for_statement"
+                | "for_in_statement"
+                | "while_statement"
+                | "do_statement"
+                | "for_expression"
+                | "while_expression"
+                | "loop_expression"
+                | "enhanced_for_statement"
+        ) {
+            loops.push(p.start_byte());
+        }
         if matches!(p.kind(), "if_statement" | "if_expression") {
-            if let Some(c) = p.child_by_field_name("condition") { conditions.push(c.utf8_text(src).unwrap_or("").to_owned()); }
+            if let Some(c) = p.child_by_field_name("condition") {
+                conditions.push(c.utf8_text(src).unwrap_or("").to_owned());
+            }
         }
         parent = p.parent();
     }
-    let callee = node.child_by_field_name("function").or_else(|| node.child_by_field_name("name")).map(|f| f.utf8_text(src).unwrap_or("").to_owned());
+    let callee = node
+        .child_by_field_name("function")
+        .or_else(|| node.child_by_field_name("name"))
+        .map(|f| f.utf8_text(src).unwrap_or("").to_owned());
     let condition = if kind == "BRANCH" {
-        node.child_by_field_name("condition").map(|c| c.utf8_text(src).unwrap_or("").to_owned())
-    } else { None };
-    Some(RawSemantic { caller, start: node.start_byte(), end: node.end_byte(), value: serde_json::json!({
-        "schemaId": "defect.semantic-event.v1", "schemaVersion": 1,
-        "value": { "kind": kind, "callee": callee, "condition": condition, "enclosingLoops": loops, "pathConditions": conditions,
-          "effectResolution": "UNKNOWN", "aliasResolution": "UNKNOWN", "controlFlowResolution": "LEXICAL_ONLY" }
-    }) })
+        node.child_by_field_name("condition")
+            .map(|c| c.utf8_text(src).unwrap_or("").to_owned())
+    } else {
+        None
+    };
+    Some(RawSemantic {
+        caller,
+        start: node.start_byte(),
+        end: node.end_byte(),
+        value: serde_json::json!({
+            "schemaId": "defect.semantic-event.v1", "schemaVersion": 1,
+            "value": { "kind": kind, "callee": callee, "condition": condition, "enclosingLoops": loops, "pathConditions": conditions,
+              "effectResolution": "UNKNOWN", "aliasResolution": "UNKNOWN", "controlFlowResolution": "LEXICAL_ONLY" }
+        }),
+    })
 }
 
 const PUBLISH: &[&str] = &["publish", "emit", "enqueue", "send", "dispatch"];
 const SUBSCRIBE: &[&str] = &["subscribe", "on", "consume", "process", "listen"];
-const WRITERS: &[&str] = &["update", "set", "save", "insert", "upsert", "exec", "create", "increment", "decrement"];
-const TX: &[&str] = &["transaction", "withTransaction", "beginTransaction", "runInTransaction", "$transaction"];
+const WRITERS: &[&str] = &[
+    "update",
+    "set",
+    "save",
+    "insert",
+    "upsert",
+    "exec",
+    "create",
+    "increment",
+    "decrement",
+];
+const TX: &[&str] = &[
+    "transaction",
+    "withTransaction",
+    "beginTransaction",
+    "runInTransaction",
+    "$transaction",
+];
 const TEST_FNS: &[&str] = &["it", "test", "describe"];
-const LOCK_FNS: &[&str] = &["lock", "acquire", "readLock", "writeLock", "rLock", "withLock", "with_lock", "synchronized", "try_lock"];
-pub fn lockish(s: &str) -> bool { let l = s.to_ascii_lowercase(); l.contains("lock") || l.contains("mutex") || l.contains("semaphore") || l.contains("atomic") }
+const LOCK_FNS: &[&str] = &[
+    "lock",
+    "acquire",
+    "readLock",
+    "writeLock",
+    "rLock",
+    "withLock",
+    "with_lock",
+    "synchronized",
+    "try_lock",
+];
+pub fn lockish(s: &str) -> bool {
+    let l = s.to_ascii_lowercase();
+    l.contains("lock") || l.contains("mutex") || l.contains("semaphore") || l.contains("atomic")
+}
 
 pub fn parse_ts(src: &str, tsx: bool) -> RawFile {
     let mut parser = Parser::new();
@@ -271,7 +380,10 @@ pub fn parse_ts(src: &str, tsx: bool) -> RawFile {
     };
     let root = tree.root_node();
     out.had_errors = root.has_error();
-    let mut w = Walker { src: src.as_bytes(), out: &mut out };
+    let mut w = Walker {
+        src: src.as_bytes(),
+        out: &mut out,
+    };
     w.visit(root, None, None, false);
     out
 }
@@ -315,14 +427,30 @@ impl<'a> Walker<'a> {
                 "extends_clause" | "extends_type_clause" => {
                     if let Some(t) = ch.named_child(0) {
                         let target = heritage_type_name(&self.text(t));
-                        if !target.is_empty() { self.out.heritage.push(RawHeritage { owner, rel: "extends", target, start: ch.start_byte(), end: ch.end_byte() }); }
+                        if !target.is_empty() {
+                            self.out.heritage.push(RawHeritage {
+                                owner,
+                                rel: "extends",
+                                target,
+                                start: ch.start_byte(),
+                                end: ch.end_byte(),
+                            });
+                        }
                     }
                 }
                 "implements_clause" => {
                     let mut cc = ch.walk();
                     for t in ch.named_children(&mut cc) {
                         let target = heritage_type_name(&self.text(t));
-                        if !target.is_empty() { self.out.heritage.push(RawHeritage { owner, rel: "implements", target, start: t.start_byte(), end: t.end_byte() }); }
+                        if !target.is_empty() {
+                            self.out.heritage.push(RawHeritage {
+                                owner,
+                                rel: "implements",
+                                target,
+                                start: t.start_byte(),
+                                end: t.end_byte(),
+                            });
+                        }
                     }
                 }
                 "class_heritage" => {
@@ -332,14 +460,30 @@ impl<'a> Walker<'a> {
                             "extends_clause" | "extends_type_clause" => {
                                 if let Some(t) = clause.named_child(0) {
                                     let target = heritage_type_name(&self.text(t));
-                                    if !target.is_empty() { self.out.heritage.push(RawHeritage { owner, rel: "extends", target, start: clause.start_byte(), end: clause.end_byte() }); }
+                                    if !target.is_empty() {
+                                        self.out.heritage.push(RawHeritage {
+                                            owner,
+                                            rel: "extends",
+                                            target,
+                                            start: clause.start_byte(),
+                                            end: clause.end_byte(),
+                                        });
+                                    }
                                 }
                             }
                             "implements_clause" => {
                                 let mut cc = clause.walk();
                                 for t in clause.named_children(&mut cc) {
                                     let target = heritage_type_name(&self.text(t));
-                                    if !target.is_empty() { self.out.heritage.push(RawHeritage { owner, rel: "implements", target, start: t.start_byte(), end: t.end_byte() }); }
+                                    if !target.is_empty() {
+                                        self.out.heritage.push(RawHeritage {
+                                            owner,
+                                            rel: "implements",
+                                            target,
+                                            start: t.start_byte(),
+                                            end: t.end_byte(),
+                                        });
+                                    }
                                 }
                             }
                             _ => {}
@@ -351,8 +495,16 @@ impl<'a> Walker<'a> {
         }
     }
 
-    fn visit(&mut self, node: Node, enclosing: Option<usize>, class: Option<String>, exported: bool) {
-        if let Some(event) = semantic_event(node, enclosing, self.src) { self.out.semantic.push(event); }
+    fn visit(
+        &mut self,
+        node: Node,
+        enclosing: Option<usize>,
+        class: Option<String>,
+        exported: bool,
+    ) {
+        if let Some(event) = semantic_event(node, enclosing, self.src) {
+            self.out.semantic.push(event);
+        }
         match node.kind() {
             "export_statement" => {
                 let mut c = node.walk();
@@ -408,7 +560,13 @@ impl<'a> Walker<'a> {
                             }
                         }
                     }
-                    self.out.enums.push(RawEnum { owner: enum_idx, name: name.clone(), values, start: node.start_byte(), end: node.end_byte() });
+                    self.out.enums.push(RawEnum {
+                        owner: enum_idx,
+                        name: name.clone(),
+                        values,
+                        start: node.start_byte(),
+                        end: node.end_byte(),
+                    });
                     return;
                 }
             }
@@ -425,34 +583,76 @@ impl<'a> Walker<'a> {
                     let idx = self.push_symbol("method", name, class.as_deref(), node, false);
                     if class.is_some() {
                         let method_name = self.text(n);
-                        let params = node.child_by_field_name("parameters").map(|p| self.text(p)).unwrap_or_else(|| "()".into());
-                        let ret = node.child_by_field_name("return_type").map(|r| self.text(r).trim().trim_start_matches(':').trim().to_string());
-                        let text = match ret { Some(r) => format!("{method_name}{params}: {r}"), None => format!("{method_name}{params}") };
-                        self.out.signatures.push(RawSignature { method: idx, text, start: node.start_byte(), end: node.end_byte() });
+                        let params = node
+                            .child_by_field_name("parameters")
+                            .map(|p| self.text(p))
+                            .unwrap_or_else(|| "()".into());
+                        let ret = node.child_by_field_name("return_type").map(|r| {
+                            self.text(r)
+                                .trim()
+                                .trim_start_matches(':')
+                                .trim()
+                                .to_string()
+                        });
+                        let text = match ret {
+                            Some(r) => format!("{method_name}{params}: {r}"),
+                            None => format!("{method_name}{params}"),
+                        };
+                        self.out.signatures.push(RawSignature {
+                            method: idx,
+                            text,
+                            start: node.start_byte(),
+                            end: node.end_byte(),
+                        });
                     }
                     self.children(node, Some(idx), class);
                     return;
                 }
             }
-            "public_field_definition" | "private_property_declaration" | "abstract_property_declaration" => {
-                if let Some(n) = node.child_by_field_name("name").or_else(|| node.named_child(0)) {
+            "public_field_definition"
+            | "private_property_declaration"
+            | "abstract_property_declaration" => {
+                if let Some(n) = node
+                    .child_by_field_name("name")
+                    .or_else(|| node.named_child(0))
+                {
                     let name = self.text(n);
                     if let Some(cls) = class.as_deref() {
                         if let Some(v) = node.child_by_field_name("value") {
-                            if matches!(v.kind(), "arrow_function" | "function_expression" | "function") {
-                                let midx = self.push_symbol("method", name.clone(), Some(cls), node, false);
+                            if matches!(
+                                v.kind(),
+                                "arrow_function" | "function_expression" | "function"
+                            ) {
+                                let midx = self.push_symbol(
+                                    "method",
+                                    name.clone(),
+                                    Some(cls),
+                                    node,
+                                    false,
+                                );
                                 self.children(v, Some(midx), class);
                                 return;
                             }
                         }
                         let fidx = self.push_symbol("field", name.clone(), Some(cls), node, false);
-                        let type_text = node.child_by_field_name("type").map(|t| self.text(t)).or_else(|| {
-                            let mut c = node.walk();
-                            let found = node.named_children(&mut c).find(|ch| ch.kind() == "type_annotation").map(|t| self.text(t));
-                            found
-                        });
+                        let type_text = node
+                            .child_by_field_name("type")
+                            .map(|t| self.text(t))
+                            .or_else(|| {
+                                let mut c = node.walk();
+                                let found = node
+                                    .named_children(&mut c)
+                                    .find(|ch| ch.kind() == "type_annotation")
+                                    .map(|t| self.text(t));
+                                found
+                            });
                         if let Some(type_text) = type_text.clone() {
-                            self.out.field_types.push(RawFieldType { field: fidx, type_text, start: node.start_byte(), end: node.end_byte() });
+                            self.out.field_types.push(RawFieldType {
+                                field: fidx,
+                                type_text,
+                                start: node.start_byte(),
+                                end: node.end_byte(),
+                            });
                         }
                         // Extract RawField for UML class diagram support
                         let visibility = if node.kind().starts_with("public_") {
@@ -464,7 +664,14 @@ impl<'a> Walker<'a> {
                         } else {
                             "default"
                         };
-                        self.out.fields.push(RawField { owner: cls.parse().unwrap_or(0), name: name.clone(), type_text, visibility, start: node.start_byte(), end: node.end_byte() });
+                        self.out.fields.push(RawField {
+                            owner: cls.parse().unwrap_or(0),
+                            name: name.clone(),
+                            type_text,
+                            visibility,
+                            start: node.start_byte(),
+                            end: node.end_byte(),
+                        });
                         return;
                     }
                 }
@@ -473,7 +680,11 @@ impl<'a> Walker<'a> {
                 let name = node.child_by_field_name("name");
                 let value = node.child_by_field_name("value");
                 if let (Some(n), Some(v)) = (name, value) {
-                    if matches!(v.kind(), "arrow_function" | "function_expression" | "function") && n.kind() == "identifier" {
+                    if matches!(
+                        v.kind(),
+                        "arrow_function" | "function_expression" | "function"
+                    ) && n.kind() == "identifier"
+                    {
                         let name = self.text(n);
                         let idx = self.push_symbol("function", name, None, node, exported);
                         self.children(v, Some(idx), class);
@@ -488,33 +699,81 @@ impl<'a> Walker<'a> {
                     .and_then(|n| n.child_by_field_name("constructor"))
                     .map(|n| self.text(n))
                     .unwrap_or_else(|| "<expression>".into());
-                self.out.throws.push(RawThrow { caller: enclosing, error_class: class, start: node.start_byte(), end: node.end_byte() });
+                self.out.throws.push(RawThrow {
+                    caller: enclosing,
+                    error_class: class,
+                    start: node.start_byte(),
+                    end: node.end_byte(),
+                });
             }
             "assignment_expression" | "augmented_assignment_expression" => {
                 if let Some(l) = node.child_by_field_name("left") {
                     if l.kind() == "member_expression" {
                         if let Some(p) = l.child_by_field_name("property") {
-                            let receiver = l.child_by_field_name("object").filter(|o| matches!(o.kind(), "identifier" | "member_expression" | "this")).map(|o| self.text(o));
-                            self.out.writes.push(RawWrite { caller: enclosing, field: self.text(p), receiver, start: node.start_byte(), end: node.end_byte() });
+                            let receiver = l
+                                .child_by_field_name("object")
+                                .filter(|o| {
+                                    matches!(o.kind(), "identifier" | "member_expression" | "this")
+                                })
+                                .map(|o| self.text(o));
+                            self.out.writes.push(RawWrite {
+                                caller: enclosing,
+                                field: self.text(p),
+                                receiver,
+                                start: node.start_byte(),
+                                end: node.end_byte(),
+                            });
                         }
                     }
                 }
             }
             "member_expression" => {
                 // A property access that is neither being assigned to nor being called is a read of that field.
-                if let (Some(p), Some(parent)) = (node.child_by_field_name("property"), node.parent()) {
-                    let assigned = matches!(parent.kind(), "assignment_expression" | "augmented_assignment_expression") && parent.child_by_field_name("left").map_or(false, |l| l.id() == node.id());
-                    let called = parent.kind() == "call_expression" && parent.child_by_field_name("function").map_or(false, |f| f.id() == node.id());
+                if let (Some(p), Some(parent)) =
+                    (node.child_by_field_name("property"), node.parent())
+                {
+                    let assigned = matches!(
+                        parent.kind(),
+                        "assignment_expression" | "augmented_assignment_expression"
+                    ) && parent
+                        .child_by_field_name("left")
+                        .map_or(false, |l| l.id() == node.id());
+                    let called = parent.kind() == "call_expression"
+                        && parent
+                            .child_by_field_name("function")
+                            .map_or(false, |f| f.id() == node.id());
                     if !assigned && !called {
-                        let receiver = node.child_by_field_name("object").filter(|o| matches!(o.kind(), "identifier" | "member_expression" | "this")).map(|o| self.text(o));
-                        self.out.reads.push(RawRead { caller: enclosing, field: self.text(p), receiver, start: node.start_byte(), end: node.end_byte() });
+                        let receiver = node
+                            .child_by_field_name("object")
+                            .filter(|o| {
+                                matches!(o.kind(), "identifier" | "member_expression" | "this")
+                            })
+                            .map(|o| self.text(o));
+                        self.out.reads.push(RawRead {
+                            caller: enclosing,
+                            field: self.text(p),
+                            receiver,
+                            start: node.start_byte(),
+                            end: node.end_byte(),
+                        });
                     }
                 }
             }
             "call_expression" => {
-                if let (Some(kind), Some(name)) = (self.callee_name(node), self.first_string_arg(node)) {
-                    if matches!(kind.as_str(), "createCounter" | "createHistogram" | "createGauge" | "createUpDownCounter") {
-                        self.out.metrics.push(RawMetric { caller: enclosing, name, kind, start: node.start_byte(), end: node.end_byte() });
+                if let (Some(kind), Some(name)) =
+                    (self.callee_name(node), self.first_string_arg(node))
+                {
+                    if matches!(
+                        kind.as_str(),
+                        "createCounter" | "createHistogram" | "createGauge" | "createUpDownCounter"
+                    ) {
+                        self.out.metrics.push(RawMetric {
+                            caller: enclosing,
+                            name,
+                            kind,
+                            start: node.start_byte(),
+                            end: node.end_byte(),
+                        });
                     }
                 }
                 if let Some(idx) = self.test_call(node, enclosing) {
@@ -542,8 +801,14 @@ impl<'a> Walker<'a> {
         let args = node.child_by_field_name("arguments")?;
         let first = args.named_child(0)?;
         match first.kind() {
-            "string" => Some(self.text(first).trim_matches(|c| c == '"' || c == '\'' || c == '`').to_string()),
-            "template_string" if !self.text(first).contains("${") => Some(self.text(first).trim_matches('`').to_string()),
+            "string" => Some(
+                self.text(first)
+                    .trim_matches(|c| c == '"' || c == '\'' || c == '`')
+                    .to_string(),
+            ),
+            "template_string" if !self.text(first).contains("${") => {
+                Some(self.text(first).trim_matches('`').to_string())
+            }
             _ => None,
         }
     }
@@ -568,28 +833,50 @@ impl<'a> Walker<'a> {
     }
 
     fn channel_write_tx(&mut self, node: Node, enclosing: Option<usize>) {
-        let Some(name) = self.callee_name(node) else { return };
+        let Some(name) = self.callee_name(node) else {
+            return;
+        };
         let (s, e) = (node.start_byte(), node.end_byte());
         if TX.contains(&name.as_str()) {
-            self.out.txs.push(RawTx { caller: enclosing, start: s, end: e });
+            self.out.txs.push(RawTx {
+                caller: enclosing,
+                start: s,
+                end: e,
+            });
         }
         // Lock acquisition: `x.lock()` / `x.acquire()` / `withLock(...)` where the receiver looks
         // like a lock. Recorded as a fact so the race-window view can honour them.
-        let is_member = node.child_by_field_name("function").map_or(false, |f| f.kind() == "member_expression");
+        let is_member = node
+            .child_by_field_name("function")
+            .map_or(false, |f| f.kind() == "member_expression");
         let recv_name = if is_member {
             node.child_by_field_name("function")
                 .and_then(|f| f.child_by_field_name("object"))
                 .filter(|o| matches!(o.kind(), "identifier" | "member_expression"))
                 .map(|o| self.text(o))
-        } else { None };
+        } else {
+            None
+        };
         let bare_lock = !is_member && LOCK_FNS.contains(&name.as_str());
         let receiver = recv_name.unwrap_or_default();
-        let looks_lockish = bare_lock || (LOCK_FNS.contains(&name.as_str()) && (receiver.is_empty() || lockish(&receiver)));
+        let looks_lockish = bare_lock
+            || (LOCK_FNS.contains(&name.as_str()) && (receiver.is_empty() || lockish(&receiver)));
         if looks_lockish {
-            let obj = if receiver.is_empty() { name.clone() } else { receiver };
-            self.out.locks.push(RawLock { caller: enclosing, object: obj, start: s, end: e });
+            let obj = if receiver.is_empty() {
+                name.clone()
+            } else {
+                receiver
+            };
+            self.out.locks.push(RawLock {
+                caller: enclosing,
+                object: obj,
+                start: s,
+                end: e,
+            });
         }
-        let is_member = node.child_by_field_name("function").map_or(false, |f| f.kind() == "member_expression");
+        let is_member = node
+            .child_by_field_name("function")
+            .map_or(false, |f| f.kind() == "member_expression");
         if is_member {
             if let Some(topic) = self.first_string_arg(node) {
                 let role = if PUBLISH.contains(&name.as_str()) {
@@ -605,7 +892,14 @@ impl<'a> Walker<'a> {
                         .and_then(|a| a.named_child(1))
                         .filter(|h| h.kind() == "identifier")
                         .map(|h| self.text(h));
-                    self.out.channels.push(RawChannel { caller: enclosing, role, topic, handler, start: s, end: e });
+                    self.out.channels.push(RawChannel {
+                        caller: enclosing,
+                        role,
+                        topic,
+                        handler,
+                        start: s,
+                        end: e,
+                    });
                 }
             }
         }
@@ -633,7 +927,13 @@ impl<'a> Walker<'a> {
                                 .and_then(|v| v.child_by_field_name("object"))
                                 .filter(|o| matches!(o.kind(), "identifier" | "member_expression"))
                                 .map(|o| self.text(o));
-                            self.out.writes.push(RawWrite { caller: enclosing, field: k.trim_matches(|c| c == '"' || c == '\'').to_string(), receiver, start: pair.start_byte(), end: pair.end_byte() });
+                            self.out.writes.push(RawWrite {
+                                caller: enclosing,
+                                field: k.trim_matches(|c| c == '"' || c == '\'').to_string(),
+                                receiver,
+                                start: pair.start_byte(),
+                                end: pair.end_byte(),
+                            });
                         }
                     }
                 }
@@ -642,11 +942,16 @@ impl<'a> Walker<'a> {
     }
 
     fn call(&mut self, node: Node, enclosing: Option<usize>) {
-        let Some(f) = node.child_by_field_name("function") else { return };
+        let Some(f) = node.child_by_field_name("function") else {
+            return;
+        };
         let (callee, receiver) = match f.kind() {
             "identifier" => (self.text(f), None),
             "member_expression" => {
-                let prop = f.child_by_field_name("property").map(|p| self.text(p)).unwrap_or_default();
+                let prop = f
+                    .child_by_field_name("property")
+                    .map(|p| self.text(p))
+                    .unwrap_or_default();
                 let obj = f.child_by_field_name("object").map(|o| self.text(o));
                 (prop, obj)
             }
@@ -667,8 +972,13 @@ impl<'a> Walker<'a> {
     }
 
     fn import(&mut self, node: Node) {
-        let Some(srcn) = node.child_by_field_name("source") else { return };
-        let module = self.text(srcn).trim_matches(|c| c == '"' || c == '\'').to_string();
+        let Some(srcn) = node.child_by_field_name("source") else {
+            return;
+        };
+        let module = self
+            .text(srcn)
+            .trim_matches(|c| c == '"' || c == '\'')
+            .to_string();
         let (s, e) = (node.start_byte(), node.end_byte());
         let mut c = node.walk();
         for ch in node.named_children(&mut c) {
@@ -687,7 +997,10 @@ impl<'a> Walker<'a> {
                     }),
                     "namespace_import" => {
                         let mut nc = part.walk();
-                        if let Some(id) = part.named_children(&mut nc).find(|n| n.kind() == "identifier") {
+                        if let Some(id) = part
+                            .named_children(&mut nc)
+                            .find(|n| n.kind() == "identifier")
+                        {
                             self.out.imports.push(RawImport {
                                 module: module.clone(),
                                 local: self.text(id),
@@ -699,7 +1012,10 @@ impl<'a> Walker<'a> {
                     }
                     "named_imports" => {
                         let mut nc = part.walk();
-                        for spec in part.named_children(&mut nc).filter(|n| n.kind() == "import_specifier") {
+                        for spec in part
+                            .named_children(&mut nc)
+                            .filter(|n| n.kind() == "import_specifier")
+                        {
                             let name = spec.child_by_field_name("name").map(|n| self.text(n));
                             let alias = spec.child_by_field_name("alias").map(|n| self.text(n));
                             if let Some(name) = name {

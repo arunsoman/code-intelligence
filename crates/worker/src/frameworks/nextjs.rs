@@ -7,7 +7,9 @@
 //!   - Route handlers with named HTTP exports (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`)
 //!
 //! Cross-file resolution is left to `index.rs`.
-use crate::frameworks::{FrameworkContext, FrameworkEntityKind, FrameworkExtension, RawFrameworkMetadata};
+use crate::frameworks::{
+    FrameworkContext, FrameworkEntityKind, FrameworkExtension, RawFrameworkMetadata,
+};
 use crate::language::RawFile;
 use serde_json::json;
 use std::path::{Component, Path};
@@ -18,10 +20,16 @@ pub struct NextJsExtension;
 const HTTP_EXPORTS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
 impl FrameworkExtension for NextJsExtension {
-    fn framework(&self) -> &'static str { "nextjs" }
+    fn framework(&self) -> &'static str {
+        "nextjs"
+    }
 
     fn matches(&self, rel: &str) -> bool {
-        rel.ends_with(".ts") || rel.ends_with(".tsx") || rel.ends_with(".js") || rel.ends_with(".jsx") || rel.ends_with(".mjs")
+        rel.ends_with(".ts")
+            || rel.ends_with(".tsx")
+            || rel.ends_with(".js")
+            || rel.ends_with(".jsx")
+            || rel.ends_with(".mjs")
     }
 
     fn extract(&self, ctx: FrameworkContext, raw: &mut RawFile) {
@@ -95,48 +103,73 @@ impl FrameworkExtension for NextJsExtension {
 
 fn parse_ts(src: &str) -> Option<Tree> {
     let mut parser = tree_sitter::Parser::new();
-    parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).ok()?;
+    parser
+        .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+        .ok()?;
     parser.parse(src, None)
 }
 
 fn infer_next_route(rel: &str, prefix: &str) -> Option<String> {
-    if !rel.starts_with(prefix) { return None; }
+    if !rel.starts_with(prefix) {
+        return None;
+    }
     let p = Path::new(&rel[prefix.len()..]);
     let mut segs: Vec<String> = Vec::new();
     for c in p.components() {
         if let Component::Normal(os) = c {
             let s = os.to_string_lossy().to_string();
-            if s == "page.tsx" || s == "page.ts" || s == "page.jsx" || s == "page.js" ||
-               s == "route.ts" || s == "route.js" ||
-               s == "index.tsx" || s == "index.ts" || s == "index.jsx" || s == "index.js" ||
-               s == "layout.tsx" || s == "layout.ts" || s == "layout.jsx" || s == "layout.js" {
+            if s == "page.tsx"
+                || s == "page.ts"
+                || s == "page.jsx"
+                || s == "page.js"
+                || s == "route.ts"
+                || s == "route.js"
+                || s == "index.tsx"
+                || s == "index.ts"
+                || s == "index.jsx"
+                || s == "index.js"
+                || s == "layout.tsx"
+                || s == "layout.ts"
+                || s == "layout.jsx"
+                || s == "layout.js"
+            {
                 continue;
             }
             let stem = s.rsplit_once('.').map(|(a, _)| a).unwrap_or(&s);
-            if stem == "index" { continue; }
+            if stem == "index" {
+                continue;
+            }
             let seg = normalize_segment(stem);
             segs.push(seg);
         }
     }
-    Some(if segs.is_empty() { "/".to_string() } else { format!("/{}", segs.join("/")) })
+    Some(if segs.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{}", segs.join("/"))
+    })
 }
 
 fn normalize_segment(s: &str) -> String {
     if s.starts_with("[[...") && s.ends_with("]]") {
-        format!("...{}", &s[4..s.len()-2])
+        format!("...{}", &s[4..s.len() - 2])
     } else if s.starts_with("[...") && s.ends_with(']') {
-        format!("...{}", &s[4..s.len()-1])
+        format!("...{}", &s[4..s.len() - 1])
     } else if s.starts_with('[') && s.ends_with(']') {
-        format!(":{}", &s[1..s.len()-1])
+        format!(":{}", &s[1..s.len() - 1])
     } else {
         s.to_string()
     }
 }
 
 fn route_kind(rel: &str) -> &'static str {
-    if rel.contains("/api/") || rel.starts_with("pages/api/") { "api_route" }
-    else if rel.contains("/app/") { "page" }
-    else { "page" }
+    if rel.contains("/api/") || rel.starts_with("pages/api/") {
+        "api_route"
+    } else if rel.contains("/app/") {
+        "page"
+    } else {
+        "page"
+    }
 }
 
 fn http_method_for_file(rel: &str) -> String {
@@ -148,7 +181,10 @@ fn http_method_for_file(rel: &str) -> String {
 }
 
 fn is_actions_file(rel: &str) -> bool {
-    let file = Path::new(rel).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let file = Path::new(rel)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
     file == "actions.ts" || file == "actions.js" || rel.contains("/actions/")
 }
 
@@ -169,7 +205,9 @@ fn exported_http_methods(root: Node, src: &str) -> Vec<(String, (usize, usize))>
             }
         }
         let mut c = n.walk();
-        for ch in n.named_children(&mut c) { stack.push(ch); }
+        for ch in n.named_children(&mut c) {
+            stack.push(ch);
+        }
     }
     out
 }
@@ -184,7 +222,10 @@ fn exported_async_functions(root: Node, src: &str) -> Vec<(String, (usize, usize
                 if let Some(decl) = n.child_by_field_name("declaration") {
                     if decl.kind() == "function_declaration" {
                         if is_async_function(decl, src) {
-                            if let Some(name) = decl.child_by_field_name("name").map(|x| text(x, src.as_bytes())) {
+                            if let Some(name) = decl
+                                .child_by_field_name("name")
+                                .map(|x| text(x, src.as_bytes()))
+                            {
                                 out.push((name, (decl.start_byte(), decl.end_byte())));
                             }
                         }
@@ -194,13 +235,20 @@ fn exported_async_functions(root: Node, src: &str) -> Vec<(String, (usize, usize
             _ => {}
         }
         let mut c = n.walk();
-        for ch in n.named_children(&mut c) { stack.push(ch); }
+        for ch in n.named_children(&mut c) {
+            stack.push(ch);
+        }
     }
     out
 }
 
 fn is_async_function(n: Node, src: &str) -> bool {
-    let head: String = n.utf8_text(src.as_bytes()).unwrap_or("").chars().take(20).collect();
+    let head: String = n
+        .utf8_text(src.as_bytes())
+        .unwrap_or("")
+        .chars()
+        .take(20)
+        .collect();
     head.contains("async ")
 }
 
@@ -235,14 +283,21 @@ mod tests {
     fn extract(rel: &str, src: &str) -> Vec<RawFrameworkMetadata> {
         let mut raw = crate::language::RawFile::default();
         let ext = NextJsExtension;
-        let ctx = FrameworkContext { rel, src, project_root: std::path::Path::new(".") };
+        let ctx = FrameworkContext {
+            rel,
+            src,
+            project_root: std::path::Path::new("."),
+        };
         ext.extract(ctx, &mut raw);
         raw.framework_metadata
     }
 
     #[test]
     fn infers_app_router_routes() {
-        let m = extract("app/users/[id]/page.tsx", "export default function Page() { return null; }");
+        let m = extract(
+            "app/users/[id]/page.tsx",
+            "export default function Page() { return null; }",
+        );
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].properties["path"], "/users/:id");
         assert_eq!(m[0].properties["method"], "GET");
@@ -255,7 +310,11 @@ export async function GET(request: Request) { return Response.json({}); }
 export async function POST(request: Request) { return Response.json({}); }
 "#;
         let m = extract("app/api/users/route.ts", src);
-        let paths: Vec<&str> = m.iter().filter(|x| x.kind == FrameworkEntityKind::Route).map(|x| x.properties["method"].as_str().unwrap()).collect();
+        let paths: Vec<&str> = m
+            .iter()
+            .filter(|x| x.kind == FrameworkEntityKind::Route)
+            .map(|x| x.properties["method"].as_str().unwrap())
+            .collect();
         assert!(paths.contains(&"GET"));
         assert!(paths.contains(&"POST"));
         assert!(paths.contains(&"API"));
@@ -263,7 +322,10 @@ export async function POST(request: Request) { return Response.json({}); }
 
     #[test]
     fn infers_pages_router_routes() {
-        let m = extract("pages/blog/[slug].tsx", "export default function Post() { return null; }");
+        let m = extract(
+            "pages/blog/[slug].tsx",
+            "export default function Post() { return null; }",
+        );
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].properties["path"], "/blog/:slug");
     }
@@ -275,6 +337,8 @@ export async function POST(request: Request) { return Response.json({}); }
 export async function createUser(formData: FormData) { return null; }
 "#;
         let m = extract("app/actions.ts", src);
-        assert!(m.iter().any(|x| x.kind == FrameworkEntityKind::Route && x.properties["kind"] == "server_action"));
+        assert!(m.iter().any(
+            |x| x.kind == FrameworkEntityKind::Route && x.properties["kind"] == "server_action"
+        ));
     }
 }

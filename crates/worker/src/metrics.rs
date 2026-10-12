@@ -10,7 +10,7 @@
 //! so `&&` inside a comment or string literal does not count. Closures are not measured separately
 //! (version 1): their decision points are part of the enclosing function's count.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use tree_sitter::{Node, Parser};
 
@@ -46,11 +46,34 @@ struct Tables {
     declaration_kinds: &'static [&'static str],
 }
 
-const TS_DECLARATIONS: &[&str] = &["function_declaration", "method_definition", "class_declaration", "abstract_class_declaration", "variable_declarator", "type_declaration", "interface_declaration"];
+const TS_DECLARATIONS: &[&str] = &[
+    "function_declaration",
+    "method_definition",
+    "class_declaration",
+    "abstract_class_declaration",
+    "variable_declarator",
+    "type_declaration",
+    "interface_declaration",
+];
 
 const TS: Tables = Tables {
-    funcs: &["function_declaration", "method_definition", "generator_function_declaration", "function_signature", "abstract_method_signature"],
-    decisions: &["if_statement", "for_statement", "for_in_statement", "while_statement", "do_statement", "switch_case", "catch_clause", "ternary_expression"],
+    funcs: &[
+        "function_declaration",
+        "method_definition",
+        "generator_function_declaration",
+        "function_signature",
+        "abstract_method_signature",
+    ],
+    decisions: &[
+        "if_statement",
+        "for_statement",
+        "for_in_statement",
+        "while_statement",
+        "do_statement",
+        "switch_case",
+        "catch_clause",
+        "ternary_expression",
+    ],
     binary: &["binary_expression"],
     operators: &["&&", "||", "??"],
     blocks: &["statement_block"],
@@ -60,62 +83,156 @@ const TS: Tables = Tables {
 
 const RUST: Tables = Tables {
     funcs: &["function_item"],
-    decisions: &["if_expression", "while_expression", "for_expression", "loop_expression", "match_arm", "try_expression"],
+    decisions: &[
+        "if_expression",
+        "while_expression",
+        "for_expression",
+        "loop_expression",
+        "match_arm",
+        "try_expression",
+    ],
     binary: &["binary_expression"],
     operators: &["&&", "||"],
     blocks: &["block"],
-    param_items: &["parameter", "self_parameter", "reference_pattern", "mut_pattern"],
-    declaration_kinds: &["function_item", "impl_item", "struct_item", "enum_item", "trait_item", "type_item"],
+    param_items: &[
+        "parameter",
+        "self_parameter",
+        "reference_pattern",
+        "mut_pattern",
+    ],
+    declaration_kinds: &[
+        "function_item",
+        "impl_item",
+        "struct_item",
+        "enum_item",
+        "trait_item",
+        "type_item",
+    ],
 };
 
 const JAVA: Tables = Tables {
     funcs: &["method_declaration", "constructor_declaration"],
-    decisions: &["if_statement", "for_statement", "enhanced_for_statement", "while_statement", "do_statement", "switch_block_statement_group", "catch_clause", "ternary_expression"],
+    decisions: &[
+        "if_statement",
+        "for_statement",
+        "enhanced_for_statement",
+        "while_statement",
+        "do_statement",
+        "switch_block_statement_group",
+        "catch_clause",
+        "ternary_expression",
+    ],
     binary: &["binary_expression"],
     operators: &["&&", "||"],
     blocks: &["block"],
     param_items: &["formal_parameter", "spread_parameter"],
-    declaration_kinds: &["method_declaration", "constructor_declaration", "class_declaration", "interface_declaration", "enum_declaration", "record_declaration"],
+    declaration_kinds: &[
+        "method_declaration",
+        "constructor_declaration",
+        "class_declaration",
+        "interface_declaration",
+        "enum_declaration",
+        "record_declaration",
+    ],
 };
 
 const GO: Tables = Tables {
     funcs: &["function_declaration", "method_declaration"],
-    decisions: &["if_statement", "for_statement", "range_clause", "expression_case", "communication_case"],
+    decisions: &[
+        "if_statement",
+        "for_statement",
+        "range_clause",
+        "expression_case",
+        "communication_case",
+    ],
     binary: &["binary_expression"],
     operators: &["&&", "||"],
     blocks: &["block"],
     param_items: &["parameter_declaration", "variadic_parameter_declaration"],
-    declaration_kinds: &["function_declaration", "method_declaration", "type_declaration", "struct_type", "interface_type"],
+    declaration_kinds: &[
+        "function_declaration",
+        "method_declaration",
+        "type_declaration",
+        "struct_type",
+        "interface_type",
+    ],
 };
 
 const PYTHON: Tables = Tables {
     funcs: &["function_definition"],
-    decisions: &["if_statement", "for_statement", "while_statement", "except_clause", "conditional_expression"],
+    decisions: &[
+        "if_statement",
+        "for_statement",
+        "while_statement",
+        "except_clause",
+        "conditional_expression",
+    ],
     binary: &["binary_operator", "boolean_operator"],
     operators: &["and", "or"],
     blocks: &["block"],
-    param_items: &["identifier", "typed_parameter", "default_parameter", "typed_default_parameter", "list_splat_pattern", "dictionary_splat_pattern"],
-    declaration_kinds: &["function_definition", "class_definition", "decorated_definition"],
+    param_items: &[
+        "identifier",
+        "typed_parameter",
+        "default_parameter",
+        "typed_default_parameter",
+        "list_splat_pattern",
+        "dictionary_splat_pattern",
+    ],
+    declaration_kinds: &[
+        "function_definition",
+        "class_definition",
+        "decorated_definition",
+    ],
 };
 
 #[derive(Clone, Copy, PartialEq)]
-enum Lang { Ts, Tsx, Rust, Java, Go, Python }
+enum Lang {
+    Ts,
+    Tsx,
+    Rust,
+    Java,
+    Go,
+    Python,
+}
 
 fn lang_name(lang: Lang) -> &'static str {
-    match lang { Lang::Ts => "typescript", Lang::Tsx => "tsx", Lang::Rust => "rust", Lang::Java => "java", Lang::Go => "go", Lang::Python => "python" }
+    match lang {
+        Lang::Ts => "typescript",
+        Lang::Tsx => "tsx",
+        Lang::Rust => "rust",
+        Lang::Java => "java",
+        Lang::Go => "go",
+        Lang::Python => "python",
+    }
 }
 
 fn lang_for(rel: &str) -> Option<Lang> {
     let name = rel.rsplit('/').next().unwrap_or(rel);
     let lower = name.to_ascii_lowercase();
-    if lower.ends_with(".ts") { return Some(Lang::Ts); }
-    if lower.ends_with(".tsx") { return Some(Lang::Tsx); }
-    if lower.ends_with(".js") || lower.ends_with(".cjs") || lower.ends_with(".mjs") { return Some(Lang::Ts); }
-    if lower.ends_with(".jsx") { return Some(Lang::Tsx); }
-    if lower.ends_with(".rs") || lower.ends_with(".nir") { return Some(Lang::Rust); }
-    if lower.ends_with(".java") { return Some(Lang::Java); }
-    if lower.ends_with(".go") { return Some(Lang::Go); }
-    if lower.ends_with(".py") || lower.ends_with(".pyi") { return Some(Lang::Python); }
+    if lower.ends_with(".ts") {
+        return Some(Lang::Ts);
+    }
+    if lower.ends_with(".tsx") {
+        return Some(Lang::Tsx);
+    }
+    if lower.ends_with(".js") || lower.ends_with(".cjs") || lower.ends_with(".mjs") {
+        return Some(Lang::Ts);
+    }
+    if lower.ends_with(".jsx") {
+        return Some(Lang::Tsx);
+    }
+    if lower.ends_with(".rs") || lower.ends_with(".nir") {
+        return Some(Lang::Rust);
+    }
+    if lower.ends_with(".java") {
+        return Some(Lang::Java);
+    }
+    if lower.ends_with(".go") {
+        return Some(Lang::Go);
+    }
+    if lower.ends_with(".py") || lower.ends_with(".pyi") {
+        return Some(Lang::Python);
+    }
     None
 }
 
@@ -143,10 +260,19 @@ fn parser_for(lang: Lang) -> Parser {
     p
 }
 
-fn text<'a>(node: Node<'a>, src: &'a [u8]) -> &'a str { node.utf8_text(src).unwrap_or("") }
+fn text<'a>(node: Node<'a>, src: &'a [u8]) -> &'a str {
+    node.utf8_text(src).unwrap_or("")
+}
 
-fn collect_functions<'a>(node: Node<'a>, t: &'static Tables, out: &mut Vec<(Node<'a>, bool)>, depth: usize) {
-    if depth > 400 || out.len() >= MAX_FUNCTIONS_PER_FILE * 2 { return; }
+fn collect_functions<'a>(
+    node: Node<'a>,
+    t: &'static Tables,
+    out: &mut Vec<(Node<'a>, bool)>,
+    depth: usize,
+) {
+    if depth > 400 || out.len() >= MAX_FUNCTIONS_PER_FILE * 2 {
+        return;
+    }
     let expr_form = node.kind() == "arrow_function";
     if t.funcs.contains(&node.kind()) || expr_form {
         out.push((node, expr_form));
@@ -165,19 +291,35 @@ fn fn_name<'a>(node: Node<'a>, src: &'a [u8], lang: Lang) -> String {
         let named = {
             let mut w = cur.walk();
             let found = cur.children(&mut w).find(|c| {
-                matches!(c.kind(), "identifier" | "property_identifier" | "field_identifier" | "shorthand_property_identifier")
+                matches!(
+                    c.kind(),
+                    "identifier"
+                        | "property_identifier"
+                        | "field_identifier"
+                        | "shorthand_property_identifier"
+                )
             });
             found.map(|c| text(c, src).to_string())
         };
-        if let Some(n) = named { return n; }
+        if let Some(n) = named {
+            return n;
+        }
         let Some(parent) = cur.parent() else { break };
         match parent.kind() {
             // `const f = () => …`, `f = function(){…}`, `x: function(){…}`
-            "variable_declarator" | "assignment_expression" | "pair" | "property" | "assignment" => {
-                let Some(sibling) = named_sibling_of(parent, cur, src) else { break };
+            "variable_declarator"
+            | "assignment_expression"
+            | "pair"
+            | "property"
+            | "assignment" => {
+                let Some(sibling) = named_sibling_of(parent, cur, src) else {
+                    break;
+                };
                 return sibling;
             }
-            "call_expression" | "call" if lang == Lang::Python => { cur = parent; }
+            "call_expression" | "call" if lang == Lang::Python => {
+                cur = parent;
+            }
             _ => break,
         }
         cur = parent;
@@ -185,8 +327,15 @@ fn fn_name<'a>(node: Node<'a>, src: &'a [u8], lang: Lang) -> String {
     match node.kind() {
         "method_declaration" | "function_item" | "method_definition" | "function_definition" => {
             let mut w = node.walk();
-            let found = node.children(&mut w).find(|c| matches!(c.kind(), "identifier" | "property_identifier" | "field_identifier"));
-            found.map(|c| text(c, src).to_string()).unwrap_or_else(|| "<anonymous>".into())
+            let found = node.children(&mut w).find(|c| {
+                matches!(
+                    c.kind(),
+                    "identifier" | "property_identifier" | "field_identifier"
+                )
+            });
+            found
+                .map(|c| text(c, src).to_string())
+                .unwrap_or_else(|| "<anonymous>".into())
         }
         _ => "<anonymous>".to_string(),
     }
@@ -195,8 +344,12 @@ fn fn_name<'a>(node: Node<'a>, src: &'a [u8], lang: Lang) -> String {
 fn named_sibling_of(parent: Node, child: Node, src: &[u8]) -> Option<String> {
     let mut w = parent.walk();
     for c in parent.children(&mut w) {
-        if c.id() == child.id() { break; }
-        if matches!(c.kind(), "identifier" | "property_identifier") { return Some(c.utf8_text(src).unwrap_or("").to_string()); }
+        if c.id() == child.id() {
+            break;
+        }
+        if matches!(c.kind(), "identifier" | "property_identifier") {
+            return Some(c.utf8_text(src).unwrap_or("").to_string());
+        }
     }
     None
 }
@@ -204,9 +357,16 @@ fn named_sibling_of(parent: Node, child: Node, src: &[u8]) -> Option<String> {
 fn binary_operator_text(n: Node, src: &[u8]) -> String {
     let mut w = n.walk();
     for c in n.children(&mut w) {
-        if c.child_count() > 0 { continue; }
+        if c.child_count() > 0 {
+            continue;
+        }
         let t = text(c, src);
-        if ["&&", "||", "??", "and", "or"].iter().any(|o| t.eq_ignore_ascii_case(o)) { return t.to_ascii_lowercase(); }
+        if ["&&", "||", "??", "and", "or"]
+            .iter()
+            .any(|o| t.eq_ignore_ascii_case(o))
+        {
+            return t.to_ascii_lowercase();
+        }
     }
     String::new()
 }
@@ -221,22 +381,33 @@ fn param_count(fn_node: Node, src: &[u8], lang: Lang, t: &'static Tables) -> usi
         Lang::Python => &["parameters"],
     };
     let mut w = fn_node.walk();
-    let items: Vec<Node> = fn_node.children(&mut w)
+    let items: Vec<Node> = fn_node
+        .children(&mut w)
         .find(|c| list_kinds.contains(&c.kind()))
         .map(|list| {
             let mut lw = list.walk();
-            list.children(&mut lw).filter(|c| t.param_items.contains(&c.kind())).collect()
+            list.children(&mut lw)
+                .filter(|c| t.param_items.contains(&c.kind()))
+                .collect()
         })
         .unwrap_or_else(|| {
             if lang == Lang::Ts || lang == Lang::Tsx {
                 let mut fw = fn_node.walk();
-                fn_node.children(&mut fw).filter(|c| c.kind() == "identifier").take(1).collect()
-            } else { vec![] }
+                fn_node
+                    .children(&mut fw)
+                    .filter(|c| c.kind() == "identifier")
+                    .take(1)
+                    .collect()
+            } else {
+                vec![]
+            }
         });
     let mut n = items.len();
     if lang == Lang::Python && !items.is_empty() {
         let first = text(items[0], src);
-        if first == "self" || first == "cls" { n = n.saturating_sub(1); }
+        if first == "self" || first == "cls" {
+            n = n.saturating_sub(1);
+        }
     }
     n
 }
@@ -258,7 +429,9 @@ fn measure(fn_node: Node, src: &[u8], lang: Lang, t: &'static Tables) -> FnMetri
         }
         if t.binary.contains(&k) {
             let op = binary_operator_text(n, src);
-            if t.operators.iter().any(|o| op.eq_ignore_ascii_case(o)) { complexity += 1; }
+            if t.operators.iter().any(|o| op.eq_ignore_ascii_case(o)) {
+                complexity += 1;
+            }
         }
         if depth > 0 && t.blocks.contains(&k) {
             nesting = nesting.max(depth as usize);
@@ -290,47 +463,85 @@ fn count_symbols(node: Node, t: &'static Tables, out: &mut usize) {
     }
 }
 
-struct FileResult { lines: usize, symbols: usize, had_errors: bool, functions: Vec<FnMetrics> }
+struct FileResult {
+    lines: usize,
+    symbols: usize,
+    had_errors: bool,
+    functions: Vec<FnMetrics>,
+}
 
 fn collect(src: &str, lang: Lang) -> FileResult {
     let t = tables(lang);
     let bytes = src.as_bytes();
     let mut parser = parser_for(lang);
-    let Some(tree) = parser.parse(bytes, None) else { return FileResult { lines: 0, symbols: 0, had_errors: true, functions: vec![] } };
+    let Some(tree) = parser.parse(bytes, None) else {
+        return FileResult {
+            lines: 0,
+            symbols: 0,
+            had_errors: true,
+            functions: vec![],
+        };
+    };
     let root = tree.root_node();
     let mut symbols = 0usize;
     count_symbols(root, t, &mut symbols);
     let mut found: Vec<(Node, bool)> = Vec::new();
     collect_functions(root, t, &mut found, 0);
-    let mut functions: Vec<FnMetrics> = found.into_iter().map(|(n, _)| measure(n, bytes, lang, t)).collect();
+    let mut functions: Vec<FnMetrics> = found
+        .into_iter()
+        .map(|(n, _)| measure(n, bytes, lang, t))
+        .collect();
     functions.truncate(MAX_FUNCTIONS_PER_FILE);
     functions.reverse(); // source order: the walk above is depth-first but pop-order reversed; stable sort below restores reading order
     functions.sort_by_key(|m| m.start_line);
     // A file ending in `\n` has lines = countOf('\n'); an unterminated last line counts too.
     let newlines = bytes.iter().filter(|&&b| b == b'\n').count();
-    let lines = if bytes.is_empty() { 0 } else if *bytes.last().unwrap() == b'\n' { newlines } else { newlines + 1 };
-    FileResult { lines, symbols, had_errors: root.has_error(), functions }
+    let lines = if bytes.is_empty() {
+        0
+    } else if *bytes.last().unwrap() == b'\n' {
+        newlines
+    } else {
+        newlines + 1
+    };
+    FileResult {
+        lines,
+        symbols,
+        had_errors: root.has_error(),
+        functions,
+    }
 }
 
 fn file_metrics(root: &Path, rel: &str) -> Value {
     let abs: PathBuf = root.join(rel);
     let bytes = match std::fs::read(&abs) {
         Ok(b) => b,
-        Err(e) => { return json!({ "path": rel, "error": format!("unreadable: {e}") }); }
+        Err(e) => {
+            return json!({ "path": rel, "error": format!("unreadable: {e}") });
+        }
     };
-    if bytes.len() > MAX_FILE_BYTES { return json!({ "path": rel, "error": "too-large" }); }
-    let Some(lang) = lang_for(rel) else { return json!({ "path": rel, "language": "UNSUPPORTED" }) };
+    if bytes.len() > MAX_FILE_BYTES {
+        return json!({ "path": rel, "error": "too-large" });
+    }
+    let Some(lang) = lang_for(rel) else {
+        return json!({ "path": rel, "language": "UNSUPPORTED" });
+    };
     let src = String::from_utf8_lossy(&bytes);
     let c = collect(&src, lang);
-    let functions: Vec<Value> = c.functions.iter().map(|m| json!({
-        "name": m.name,
-        "startLine": m.start_line,
-        "endLine": m.end_line,
-        "length": m.end_line - m.start_line + 1,
-        "complexity": m.complexity,
-        "nesting": m.nesting,
-        "params": m.params,
-    })).collect();
+    let functions: Vec<Value> = c
+        .functions
+        .iter()
+        .map(|m| {
+            json!({
+                "name": m.name,
+                "startLine": m.start_line,
+                "endLine": m.end_line,
+                "length": m.end_line - m.start_line + 1,
+                "complexity": m.complexity,
+                "nesting": m.nesting,
+                "params": m.params,
+            })
+        })
+        .collect();
     json!({
         "path": rel,
         "language": lang_name(lang),
@@ -344,15 +555,34 @@ fn file_metrics(root: &Path, rel: &str) -> Value {
 
 /// Verify a metrics call: parse each requested file at `root`, bounded (§13).
 pub fn metrics_verify(root: &Path, params: &Value) -> Result<Value, (&'static str, String)> {
-    let files: Vec<String> = params.get("files")
+    let files: Vec<String> = params
+        .get("files")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
-        .ok_or(("INVALID_SCHEMA", "params.files must be an array of paths".to_string()))?;
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .ok_or((
+            "INVALID_SCHEMA",
+            "params.files must be an array of paths".to_string(),
+        ))?;
     if files.is_empty() || files.len() > MAX_FILES {
-        return Err(("RESOURCE_LIMIT", format!("metrics accepts 1..{MAX_FILES} files per call (got {})", files.len())));
+        return Err((
+            "RESOURCE_LIMIT",
+            format!(
+                "metrics accepts 1..{MAX_FILES} files per call (got {})",
+                files.len()
+            ),
+        ));
     }
     for f in &files {
-        if f.contains("..") { return Err(("INVALID_SCHEMA", "paths must stay inside the repository root".to_string())); }
+        if f.contains("..") {
+            return Err((
+                "INVALID_SCHEMA",
+                "paths must stay inside the repository root".to_string(),
+            ));
+        }
     }
     let per_file: Vec<Value> = files.iter().map(|f| file_metrics(root, f)).collect();
     Ok(json!({ "files": per_file, "metricsVersion": METRICS_VERSION }))
@@ -378,14 +608,28 @@ mod tests {
         out.push_str(n.kind());
         out.push('\n');
         let mut w = n.walk();
-        for c in n.children(&mut w) { walk(c, d + 1, out); }
+        for c in n.children(&mut w) {
+            walk(c, d + 1, out);
+        }
     }
 
     #[test]
     fn ts_tables_see_the_common_decision_kinds() {
         let src = "function f(a, b) {\n  if (a && b) { return 1; }\n  for (const x of a) { switch (x) { case 1: y(); } }\n  try { x(); } catch (e) { g(); }\n  return a ?? b ? f() : 0;\n}\nconst g = (x) => x;\nclass C { m(n) { const h = () => n > 0 && f(); h(); } }";
         let d = dump(src, "a.ts");
-        for k in ["if_statement", "for_in_statement", "switch_case", "catch_clause", "binary_expression", "ternary_expression", "function_declaration", "method_definition", "arrow_function", "formal_parameters", "statement_block"] {
+        for k in [
+            "if_statement",
+            "for_in_statement",
+            "switch_case",
+            "catch_clause",
+            "binary_expression",
+            "ternary_expression",
+            "function_declaration",
+            "method_definition",
+            "arrow_function",
+            "formal_parameters",
+            "statement_block",
+        ] {
             assert!(d.contains(k), "missing {k} in TS tree\n{d}");
         }
     }
@@ -394,7 +638,17 @@ mod tests {
     fn rust_tables_see_the_common_decision_kinds() {
         let src = "fn f(a: i32) {\n  if a > 0 && a < 9 { return a?; }\n  for i in 0..a { match i { 0 => g(), _ => {} } }\n  while a > 0 { a -= 1; }\n}\nfn g() {}";
         let d = dump(src, "a.rs");
-        for k in ["if_expression", "for_expression", "match_arm", "while_expression", "try_expression", "binary_expression", "function_item", "parameters", "block"] {
+        for k in [
+            "if_expression",
+            "for_expression",
+            "match_arm",
+            "while_expression",
+            "try_expression",
+            "binary_expression",
+            "function_item",
+            "parameters",
+            "block",
+        ] {
             assert!(d.contains(k), "missing {k} in Rust tree\n{d}");
         }
     }
@@ -403,7 +657,17 @@ mod tests {
     fn java_tables_see_the_common_decision_kinds() {
         let src = "class C {\n  int f(int a, boolean b) {\n    if (a > 0 && b) { return 1; }\n    for (int i = 0; i < a; i++) { while (a > 0) { a--; } }\n    try { g(); } catch (Exception e) { h(); }\n    return a > 0 ? a : 0;\n  }\n}";
         let d = dump(src, "C.java");
-        for k in ["if_statement", "for_statement", "while_statement", "catch_clause", "ternary_expression", "binary_expression", "method_declaration", "formal_parameters", "block"] {
+        for k in [
+            "if_statement",
+            "for_statement",
+            "while_statement",
+            "catch_clause",
+            "ternary_expression",
+            "binary_expression",
+            "method_declaration",
+            "formal_parameters",
+            "block",
+        ] {
             assert!(d.contains(k), "missing {k} in Java tree\n{d}");
         }
     }
@@ -412,7 +676,17 @@ mod tests {
     fn go_tables_see_the_common_decision_kinds() {
         let src = "package m\n\nfunc F(a int) int {\n\tif a > 0 && a < 9 {\n\t\tfor i := range a {\n\t\t\tswitch i { case 1: g() }\n\t\t}\n\t\tselect { case <-ch: g(); default: }\n\t}\n\treturn a\n}\nfunc g() {\n\tch := make(chan int)\n\t_ = ch\n}";
         let d = dump(src, "a.go");
-        for k in ["if_statement", "for_statement", "range_clause", "expression_case", "communication_case", "binary_expression", "function_declaration", "parameter_list", "block"] {
+        for k in [
+            "if_statement",
+            "for_statement",
+            "range_clause",
+            "expression_case",
+            "communication_case",
+            "binary_expression",
+            "function_declaration",
+            "parameter_list",
+            "block",
+        ] {
             assert!(d.contains(k), "missing {k} in Go tree\n{d}");
         }
     }
@@ -421,7 +695,16 @@ mod tests {
     fn python_tables_see_the_common_decision_kinds() {
         let src = "def f(a, b):\n    if a > 0 and b:\n        for i in a:\n            try: g()\n            except: pass\n    return a if a > 1 else b\ndef g(): pass";
         let d = dump(src, "a.py");
-        for k in ["if_statement", "for_statement", "except_clause", "conditional_expression", "boolean_operator", "function_definition", "parameters", "block"] {
+        for k in [
+            "if_statement",
+            "for_statement",
+            "except_clause",
+            "conditional_expression",
+            "boolean_operator",
+            "function_definition",
+            "parameters",
+            "block",
+        ] {
             assert!(d.contains(k), "missing {k} in Python tree\n{d}");
         }
     }
@@ -453,7 +736,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("cie-metrics2-{}", std::process::id()));
         let err = metrics_verify(&dir, &json!({ "files": ["../outside.ts"] })).unwrap_err();
         assert_eq!(err.0, "INVALID_SCHEMA");
-        let many = (0..MAX_FILES + 1).map(|i| format!("f{i}.ts")).collect::<Vec<_>>();
+        let many = (0..MAX_FILES + 1)
+            .map(|i| format!("f{i}.ts"))
+            .collect::<Vec<_>>();
         let err2 = metrics_verify(&dir, &json!({ "files": many })).unwrap_err();
         assert_eq!(err2.0, "RESOURCE_LIMIT");
     }
@@ -470,8 +755,15 @@ mod tests {
         std::fs::write(dir.join("src/a.ts"), src).unwrap();
         let v = metrics_verify(&dir, &json!({ "files": ["src/a.ts"] })).unwrap();
         let functions = v["files"][0]["functions"].as_array().unwrap();
-        let names: Vec<&str> = functions.iter().map(|f| f["name"].as_str().unwrap()).collect();
-        assert_eq!(names, vec!["onUserActionSelect", "onClick"], "{functions:?}");
+        let names: Vec<&str> = functions
+            .iter()
+            .map(|f| f["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["onUserActionSelect", "onClick"],
+            "{functions:?}"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 }

@@ -208,6 +208,8 @@ export class Service {
   /** The GitHub transport F07 publishes through. Unset means publication is refused, never simulated. */
   forge: DraftForge | null = null;
   private worker: WorkerClient;
+  /** Hermetic override of the concept-hierarchy motif batch (tests); production defaults to the Rust worker. */
+  private motifBatch: import("./concept-hierarchy/motifs.ts").MotifBatchMatcher | undefined;
   private model: ModelProvider;
   private offline: ModelProvider;
   /** C13 gateway operations over the workspace log. */
@@ -728,8 +730,8 @@ export class Service {
   /** The last failure from the model provider, cleared by the next success; reported by health(). */
   modelError: string | null = null;
 
-  constructor(store: Store, worker: WorkerClient, model: ModelProvider, offline: ModelProvider = new StubProvider()) {
-    this.store = store; this.worker = worker; this.model = model; this.offline = offline;
+  constructor(store: Store, worker: WorkerClient, model: ModelProvider, offline: ModelProvider = new StubProvider(), motifBatch?: import("./concept-hierarchy/motifs.ts").MotifBatchMatcher) {
+    this.store = store; this.worker = worker; this.model = model; this.offline = offline; this.motifBatch = motifBatch;
     this.sessionManager = new ChatSessionManager(this.store);
     this.registry = new Registry(store);
     this.history = new History(store, this.registry);
@@ -2201,7 +2203,7 @@ export class Service {
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
     const adapter = this.namingAdapter(rev, control);
-    const result = await buildHierarchy(this.store, rev.id, { repoRoot: rev.repoRoot, adapter, control, provider: `${this.model.name}/${this.model.model}` });
+    const result = await buildHierarchy(this.store, rev.id, { repoRoot: rev.repoRoot, adapter, control, provider: `${this.model.name}/${this.model.model}`, motifBatch: this.motifBatch });
     control?.commit();
     // Record who really wrote the names, not who was configured to: a hosted model that was not approved did not write them.
     const u = adapter.usage!;

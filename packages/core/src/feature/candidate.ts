@@ -20,7 +20,7 @@ import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:f
 import { dirname } from "node:path";
 import type { Store } from "../store.ts";
 import { authorize, type AuthorityConfig } from "./authority.ts";
-import { asSet, canonHash, contentRoot, defineSchema, entriesFromDirectory, type Canon } from "./canon.ts";
+import { asSet, canonHash, contentRootOfTree, defineSchema, type Canon } from "./canon.ts";
 import { FeatureError } from "./errors.ts";
 import { eventFor, transition } from "./lifecycle.ts";
 import { snapshotOf } from "./intake.ts";
@@ -313,7 +313,7 @@ export function materializeCandidate(d: CandidateDeps, actor: Id, i: Materialize
     const oracleState: CandidateRecord["oracleState"] = !baseTests.size ? "NO_ORACLE" : oracleChanges.length || originalOracleHash !== candidateOracleHash ? "PROPERTY_CHANGE_PENDING_REVIEW" : "ORIGINAL_PRESERVED";
 
     // ---- binding
-    const rootOf = (dir: string) => contentRoot(entriesFromDirectory(dir, { exclude: [] }));
+    const rootOf = (dir: string) => contentRootOfTree(dir, { exclude: [] }).digest;
     const editsHash = sha256(JSON.stringify(integrate ? { integrate: integrate.map((c) => c.bindingHash) } : i.edits));
     const binding: PatchBinding = {
       repositoryId: rec.repositoryId, baseCommitHash: live.commitHash, baseContentHash: rootOf(baseDir), candidateContentHash: rootOf(candDir), diffHash: canonHash(DiffSchema, deltas),
