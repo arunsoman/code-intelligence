@@ -21,7 +21,7 @@ import { BudgetController, inferSourceOverview, OllamaProvider, hasModel, listIn
 import { SCHEMA_SOURCE_OVERVIEW, type SourceOverviewOutput } from "@cie/schema";
 import { matchName, readText, routerFor, validateProviderGuide, type ChartOption, type Intent as ChatIntent, type ProviderGuideResponse, type RouterModel } from "./llm-router.ts";
 import { INTENT_CONFIDENCE_THRESHOLD } from "../../schema/src/intents.ts";
-import { fetchRepositoryBranches, repositoryGit, switchRepositoryBranch } from "./repository-git.ts";
+import { GitBrowsing } from "./repository-git.ts";
 import { modelFailureNotice } from "./model-failure.ts";
 import { validateChatPlan } from "./chat-plan.ts";
 import { executeChatPlan } from "./chat-execution.ts";
@@ -251,6 +251,8 @@ export class Service {
   readonly revisionDiff: RevisionDiff;
   /** C01/C24: IDE events, exception reports and recent editor context. */
   readonly editorEvents: EditorEvents;
+  /** Git info/branch switching and the local folder picker. */
+  readonly gitBrowsing: GitBrowsing;
   /** Operations the screens need that have no other home: revision and source lists, the evaluation registry, and local team administration. */
   readonly screenOps: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>> | ApiResult<unknown>> = {
     "C07/listRevisions": (c, b) => ok(c, (this.store.db.prepare("select id, repo_root, created_at, file_count from revisions " + (b?.repoRoot ? "where repo_root = ? " : "") + "order by rowid desc limit 30").all(...(b?.repoRoot ? [b.repoRoot] : [])) as any[]).map((r) => ({ id: r.id, repoRoot: r.repo_root, createdAt: r.created_at, files: r.file_count }))),
@@ -749,6 +751,7 @@ export class Service {
     this.indexer = new Indexer(this);
     this.revisionDiff = new RevisionDiff(this);
     this.editorEvents = new EditorEvents(this);
+    this.gitBrowsing = new GitBrowsing(this);
     this.evaluator = new Evaluator(store);
     this.workspaceLog = new WorkspaceLog(store, {
       evidenceState: (revision, evidenceId) => { const rev = this.store.revision(revision), ev = rev ? this.store.evidence(revision, evidenceId) : null; if (!rev || !ev) return "UNAVAILABLE"; const st = this.resolveEvidence(rev, ev).state; return st === "CURRENT" ? "CURRENT" : st === "STALE" ? "STALE" : "UNAVAILABLE"; },
@@ -1996,44 +1999,14 @@ export class Service {
     return ok(ctx, r);
   }
 
-  repositoryGit(ctx: CallContext, req: { repoPath: string }) {
-    try { return ok(ctx, repositoryGit(req?.repoPath)); }
-    catch (e) { return fail(ctx, { code: "INVALID_SCHEMA", message: (e as Error).message, retryable: false }); }
-  }
+  repositoryGit(ctx: CallContext, req: { repoPath: string }) { return this.gitBrowsing.repositoryGit(ctx, req); }
 
-  async fetchBranches(ctx: CallContext, req: { repoPath: string }) {
-    try { return ok(ctx, await fetchRepositoryBranches(req?.repoPath)); }
-    catch (e) { return fail(ctx, { code: "PROVIDER_UNAVAILABLE", message: (e as Error).message, retryable: true }); }
-  }
+  fetchBranches(ctx: CallContext, req: { repoPath: string }) { return this.gitBrowsing.fetchBranches(ctx, req); }
 
-  switchBranch(ctx: CallContext, req: { repoPath: string; branch: string; expectedHead: string | null; expectedBranch: string | null; kind?: "local" | "remote" }) {
-    if (this.store.activeJobs().length) return fail(ctx, { code: "VERSION_CONFLICT", message: "Wait for running jobs to finish before switching branches.", retryable: true });
-    try {
-      const info = switchRepositoryBranch(req?.repoPath, req?.branch, req?.expectedHead, req?.expectedBranch, req?.kind);
-      this.store.audit(actor(ctx), "repository.switchBranch", info.repoRoot, { branch: info.branch, head: info.head });
-      return ok(ctx, info);
-    } catch (e) { return fail(ctx, { code: "INVALID_SCHEMA", message: (e as Error).message, retryable: false }); }
-  }
+  switchBranch(ctx: CallContext, req: { repoPath: string; branch: string; expectedHead: string | null; expectedBranch: string | null; kind?: "local" | "remote" }) { return this.gitBrowsing.switchBranch(ctx, req); }
 
   /** Directory names only (never file contents) so the UI can offer a folder picker. Loopback-only gateway. */
-  browseDirectory(ctx: CallContext, req: { path?: string }): ApiResult<DirListing> {
-    const want = req.path?.trim() || homedir();
-    if (!isAbsolute(want)) return fail(ctx, { code: "INVALID_SCHEMA", message: "path must be absolute", retryable: false });
-    let path: string;
-    try {
-      path = realpathSync(want);
-      if (!statSync(path).isDirectory()) return fail(ctx, { code: "INVALID_SCHEMA", message: "not a directory", retryable: false });
-    } catch { return fail(ctx, { code: "NOT_FOUND", message: "directory not found", retryable: false }); }
-    const MAX = 500;
-    let names: import("node:fs").Dirent[];
-    try { names = readdirSync(path, { withFileTypes: true }); } catch { return fail(ctx, { code: "FORBIDDEN", message: "cannot read directory", retryable: false }); }
-    const dirs = names
-      .filter((d) => (d.isDirectory() || (d.isSymbolicLink() && safeIsDir(join(path, d.name)))) && !d.name.startsWith(".") && d.name !== "node_modules")
-      .sort((a, b) => a.name.localeCompare(b.name));
-    const entries = dirs.slice(0, MAX).map((d) => ({ name: d.name, path: join(path, d.name), isGitRepo: existsSync(join(path, d.name, ".git")) }));
-    const parent = dirname(path);
-    return ok(ctx, { path, parent: parent === path ? null : parent, entries, truncated: dirs.length > MAX });
-  }
+  browseDirectory(ctx: CallContext, req: { path?: string }): ApiResult<DirListing> { return this.gitBrowsing.browseDirectory(ctx, req); }
 
   /** C01: an IDE event. Only path + line numbers are accepted; they resolve to entity ids and nothing else is stored. */
   captureEditorEvent(ctx: CallContext, req: { event: EditorEvent }): ApiResult<{ accepted: boolean; stale?: boolean; entities: string[]; indexed: boolean }> { return this.editorEvents.captureEditorEvent(ctx, req); }

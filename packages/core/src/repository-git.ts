@@ -1,9 +1,14 @@
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync, realpathSync } from "node:fs";
-import { isAbsolute } from "node:path";
-import type { RepositoryGitInfo } from "@cie/schema";
+import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join } from "node:path";
+import { homedir } from "node:os";
+import type { ApiResult, CallContext, DirListing, RepositoryGitInfo } from "@cie/schema";
 import { ghAuthToken, parseGitHubRemote } from "./gh.ts";
+import { actor, fail, ok } from "./service.ts";
+import type { Service } from "./service.ts";
+
+function safeIsDir(p: string): boolean { try { return statSync(p).isDirectory(); } catch { return false; } }
 
 function git(root: string, args: string[]): string {
   return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", timeout: 10_000, maxBuffer: 2 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).trim();
@@ -89,4 +94,49 @@ export function switchRepositoryBranch(repoPath: string, branch: string, expecte
     catch { throw new Error(`Switched to ${remote.localBranch ?? remote.branch}, but Git could not save its upstream fetch configuration. Refresh Git details and check the repository configuration.`); }
   }
   return repositoryGit(current.repoRoot);
+}
+
+export class GitBrowsing {
+  declare readonly svc: Service;
+  constructor(svc: Service) { Object.defineProperty(this, "svc", { value: svc, enumerable: false }); }
+  private get store() { return this.svc.store; }
+
+  repositoryGit(ctx: CallContext, req: { repoPath: string }) {
+    try { return ok(ctx, repositoryGit(req?.repoPath)); }
+    catch (e) { return fail(ctx, { code: "INVALID_SCHEMA", message: (e as Error).message, retryable: false }); }
+  }
+
+  async fetchBranches(ctx: CallContext, req: { repoPath: string }) {
+    try { return ok(ctx, await fetchRepositoryBranches(req?.repoPath)); }
+    catch (e) { return fail(ctx, { code: "PROVIDER_UNAVAILABLE", message: (e as Error).message, retryable: true }); }
+  }
+
+  switchBranch(ctx: CallContext, req: { repoPath: string; branch: string; expectedHead: string | null; expectedBranch: string | null; kind?: "local" | "remote" }) {
+    if (this.store.activeJobs().length) return fail(ctx, { code: "VERSION_CONFLICT", message: "Wait for running jobs to finish before switching branches.", retryable: true });
+    try {
+      const info = switchRepositoryBranch(req?.repoPath, req?.branch, req?.expectedHead, req?.expectedBranch, req?.kind);
+      this.store.audit(actor(ctx), "repository.switchBranch", info.repoRoot, { branch: info.branch, head: info.head });
+      return ok(ctx, info);
+    } catch (e) { return fail(ctx, { code: "INVALID_SCHEMA", message: (e as Error).message, retryable: false }); }
+  }
+
+  /** Directory names only (never file contents) so the UI can offer a folder picker. Loopback-only gateway. */
+  browseDirectory(ctx: CallContext, req: { path?: string }): ApiResult<DirListing> {
+    const want = req.path?.trim() || homedir();
+    if (!isAbsolute(want)) return fail(ctx, { code: "INVALID_SCHEMA", message: "path must be absolute", retryable: false });
+    let path: string;
+    try {
+      path = realpathSync(want);
+      if (!statSync(path).isDirectory()) return fail(ctx, { code: "INVALID_SCHEMA", message: "not a directory", retryable: false });
+    } catch { return fail(ctx, { code: "NOT_FOUND", message: "directory not found", retryable: false }); }
+    const MAX = 500;
+    let names: import("node:fs").Dirent[];
+    try { names = readdirSync(path, { withFileTypes: true }); } catch { return fail(ctx, { code: "FORBIDDEN", message: "cannot read directory", retryable: false }); }
+    const dirs = names
+      .filter((d) => (d.isDirectory() || (d.isSymbolicLink() && safeIsDir(join(path, d.name)))) && !d.name.startsWith(".") && d.name !== "node_modules")
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const entries = dirs.slice(0, MAX).map((d) => ({ name: d.name, path: join(path, d.name), isGitRepo: existsSync(join(path, d.name, ".git")) }));
+    const parent = dirname(path);
+    return ok(ctx, { path, parent: parent === path ? null : parent, entries, truncated: dirs.length > MAX });
+  }
 }
