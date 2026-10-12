@@ -1,7 +1,7 @@
 // Names a question mentions, looked up in the index before any model reads the question. "What is MiFilter" is a lookup
 // of `MiFilter`, not a choice of picture: the words that look like code (CamelCase, snake_case, dotted, paths) are matched
 // against the revision's symbols and files, exactly first, then with a small edit distance for typos. Plain English words
-// only count when they equal a whole class, type, function or file name. Nothing matched is reported as such, never guessed.
+// only count when they equal a whole class, type, function or file name and are not generic scenario nouns. Nothing matched is reported as such, never guessed.
 import type { Entity } from "@cie/schema";
 import type { AccessPolicy } from "./access.ts";
 import type { Store } from "./store.ts";
@@ -19,10 +19,12 @@ const STOP = new Set(["what", "whats", "which", "where", "when", "does", "this",
 export const codeShaped = (t: string) => /[a-z0-9][A-Z]|[A-Z]{2,}[a-z]|_|[./#]|::/.test(t);
 
 interface NameIndex { keys: Map<string, Entity[]>; fuzzyKeys: string[] }
-const cache = new Map<string, NameIndex>();
+const cache = new WeakMap<Store, Map<string, NameIndex>>();
 
 function nameIndex(store: Store, revision: string): NameIndex {
-  const hit = cache.get(revision);
+  let revisions = cache.get(store);
+  if (!revisions) { revisions = new Map(); cache.set(store, revisions); }
+  const hit = revisions.get(revision);
   if (hit) return hit;
   const keys = new Map<string, Entity[]>();
   const add = (k: string, e: Entity) => { if (k) keys.set(k, [...(keys.get(k) ?? []), e]); };
@@ -33,8 +35,8 @@ function nameIndex(store: Store, revision: string): NameIndex {
     else if (name.includes(".")) add(name.slice(name.lastIndexOf(".") + 1), e);
   }
   const index = { keys, fuzzyKeys: [...keys.keys()].filter((k) => k.length >= 4) };
-  if (cache.size > 10) cache.clear();
-  cache.set(revision, index);
+  if (revisions.size > 10) revisions.clear();
+  revisions.set(revision, index);
   return index;
 }
 
@@ -66,6 +68,10 @@ export function candidateWords(text: string): string[] {
   return out;
 }
 
+// These nouns describe business scenarios more often than explicit code references.
+const GENERIC_NOUNS = new Set(["user", "users", "case", "cases", "system", "state", "result", "error", "request", "response", "payment", "transaction", "refund"]);
+const explicitlyNamed = (text: string, word: string) => text.includes(`\`${word}\``) || new RegExp(`\\b(?:class|type|interface|function|method|file)\\s+${word}\\b`, "i").test(text);
+
 const rank = (a: Entity, b: Entity) => (KIND_ORDER[a.kind] ?? 9) - (KIND_ORDER[b.kind] ?? 9) || a.file.length - b.file.length || a.name.localeCompare(b.name);
 
 function matchesFor(found: Entity[], access: AccessPolicy): MentionMatch[] {
@@ -81,6 +87,7 @@ export function resolveMentions(store: Store, revision: string, text: string, ac
   const resolved: Mention[] = [], unresolved: string[] = [];
   for (const word of candidateWords(text)) {
     const lower = word.toLowerCase(), shaped = codeShaped(word);
+    if (!shaped && GENERIC_NOUNS.has(lower) && word === lower && !explicitlyNamed(text, word)) continue;
     if (!shaped && (lower.length < 4 || STOP.has(lower))) continue;
     // An English word names code only when it is a whole name ("payments" the file, not "filter" the method of MiFilter).
     const exact = (keys.get(lower) ?? []).filter((e) => shaped || (WHOLE_NAME_KINDS.has(e.kind) && (e.name.toLowerCase() === lower || e.name.toLowerCase().replace(/\.[a-z0-9]+$/, "") === lower)));

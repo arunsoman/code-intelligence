@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Store } from "../src/store.ts";
-import { ConversationActions, ConversationConflict } from "../src/conversation-actions.ts";
+import { ConversationActions, ConversationConflict, TURN_FINALIZATION_GRACE_MS } from "../src/conversation-actions.ts";
 import { ChatSessionManager } from "../src/chat-session.ts";
 import { ctx } from "./helpers.ts";
 
@@ -36,4 +36,27 @@ test("turn ownership and response receipts are isolated by principal and tenant"
  assert.doesNotThrow(()=>actions.begin(other,"chat",{}));
  assert.equal(actions.owns(other,"chat","shared"),true);
  assert.equal(actions.owns({...other,requestId:owner.requestId},"chat","shared"),false);
+});
+
+
+test("a deadline-exhausted turn can save its unresolved result during finalization grace", () => {
+ const store = new Store(":memory:"), actions = new ConversationActions(store), owner = ctx("deadline");
+ const originalNow = Date.now; const start = originalNow(); owner.deadlineMs = start + 100;
+ try {
+  Date.now = () => start;
+  const action = actions.begin(owner, "chat", {});
+  Date.now = () => start + 101;
+  assert.throws(() => actions.begin(ctx("overlap"), "chat", {}), ConversationConflict, "another turn must not take over during finalization");
+  actions.finish(owner, "chat", action.actionId, { status: "UNRESOLVED" }, () => {});
+  assert.deepEqual(actions.begin(owner, "chat", {}).replay, { status: "UNRESOLVED" });
+ } finally { Date.now = originalNow; store.db.close(); }
+});
+
+test("long request deadlines are not cut short by a fixed two-minute lease", () => {
+ const store = new Store(":memory:"), actions = new ConversationActions(store), owner = ctx("long");
+ owner.deadlineMs = Date.now() + 180000;
+ actions.begin(owner, "chat", {});
+ const row = store.db.prepare("select lease_until from conversation_actions").get() as { lease_until: number };
+ assert.equal(row.lease_until, owner.deadlineMs + TURN_FINALIZATION_GRACE_MS);
+ store.db.close();
 });

@@ -3351,12 +3351,14 @@ export class Service {
       if (!indexed || indexed.id !== checkpoint.revision) return fail(ctx, { code: "STALE_REVISION", message: "The indexed revision changed; ask the original question again to collect fresh evidence.", retryable: false });
       const access = policyFor(this.store, indexed.repoRoot);
       const entities = this.store.entitiesById(indexed.id, checkpoint.inspectedIds);
-      if (entities.length !== checkpoint.inspectedIds.length || entities.some(e => access.denied(e.file))) return fail(ctx, { code: "FORBIDDEN", message: "Source access changed; start a fresh investigation with permitted evidence.", retryable: false });
+      if (entities.length !== checkpoint.inspectedIds.length) return fail(ctx, { code: "STALE_REVISION", message: "An inspected element is no longer indexed; start a fresh investigation.", retryable: false });
+      if (entities.some(e => access.denied(e.file))) return fail(ctx, { code: "FORBIDDEN", message: "Source access changed; start a fresh investigation with permitted evidence.", retryable: false });
       for (const [id, expected] of Object.entries(checkpoint.sourceHashes)) {
         const entity = entities.find(e => e.entityId === id), source = entity?.spans[0]?.sourceId;
         if (!source) return fail(ctx, { code: "STALE_REVISION", message: "An inspected source is no longer available; re-index and ask again.", retryable: false });
         try {
           const path = realpathSync(resolve(indexed.repoRoot, source)), rel = relative(realpathSync(indexed.repoRoot), path);
+          if (access.denied(rel)) return fail(ctx, { code: "FORBIDDEN", message: "Source access changed; start a fresh investigation with permitted evidence.", retryable: false });
           if (rel.startsWith("..") || isAbsolute(rel) || createHash("sha256").update(readFileSync(path)).digest("hex") !== expected) throw new Error("stale source");
         } catch { return fail(ctx, { code: "STALE_REVISION", message: "Inspected source changed; re-index and ask the original question again.", retryable: false }); }
       }

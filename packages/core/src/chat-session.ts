@@ -71,7 +71,11 @@ export class ChatSessionManager {
     const tenantId = ctx.actor.tenantId;
     const sessionId = requestedSessionId?.trim().slice(0, 120) || ctx.actor.sessionId || crypto.randomUUID();
     const key = `${tenantId}\u0000${principalId}\u0000${sessionId}`;
-    let state = this.sessions.get(key);
+    // Read-only requests may come through another server/manager. Cached state must not
+    // overwrite completed turns written since the last read.
+    const owned = this.ownedTurns.has(ctx);
+    let state = owned ? this.sessions.get(key) : undefined;
+    let changed = false;
     if (!state) {
       const row = this.store.db.prepare(`select state, seq, created_at, last_active_at, context_json, turns_json
         from chat_sessions where session_id = ? and actor_principal = ? and tenant_id = ?`).get(sessionId, principalId, tenantId) as {
@@ -88,6 +92,7 @@ export class ChatSessionManager {
       }
     }
     if (!state) {
+      changed = true;
       const session: ChatSession = {
         sessionId,
         actorPrincipal: principalId,
@@ -111,6 +116,7 @@ export class ChatSessionManager {
       state = { session, context, turns: [] };
     }
     if (revision && revision !== state.context.revision) {
+      changed = true;
       const row = this.store.revision(revision);
       state.context = {
         id: crypto.randomUUID(), state: "active", openedAtSeq: state.session.seq,
@@ -127,7 +133,7 @@ export class ChatSessionManager {
           last_active_at=excluded.last_active_at, context_json=excluded.context_json, turns_json=excluded.turns_json`)
         .run(sessionId, principalId, tenantId, state!.session.state, state!.session.seq, state!.session.createdAt, state!.session.lastActiveAt, JSON.stringify(state!.context), JSON.stringify(state!.turns));
     };
-    persist();
+    if (owned || changed) persist();
     return {
       get session() { return state!.session; },
       get context() { return state!.context; },

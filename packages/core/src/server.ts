@@ -215,7 +215,7 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
       }
       const idem = String(req.headers["idempotency-key"] ?? "");
       if (op.mutating && !idem) return send(res, 400, { ok: false, error: { code: "INVALID_SCHEMA", message: "Idempotency-Key header required", retryable: false } });
-      const ctx = mk(idem);
+      const ctx = mk(idem, m[1] === "C15" && m[2] === "converse" ? 180_000 : 60_000);
       // In a multi-tenant server a path is only usable if the tenant is allowed to read it: indexing, and even browsing for it.
       const opKey = `${m[1]}/${m[2]}`;
       if (target instanceof TenantHost && ["C01/switchBranch", "C01/fetchBranches"].includes(opKey)) return send(res, 403, { ok: false, error: { code: "FORBIDDEN", message: "Branch switching and fetching are available only in the local app.", retryable: false } });

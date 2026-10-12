@@ -28,3 +28,11 @@ test("source paging continues through a line larger than the character budget", 
   assert.equal(last.nextOffset, undefined);
   assert.deepEqual(sourcePage(""), { text: "" });
 });
+
+
+test("a medium-sized transaction pipeline includes its later compensation branch in one page", () => {
+  const source = "// pipeline step\n".repeat(250) + "rollBackManual(batchId);";
+  const page = sourcePage(source);
+  assert.equal(page.text, source);
+  assert.equal(page.nextOffset, undefined);
+});

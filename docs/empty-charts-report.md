@@ -33,7 +33,7 @@ Three distinct root causes appear:
 ### S1 — C4 container / component architecture
 **Status in test run:** FAIL (timed out)\
 **Root cause:** Server error
-
+`
 The conversation panel shows `STORAGE_FAILURE: internal error` in red for the S1 turn.
 The view header says *"0 drawn nodes and edges"* and the canvas is empty.  The offline
 model attempted to generate the layout but the server rejected its output before anything

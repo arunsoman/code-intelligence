@@ -3,6 +3,9 @@ import type { CallContext } from "@cie/schema";
 import type { Store } from "./store.ts";
 
 const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, canonical(v)])) : value;
+/** Saving a bounded result may finish just after the investigation deadline. This does not extend model/tool budgets. */
+export const TURN_FINALIZATION_GRACE_MS = 15_000;
+
 type Action = { action_id: string; owner: string; state: string; payload_hash: string; lease_until: number; checkpoint_json: string | null; response_json: string | null };
 export class ConversationConflict extends Error { readonly retryable: boolean; constructor(message: string, retryable = false) { super(message); this.retryable = retryable; } }
 /** SQLite serializes acquisition; a lease bounds recovery without aborting another live server. */
@@ -24,7 +27,7 @@ export class ConversationActions {
       const owner = ctx.requestId;
       this.store.db.prepare(`insert into conversation_actions values(?,?,?,?,?,?,'pending',?,1,?,null)
         on conflict(tenant_id,principal_id,session_id,action_id) do update set owner=excluded.owner,state='pending',lease_until=excluded.lease_until,attempt=conversation_actions.attempt+1,checkpoint_json=excluded.checkpoint_json,response_json=null`)
-        .run(...scope, actionId, hash, owner, Math.min(ctx.deadlineMs, Date.now() + 120_000), checkpoint ? JSON.stringify(checkpoint) : null);
+        .run(...scope, actionId, hash, owner, ctx.deadlineMs + TURN_FINALIZATION_GRACE_MS, checkpoint ? JSON.stringify(checkpoint) : null);
       return { owner, actionId };
     });
   }

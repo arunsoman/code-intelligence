@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync, mkdirSync, writeFileSync, unlinkSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { AnswerReview } from "@cie/schema";
 import type { RouterModel, AgentMessage } from "../src/llm-router.ts";
@@ -141,5 +141,182 @@ test("missing source and reviewer failure do not display the draft or retry inde
     assert.equal(writes, 1);
     assert.equal(r.value.validation!.investigation!.nextAction, "request_source");
     assert.doesNotMatch(r.value.message, /definitely lost/);
+  } finally { f.worker.close(); }
+});
+
+test("a chat model timeout saves unresolved evidence instead of discarding the turn", async () => {
+  const f = await boot(); const originalNow = Date.now; const request = ctx();
+  try {
+    let turns = 0;
+    f.svc.router = { name: "timed-out-model", choose: async () => null, converse: async (messages) => {
+      if (turns++ === 0) return call("read_code", { id: target(messages) });
+      Date.now = () => request.deadlineMs + 1;
+      throw new Error("model timeout");
+    } };
+    const r = await f.svc.converse(request, { text: "Explain AuthService", revision: f.revision, sessionId: "deadline-chat" });
+    assert.ok(r.ok && r.value.kind === "analysis");
+    assert.equal(r.value.validation!.status, "UNRESOLVED");
+    assert.match(r.value.message, /request deadline was reached/);
+    assert.ok(r.value.validation!.investigation!.observations.length);
+    const saved = f.svc.store.db.prepare("select state from conversation_actions where session_id=?").get("deadline-chat") as { state: string };
+    assert.equal(saved.state, "complete");
+  } finally { Date.now = originalNow; f.worker.close(); }
+});
+
+test("a null first-turn reply at the deadline remains resumable instead of entering fallback", async () => {
+ const f = await boot(); const originalNow = Date.now; const request = ctx();
+ try {
+  f.svc.router = { name: "null-timeout", choose: async () => null, converse: async () => { Date.now = () => request.deadlineMs + 1; return null; } };
+  const r = await f.svc.converse(request, { text: "Explain AuthService", revision: f.revision, sessionId: "null-deadline" });
+  assert.ok(r.ok && r.value.kind === "analysis");
+  assert.equal(r.value.validation!.status, "UNRESOLVED");
+  assert.match(r.value.message, /request deadline was reached/);
+  assert.ok(r.value.validation!.investigation);
+ } finally { Date.now = originalNow; f.worker.close(); }
+});
+
+test("graph-only investigation pins its evidence files before allowing resume", async () => {
+  const repo = copyFixture(), f = await boot(repo);
+  try {
+    f.svc.router = { name: "graph-checkpoint", choose: async () => null, converse: async (messages, tools) => {
+      if (tools[0].name === "review_answer") return call("review_answer", { ...gap("UNRESOLVED") });
+      return call("answer", { text: "Implementation remains unread.", cites: [target(messages)] });
+    } };
+    const first = await f.svc.converse(ctx(), { text: "Explain AuthService", revision: f.revision, sessionId: "graph-checkpoint" });
+    assert.ok(first.ok && first.value.kind === "analysis");
+    const checkpoint = first.value.validation!.investigation!;
+    assert.deepEqual(checkpoint.sourceReads, {});
+    assert.ok(Object.keys(checkpoint.sourceHashes).length, "discovered graph evidence has a source fingerprint even without read_code");
+    appendFileSync(join(repo, "src/auth/service.ts"), "\n// changed graph evidence\n");
+    let invoked = false;
+    f.svc.router = { name: "must-not-resume", choose: async () => null, converse: async () => { invoked = true; return null; } };
+    const resumed = await f.svc.converse(ctx(), { text: `continue investigation ${checkpoint.id}`, revision: f.revision, sessionId: "graph-checkpoint" });
+    assert.ok(!resumed.ok); assert.equal(resumed.error.code, "STALE_REVISION");
+    assert.equal(invoked, false, "stale observations are rejected before the model sees them");
+  } finally { f.worker.close(); }
+});
+
+
+test("resume rejects a visible source redirected into a newly denied path with identical bytes", async () => {
+  const repo = copyFixture(), f = await boot(repo);
+  try {
+    f.svc.router = { name: "physical-access", choose: async () => null, converse: async (messages, tools) => {
+      if (tools[0].name === "review_answer") return call("review_answer", { ...gap("UNRESOLVED") });
+      return call("answer", { text: "Unread implementation.", cites: [target(messages)] });
+    } };
+    const first = await f.svc.converse(ctx(), { text: "Explain AuthService", revision: f.revision, sessionId: "physical-access" });
+    assert.ok(first.ok && first.value.kind === "analysis");
+    const path = join(repo, "src/auth/service.ts");
+    mkdirSync(join(repo, "restricted"));
+    writeFileSync(join(repo, "restricted/service.ts"), readFileSync(path));
+    unlinkSync(path); symlinkSync(join(repo, "restricted/service.ts"), path);
+    f.svc.store.denyPath(repo, "restricted");
+    const resumed = await f.svc.converse(ctx(), { text: `continue investigation ${first.value.validation!.investigation!.id}`, revision: f.revision, sessionId: "physical-access" });
+    assert.ok(!resumed.ok); assert.equal(resumed.error.code, "FORBIDDEN");
+  } finally { f.worker.close(); }
+});
+
+test("slow retrieval cannot consume the answer and review time reservations", async () => {
+  const f = await boot();
+  try {
+    let writes = 0, reviews = 0, aborted = false;
+    f.svc.router = { name: "reserved-time", choose: async () => null, converse: async (messages, tools, signal) => {
+      if (tools[0].name === "review_answer") { reviews++; return call("review_answer", { ...supported }); }
+      writes++;
+      if (writes === 1) return call("read_code", { id: target(messages) });
+      if (writes === 2) { signal?.addEventListener("abort", () => { aborted = true; }); return new Promise(() => {}); }
+      assert.deepEqual(tools.map(t => t.name), ["answer"]);
+      return call("answer", { text: "AuthService signs users in.", cites: [target(messages)] });
+    } };
+    const request = ctx(); request.deadlineMs = Date.now() + 24_250;
+    const result = await f.svc.converse(request, { text: "Explain AuthService", revision: f.revision });
+    assert.ok(result.ok && result.value.kind === "analysis");
+    assert.equal(result.value.validation!.status, "SUPPORTED");
+    assert.equal(aborted, true); assert.equal(reviews, 1); assert.equal(writes, 3);
+    assert.ok(Date.now() < request.deadlineMs - 10_000, "review completes before the request deadline");
+  } finally { f.worker.close(); }
+});
+
+test("reading a full source file satisfies its contained method citations without duplicate reads", async () => {
+  const f = await boot();
+  try {
+    const file = f.svc.store.entities(f.revision).find(e => e.kind === "file" && e.file === "src/auth/service.ts")!;
+    const method = f.svc.store.entities(f.revision).find(e => e.name === "AuthService.login")!;
+    let writes = 0, reviews = 0;
+    f.svc.router = { name: "file-coverage", choose: async () => null, converse: async (_messages, tools) => {
+      if (tools[0].name === "review_answer") { reviews++; return call("review_answer", { ...supported }); }
+      return writes++ === 0 ? call("read_code", { id: file.entityId }) : call("answer", { text: "AuthService implements login.", cites: [method.entityId] });
+    } };
+    const result = await f.svc.converse(ctx(), { text: "Explain AuthService", revision: f.revision });
+    assert.ok(result.ok && result.value.kind === "analysis");
+    assert.equal(result.value.validation!.status, "SUPPORTED"); assert.equal(result.value.validation!.repairAttempts, 0);
+    assert.equal(writes, 2); assert.equal(reviews, 1);
+  } finally { f.worker.close(); }
+});
+
+test("missing source at the original call cap gets bounded repair reads before model review", async () => {
+  const f = await boot();
+  try {
+    const targetEntity = f.svc.store.entities(f.revision).find(e => e.name === "signToken")!;
+    let writes = 0, reviews = 0;
+    f.svc.router = { name: "repair-cap", choose: async () => null, converse: async (messages, tools) => {
+      if (tools[0].name === "review_answer") { reviews++; return call("review_answer", { ...supported }); }
+      writes++;
+      if (writes === 1) return call("read_code", { id: target(messages) });
+      if (writes === 2) return { content: "", toolCalls: Array.from({ length: 27 }, (_, i) => ({ name: "find_code", arguments: { query: i === 0 ? "signToken" : `NoSuchImplementation${i}` } })) };
+      if (writes === 4) {
+        assert.ok(tools.some(t => t.name === "read_code"), "repair has its own tool allowance after 28 calls");
+        assert.equal(reviews, 0, "known missing source is handled before paying for a reviewer call");
+        return call("read_code", { id: targetEntity.entityId });
+      }
+      return call("answer", { text: "signToken implements token signing.", cites: [targetEntity.entityId] });
+    } };
+    const request = ctx(); request.deadlineMs = Date.now() + 90000;
+    const result = await f.svc.converse(request, { text: "Explain AuthService", revision: f.revision });
+    assert.ok(result.ok && result.value.kind === "analysis");
+    assert.equal(result.value.validation!.status, "SUPPORTED"); assert.equal(result.value.validation!.repairAttempts, 1);
+    assert.equal(reviews, 1); assert.equal(writes, 5);
+  } finally { f.worker.close(); }
+});
+
+test("review can finish after fifteen seconds while staying within its thirty-second budget", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let finish!: (value: ReturnType<typeof call>) => void, signal!: AbortSignal;
+  const model: RouterModel = { name: "long-review", choose: async () => null, converse: async (_messages, _tools, s) => {
+    signal = s!; return new Promise(resolve => { finish = resolve; });
+  } };
+  const pending = reviewAnswer(model, "Explain login", { text: "Draft", cites: [] }, [], Date.now() + 45000);
+  await Promise.resolve(); await Promise.resolve();
+  t.mock.timers.tick(16000);
+  assert.equal(signal.aborted, false);
+  finish(call("review_answer", { ...supported }));
+  assert.equal((await pending).verdict, "SUPPORTED");
+});
+
+test("old saved file reads regain contained-method coverage on Continue without duplicate reads", async () => {
+  const f = await boot();
+  try {
+    const file = f.svc.store.entities(f.revision).find(e => e.kind === "file" && e.file === "src/auth/service.ts")!;
+    const method = f.svc.store.entities(f.revision).find(e => e.name === "AuthService.login")!;
+    let writes = 0;
+    f.svc.router = { name: "old-checkpoint", choose: async () => null, converse: async (_messages, tools) => {
+      if (tools[0].name === "review_answer") return call("review_answer", { ...gap("UNRESOLVED") });
+      return writes++ === 0 ? call("read_code", { id: file.entityId }) : call("answer", { text: "Login exists.", cites: [method.entityId] });
+    } };
+    const first = await f.svc.converse(ctx(), { text: "Explain AuthService", revision: f.revision, sessionId: "old-coverage" });
+    assert.ok(first.ok && first.value.kind === "analysis");
+    const row = f.svc.store.db.prepare("select response_json from conversation_actions where session_id=? and state='complete'").get("old-coverage") as { response_json: string };
+    const saved = JSON.parse(row.response_json), checkpoint = saved.value.validation.investigation;
+    checkpoint.sourceReads = { [file.entityId]: checkpoint.sourceReads[file.entityId] };
+    checkpoint.observations = checkpoint.observations.map((o: { content: string }) => ({ ...o, content: o.content.split("Contained implementations fully covered")[0] }));
+    f.svc.store.db.prepare("update conversation_actions set response_json=? where session_id=? and state='complete'").run(JSON.stringify(saved), "old-coverage");
+    let resumedWrites = 0;
+    f.svc.router = { name: "continue-coverage", choose: async () => null, converse: async (_messages, tools) => {
+      if (tools[0].name === "review_answer") return call("review_answer", { ...supported });
+      resumedWrites++; return call("answer", { text: "AuthService implements login.", cites: [method.entityId] });
+    } };
+    const resumed = await f.svc.converse(ctx(), { text: `continue investigation ${checkpoint.id}`, revision: f.revision, sessionId: "old-coverage" });
+    assert.ok(resumed.ok && resumed.value.kind === "analysis");
+    assert.equal(resumed.value.validation!.status, "SUPPORTED"); assert.equal(resumedWrites, 1);
   } finally { f.worker.close(); }
 });

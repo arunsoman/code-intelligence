@@ -1,3 +1,5 @@
+import { basename } from "node:path";
+import { converseWithin, ModelDeadlineError } from "./model-deadline.ts";
 import { reviewAnswer, unavailableReview, unresolvedMessage } from "./answer-validation.ts";
 import { answerVisual, answerLimitations, boundAnswerContext } from "./answer-visual.ts";
 import { diagnostic } from "./diagnostics.ts";
@@ -10,7 +12,7 @@ import { diagnostic } from "./diagnostics.ts";
 // dropped and the reply says so.
 import type { AnswerInvestigation, AnswerReview, AnswerValidation, ApiResult, CallContext, ConverseResult } from "@cie/schema";
 import { policyFor } from "./access.ts";
-import { analysis, CHAT_TOOLS, checkArgs, toolByName, type ToolEnv } from "./chat-tools.ts";
+import { restoreContainedCoverage, analysis, CHAT_TOOLS, checkArgs, toolByName, type ToolEnv } from "./chat-tools.ts";
 import type { AgentMessage, AgentReply, AgentToolCall, RouterModel } from "./llm-router.ts";
 import { resolveMentions } from "./mentions.ts";
 import type { Service } from "./service.ts";
@@ -18,7 +20,7 @@ import type { RevisionRow } from "./store.ts";
 
 const MAX_TURNS = 16, MAX_CALLS = 28, MAX_OBSERVATION = 24000;
 /** Stop calling tools this long before the deadline, so there is time to write the answer. */
-const ANSWER_RESERVE_MS = 12_000;
+const ANSWER_RESERVE_MS = 12_000, REVIEW_RESERVE_MS = 12_000;
 
 export interface AgentRequest { text: string; history: { role: "user" | "assistant"; text: string }[]; subject?: string; pins?: string[]; resume?: AnswerInvestigation }
 
@@ -43,7 +45,8 @@ function systemPrompt(): string {
     "You answer a developer's questions about one indexed codebase by calling read-only tools, then calling `answer`.",
     "Rules:",
     "- Everything you state must come from a tool result in this conversation. Never rely on what you assume the code does.",
-    "- `mentions` in the request are names from the question already found in the index, with their ids. Start from them: read_code a mentioned element before explaining it. `unresolved` names were not found; use find_code once, and if that finds nothing, say plainly that the name is not in this codebase.",
+    "- `mentions` in the request are names from the question already found in the index, with their ids. They are lexical candidates, not proof of relevance. Read a candidate only when its file and role fit the question; do not investigate generic name coincidences. `unresolved` names were not found; use find_code once, and if that finds nothing, say plainly that the name is not in this codebase.",
+    "- Establish which implementation belongs to the requested domain before tracing behavior. Test fixtures and examples do not establish production behavior unless the question explicitly asks about them. Matching words across different domains do not establish matching behavior. If domain lookup finds no relevant implementation, identify the indexed-repository/source gap and request the correct source; do not exhaust the budget on unrelated symbols.",
     "- For questions about ordering, side effects, provider calls, refunds or compensation, follow the relevant implementations and concrete adapters with read_code, not just their callers. Read remaining source offsets when a tool reports continuation. Treat unresolved dynamic calls as gaps; never infer ordering or absence of refunds from names alone.",
     "- Call only the tools the question needs. Several independent calls may go in one turn. Do not repeat a call.",
     "- If the user asks about a named component, module, package or subsystem, call read_module first, then read_code on the central classes it reports. Do not use project_overview for a named component; project_overview is only for the whole repository.",
@@ -75,6 +78,7 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
     { role: "system", content: systemPrompt() },
     { role: "user", content: JSON.stringify({
       question: req.text,
+      indexedRepository: basename(rev.repoRoot),
       mentions: mentions.resolved.map((m) => ({ name: m.text, match: m.how, candidates: m.matches.map((x) => ({ id: x.entityId, kind: x.kind, name: x.name, file: x.file })) })),
       unresolved: mentions.unresolved,
       ...(req.subject ? { currentSubject: req.subject } : {}),
@@ -85,16 +89,17 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
   if (req.resume) {
     env.sourceReads = new Map(Object.entries(req.resume.sourceReads));
     for (const e of svc.store.entitiesById(rev.id, req.resume.inspectedIds)) if (!access.denied(e.file)) env.seen.set(e.entityId, { name: e.name, file: e.file });
+    restoreContainedCoverage(env);
     for (const o of observations) messages.push({ role: "assistant", content: "", toolCalls: [{ name: o.name, arguments: o.arguments }] }, { role: "tool", toolName: o.name, content: o.content });
     messages.push({ role: "user", content: JSON.stringify({ resume: true, missingEvidence: req.resume.missingEvidence, nextAction: req.resume.nextAction, instruction: "Continue the original question with this fresh budget. Address the identified gaps; do not repeat completed reads unless a remaining source offset is needed." }) });
   }
   const cache = new Map<string, string>(), trace: string[] = [];
   for (const o of observations) cache.set(callKey({ name: o.name, arguments: o.arguments }), o.content);
-  let calls = 0, nudged = false, stopped = "";
+  let calls = 0, nudged = false, stopped = "", forceAnswer = false;
   const answerState: { final: { text: string; cites: string[] } | null } = { final: null };
   let repairAttempts = 0, review: AnswerReview = unavailableReview("No answer draft was completed.");
+  const reviewReserve = Math.min(35_000, Math.max(REVIEW_RESERVE_MS, Math.floor((ctx.deadlineMs - Date.now()) / 5)));
   const assess = async (draft: { text: string; cites: string[] }, turn: number): Promise<boolean> => {
-    review = await reviewAnswer(model, req.text, draft, observations, ctx.deadlineMs - 3000);
     const gaps: string[] = [];
     if (!observations.length) gaps.push("No tool evidence was inspected.");
     if (draft.cites.some(id => !env.seen.has(id))) gaps.push("The draft cites code that was not shown in this investigation.");
@@ -109,10 +114,13 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
       for (const [start, end] of read.ranges) { if (start > covered) break; covered = Math.max(covered, end); }
       if (covered < read.total) gaps.push(`Source for ${env.seen.get(id)?.name ?? id} remains unread from read_code offset ${covered}.`);
     }
+    const missingSource = gaps.some(g => g.startsWith("Implementation for ") || g.startsWith("Source for "));
+    review = missingSource ? { ...unavailableReview("Source coverage is incomplete."), verdict: "REPAIRABLE", gaps, nextAction: "continue" }
+      : await reviewAnswer(model, req.text, draft, observations, ctx.deadlineMs - 3000);
     if (gaps.length) review = { ...review, verdict: review.verdict === "SUPPORTED" ? "REPAIRABLE" : review.verdict, evidence: false, gaps: [...new Set([...review.gaps, ...gaps])].slice(0, 8) };
     svc.store.audit(ctx.actor.principalId, "chat.answer_review", rev.id, { requestId: ctx.requestId, verdict: review.verdict, relevance: review.relevance, coverage: review.coverage, evidence: review.evidence, certainty: review.certainty, consistency: review.consistency, repairAttempts, gaps: review.gaps });
     if (review.verdict === "SUPPORTED") { answerState.final = draft; return true; }
-    if (review.verdict === "REPAIRABLE" && repairAttempts < 2 && turn < MAX_TURNS - 2 && calls < MAX_CALLS && ctx.deadlineMs - Date.now() > ANSWER_RESERVE_MS + 3000) {
+    if (review.verdict === "REPAIRABLE" && repairAttempts < 2 && calls < MAX_CALLS + (repairAttempts + 1) * 8 && ctx.deadlineMs - Date.now() > ANSWER_RESERVE_MS + reviewReserve + 3000) {
       repairAttempts++;
       messages.push({ role: "tool", toolName: "answer", content: JSON.stringify({ status: "withheld", review }) }, { role: "user", content: "Repair the draft against the original question and the review gaps. Fetch the specific missing evidence or correct the conclusion. Existing identical tool calls are cached; change the target or continuation offset to obtain new evidence. Call answer again only after addressing the issues." });
       return false;
@@ -134,17 +142,40 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
     svc.store.audit(ctx.actor.principalId, "chat.tool", rev.id, { tool: toolCall.name, status: "complete" });
   }
 
-  for (let turn = 0; turn < MAX_TURNS && !answerState.final; turn++) {
+  for (let turn = 0; turn < MAX_TURNS + repairAttempts * 4 && !answerState.final; turn++) {
     const left = ctx.deadlineMs - Date.now();
-    const lastChance = turn === MAX_TURNS - 1 || calls >= MAX_CALLS || left < ANSWER_RESERVE_MS;
+    const lastChance = turn === MAX_TURNS + repairAttempts * 4 - 1 || calls >= MAX_CALLS + repairAttempts * 8 || forceAnswer || left <= ANSWER_RESERVE_MS + reviewReserve;
     if (left <= 0) { stopped = "the request deadline was reached"; break; }
-    if (lastChance) stopped = left < ANSWER_RESERVE_MS ? "the answer reserve was reached" : "the investigation budget was reached";
+    if (lastChance) stopped = forceAnswer || left <= ANSWER_RESERVE_MS + reviewReserve ? "the answer and review reserve was reached" : "the investigation budget was reached";
     if (lastChance && turn > 0) messages.push({ role: "user", content: "The investigation budget or deadline is reached. Call answer now; explicitly identify unread implementations and incomplete source pages. Do not claim an execution order or absence of compensation without source evidence." });
+    const pendingReads = [...(env.sourceReads ?? [])].flatMap(([id, read]) => {
+      let covered = 0; for (const [start, end] of read.ranges) { if (start > covered) break; covered = Math.max(covered, end); }
+      return covered < read.total ? [{ id, offset: covered }] : [];
+    }).slice(0, 3);
+    if (pendingReads.length && !lastChance) messages.push({ role: "user", content: JSON.stringify({ priority: "Finish these unread source pages before broadening the search, unless they are unrelated to the question.", pendingReads }) });
     const turnStarted = performance.now();
     diagnostic("agent.turn.start", { requestId: ctx.requestId, turn, calls, lastChance, deadlineRemainingMs: left });
-    const reply: AgentReply | null = await model.converse(messages, lastChance && turn > 0 ? specs.filter((s) => s.name === "answer") : specs, AbortSignal.timeout(Math.max(1000, left)));
+    let reply: AgentReply | null;
+    try {
+      const callBudget = Math.max(1, left - (lastChance ? reviewReserve : ANSWER_RESERVE_MS + reviewReserve));
+      reply = await converseWithin(model, messages, lastChance ? specs.filter((s) => s.name === "answer") : specs, callBudget);
+    } catch (error) {
+      if (error instanceof ModelDeadlineError && !lastChance && ctx.deadlineMs - Date.now() > reviewReserve) {
+        forceAnswer = true;
+        env.warnings.push("The retrieval model call reached its time allowance; remaining time is reserved for an answer and review.");
+        continue;
+      }
+      stopped = Date.now() >= ctx.deadlineMs ? "the request deadline was reached" : "the chat model call failed";
+      review = unavailableReview(stopped);
+      break;
+    }
     diagnostic("agent.turn.complete", { requestId: ctx.requestId, turn, elapsedMs: performance.now() - turnStarted, toolCalls: reply?.toolCalls.map((c) => ({ name: c.name, argumentKeys: Object.keys(c.arguments) })), responseChars: reply?.content.length, empty: !reply });
-    if (!reply) { if (turn === 0) return null; stopped = `${model.name} stopped answering`; break; }
+    if (!reply) {
+      if (turn === 0 && Date.now() < ctx.deadlineMs && !lastChance) return null;
+      stopped = Date.now() >= ctx.deadlineMs ? "the request deadline was reached" : `${model.name} stopped answering`;
+      review = unavailableReview(stopped);
+      break;
+    }
     if (!reply.toolCalls.length) {
       // Plain text is often the model thinking aloud; ask once for the answer tool before showing it as the reply.
       if (reply.content.trim() && !nudged && turn < MAX_TURNS - 1) { nudged = true; messages.push({ role: "assistant", content: reply.content }, { role: "user", content: "Reply to the user by calling the answer tool; plain text is not shown." }); continue; }
@@ -167,7 +198,7 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
       if (problem) observation = `Refused: ${problem}.`;
       else if (!tool!.run) observation = "This tool cannot be combined with others; it was ignored.";
       else if (cache.has(callKey(call))) observation = `Same call as before; its result is unchanged:\n${cache.get(callKey(call))}`;
-      else if (calls >= MAX_CALLS) observation = "Not run: the tool budget is used up.";
+      else if (calls >= MAX_CALLS + repairAttempts * 8) observation = "Not run: the tool budget is used up.";
       else {
         calls++;
         try { observation = await tool!.run(env, call.arguments); } catch (e) { observation = `Failed: ${(e as Error).message}`; }
@@ -219,7 +250,7 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
     const sourceReads = Object.fromEntries(env.sourceReads ?? []);
     const investigation: AnswerInvestigation = { id: ctx.requestId, question: req.text, revision: rev.id,
       supportedFindings: review.supportedFindings, missingEvidence: [...new Set([...review.gaps, ...warnings.filter(w => /Source incomplete|Investigation incomplete/.test(w))])].slice(0, 12), nextAction: review.nextAction,
-      inspectedIds: [...env.seen.keys()], sourceReads, sourceHashes: Object.fromEntries(Object.entries(sourceReads).map(([id, r]) => [id, r.contentHash])), observations };
+      inspectedIds: [...new Set([...Object.keys(sourceReads), ...cited, ...env.seen.keys()])], sourceReads, sourceHashes: Object.fromEntries(svc.store.entitiesById(rev.id, [...env.seen.keys()]).flatMap(e => e.spans[0] ? [[e.entityId, sourceReads[e.entityId]?.contentHash ?? e.spans[0].contentHash]] : [])), observations };
     validation.investigation = investigation;
     message = unresolvedMessage(investigation);
     warnings.push("The answer did not pass validation; its unvalidated conclusion was withheld.");

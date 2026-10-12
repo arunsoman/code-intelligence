@@ -534,7 +534,9 @@ export function App() {
 
   const showChatResult = (result: ChatAnalysisResult) => {
     if (!result.view) return;
-    adoptView(result.view, result.claims, false);
+    const tab = responseWorkspace.current()?.tabs.find(t => t.view?.id === result.view!.id && t.view.revision === result.view!.revision);
+    if (tab) void responseWorkspace.generate(tab.id);
+    else adoptView(result.view, result.claims, false);
     const count = result.view.nodes.length;
     const message = count ? `Showing ${result.title}: ${count} chart element(s). Click an element to inspect its code and evidence.` : `${result.title} has no chart elements to show; check the gaps listed below the canvas.`;
     setNotice(message);

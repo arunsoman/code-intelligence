@@ -3,12 +3,14 @@
 // tool is one entry here, not another rule in a prompt and another branch in a validator. Every tool reports what it saw in
 // a short text the model reads next, and the ids of the code elements in it — the only ids an answer may cite.
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { CallContext, ChatAnalysisResult, Entity } from "@cie/schema";
 import type { AccessPolicy } from "./access.ts";
 import type { ChatStep } from "./chat-plan.ts";
 import { executeChatPlan } from "./chat-execution.ts";
+import { coveredChildren } from "./source-coverage.ts";
+import { sourceCandidates } from "./code-search.ts";
 import { resolveMentions } from "./mentions.ts";
 import { retrieveForQuestion } from "./retrieval.ts";
 import type { Service } from "./service.ts";
@@ -36,7 +38,7 @@ export interface ChatTool {
   run?: (env: ToolEnv, args: Record<string, unknown>) => Promise<string>;
 }
 
-const MAX_SOURCE_LINES = 120, MAX_SOURCE_CHARS = 14000, MAX_LINKS = 20;
+const MAX_SOURCE_LINES = 320, MAX_SOURCE_CHARS = 14000, MAX_LINKS = 20;
 const FORMS = VISUALS.filter((v) => v.formId !== "HypothesisGraph");
 
 const str = (description: string, extra: { enum?: string[]; maxLength?: number } = {}) => ({ type: "string" as const, description, maxLength: 1000, ...extra });
@@ -71,13 +73,18 @@ function entityFor(env: ToolEnv, ref: string): Entity | null {
   return hit ? svc.store.entitiesById(rev.id, [hit.entityId])[0] ?? null : null;
 }
 
-function sourceOf(rev: RevisionRow, e: Entity): { startLine: number; endLine: number; text: string; stale: boolean; contentHash: string } | null {
+function sourceOf(rev: RevisionRow, e: Entity, access: AccessPolicy): { startLine: number; endLine: number; text: string; stale: boolean; contentHash: string } | null {
   const span = e.spans[0];
   if (!span) return null;
   const path = resolve(rev.repoRoot, span.sourceId), rel = relative(rev.repoRoot, path);
   if (rel.startsWith("..") || isAbsolute(rel)) return null;
   let buf: Buffer;
-  try { buf = readFileSync(path); } catch { return null; }
+  try {
+    const root = realpathSync(rev.repoRoot), physical = realpathSync(path);
+    const physicalRel = relative(root, physical);
+    if (physicalRel === ".." || physicalRel.startsWith("../") || isAbsolute(physicalRel) || access.denied(physicalRel)) return null;
+    buf = readFileSync(physical);
+  } catch { return null; }
   const contentHash = createHash("sha256").update(buf).digest("hex");
   const stale = contentHash !== span.contentHash;
   // File entities may carry a zero-length location span rather than a whole-file span.
@@ -93,6 +100,23 @@ export function sourcePage(text: string, offset = 0): { text: string; nextOffset
   const page = lines.slice(0, MAX_SOURCE_LINES).join("\n").slice(0, MAX_SOURCE_CHARS);
   const end = offset + page.length;
   return { text: page, ...(end < text.length ? { nextOffset: end } : {}) };
+}
+
+/** Upgrade saved coverage using the same hash-verified source and delivered ranges.
+ * This derives child coverage from old checkpoints without spending duplicate tool calls. */
+export function restoreContainedCoverage(env: ToolEnv): void {
+  const saved = [...(env.sourceReads ?? [])];
+  const parents = env.svc.store.entitiesById(env.rev.id, saved.map(([id]) => id));
+  const children = env.svc.store.entities(env.rev.id).filter(e => !env.access.denied(e.file));
+  for (const parent of parents) {
+    if (env.access.denied(parent.file) || !["file", "class", "interface"].includes(parent.kind)) continue;
+    const read = env.sourceReads!.get(parent.entityId)!, source = sourceOf(env.rev, parent, env.access);
+    if (!source || source.stale || source.contentHash !== read.contentHash || source.text.length !== read.total) continue;
+    for (const { entity, total } of coveredChildren(parent, source.text, read, children)) {
+      note(env, entity);
+      env.sourceReads!.set(entity.entityId, { total, contentHash: source.contentHash, ranges: [[0, total]] });
+    }
+  }
 }
 
 /** Run one existing analysis step (the same code the scripted planner runs) and report it to the model. Exported so
@@ -120,11 +144,13 @@ export const CHAT_TOOLS: ChatTool[] = [
     async run(env, { query }) {
       const q = query as string;
       const named = resolveMentions(env.svc.store, env.rev.id, q, env.access).resolved.flatMap((m) => m.matches);
+      const direct = sourceCandidates(env.svc.store, env.rev.id, q, env.access);
+      if (direct.length) return [`${direct.length} indexed name/path match(es) for "${q}" (read implementations to establish relevance):`, ...direct.map(e => line(env, e))].join("\n");
       const r = retrieveForQuestion(env.svc.store, env.rev.id, q, { access: env.access, maxNodes: 12 });
       const related = r.bundle.entities.filter((e) => e.kind !== "file" && r.scored.get(e.entityId)?.factors.some((f) => f.factor === "TASK_MATCH" && f.normalizedScore > 0))
         .sort((a, b) => (r.scored.get(b.entityId)?.score ?? 0) - (r.scored.get(a.entityId)?.score ?? 0));
       const all = [...new Map([...named.map((m) => ({ entityId: m.entityId, name: m.name, file: m.file, kind: m.kind })), ...related].map((e) => [e.entityId, e])).values()].slice(0, 12);
-      return all.length ? [`${all.length} match(es) for "${q}":`, ...all.map((e) => line(env, e))].join("\n") : `Nothing in this revision matches "${q}".`;
+      return all.length ? [`${all.length} tentative semantic candidate(s) for "${q}"; no direct source name/path match was found. These are not established domain matches:`, ...all.map((e) => line(env, e))].join("\n") : `Nothing in this revision matches "${q}".`;
     },
   },
   {
@@ -150,9 +176,11 @@ export const CHAT_TOOLS: ChatTool[] = [
       section("Called by", linked((r) => (r.kind === "calls" && r.to === e.entityId ? r.from : null)));
       section("Calls", linked((r) => (r.kind === "calls" && r.from === e.entityId ? r.to : null)));
       section("Imported by", linked((r) => (r.kind === "imports" && r.to === e.entityId ? r.from : null)));
-      const src = sourceOf(rev, e);
+      const src = sourceOf(rev, e, access);
+      if (src?.stale) return "Source changed since indexing. Reindex this repository before reading this element; indexed symbol offsets and relationships may no longer describe the current file.";
       if (src && Number(offset) > src.text.length) return "Refused: offset is past the end of the entity source.";
       const page = src ? sourcePage(src.text, Number(offset)) : null;
+      const inherited: Entity[] = [];
       if (src && page) {
         env.sourceReads ??= new Map();
         const previous = env.sourceReads.get(e.entityId);
@@ -160,13 +188,22 @@ export const CHAT_TOOLS: ChatTool[] = [
         read.ranges.push([Number(offset), Number(offset) + page.text.length]);
         read.ranges.sort((a, b) => a[0] - b[0]);
         env.sourceReads.set(e.entityId, read);
+        if (["file", "class", "interface"].includes(e.kind)) {
+          const children = svc.store.entities(rev.id).filter(child => !access.denied(child.file));
+          for (const { entity, total } of coveredChildren(e, src.text, read, children)) {
+            note(env, entity);
+            env.sourceReads.set(entity.entityId, { total, contentHash: src.contentHash, ranges: [[0, total]] });
+            inherited.push(entity);
+          }
+        }
       }
       svc.store.audit(env.ctx.actor.principalId, "chat.read", rev.id, { entity: e.entityId });
       return [
         `[${e.entityId}] ${e.kind} ${e.name} — ${e.file}${src ? `:${src.startLine}-${src.endLine}` : ""}`,
-        src ? `${src.stale ? "(the file changed since it was indexed; this is its current text)\n" : ""}\`\`\`\n${page!.text}\n\`\`\`` : "(source text unavailable)",
+        src ? `\`\`\`\n${page!.text}\n\`\`\`` : "(source text unavailable)",
         ...(page?.nextOffset !== undefined ? [`Source continues: call read_code with id=${JSON.stringify(e.entityId)} and offset=${page.nextOffset}.`] : []),
-        ...sections,
+        ...(inherited.length ? ["Contained implementations fully covered by these source pages:", ...inherited.slice(0, 8).map(child => `[${child.entityId}] ${child.name}`)] : []),
+        sections.join("\n").slice(0, 4500),
       ].join("\n");
     },
   },
