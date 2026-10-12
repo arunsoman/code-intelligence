@@ -8,7 +8,7 @@ import { useResponseWorkspace } from "./use-response-workspace.ts";
 import type { CanvasState } from "./response-workspace.ts";
 import type { EntityCode, ResponseManifest } from "@cie/schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ApiResult, AuditEvent, JobView, ChangesSince, Claim, ConverseResult, EditorContext, ExplainResult, MapOverlays, MatrixAxis, MatrixCell, ResolvedEvidence, RevisionInfo, SavedState, StatusInfo, VerdictKind, ViewNode, ViewSpec, WorkspaceOpen } from "@cie/schema";
+import type { AnswerValidationSummary, ApiResult, AuditEvent, JobView, ChangesSince, Claim, ConverseResult, EditorContext, ExplainResult, MapOverlays, MatrixAxis, MatrixCell, ResolvedEvidence, RevisionInfo, SavedState, StatusInfo, VerdictKind, ViewNode, ViewSpec, WorkspaceOpen } from "@cie/schema";
 import { call } from "./api.ts";
 import { selectedChartId } from "./chart-selection.ts";
 import type { ChatAnalysisResult } from "@cie/schema";
@@ -30,6 +30,7 @@ import { TerrainView } from "./TerrainView.tsx";
 import { MatrixView } from "./MatrixView.tsx";
 import { JobBar } from "./JobBar.tsx";
 import { VisualsGallery, type CatalogEntry } from "./VisualsGallery.tsx";
+import { ReverseEngineeringPanel } from "./ReverseEngineering.tsx";
 import { ProviderWizard } from "./ProviderWizard.tsx";
 import { FolderPicker } from "./FolderPicker.tsx";
 import { DefectPanel } from "./DefectPanel.tsx";
@@ -102,9 +103,9 @@ export function App() {
   useEffect(() => {
     let active = true;
     const generation = chatRestoreGeneration.current;
-    void call<{ sessionId: string; turns: { seq: number; role: "user" | "assistant"; text: string; at: string }[] }>("C15", "conversation", { sessionId: chatSessionId }).then((r) => {
+    void call<{ sessionId: string; turns: { seq: number; role: "user" | "assistant"; text: string; at: string; validation?: AnswerValidationSummary }[] }>("C15", "conversation", { sessionId: chatSessionId }).then((r) => {
       if (!active || generation !== chatRestoreGeneration.current || !r.ok) return;
-      setMessages(r.value.turns.map((turn) => ({ id: `turn-${turn.seq}`, role: turn.role, text: turn.text, at: turn.at })));
+      setMessages(r.value.turns.map((turn) => ({ id: `turn-${turn.seq}`, role: turn.role, text: turn.text, at: turn.at, validation: turn.validation })));
     });
     return () => { active = false; };
   }, [chatSessionId]);
@@ -144,6 +145,7 @@ export function App() {
   /** "Ask about this finding" (UX-57): close the drawer, fill the composer, put the focus there. */
   const askFromInsights = (question: string) => { setInsightsOpen(false); setChatSeed({ text: question, n: Date.now() }); requestAnimationFrame(() => document.getElementById("chat-input")?.focus()); };
   const [investigationsOpen, setInvestigationsOpen] = useState(false);
+  const [reOpen, setReOpen] = useState(false);
   const [drawMode, setDrawMode] = useState<"matrix" | "graph">("matrix");
   const [cellSel, setCellSel] = useState<string[]>([]); // matrix cells chosen as "these" for the next message
   const [terrainWeights, setTerrainWeights] = useState<Record<string, number>>({});
@@ -476,7 +478,10 @@ export function App() {
     const manifest = responseWorkspace.current()?.manifest;
     if (manifest) {
       const alternatives = manifest.views.filter((v) => v.relevant && !v.primary && v.status !== "unavailable").slice(0, 6).map((v) => ({
-        form: v.form, name: v.label, question: manifest.question, ...(v.code.startsWith("S") ? { chartCode: v.code } : {}),
+        form: v.form, name: v.label, question: manifest.question,
+        response: { responseId: manifest.responseId, viewId: v.id, revision: manifest.revision, answerContext: manifest.answerContext, seeds: v.seeds, scope: v.scope, subject: v.subject,
+          ...((v.form === "GeneratedChart" || v.form === "SemanticMap") && manifest.snapshotId ? { snapshotId: manifest.snapshotId } : {}) },
+        ...(v.code.startsWith("S") ? { chartCode: v.code } : {}),
       }));
       if (alternatives.length) setMessages((current) => current.map((item) => item.id === id ? { ...item, alternatives } : item));
     }
@@ -508,7 +513,7 @@ export function App() {
           if (v.manifest) responseWorkspace.begin(v.manifest, shown.flatMap((r) => r.view ? [{ view: r.view, claims: r.claims }] : []));
           else if (last?.view) adoptView(last.view, last.claims, false);
           const summary = [v.message, ...v.results.flatMap((result) => result.view ? [result.title, result.view.caption, ...result.view.nodes.slice(0, 30).map((node) => `${node.label}: ${(node.notes ?? []).join(" ")}`)] : [result.title, result.message])].join("\n");
-          appendChartMessage(text, summary, { text: v.message, at: now(), results: v.results, ...(v.thinking ? { thinking: v.thinking } : {}) });
+          appendChartMessage(text, summary, { text: v.message, at: now(), results: v.results, validation: v.validation, ...(v.thinking ? { thinking: v.thinking } : {}) });
           log("ASK", text.slice(0, 80));
           break;
         }
@@ -566,16 +571,16 @@ export function App() {
     setDrawer({ kind: "inspect", title: vn.label, sub: `${vn.role ?? vn.kind}${vn.file ? ` · ${vn.file}` : ""}`, notes: [...(vn.notes ?? []), ...(mark ? [mark.summary, ...mark.notes] : [])], factors: vn.factors, claimIds: vn.claimIds, evidence: await evidence(evidenceIds), entityId: vn.entityRefs[0] });
     log("INSPECT", vn.label);
   };
-  const askForm = async (question: string, form: string, subject?: string, kind?: string, chatLabel?: string, baseQuestion?: string, chartCode?: string, target?: { revision: string; seeds: string[]; scope: "subject" }) => {
+  const askForm = async (question: string, form: string, subject?: string, kind?: string, chatLabel?: string, baseQuestion?: string, chartCode?: string, target?: { revision: string; seeds: string[]; scope: "subject" | "repository"; answerContext?: string; snapshotId?: string }) => {
     const related = !target && responseWorkspace.workspace?.tabs.find((t) => chartCode ? t.code === chartCode : t.form === form);
-    if (related && (baseQuestion || question === responseWorkspace.workspace?.manifest.question)) { void responseWorkspace.generate(related.id); return; }
+    if (related && ((baseQuestion ?? question) === responseWorkspace.workspace?.manifest.question)) { void responseWorkspace.generate(related.id); return; }
     const responseToken = ++responseGeneration.current;
     responseWorkspace.cancel();
     const generation = repoGeneration.current;
     say("user", chatLabel ?? question);
     setBusy("Composing view…"); setError(null); setNotice(null);
     try {
-      const r = await call<{ view: ViewSpec; claims: Claim[]; manifest?: ResponseManifest }>("C19", "ask", { question, revision: target?.revision ?? info?.revision?.id, form, subject, kind, ...(target ? { seeds: target.seeds, scope: target.scope } : {}), ...(chartCode ? { chartCode } : {}) });
+      const r = await call<{ view: ViewSpec; claims: Claim[]; manifest?: ResponseManifest }>("C19", "ask", { question, revision: target?.revision ?? info?.revision?.id, form, subject, kind, ...(target ? { seeds: target.seeds, scope: target.scope, answerContext: target.answerContext, snapshotId: target.snapshotId } : {}), ...(chartCode ? { chartCode } : {}) });
       if (generation !== repoGeneration.current || responseToken !== responseGeneration.current) return;
       if (!r.ok) { say("assistant", failMsg(r), true); return; }
       if (r.value.manifest) responseWorkspace.begin(r.value.manifest, [{ view: r.value.view, claims: r.value.claims }], target ? subject ?? "Selected scope" : undefined);
@@ -775,6 +780,7 @@ export function App() {
         {hotspotsOpen && repoPath && <HotspotPanel repoPath={repoPath} revision={revision} onClose={() => setHotspotsOpen(false)} />}
         {insightsOpen && revision && <InsightsPanel revision={revision} view={view} onClose={() => setInsightsOpen(false)} onAsk={askFromInsights} onReindexed={refresh} />}
         {investigationsOpen && revision && <InvestigationPanel key={`${revision}:${ws.id ?? "repo"}`} revision={revision} workspaceId={ws.id ?? `repo:${info?.revision?.repoRoot ?? repoPath}`} initialQuestion={view?.question ?? ""} entityRefs={[...new Set(selection.flatMap((id) => nodeById.get(id)?.entityRefs ?? []))]} onClose={() => setInvestigationsOpen(false)} />}
+        {reOpen && revision && <ReverseEngineeringPanel key={`re:${revision}`} revision={revision} onClose={() => setReOpen(false)} />}
         <h1>Code Intelligence</h1>
         <ModelMenu current={info?.model ?? null} hosted={!!info?.hosted} call={call} onChanged={refresh} />
         {info?.revision && <span className="chip mono" title={info.revision.repoRoot}>rev {info.revision.id} · {info.revision.fileCount} files</span>}
@@ -801,6 +807,9 @@ export function App() {
             <button className="nav-item" onClick={() => openDialog(() => setProfilesOpen(true))}>Profiles</button>
             <button className="nav-item" disabled={!revision} onClick={() => openDialog(() => setInsightsOpen(true))}>Insights</button>
             <button className="nav-item" disabled={!revision} onClick={() => openDialog(() => setInvestigationsOpen(true))}>Investigations</button>
+          </div></details>
+          <details className="nav-menu" aria-disabled={!indexed || undefined}><summary className={indexed ? "" : "nav-disabled"} title={indexed ? undefined : "Index a repository first"}>Reverse Engineering</summary><div className="nav-popover">
+            <button className="nav-item" disabled={!revision} onClick={() => openDialog(() => setReOpen(true))} title="Dependency fog, reverse-engineering evidence records, and bundle import/export">Evidence &amp; fog</button>
           </div></details>
           <details className="nav-menu" aria-disabled={!indexed || undefined}><summary className={indexed ? "" : "nav-disabled"} title={indexed ? undefined : "Index a repository first"}>Work</summary><div className="nav-popover">
             <button className="nav-item" onClick={() => openDialog(() => setPrOpen(true))} title="Analyse a pull request: changed-code findings, the quality gate, and publishing its status to GitHub">Pull requests</button>
@@ -1064,7 +1073,11 @@ export function App() {
       </main>
 
       <aside id="workspace-right-panel" className="right" data-focus-open={focusPanel ? "true" : undefined} data-has-evidence={code || drawer ? "true" : "false"}>
-        <ChatPanel onNewContext={() => { resetResponse(); setView(null); setSelection([]); setCellSel([]); setCode(null); setDrawer(null); setBusy(null); chatRestoreGeneration.current++; setChatSessionId(uuid()); setMessages([]); setError(null); setNotice("Started a new conversation context."); }} onShowResult={showChatResult} onShowAlt={(alt) => void askForm(alt.prompt ?? alt.question, alt.form, undefined, alt.kind, `Show as ${alt.name}`, alt.question, alt.chartCode)} onCreateProvider={() => openDialog(() => setProviderWizardOpen(true))} messages={messages} referents={referents} busy={!!busy} canAsk={!!info?.revision} examples={EXAMPLES} seed={chatSeed ?? undefined} onSend={(t) => void send(t)} onDropReferent={(id) => (id.startsWith("cell:") ? setCellSel(cellSel.filter((x) => x !== id)) : id === "card:pins" ? setCardPins(null) : id.startsWith("editor:") ? setDismissed(new Set([...dismissed, id.slice(7)])) : setSelection(selection.filter((x) => x !== id)))} />
+        <ChatPanel onNewContext={() => { resetResponse(); setView(null); setSelection([]); setCellSel([]); setCode(null); setDrawer(null); setBusy(null); chatRestoreGeneration.current++; setChatSessionId(uuid()); setMessages([]); setError(null); setNotice("Started a new conversation context."); }} onShowResult={showChatResult} onContinueInvestigation={(id) => void send(`continue investigation ${id}`)} onShowAlt={(alt) => {
+          const current = responseWorkspace.current();
+          if (alt.response && current?.manifest.responseId === alt.response.responseId) { void responseWorkspace.generate(alt.response.viewId); return; }
+          void askForm(alt.prompt ?? alt.question, alt.form, alt.response?.subject, alt.kind, `Show as ${alt.name}`, alt.question, alt.chartCode, alt.response);
+        }} onCreateProvider={() => openDialog(() => setProviderWizardOpen(true))} messages={messages} referents={referents} busy={!!busy} canAsk={!!info?.revision} examples={EXAMPLES} seed={chatSeed ?? undefined} onSend={(t) => void send(t)} onDropReferent={(id) => (id.startsWith("cell:") ? setCellSel(cellSel.filter((x) => x !== id)) : id === "card:pins" ? setCardPins(null) : id.startsWith("editor:") ? setDismissed(new Set([...dismissed, id.slice(7)])) : setSelection(selection.filter((x) => x !== id)))} />
         <section className="drawer" aria-label="Evidence">
           {code && (
             <div className="codecard">

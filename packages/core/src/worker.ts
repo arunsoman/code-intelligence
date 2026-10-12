@@ -28,6 +28,17 @@ export interface ProfileCompareResultRpc { verdict: string; reasons: string[]; r
 export interface ProfileDeltaRowRpc { functionKey?: string; function_key?: string; name: string; file: string; line: number; baselineValue?: number; baseline_value?: number; candidateValue?: number; candidate_value?: number; deltaPerRequest?: number | null; delta_per_request?: number | null; baselineShare?: number | null; baseline_share?: number | null; candidateShare?: number | null; candidate_share?: number | null; shareChange?: number | null; share_change?: number | null }
 export interface ProfilePopulationRpc { populationHash?: string; population_hash?: string; service: string; windowFromNs?: number; window_from_ns?: number; windowToNs?: number; window_to_ns?: number; revision?: string | null; sampleTypeKind?: string; sample_type_kind?: string; chunkIds?: string[]; chunk_ids?: string[]; sampleCount?: number; sample_count?: number; expectedSamples?: number | null; expected_samples?: number | null; collectionRatio?: number | null; collection_ratio?: number | null; requestCount?: number | null; request_count?: number | null; errorCount?: number | null; error_count?: number | null }
 
+/** C33 artifact probe: one claim the bytes support, with the epistemic status the evidence schema needs. */
+export interface ArtifactProbeClaim { predicate: string; confidence: string; authority: string; limitations: string[]; locations: { kind: string; value: string; endValue?: string }[] }
+export interface ArtifactProbeUnknown { question: string; reason: string }
+export interface ArtifactProbeReport {
+  path: string; sizeBytes: number; sha256: string;
+  format: string; formatDetail: string;
+  claims: ArtifactProbeClaim[];
+  unresolved: ArtifactProbeUnknown[];
+  notes: string[];
+}
+
 const MAX_FRAME = 8 * 1024 * 1024;
 
 interface Pending { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
@@ -264,6 +275,14 @@ export class WorkerClient {
   /** F05: compare two profile files under population equivalence rules (the caller still gates on error populations). */
   async compareProfileFiles(params: { baselinePath: string; candidatePath: string; serviceHint?: string; baseline?: { ordinal?: number; service: string; windowFromNs: number; windowToNs: number; revision?: string }; candidate?: { ordinal?: number; service: string; windowFromNs: number; windowToNs: number; revision?: string }; baselineTrace?: { service: string; fromNs: number; toNs: number }; candidateTrace?: { service: string; fromNs: number; toNs: number }; normalise?: "PER_REQUEST"; declareEquivalent?: { reason: string }; timeoutMs?: number }): Promise<ProfileCompareResultRpc> {
     const msg = await this.callRetry("compareProfiles", params, params.timeoutMs ?? 60_000);
+    if (!msg.ok) throw new WorkerError(msg.error);
+    return msg.result;
+  }
+
+  /** C33: probe one binary artifact (jar/so/dll/exe/…) and return what its bytes support. The path is
+   * read inside the worker; only claims, locations and questions cross the RPC. */
+  async probeArtifact(path: string, displayPath?: string, timeoutMs = 120_000): Promise<ArtifactProbeReport> {
+    const msg = await this.callRetry("probeArtifact", { path, displayPath }, timeoutMs);
     if (!msg.ok) throw new WorkerError(msg.error);
     return msg.result;
   }

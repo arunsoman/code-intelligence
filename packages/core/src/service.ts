@@ -1,12 +1,15 @@
+import { summarizeValidation } from "./answer-validation.ts";
 import { parseCompoundQuestion, planCompoundQuestion, evaluateCompoundQuestion, compoundAnswer } from "./compound-query.ts";
 import { validateSnapshotReuse } from "./snapshot-reuse.ts";
 import { retrieveFromSnapshot } from "./retrieval.ts";
 import { validateImpactPolicy, explainImpactItem } from "./impact-report.ts";
 import { renderImpactComment } from "./impact-render.ts";
 import { ConversationActions, ConversationConflict } from "./conversation-actions.ts";
+import { boundAnswerContext } from "./answer-visual.ts";
 import { bindSelectedChart, responsePortfolio } from "./response-portfolio.ts";
-import type { ResponseManifest } from "@cie/schema";
+import type { AnswerInvestigation, AnswerValidationSummary, ResponseManifest } from "@cie/schema";
 import { diagnostic, bundleDiagnostics, withDiagnostics } from "./diagnostics.ts";
+import { reEvidenceFailure, reExportBundle, reFogInventory, reImportBundle, reListEvidence, reListArtifacts, reAnalyzeArtifact } from "./re-evidence.ts";
 // Orchestration. Public operations return ApiResult (contracts §1). Every model call goes through callModel,
 // which enforces the per-repository egress opt-in, scrubs secrets, and writes the audit trail.
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
@@ -427,6 +430,27 @@ export class Service {
     "C04/actionsRuns": (c, b) => this.ciResult(c, () => this.ciForge().actionsRuns(b.repo, b.workflow)),
     "C04/releaseByTag": (c, b) => this.ciResult(c, () => this.ciForge().releaseByTag(b.repo, b.tag)),
   };
+
+  /** C33 — reverse-engineering evidence (the "Reverse engineering" menu; packages/evidence). Read-only
+   * except importBundle and analyzeArtifact: an import stores nothing that has not authenticated — every
+   * record id and the bundle digest are recomputed from content — and the artifact probe reaches storage
+   * through that same authenticated import path. */
+  readonly reOps: Record<string, (ctx: CallContext, b: any) => Promise<ApiResult<unknown>>> = {
+    "C33/fogInventory": (c, b) => this.reResult(c, () => reFogInventory(this.store, String(b?.revision ?? ""))),
+    "C33/listEvidence": (c, b) => this.reResult(c, () => reListEvidence(this.store, String(b?.revision ?? ""))),
+    "C33/importBundle": (c, b) => this.reResult(c, () => reImportBundle(this.store, String(b?.revision ?? ""), b)),
+    "C33/exportBundle": (c, b) => this.reResult(c, () => reExportBundle(this.store, String(b?.revision ?? ""))),
+    "C33/listArtifacts": (c, b) => this.reResult(c, () => reListArtifacts(this.store, String(b?.revision ?? ""))),
+    "C33/analyzeArtifact": (c, b) => this.reResult(c, () => reAnalyzeArtifact(this.store, this.worker, String(b?.revision ?? ""), b?.path)),
+  };
+
+  private async reResult<T>(ctx: CallContext, fn: () => T | Promise<T>): Promise<ApiResult<T>> {
+    try {
+      return ok(ctx, await fn());
+    } catch (e) {
+      return fail(ctx, reEvidenceFailure(e) ?? storageFailure(e));
+    }
+  }
 
   /** Real release adapters: milestone issues read live via the `gh` CLI (no token stored or passed; `gh auth`
    * handles authentication). When `gh` is unavailable this answers with no issues rather than guessing — the
@@ -2268,6 +2292,8 @@ export class Service {
   /** Every question gets both: the picture, and the written answer composed from the same view (after access redaction, so it never says more). */
   async ask(ctx: CallContext, req: Parameters<Service["askView"]>[1]): Promise<ApiResult<{ view: ViewSpec; claims: Claim[]; manifest?: ResponseManifest }>> {
     return withDiagnostics({ requestId: ctx.requestId, traceId: ctx.traceId }, async () => {
+      if (req.answerContext !== undefined && (typeof req.answerContext !== "string" || req.answerContext.length > 6000))
+        return fail(ctx, { code: "INVALID_SCHEMA", message: "answerContext must be a string of at most 6000 characters", retryable: false });
       const result = await this.askInternal(ctx, req);
       if (!result.ok) return result;
       if(req.snapshotId){
@@ -2278,7 +2304,7 @@ export class Service {
       }
       result.value.view = bindSelectedChart(result.value.view, req.chartCode);
       result.value.view.params = { ...result.value.view.params, scope: req.scope ?? (req.overview ? "repository" : "subject"), ...(req.subject ? { subject: req.subject } : {}) };
-      return { ...result, value: { ...result.value, manifest: this.manifestFor([result.value.view], req.question.trim(), { scope: req.scope ?? (req.overview ? "repository" : "subject"), subject: req.subject, seeds: req.seeds }) } };
+      return { ...result, value: { ...result.value, manifest: this.manifestFor([result.value.view], req.question.trim(), { scope: req.scope ?? (req.overview ? "repository" : "subject"), subject: req.subject, seeds: req.seeds }, req.answerContext) } };
     });
   }
 
@@ -2360,7 +2386,7 @@ export class Service {
     };
   }
 
-  private async askView(ctx: CallContext, req: { question: string; snapshotId?: string; route?: ViewRoute; revision?: string; pins?: string[]; seeds?: string[]; overview?: boolean; level?: number; form?: string; kind?: "failure" | "invariant"; subject?: string; lens?: string; chartCode?: string; scope?: "repository" | "subject" }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
+  private async askView(ctx: CallContext, req: { question: string; answerContext?: string; snapshotId?: string; route?: ViewRoute; revision?: string; pins?: string[]; seeds?: string[]; overview?: boolean; level?: number; form?: string; kind?: "failure" | "invariant"; subject?: string; lens?: string; chartCode?: string; scope?: "repository" | "subject" }): Promise<ApiResult<{ view: ViewSpec; claims: Claim[] }>> {
     const question = (req.question ?? "").trim();
     if (!question || question.length > 1000) return fail(ctx, { code: "INVALID_SCHEMA", message: "question must be 1–1000 characters", retryable: false });
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
@@ -2427,14 +2453,14 @@ export class Service {
         const fallbackOptions = { overview: req.overview, lens: req.lens, pins: new Set(req.pins ?? []), extraSeeds: [...(req.pins ?? []), ...(req.overview ? overviewSeeds(this.store, rev.id) : req.seeds ?? [])], access: policyFor(this.store, rev.repoRoot) };
         const modelBundle = retrieveForQuestion(this.store, rev.id, question, { ...fallbackOptions, tokenBudget: req.overview ? undefined : chunkTokenBudget() }).bundle;
         if (modelBundle.entities.length > 0) {
-          const cacheKey = chartPlanCacheKey(modelBundle, question, req.chartCode);
-          let plan = matchingChartPlan(this.store.generatedChartPlan(cacheKey, modelBundle.id, question) ?? cachedChartPlan(modelBundle, question, req.chartCode), req.chartCode);
+          const cacheKey = chartPlanCacheKey(modelBundle, question, req.chartCode, req.answerContext);
+          let plan = matchingChartPlan(this.store.generatedChartPlan(cacheKey, modelBundle.id, question) ?? cachedChartPlan(modelBundle, question, req.chartCode, req.answerContext), req.chartCode);
           const warnings: string[] = [];
           let cacheHit = !!plan;
           let run: ModelRunRef | undefined;
           const diag: ChartCompileDiag = { cacheHit, schemaValidationPassed: true };
           if (!plan) {
-            const generated = await this.callModel<ChartOutput>(ctx, rev, chartCreatorRequest(question, modelBundle, req.chartCode));
+            const generated = await this.callModel<ChartOutput>(ctx, rev, chartCreatorRequest(question, modelBundle, req.chartCode, req.answerContext));
             if (generated.note) warnings.push(generated.note);
             if (generated.result.ok) {
               plan = generated.result.value;
@@ -2452,7 +2478,7 @@ export class Service {
                 }
               }
               if (plan) {
-                rememberChartPlan(modelBundle, question, plan);
+                rememberChartPlan(modelBundle, question, plan, req.answerContext);
                 this.store.saveGeneratedChartPlan(cacheKey, modelBundle.id, question, plan);
               }
             } else {
@@ -2509,13 +2535,13 @@ export class Service {
       // Answer the question from the same evidence independently of whether its diagram is renderable.
       const evidenceAnswer = compoundResult ? {text:compoundAnswer(compoundResult),claims:[],warnings:[]} : await this.answerFromEvidence(ctx, rev, question, modelBundle);
       warnings.push(...evidenceAnswer.warnings);
-      const cacheKey = chartPlanCacheKey(modelBundle, question, req.chartCode);
-      let plan = matchingChartPlan(this.store.generatedChartPlan(cacheKey, modelBundle.id, question) ?? cachedChartPlan(modelBundle, question, req.chartCode), req.chartCode);
+      const cacheKey = chartPlanCacheKey(modelBundle, question, req.chartCode, req.answerContext);
+      let plan = matchingChartPlan(this.store.generatedChartPlan(cacheKey, modelBundle.id, question) ?? cachedChartPlan(modelBundle, question, req.chartCode, req.answerContext), req.chartCode);
       diagnostic("chart.cache", { requestId: ctx.requestId, chartId: req.chartCode, cacheKey, hit: !!plan, bundleId: modelBundle.id });
       let chartRun: ModelRunRef | undefined;
       const chartDiag: ChartCompileDiag = { cacheHit: !!plan, schemaValidationPassed: true };
       if (!plan && bundle.entities.length > 0) {
-        const generated = await this.callModel<ChartOutput>(ctx, rev, chartCreatorRequest(question, modelBundle, req.chartCode));
+        const generated = await this.callModel<ChartOutput>(ctx, rev, chartCreatorRequest(question, modelBundle, req.chartCode, req.answerContext));
         if (generated.note) warnings.push(generated.note);
         if (generated.result.ok) {
           plan = generated.result.value;
@@ -2533,7 +2559,7 @@ export class Service {
             }
           }
           if (plan) {
-            rememberChartPlan(modelBundle, question, plan);
+            rememberChartPlan(modelBundle, question, plan, req.answerContext);
             this.store.saveGeneratedChartPlan(cacheKey, modelBundle.id, question, plan);
           }
         } else {
@@ -2548,7 +2574,7 @@ export class Service {
       if (!plan && req.chartCode) {
         const offlineStarted = performance.now();
         diagnostic("model.dispatch", { requestId: ctx.requestId, purpose: "CHART", chartId: req.chartCode, provider: this.offline.name, model: this.offline.model, hosted: false, reason: bundle.entities.length ? "chart generation failed or was rejected" : "retrieval returned no entities", bundle: bundleDiagnostics(modelBundle) });
-        const empty = await runModel<ChartOutput>(this.offline, chartCreatorRequest(question, modelBundle, req.chartCode), {
+        const empty = await runModel<ChartOutput>(this.offline, chartCreatorRequest(question, modelBundle, req.chartCode, req.answerContext), {
           deadlineMs: Math.max(1000, ctx.deadlineMs - Date.now()),
         });
         diagnostic("model.complete", { requestId: ctx.requestId, purpose: "CHART", chartId: req.chartCode, elapsedMs: performance.now() - offlineStarted, provider: this.offline.name, model: this.offline.model, ok: empty.ok, ...(empty.ok ? { run: empty.run, outputKeys: Object.keys(empty.value) } : { error: empty.error }) }, empty.ok ? "debug" : "warn");
@@ -2644,9 +2670,9 @@ export class Service {
     return ok(ctx, catalog(this.store, rev, !!rev && isGitRepo(rev.repoRoot)), rev ? { revision: rev.id } : {});
   }
 
-  private manifestFor(views: ViewSpec[], question: string, context?: { scope: "subject" | "repository"; subject?: string; seeds?: string[] }): ResponseManifest {
+  private manifestFor(views: ViewSpec[], question: string, context?: { scope: "subject" | "repository"; subject?: string; seeds?: string[] }, answerContext?: string): ResponseManifest {
     const rev = this.store.revision(views[0]!.revision);
-    return responsePortfolio({ views, question, context, evidenceKinds: this.store.entityKindCounts(views[0]!.revision), catalog: catalog(this.store, rev, !!rev && isGitRepo(rev.repoRoot)) });
+    return responsePortfolio({ views, question, context, answerContext: boundAnswerContext(answerContext), evidenceKinds: this.store.entityKindCounts(views[0]!.revision), catalog: catalog(this.store, rev, !!rev && isGitRepo(rev.repoRoot)) });
   }
 
   /** Rank supported chat chart options against the question and the answer that was just shown. */
@@ -3229,11 +3255,11 @@ export class Service {
   }
 
   /** Read the caller's persisted conversation turns for restoring the chat panel. */
-  conversation(ctx: CallContext, req: { sessionId: string }): ApiResult<{ sessionId: string; turns: { seq: number; role: "user" | "assistant"; text: string; at: string }[] }> {
+  conversation(ctx: CallContext, req: { sessionId: string }): ApiResult<{ sessionId: string; turns: { seq: number; role: "user" | "assistant"; text: string; at: string; validation?: AnswerValidationSummary }[] }> {
     const sessionId = typeof req.sessionId === "string" ? req.sessionId.trim() : "";
     if (!sessionId || sessionId.length > 120) return fail(ctx, { code: "INVALID_SCHEMA", message: "a valid sessionId is required", retryable: false });
     const session = this.sessionManager.getSession(ctx, sessionId);
-    return ok(ctx, { sessionId, turns: session.turns.filter((turn) => turn.state === "complete").map(({ seq, role, text, at }) => ({ seq, role, text, at })) });
+    return ok(ctx, { sessionId, turns: session.turns.filter((turn) => turn.state === "complete").map(({ seq, role, text, at, validation }) => ({ seq, role, text, at, ...(validation ? { validation } : {}) })) });
   }
   /** Session-scoped entry point: persist the turn envelope before routing, then store its answer. */
   async converse(ctx: CallContext, req: { text: string; sessionId?: string; view?: ViewSpec | null; selection?: string[]; revision?: string; pins?: string[]; history?: { role: "user" | "assistant"; text: string }[] }): Promise<ApiResult<ConverseResult>> {
@@ -3244,7 +3270,10 @@ export class Service {
         const result = await this.converseSession(ctx, req);
         if (result.ok && (result.value.kind === "view" || result.value.kind === "analysis")) {
           const views = result.value.kind === "view" ? [result.value.view] : result.value.results.flatMap((r) => r.view ? [r.view] : []);
-          if (views.length) result.value.manifest = this.manifestFor(views, req.text);
+          if (views.length) {
+            const seeds = views.flatMap(v => typeof v.params?.answerEntityRefs === "string" ? v.params.answerEntityRefs.split("\n").filter(Boolean) : []);
+            result.value.manifest = this.manifestFor(views, result.value.kind === "analysis" ? result.value.validation?.question ?? req.text : req.text, seeds.length ? { scope: "subject", seeds } : undefined, result.value.message);
+          }
         }
         diagnostic("conversation.complete", { elapsedMs: performance.now() - started, ok: result.ok, ...(result.ok ? { kind: result.value.kind, message: result.value.message, metadata: result.metadata } : { error: result.error }) });
         return result;
@@ -3282,7 +3311,7 @@ export class Service {
       session.completePending();
       const answer = result.value.message;
       const chartCode = result.value.kind === "view" && typeof result.value.view.params?.chartId === "string" ? result.value.view.params.chartId : undefined;
-      session.appendTurn("assistant", answer, chartCode);
+      session.appendTurn("assistant", answer, chartCode, "complete", result.value.kind === "analysis" && result.value.validation ? summarizeValidation(result.value.validation) : undefined);
       const activeView = result.value.kind === "view" ? result.value.view
         : result.value.kind === "analysis" ? result.value.results.findLast((x) => x.view)?.view
         : undefined;
@@ -3310,6 +3339,29 @@ export class Service {
     const view = req.view ?? null;
     const revision = req.revision ?? view?.revision;
     const indexed = revision ? this.store.revision(revision) : this.store.latestRevision();
+    const resumeMatch = /^continue investigation ([a-zA-Z0-9:_-]{1,120})$/i.exec(text);
+    if (resumeMatch) {
+      const sessionId = req.sessionId?.trim() || ctx.actor.sessionId || ctx.idempotencyKey || ctx.requestId;
+      const saved = this.store.db.prepare(`select response_json from conversation_actions where tenant_id=? and principal_id=? and session_id=? and state='complete' and json_extract(response_json,'$.value.validation.investigation.id')=? limit 1`)
+        .get(ctx.actor.tenantId, ctx.actor.principalId, sessionId, resumeMatch[1]) as { response_json: string } | undefined;
+      const checkpoint = saved ? (JSON.parse(saved.response_json) as { value: { validation?: { investigation?: AnswerInvestigation } } }).value.validation?.investigation : undefined;
+      if (!checkpoint) return fail(ctx, { code: "NOT_FOUND", message: "This saved investigation is not available in this conversation.", retryable: false });
+      if (!indexed || indexed.id !== checkpoint.revision) return fail(ctx, { code: "STALE_REVISION", message: "The indexed revision changed; ask the original question again to collect fresh evidence.", retryable: false });
+      const access = policyFor(this.store, indexed.repoRoot);
+      const entities = this.store.entitiesById(indexed.id, checkpoint.inspectedIds);
+      if (entities.length !== checkpoint.inspectedIds.length || entities.some(e => access.denied(e.file))) return fail(ctx, { code: "FORBIDDEN", message: "Source access changed; start a fresh investigation with permitted evidence.", retryable: false });
+      for (const [id, expected] of Object.entries(checkpoint.sourceHashes)) {
+        const entity = entities.find(e => e.entityId === id), source = entity?.spans[0]?.sourceId;
+        if (!source) return fail(ctx, { code: "STALE_REVISION", message: "An inspected source is no longer available; re-index and ask again.", retryable: false });
+        try {
+          const path = realpathSync(resolve(indexed.repoRoot, source)), rel = relative(realpathSync(indexed.repoRoot), path);
+          if (rel.startsWith("..") || isAbsolute(rel) || createHash("sha256").update(readFileSync(path)).digest("hex") !== expected) throw new Error("stale source");
+        } catch { return fail(ctx, { code: "STALE_REVISION", message: "Inspected source changed; re-index and ask the original question again.", retryable: false }); }
+      }
+      if (!this.router?.converse) return fail(ctx, { code: "INSUFFICIENT_EVIDENCE", message: "A tool-calling model is required to continue this investigation.", retryable: true });
+      const answered = await runChatAgent(this, ctx, indexed, this.router, { text: checkpoint.question, history: [], resume: checkpoint, pins: req.pins });
+      return answered ?? fail(ctx, { code: "INSUFFICIENT_EVIDENCE", message: "The model could not continue this investigation.", retryable: true });
+    }
     if (indexed) {
       const required = conceptRequirement(this.store, indexed.id);
       if (required) return ok(ctx, { kind: "message", message: required }, { revision: indexed.id });

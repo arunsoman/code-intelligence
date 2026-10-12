@@ -1,4 +1,4 @@
-import type { CallContext, RevisionId, ViewSpec } from "../../schema/src/index.ts";
+import type { AnswerValidationSummary, CallContext, RevisionId, ViewSpec } from "../../schema/src/index.ts";
 import type { BreadcrumbFrame, ReferentRecord } from "../../schema/src/intents.ts";
 import type { Store } from "./store.ts";
 
@@ -34,6 +34,7 @@ export interface ChatTurn {
   text: string;
   state: "pending" | "complete" | "failed";
   attempt: number;
+  validation?: AnswerValidationSummary;
   intentId?: number;
   chartCode?: string;
   viewId?: string;
@@ -132,8 +133,8 @@ export class ChatSessionManager {
       get context() { return state!.context; },
       get turns() { return state!.turns; },
       get referentLedger() { return state!.context.referents; },
-      appendTurn: (role: ChatTurn["role"], text: string, chartCode?: string, turnState: ChatTurn["state"] = "complete") => {
-        const turn: ChatTurn = { sessionId, seq: ++state!.session.seq, role, text, state: turnState, attempt: 1, ...(chartCode ? { chartCode } : {}), at: new Date().toISOString() };
+      appendTurn: (role: ChatTurn["role"], text: string, chartCode?: string, turnState: ChatTurn["state"] = "complete", validation?: AnswerValidationSummary) => {
+        const turn: ChatTurn = { sessionId, seq: ++state!.session.seq, role, text, ...(validation ? { validation } : {}), state: turnState, attempt: 1, ...(chartCode ? { chartCode } : {}), at: new Date().toISOString() };
         state!.turns.push(turn);
         state!.session.lastActiveAt = turn.at;
         persist();

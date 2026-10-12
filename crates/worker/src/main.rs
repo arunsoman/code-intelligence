@@ -2,7 +2,9 @@
 mod dataflow;
 mod frameworks;
 mod index;
+mod artifact;
 mod canon;
+mod evidence;
 mod language;
 mod metrics;
 mod model;
@@ -121,6 +123,19 @@ fn handle(req: &Value) -> Value {
                 }
             }
         },
+        "probeArtifact" => {
+            // C33: read one binary artifact (jar/so/dll/exe/…) and return what its bytes support.
+            let params = req.pointer("/params").cloned().unwrap_or(Value::Null);
+            match params.get("path").and_then(Value::as_str) {
+                None => Err(("INVALID_SCHEMA", "params.path required".into())),
+                Some(p) => {
+                    let display = params.get("displayPath").and_then(Value::as_str).unwrap_or(p);
+                    artifact::probe_artifact(Path::new(p), display).map_err(|(code, message)| (code, message)).and_then(|report| {
+                        serde_json::to_value(report).map_err(|e| ("STORAGE_FAILURE", e.to_string()))
+                    })
+                }
+            }
+        }
         "regexFind" => {
             let params = req.pointer("/params").cloned().unwrap_or(Value::Null);
             match params.get("root").and_then(Value::as_str) {

@@ -23,6 +23,8 @@ export interface ToolEnv {
   seen: Map<string, { name: string; file: string }>;
   /** Analyses with a view, in call order, for the "Show …" buttons. */
   results: ChatAnalysisResult[];
+  /** Source intervals actually delivered, distinct from symbols merely discovered. */
+  sourceReads?: Map<string, { total: number; contentHash: string; ranges: [number, number][] }>;
   warnings: string[];
 }
 export type JsonSchema = { type: "object"; properties: Record<string, { type: "string" | "integer" | "array"; description?: string; enum?: string[]; maxLength?: number; items?: { type: "string" }; maxItems?: number }>; required: string[]; additionalProperties: false };
@@ -34,7 +36,7 @@ export interface ChatTool {
   run?: (env: ToolEnv, args: Record<string, unknown>) => Promise<string>;
 }
 
-const MAX_SOURCE_LINES = 260, MAX_SOURCE_CHARS = 14000, MAX_LINKS = 20;
+const MAX_SOURCE_LINES = 120, MAX_SOURCE_CHARS = 14000, MAX_LINKS = 20;
 const FORMS = VISUALS.filter((v) => v.formId !== "HypothesisGraph");
 
 const str = (description: string, extra: { enum?: string[]; maxLength?: number } = {}) => ({ type: "string" as const, description, maxLength: 1000, ...extra });
@@ -69,24 +71,28 @@ function entityFor(env: ToolEnv, ref: string): Entity | null {
   return hit ? svc.store.entitiesById(rev.id, [hit.entityId])[0] ?? null : null;
 }
 
-function sourceOf(rev: RevisionRow, e: Entity): { startLine: number; endLine: number; text: string; stale: boolean } | null {
+function sourceOf(rev: RevisionRow, e: Entity): { startLine: number; endLine: number; text: string; stale: boolean; contentHash: string } | null {
   const span = e.spans[0];
   if (!span) return null;
   const path = resolve(rev.repoRoot, span.sourceId), rel = relative(rev.repoRoot, path);
   if (rel.startsWith("..") || isAbsolute(rel)) return null;
   let buf: Buffer;
   try { buf = readFileSync(path); } catch { return null; }
-  const stale = createHash("sha256").update(buf).digest("hex") !== span.contentHash;
-  const startLine = buf.subarray(0, span.startByte).toString("utf8").split("\n").length;
-  const text = buf.subarray(span.startByte, span.endByteExclusive).toString("utf8");
-  return { startLine, endLine: startLine + text.split("\n").length - 1, text, stale };
+  const contentHash = createHash("sha256").update(buf).digest("hex");
+  const stale = contentHash !== span.contentHash;
+  // File entities may carry a zero-length location span rather than a whole-file span.
+  const startLine = e.kind === "file" ? 1 : buf.subarray(0, span.startByte).toString("utf8").split("\n").length;
+  const text = (e.kind === "file" ? buf : buf.subarray(span.startByte, span.endByteExclusive)).toString("utf8");
+  return { startLine, endLine: startLine + text.split("\n").length - 1, text, stale, contentHash };
 }
 
-function truncateSource(text: string): string {
-  const lines = text.split("\n");
-  let out = lines.slice(0, MAX_SOURCE_LINES).join("\n");
-  if (out.length > MAX_SOURCE_CHARS) out = out.slice(0, MAX_SOURCE_CHARS);
-  return out.length < text.length ? `${out}\n… (${lines.length} lines in all; the rest is not shown)` : out;
+/** Page relative to the entity span; even a single very long line can be continued without losing text. */
+export function sourcePage(text: string, offset = 0): { text: string; nextOffset?: number } {
+  const rest = text.slice(offset);
+  const lines = rest.split("\n");
+  const page = lines.slice(0, MAX_SOURCE_LINES).join("\n").slice(0, MAX_SOURCE_CHARS);
+  const end = offset + page.length;
+  return { text: page, ...(end < text.length ? { nextOffset: end } : {}) };
 }
 
 /** Run one existing analysis step (the same code the scripted planner runs) and report it to the model. Exported so
@@ -123,9 +129,10 @@ export const CHAT_TOOLS: ChatTool[] = [
   },
   {
     name: "read_code",
-    description: "Read one class, function, method or file: its source, what it contains, what calls it and what it calls. Read code before saying what it does.",
-    parameters: obj({ id: str("An id from an earlier result, or the exact name of the element") }, ["id"]),
-    async run(env, { id }) {
+    description: "Read one class, function, method or file: its source, what it contains, what calls it and what it calls. Read code before saying what it does. If a next offset is returned, continue reading with that offset to inspect the rest.",
+    parameters: obj({ id: str("An id from an earlier result, or the exact name of the element"), offset: { type: "integer", description: "Character offset within the entity source; use the next offset returned by a prior read (default 0)" } }, ["id"]),
+    async run(env, { id, offset = 0 }) {
+      if (!Number.isSafeInteger(offset) || Number(offset) < 0) return "Refused: offset must be a nonnegative safe integer.";
       const e = entityFor(env, id as string);
       if (!e) return `No accessible element is called or identified by "${id}". Try find_code.`;
       const { svc, rev, access } = env;
@@ -144,10 +151,21 @@ export const CHAT_TOOLS: ChatTool[] = [
       section("Calls", linked((r) => (r.kind === "calls" && r.from === e.entityId ? r.to : null)));
       section("Imported by", linked((r) => (r.kind === "imports" && r.to === e.entityId ? r.from : null)));
       const src = sourceOf(rev, e);
+      if (src && Number(offset) > src.text.length) return "Refused: offset is past the end of the entity source.";
+      const page = src ? sourcePage(src.text, Number(offset)) : null;
+      if (src && page) {
+        env.sourceReads ??= new Map();
+        const previous = env.sourceReads.get(e.entityId);
+        const read = previous?.contentHash === src.contentHash ? previous : { total: src.text.length, contentHash: src.contentHash, ranges: [] };
+        read.ranges.push([Number(offset), Number(offset) + page.text.length]);
+        read.ranges.sort((a, b) => a[0] - b[0]);
+        env.sourceReads.set(e.entityId, read);
+      }
       svc.store.audit(env.ctx.actor.principalId, "chat.read", rev.id, { entity: e.entityId });
       return [
         `[${e.entityId}] ${e.kind} ${e.name} — ${e.file}${src ? `:${src.startLine}-${src.endLine}` : ""}`,
-        src ? `${src.stale ? "(the file changed since it was indexed; this is its current text)\n" : ""}\`\`\`\n${truncateSource(src.text)}\n\`\`\`` : "(source text unavailable)",
+        src ? `${src.stale ? "(the file changed since it was indexed; this is its current text)\n" : ""}\`\`\`\n${page!.text}\n\`\`\`` : "(source text unavailable)",
+        ...(page?.nextOffset !== undefined ? [`Source continues: call read_code with id=${JSON.stringify(e.entityId)} and offset=${page.nextOffset}.`] : []),
         ...sections,
       ].join("\n");
     },

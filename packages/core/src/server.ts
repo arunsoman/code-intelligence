@@ -137,6 +137,9 @@ export function opsFor(svc: Service) {
   for (const [key, run] of Object.entries(svc.campaignOps)) ops[key] = { mutating: !["C28/getCampaign", "C28/listCampaigns", "C28/listChildren", "C28/getCampaignPlan", "C28/clusterChildren", "C28/getDryRun"].includes(key), run: run as any };
   for (const [key, run] of Object.entries(svc.releaseOps)) ops[key] = { mutating: !["C32/getRelease", "C32/listReleases", "C32/getReleaseReadiness", "C32/previewMilestone", "C32/listMilestones", "C32/lookupIssue"].includes(key), run: run as any };
   for (const [key, run] of Object.entries(svc.ciOps)) ops[key] = { mutating: false, run: run as any };
+  // C33 reverse-engineering evidence: only the import and the artifact probe write, and both only store
+  // authenticated bundles (the probe reaches storage through the same import path).
+  for (const [key, run] of Object.entries(svc.reOps)) ops[key] = { mutating: key === "C33/importBundle" || key === "C33/analyzeArtifact", run: run as any };
   // Prompt-to-feature (docs/prompt-to-feature): typed stubs until each owning task registers its handler in feature/routes.ts.
   Object.assign(ops, featureOps(featureHandlers(svc), ops));
   return ops;

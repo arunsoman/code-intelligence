@@ -1070,6 +1070,17 @@ export const MIGRATIONS: Migration[] = [
         state text not null default 'CURRENT', created_at text not null, updated_at text not null);`),
     down: (db) => db.exec("drop table if exists impact_reports; drop table if exists pr_change_sets;"),
   },
+  {
+    // C33 (reverse engineering): evidence records and residual unknowns about artifacts the source
+    // index cannot see — compiled addons, minified bundles, published packages. Records arrive as
+    // authenticated re-evidence-bundles (packages/evidence); ids are pf-canon-v1 content digests, so
+    // re-importing the same observation is a no-op rather than a duplicate.
+    version: 51, name: "re-evidence",
+    up: (db) => db.exec(`
+      create table re_records(id text primary key, revision text not null references revisions(id) on delete cascade, kind text not null, json text not null);
+      create index re_records_revision on re_records(revision, kind);`),
+    down: (db) => db.exec("drop table re_records;"),
+  },
 ];
 export function currentVersion(db: DatabaseSync): number {
   db.exec("create table if not exists schema_version(version integer not null, name text not null, applied_at text not null)");

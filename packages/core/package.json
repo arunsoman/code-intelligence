@@ -1,1 +1,16 @@
-{ "name": "@cie/core", "version": "0.1.0", "private": true, "type": "module", "exports": { ".": "./src/index.ts" }, "dependencies": { "@cie/schema": "*", "@cie/model": "*", "typescript": "*" } }
+{
+  "name": "@cie/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@cie/schema": "*",
+    "@cie/model": "*",
+    "typescript": "*",
+    "@cie/canon": "*",
+    "@cie/evidence": "*"
+  }
+}

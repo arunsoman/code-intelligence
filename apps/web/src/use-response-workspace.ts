@@ -88,7 +88,7 @@ export function useResponseWorkspace(p: {
     const taskEpoch = epoch.current;
     set(updateTab(w, id, { status: "queued", reason: "Waiting for a generation slot. This view will start automatically.", attempt }));
     const outcome = await requests.enqueue(id, signal => call<{ view: ViewSpec; claims: Claim[]; manifest?: ResponseManifest }>("C19", "ask", {
-      question: w!.manifest.question, revision: token.revision, form: tab!.form,
+      question: w!.manifest.question, answerContext: w!.manifest.answerContext, revision: token.revision, form: tab!.form,
       ...((tab!.form === "GeneratedChart" || tab!.form === "SemanticMap") && w!.manifest.snapshotId ? {snapshotId:w!.manifest.snapshotId} : {}),
       subject: tab!.subject, scope: tab!.scope, seeds: tab!.seeds,
       ...(tab!.code.startsWith("S") ? { chartCode: tab!.code } : {}),

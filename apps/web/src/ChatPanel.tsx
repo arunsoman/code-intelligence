@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { buttonFeedback } from "./button.ts";
-import type { ChatAnalysisResult } from "@cie/schema";
+import type { AnswerValidationSummary, ChatAnalysisResult } from "@cie/schema";
 
 /** One alternative view the router considered for the same question. */
-export interface MessageAlt { form: string; kind?: string; chartCode?: string; name: string; question: string; prompt?: string }
+export interface MessageAlt { form: string; kind?: string; chartCode?: string; name: string; question: string; prompt?: string;
+  response?: { responseId: string; viewId: string; revision: string; answerContext?: string; snapshotId?: string; seeds: string[]; scope: "subject" | "repository"; subject?: string };
+}
 
 export interface Message {
-  id?: string; role: "user" | "assistant"; text: string; at: string; error?: boolean; results?: ChatAnalysisResult[];
+  id?: string; role: "user" | "assistant"; text: string; at: string; error?: boolean; results?: ChatAnalysisResult[]; validation?: AnswerValidationSummary;
   /** Other chart forms the router considered equally valid for the same question. */
   alternatives?: MessageAlt[];
   /** The pre-answer trace (why this form, the bare caption) kept once `text` carries the composed answer; shown collapsed. */
@@ -23,9 +25,10 @@ interface Props {
   onCreateProvider?: () => void;
   /** Show the same question rendered as a different chart form. */
   onShowAlt?: (alt: MessageAlt) => void;
+  onContinueInvestigation?: (id: string) => void;
 }
 
-export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend, onDropReferent, onNewContext, seed, onShowResult, onCreateProvider, onShowAlt }: Props) {
+export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend, onDropReferent, onNewContext, seed, onShowResult, onCreateProvider, onShowAlt, onContinueInvestigation }: Props) {
   const [text, setText] = useState("");
   const [referentsExpanded, setReferentsExpanded] = useState(false);
   const end = useRef<HTMLDivElement>(null);
@@ -59,6 +62,15 @@ export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend,
                 <button className="secondary small" disabled={busy} onClick={onCreateProvider}>Create a provider</button>
               </div>
             )}
+            {m.validation && <div className="chat-results" role="group" aria-label="Answer validation">
+              <span className="muted small">{m.validation.status === "SUPPORTED" ? "Answer review passed" : "Unresolved investigation"}</span>
+              {m.validation.investigation?.nextAction === "continue" && <button className="secondary small" disabled={busy} onClick={() => onContinueInvestigation?.(m.validation!.investigation!.id)}>Continue investigation</button>}
+              <details className="thinking"><summary>Answer review</summary>
+                <p className="muted small">{m.validation.review.requirements.join("; ")}</p>
+                <p className="muted small">{m.validation.review.gaps.join("; ")}</p>
+                <p className="muted small">Repair attempts: {m.validation.repairAttempts}/2. A model review is an evidence check, not a proof of runtime behavior.</p>
+              </details>
+            </div>}
             {/* Multi-step analysis results — "Show <step title>" */}
             {m.results && (
               <div className="chat-results" role="group" aria-label="Analysis views">
@@ -78,7 +90,7 @@ export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend,
                     key={j}
                     className="secondary small"
                     disabled={busy}
-                    title={`Render the same question as a ${a.name}`}
+                    title={`Explore these findings as a ${a.name}`}
                     onClick={() => onShowAlt?.(a)}
                   >
                     {a.name}

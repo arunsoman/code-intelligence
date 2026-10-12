@@ -1,0 +1,72 @@
+{
+  "protocol": "pf-canon-v1",
+  "note": "re-evidence-v1: digests computed by scripts/gen-re-evidence-vectors.ts with @cie/canon; evidence ids are ev_<hex over cie.re-evidence@1>, unknowns ru_<hex over cie.re-unknown@1>, bundles full-form pf-canon-v1/cie.re-evidence-bundle@1:<hex>. Read by node --test and cargo test.",
+  "schema": "cie.re-evidence",
+  "version": "1",
+  "unknownSchema": "cie.re-unknown",
+  "bundleSchema": "cie.re-evidence-bundle",
+  "vectors": [
+    {
+      "id": "ev-keys-order-a",
+      "op": "evidenceId",
+      "inputText": "{\"subject\":{\"path\":\"node_modules/native-thing/build/Release/native.node\",\"sha256\":\"8c85cb009ad1a0008a01500008ef4000335e7040b6e97b0026e3900044c48000\",\"format\":\"macho\"},\"provider\":{\"id\":\"rea-inspired-tool\",\"name\":\"RE Evidence Tool\",\"version\":\"0.1.0\"},\"predicate\":\"contains_function\",\"confidence\":\"observed\",\"authority\":\"shipped-artifact\",\"limitations\":[\"naming comes from the symbol table, not from debug info\",\"control flow is not reconstructed\"],\"locations\":[{\"kind\":\"address\",\"value\":\"0x401000\",\"endValue\":\"0x4010c4\"}]}",
+      "expectedCanonical": "{\"authority\":\"shipped-artifact\",\"confidence\":\"observed\",\"limitations\":[\"control flow is not reconstructed\",\"naming comes from the symbol table, not from debug info\"],\"locations\":[{\"endValue\":\"0x4010c4\",\"kind\":\"address\",\"value\":\"0x401000\"}],\"predicate\":\"contains_function\",\"provider\":{\"id\":\"rea-inspired-tool\",\"name\":\"RE Evidence Tool\",\"version\":\"0.1.0\"},\"subject\":{\"format\":\"macho\",\"path\":\"node_modules/native-thing/build/Release/native.node\",\"sha256\":\"8c85cb009ad1a0008a01500008ef4000335e7040b6e97b0026e3900044c48000\"}}",
+      "expectedId": "ev_40f3afea9d2a0043f87bf24e8b9968abc798319d6aa6af9af6c017f03aaa0f0c"
+    },
+    {
+      "id": "ev-keys-order-b",
+      "op": "evidenceId",
+      "inputText": "{\"locations\":[{\"kind\":\"address\",\"value\":\"0x401000\",\"endValue\":\"0x4010c4\"}],\"limitations\":[\"naming comes from the symbol table, not from debug info\",\"control flow is not reconstructed\"],\"authority\":\"shipped-artifact\",\"predicate\":\"contains_function\",\"confidence\":\"observed\",\"provider\":{\"id\":\"rea-inspired-tool\",\"name\":\"RE Evidence Tool\",\"version\":\"0.1.0\"},\"subject\":{\"path\":\"node_modules/native-thing/build/Release/native.node\",\"sha256\":\"8c85cb009ad1a0008a01500008ef4000335e7040b6e97b0026e3900044c48000\",\"format\":\"macho\"}}",
+      "expectedCanonical": "{\"authority\":\"shipped-artifact\",\"confidence\":\"observed\",\"limitations\":[\"control flow is not reconstructed\",\"naming comes from the symbol table, not from debug info\"],\"locations\":[{\"endValue\":\"0x4010c4\",\"kind\":\"address\",\"value\":\"0x401000\"}],\"predicate\":\"contains_function\",\"provider\":{\"id\":\"rea-inspired-tool\",\"name\":\"RE Evidence Tool\",\"version\":\"0.1.0\"},\"subject\":{\"format\":\"macho\",\"path\":\"node_modules/native-thing/build/Release/native.node\",\"sha256\":\"8c85cb009ad1a0008a01500008ef4000335e7040b6e97b0026e3900044c48000\"}}",
+      "expectedId": "ev_40f3afea9d2a0043f87bf24e8b9968abc798319d6aa6af9af6c017f03aaa0f0c"
+    },
+    {
+      "id": "ev-unicode",
+      "op": "evidenceId",
+      "inputText": "{\"subject\":{\"path\":\"node_modules/日本語-パック/∑.wasm\",\"sha256\":\"78a5d60069d04e00d975660040109e008b37760070916e00517006007286be00\",\"format\":\"wasm\"},\"provider\":{\"id\":\"résumé\",\"name\":\"Tööl\",\"version\":\"1.0\"},\"predicate\":\"exports_symbol ✅\",\"confidence\":\"observed\",\"authority\":\"shipped-artifact\",\"limitations\":[\"emoji limitations are allowed: 🧩\"],\"locations\":[{\"kind\":\"address\",\"value\":\"0x0\"}]}",
+      "expectedId": "ev_56b090f830a08d7efb8e25389e0055f96d1b1e82dd4c954708c377b730708b45"
+    },
+    {
+      "id": "ev-limitations-order",
+      "op": "evidenceId",
+      "inputText": "{\"subject\":{\"path\":\"node_modules/native-thing/build/Release/native.node\",\"sha256\":\"8c85cb009ad1a0008a01500008ef4000335e7040b6e97b0026e3900044c48000\",\"format\":\"macho\"},\"provider\":{\"id\":\"rea-inspired-tool\",\"name\":\"RE Evidence Tool\",\"version\":\"0.1.0\"},\"predicate\":\"contains_function\",\"confidence\":\"observed\",\"authority\":\"shipped-artifact\",\"limitations\":[\"control flow is not reconstructed\",\"naming comes from the symbol table, not from debug info\"],\"locations\":[{\"kind\":\"address\",\"value\":\"0x401000\",\"endValue\":\"0x4010c4\"}]}",
+      "expectedId": "ev_40f3afea9d2a0043f87bf24e8b9968abc798319d6aa6af9af6c017f03aaa0f0c"
+    },
+    {
+      "id": "ev-custody-ignored",
+      "op": "evidenceId",
+      "inputText": "{\"subject\":{\"path\":\"node_modules/native-thing/build/Release/native.node\",\"sha256\":\"8c85cb009ad1a0008a01500008ef4000335e7040b6e97b0026e3900044c48000\",\"format\":\"macho\"},\"provider\":{\"id\":\"rea-inspired-tool\",\"name\":\"RE Evidence Tool\",\"version\":\"0.1.0\"},\"predicate\":\"contains_function\",\"confidence\":\"observed\",\"authority\":\"shipped-artifact\",\"limitations\":[\"naming comes from the symbol table, not from debug info\",\"control flow is not reconstructed\"],\"locations\":[{\"kind\":\"address\",\"value\":\"0x401000\",\"endValue\":\"0x4010c4\"}],\"state\":\"STALE\",\"observedAt\":\"1999-01-01T00:00:00Z\",\"revision\":\"rev-other\"}",
+      "expectedId": "ev_40f3afea9d2a0043f87bf24e8b9968abc798319d6aa6af9af6c017f03aaa0f0c"
+    },
+    {
+      "id": "ru-basic",
+      "op": "unknownId",
+      "inputText": "{\"question\":\"does the native addon export symbols beyond its declared napi list?\",\"revision\":\"rev-fixture-1\"}",
+      "expectedId": "ru_62a8e15b193308a95b52131bb5b9b2ad94b3c03d1a194e819748c97089fc75b2"
+    },
+    {
+      "id": "ru-keys-order",
+      "op": "unknownId",
+      "inputText": "{\"revision\":\"rev-fixture-1\",\"question\":\"does the native addon export symbols beyond its declared napi list?\"}",
+      "expectedId": "ru_62a8e15b193308a95b52131bb5b9b2ad94b3c03d1a194e819748c97089fc75b2"
+    },
+    {
+      "id": "reb-two-records",
+      "op": "bundleDigest",
+      "inputText": "{\"revision\":\"rev-fixture-1\",\"records\":[{\"revision\":\"rev-fixture-1\",\"state\":\"CURRENT\",\"observedAt\":\"2026-10-12T00:00:00Z\",\"subject\":{\"path\":\"dist/app.min.js\",\"sha256\":\"c01ebb80af3706000241be00f1e216384758b6002c39ae00fb93460021090000\",\"format\":\"javascript-bundle\"},\"provider\":{\"id\":\"rea-inspired-tool\",\"name\":\"RE Evidence Tool\",\"version\":\"0.1.0\"},\"predicate\":\"recovered_source_map\",\"confidence\":\"derived\",\"authority\":\"controlled-replay\",\"limitations\":[\"recovered names may not match the original authors'\"],\"locations\":[{\"kind\":\"artifactPath\",\"value\":\"dist/app.min.js.map\"}],\"id\":\"ev_fe0debe02a72a1e78319c8e4aa37914cc92b8bdddfa41b4c02a65d20ece95b9b\"},{\"revision\":\"rev-fixture-1\",\"state\":\"CURRENT\",\"observedAt\":\"2026-10-12T00:00:00Z\",\"subject\":{\"path\":\"node_modules/native-thing/build/Release/native.node\",\"sha256\":\"8c85cb009ad1a0008a01500008ef4000335e7040b6e97b0026e3900044c48000\",\"format\":\"macho\"},\"provider\":{\"id\":\"rea-inspired-tool\",\"name\":\"RE Evidence Tool\",\"version\":\"0.1.0\"},\"predicate\":\"contains_function\",\"confidence\":\"observed\",\"authority\":\"shipped-artifact\",\"limitations\":[\"naming comes from the symbol table, not from debug info\",\"control flow is not reconstructed\"],\"locations\":[{\"kind\":\"address\",\"value\":\"0x401000\",\"endValue\":\"0x4010c4\"}],\"id\":\"ev_40f3afea9d2a0043f87bf24e8b9968abc798319d6aa6af9af6c017f03aaa0f0c\"}],\"unknowns\":[{\"id\":\"ru_62a8e15b193308a95b52131bb5b9b2ad94b3c03d1a194e819748c97089fc75b2\",\"revision\":\"rev-fixture-1\",\"question\":\"does the native addon export symbols beyond its declared napi list?\",\"status\":\"open\",\"createdAt\":\"2026-10-12T00:00:00Z\",\"updatedAt\":\"2026-10-12T00:00:00Z\"}]}",
+      "expectedDigest": "pf-canon-v1/cie.re-evidence-bundle@1:0d658d97bc4747e5f557cb3a7e72dc3e3865de74dc9c67cdf7bf45294422f831"
+    },
+    {
+      "id": "reb-records-sorted",
+      "op": "bundleDigest",
+      "inputText": "{\"revision\":\"rev-fixture-1\",\"records\":[{\"revision\":\"rev-fixture-1\",\"state\":\"CURRENT\",\"observedAt\":\"2026-10-12T00:00:00Z\",\"subject\":{\"path\":\"node_modules/native-thing/build/Release/native.node\",\"sha256\":\"8c85cb009ad1a0008a01500008ef4000335e7040b6e97b0026e3900044c48000\",\"format\":\"macho\"},\"provider\":{\"id\":\"rea-inspired-tool\",\"name\":\"RE Evidence Tool\",\"version\":\"0.1.0\"},\"predicate\":\"contains_function\",\"confidence\":\"observed\",\"authority\":\"shipped-artifact\",\"limitations\":[\"naming comes from the symbol table, not from debug info\",\"control flow is not reconstructed\"],\"locations\":[{\"kind\":\"address\",\"value\":\"0x401000\",\"endValue\":\"0x4010c4\"}],\"id\":\"ev_40f3afea9d2a0043f87bf24e8b9968abc798319d6aa6af9af6c017f03aaa0f0c\"},{\"revision\":\"rev-fixture-1\",\"state\":\"CURRENT\",\"observedAt\":\"2026-10-12T00:00:00Z\",\"subject\":{\"path\":\"dist/app.min.js\",\"sha256\":\"c01ebb80af3706000241be00f1e216384758b6002c39ae00fb93460021090000\",\"format\":\"javascript-bundle\"},\"provider\":{\"id\":\"rea-inspired-tool\",\"name\":\"RE Evidence Tool\",\"version\":\"0.1.0\"},\"predicate\":\"recovered_source_map\",\"confidence\":\"derived\",\"authority\":\"controlled-replay\",\"limitations\":[\"recovered names may not match the original authors'\"],\"locations\":[{\"kind\":\"artifactPath\",\"value\":\"dist/app.min.js.map\"}],\"id\":\"ev_fe0debe02a72a1e78319c8e4aa37914cc92b8bdddfa41b4c02a65d20ece95b9b\"}],\"unknowns\":[{\"id\":\"ru_62a8e15b193308a95b52131bb5b9b2ad94b3c03d1a194e819748c97089fc75b2\",\"revision\":\"rev-fixture-1\",\"question\":\"does the native addon export symbols beyond its declared napi list?\",\"status\":\"open\",\"createdAt\":\"2026-10-12T00:00:00Z\",\"updatedAt\":\"2026-10-12T00:00:00Z\"}]}",
+      "expectedDigest": "pf-canon-v1/cie.re-evidence-bundle@1:0d658d97bc4747e5f557cb3a7e72dc3e3865de74dc9c67cdf7bf45294422f831"
+    },
+    {
+      "id": "reb-tampered",
+      "op": "bundleDigest",
+      "inputText": "{\"revision\":\"rev-fixture-1\",\"records\":[{\"revision\":\"rev-fixture-1\",\"state\":\"CURRENT\",\"observedAt\":\"2026-10-12T00:00:00Z\",\"subject\":{\"path\":\"dist/app.min.js\",\"sha256\":\"c01ebb80af3706000241be00f1e216384758b6002c39ae00fb93460021090000\",\"format\":\"javascript-bundle\"},\"provider\":{\"id\":\"rea-inspired-tool\",\"name\":\"RE Evidence Tool\",\"version\":\"0.1.0\"},\"predicate\":\"recovered_source_map\",\"confidence\":\"derived\",\"authority\":\"controlled-replay\",\"limitations\":[\"recovered names may not match the original authors'\"],\"locations\":[{\"kind\":\"artifactPath\",\"value\":\"dist/app.min.js.map\"}],\"id\":\"ev_fe0debe02a72a1e78319c8e4aa37914cc92b8bdddfa41b4c02a65d20ece95b9b\"},{\"revision\":\"rev-fixture-1\",\"state\":\"CURRENT\",\"observedAt\":\"2026-10-12T00:00:00Z\",\"subject\":{\"path\":\"node_modules/native-thing/build/Release/native.node\",\"sha256\":\"8c85cb009ad1a0008a01500008ef4000335e7040b6e97b0026e3900044c48000\",\"format\":\"macho\"},\"provider\":{\"id\":\"rea-inspired-tool\",\"name\":\"RE Evidence Tool\",\"version\":\"0.1.0\"},\"predicate\":\"contains_function\",\"confidence\":\"inferred\",\"authority\":\"shipped-artifact\",\"limitations\":[\"naming comes from the symbol table, not from debug info\",\"control flow is not reconstructed\"],\"locations\":[{\"kind\":\"address\",\"value\":\"0x401000\",\"endValue\":\"0x4010c4\"}],\"id\":\"ev_40f3afea9d2a0043f87bf24e8b9968abc798319d6aa6af9af6c017f03aaa0f0c\"}],\"unknowns\":[{\"id\":\"ru_62a8e15b193308a95b52131bb5b9b2ad94b3c03d1a194e819748c97089fc75b2\",\"revision\":\"rev-fixture-1\",\"question\":\"does the native addon export symbols beyond its declared napi list?\",\"status\":\"open\",\"createdAt\":\"2026-10-12T00:00:00Z\",\"updatedAt\":\"2026-10-12T00:00:00Z\"}]}",
+      "expectedDigest": "pf-canon-v1/cie.re-evidence-bundle@1:4f33ca24610a8fe5796fbc2de1b9a0b58f97b1b4dfc8dde4209f6420da825234"
+    }
+  ]
+}

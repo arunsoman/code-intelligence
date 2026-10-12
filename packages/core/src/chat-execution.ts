@@ -36,7 +36,7 @@ export async function executeChatPlan(svc: Service, ctx: CallContext, rev: Revis
         record.message = [built.view.answer ?? built.view.caption, ...trail].join("\n");
         if (built.view.answer) record.thinking = [built.view.caption, ...trail].join("\n");
       } else {
-        const r = await svc.ask(ctx, { question: step.question, revision: rev.id, form: step.tool === "overview" ? "SemanticMap" : step.tool === "risk" ? "ChangeRisk" : step.tool === "tests" ? "TestConfidence" : step.form, kind: step.kind, subject, pins, seeds: step.seeds, ...(step.tool === "overview" ? { level: 1, overview: true } : {}) });
+        const r = await svc.ask(ctx, { question: step.question, revision: rev.id, form: step.tool === "overview" ? "SemanticMap" : step.tool === "risk" ? "ChangeRisk" : step.tool === "tests" ? "TestConfidence" : step.form, kind: step.kind, chartCode: step.chartCode, answerContext: step.answerContext, subject, pins, seeds: step.seeds, ...(step.tool === "overview" ? { level: 1, overview: true } : {}) });
         if (!r.ok) throw new Error(r.error.message);
         warnings.push(...r.metadata.warnings);
         record.view = r.value.view; record.claims = r.value.claims;

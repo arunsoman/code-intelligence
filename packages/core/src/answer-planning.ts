@@ -11,14 +11,14 @@ export const concernPatterns: Record<Concern, RegExp> = {
   Quality: /\b(?:tests?|testing|coverage|metrics?|profiles?|profiling|hotspots?|performance|security|trust)\b/i,
   "Other views": /(?!) /,
 };
-export interface IntentMatch { concern: Concern; terms: string[]; firstIndex: number }
+export interface IntentMatch { concern: Concern; terms: string[]; firstIndex: number; source?: "answer" }
 export function matchConcerns(question: string): IntentMatch[] {
   return Object.entries(concernPatterns).flatMap(([concern,pattern])=>{
     const hits=[...question.matchAll(new RegExp(pattern.source,"gi"))];
     return hits.length ? [{concern:concern as Concern,terms:[...new Set(hits.map(h=>h[0].toLowerCase()))],firstIndex:hits[0].index!}] : [];
   }).sort((a,b)=>a.firstIndex-b.firstIndex || (a.concern<b.concern?-1:a.concern>b.concern?1:0));
 }
-export const nativeConcerns: Record<string, Concern> = { V5: "Data", V10: "Concurrency", V12: "Quality", V17: "Quality", V8: "Quality" };
+export const nativeConcerns: Record<string, Concern> = { V3: "Reliability", V4: "Behavior", V5: "Data", V10: "Concurrency", V12: "Quality", V17: "Quality", V8: "Quality" };
 export interface AnswerPlan {
   intent: "structure" | "behavior" | "data" | "state" | "reliability" | "concurrency" | "quality" | "general";
   concerns: Concern[]; primaryCode: string; supportingCodes: string[];
@@ -28,7 +28,7 @@ export interface AnswerPlan {
   recommendations?: { code: string; score: number; reasons: string[] }[];
 }
 export interface PlanningContext {
-  question: string; primaryCode: string; views: ViewSpec[]; catalog: CatalogEntry[];
+  question: string; answerContext?: string; primaryCode: string; views: ViewSpec[]; catalog: CatalogEntry[];
   scope: "subject" | "repository"; subject?: string;
   /** Repository-wide indexed counts. Absence is unknown, never proof of missing evidence. */
   evidenceKinds?: Record<string, number>;
@@ -64,7 +64,7 @@ export function rankSupporting(ctx: PlanningContext): string[] {
     const scoreBase=(plan.concerns.length-index)*100;
     const preference=preferred[plan.intent]?.indexOf(d.id)??-1;
     const named=[d.name,...d.aliases].some(name=>name.trim().length>=3 && question.includes(normalized(name)));
-    const reasons=[match ? `Matches ${d.concern.toLowerCase()} terms: ${match.terms.join(", ")}.` : `Adds the ${d.concern.toLowerCase()} perspective of the primary view.`];
+    const reasons=[match ? `Matches ${d.concern.toLowerCase()} terms${match.source === "answer" ? " in the answer" : ""}: ${match.terms.join(", ")}.` : `Adds the ${d.concern.toLowerCase()} perspective of the primary view.`];
     if(named)reasons.push("This notation is named in the question.");
     if(preference>=0)reasons.push(`Preferred supporting notation for ${plan.intent} questions.`);
     reasons.push(d.native ? "The revision catalog reports this native view as available; semantic evidence remains unverified until generation." : ctx.evidenceKinds ? "Revision entity preflight passed; semantic evidence remains unverified until generation." : "Requestable; evidence preflight has not been checked.");

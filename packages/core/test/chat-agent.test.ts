@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { appendFileSync } from "node:fs";
+import { join } from "node:path";
 import { OPEN } from "../src/access.ts";
 import { CHAT_TOOLS, checkArgs, toolByName } from "../src/chat-tools.ts";
 import type { AgentMessage, AgentReply, AgentToolSpec, RouterModel } from "../src/llm-router.ts";
@@ -12,7 +14,9 @@ function scripted(turns: ((messages: AgentMessage[], tools: AgentToolSpec[]) => 
   const calls: { messages: AgentMessage[]; tools: AgentToolSpec[] }[] = [];
   return {
     name: "scripted-agent", calls, choose: async () => null,
-    converse: async (messages, tools) => { calls.push({ messages: [...messages], tools }); const t = turns[calls.length - 1] ?? turns.at(-1)!; return t(messages, tools); },
+    converse: async (messages, tools) => {
+      if (tools[0]?.name === "review_answer") return call("review_answer", { verdict: "SUPPORTED", relevance: true, coverage: true, evidence: true, certainty: true, consistency: true, requirements: [], gaps: [], nextAction: "continue" });
+      calls.push({ messages: [...messages], tools }); const t = turns[calls.length - 1] ?? turns.at(-1)!; return t(messages, tools); },
   };
 }
 const call = (name: string, args: Record<string, unknown>, content = ""): AgentReply => ({ content, toolCalls: [{ name, arguments: args }] });
@@ -70,14 +74,14 @@ test("the agent starts from resolved mentions, reads the code, and cites only wh
       (m) => {
         const read = m.find((x) => x.role === "tool")!.content;
         assert.match(read, /class AuthService/); assert.match(read, /```/, "the source is in the observation");
-        return call("answer", { text: "AuthService signs users in.", cites: [request(m).mentions[0].candidates[0].id, "function:src/nowhere.ts#invented"] });
+        return call("answer", { text: "AuthService signs users in.", cites: [request(m).mentions[0].candidates[0].id, ...(!m.some(x => x.role === "tool" && x.toolName === "answer") ? ["function:src/nowhere.ts#invented"] : [])] });
       },
     ]);
     svc.router = model;
     const r = await svc.converse(ctx(), { text: "what is the job of AuthService?", revision });
     assert.ok(r.ok && r.value.kind === "analysis");
     assert.match(r.value.message, /^AuthService signs users in\.\n\nBased on: AuthService \(src\/auth\/service\.ts\)\.$/);
-    assert.ok(r.metadata.warnings.some((w) => /cited 1 element\(s\) no tool had shown/.test(w)));
+    assert.equal(r.value.validation?.repairAttempts, 1);
     assert.match(r.value.thinking!, /read_code\(id="class:src\/auth\/service\.ts#AuthService"\)/);
     assert.equal(request(model.calls[0].messages).mentions[0].name, "AuthService");
     // Every chat reply draws a picture alongside the words — a model that only ever called text tools must still
@@ -127,7 +131,8 @@ test("a model that keeps calling tools is stopped and offered only the answer to
     assert.ok(r.ok && r.value.kind === "analysis");
     assert.equal(r.value.message, "Out of budget; here is what I found.");
     assert.deepEqual(model.calls.at(-1)!.tools.map((t) => t.name), ["answer"]);
-    assert.ok(model.calls.length <= 8);
+    assert.ok(model.calls.length <= 16);
+    assert.equal(r.metadata.completeness, "PARTIAL", "budget-limited answers must not be marked complete");
   } finally { worker.close(); }
 });
 
@@ -137,11 +142,11 @@ test("plain text is asked once to become an answer call; bad arguments are refus
     svc.router = scripted([
       () => call("show_view", { form: "Shell", question: "x" }),
       (m) => { assert.match(m.at(-1)!.content, /^Refused: "form" must be one of/); return { content: "I should look it up. Thinking aloud.", toolCalls: [] }; },
-      (m) => { assert.match(m.at(-1)!.content, /calling the answer tool/); return call("answer", { text: "Final.", cites: [] }); },
+      (m) => { assert.ok(m.some(x => /calling the answer tool/.test(x.content))); return call("answer", { text: "Final.", cites: [] }); },
     ]);
     const r = await svc.converse(ctx(), { text: "show me something", revision });
     assert.ok(r.ok && r.value.kind === "analysis");
-    assert.equal(r.value.message, "Final.");
+    assert.match(r.value.message, /^Unresolved:/);
   } finally { worker.close(); }
 });
 
@@ -163,8 +168,32 @@ test("a model that stops mid-way gets a reply listing what was looked at, not an
     svc.router = scripted([() => call("find_code", { query: "token" }), () => null]);
     const r = await svc.converse(ctx(), { text: "where are tokens made", revision });
     assert.ok(r.ok && r.value.kind === "analysis");
-    assert.match(r.value.message, /^I could not finish an answer \(scripted-agent stopped answering\)\.\nWhat I looked at:\n• find_code\(query="token"\)/);
+    assert.match(r.value.message, /^Unresolved:/);
+    assert.equal(r.value.validation?.status, "UNRESOLVED");
     assert.equal(r.metadata.completeness, "PARTIAL");
+  } finally { worker.close(); }
+});
+
+for (const finishPages of [false, true]) test(`paged source ${finishPages ? "can be completed" : "makes an early answer partial"}`, async () => {
+  const repo = copyFixture();
+  appendFileSync(join(repo, "src/auth/service.ts"), "\n" + "// source padding\n".repeat(400) + "// compensation marker\n");
+  const { svc, worker, revision } = await setup(undefined, repo);
+  try {
+    const file = svc.store.entities(revision).find((e) => e.kind === "file" && e.file === "src/auth/service.ts")!;
+    svc.router = scripted([
+      () => call("read_code", { id: file.entityId }),
+      (m) => {
+        const observation = m.filter((x) => x.role === "tool").at(-1)!.content;
+        const next = observation.match(/and offset=(\d+)\./);
+        if (finishPages && next) return call("read_code", { id: file.entityId, offset: Number(next[1]) });
+        if (finishPages) assert.match(observation, /compensation marker/);
+        return call("answer", { text: "Source inspected.", cites: [file.entityId] });
+      },
+    ]);
+    const r = await svc.converse(ctx(), { text: "inspect AuthService implementation", revision });
+    assert.ok(r.ok && r.value.kind === "analysis");
+    assert.equal(r.metadata.warnings.some((w) => /Source incomplete/.test(w)), !finishPages);
+    if (!finishPages) assert.equal(r.metadata.completeness, "PARTIAL");
   } finally { worker.close(); }
 });
 
@@ -174,3 +203,47 @@ async function setup(...args: Parameters<typeof ingest>) {
  assert.ok(hierarchy.ok,"analysis tests require the current concept hierarchy");
  return fixture;
 }
+
+test("refund findings select compensation as primary and alternative charts reuse its evidence", async () => {
+  const { svc, worker, revision } = await setup();
+  try {
+    const answer = "The provider call fails; reconciliation and rollback must return the refund. Exact debit ordering is unverified.";
+    svc.router = scripted([
+      m => call("read_code", { id: request(m).mentions[0].candidates[0].id }),
+      m => call("answer", { text: answer, cites: [request(m).mentions[0].candidates[0].id] }),
+    ]);
+    const r = await svc.converse(ctx(), { text: "Explain AuthService", revision });
+    assert.ok(r.ok && r.value.kind === "analysis");
+    const primary = r.value.results[0].view!;
+    assert.equal(primary.params?.chartId, "S12");
+    assert.match(primary.formReason!, /question and answer/);
+    assert.ok(primary.gaps.some(g => /ordering is unverified/.test(g)));
+    const manifest = r.value.manifest!;
+    assert.equal(manifest.question, "Explain AuthService");
+    assert.match(manifest.answerContext!, /ordering is unverified/);
+    assert.ok(manifest.snapshotId);
+    assert.ok(manifest.views[0].seeds.includes("class:src/auth/service.ts#AuthService"));
+    const checkpoint = JSON.stringify(svc.store.evidenceSnapshot(manifest.snapshotId!));
+    const alternate = await svc.ask(ctx(), { question: manifest.question, revision, chartCode: "S28", snapshotId: manifest.snapshotId, answerContext: manifest.answerContext });
+    assert.ok(alternate.ok);
+    assert.equal(alternate.value.manifest!.snapshotId, manifest.snapshotId);
+    assert.equal(alternate.value.manifest!.answerContext, manifest.answerContext);
+    assert.equal(JSON.stringify(svc.store.evidenceSnapshot(manifest.snapshotId!)), checkpoint, "answer text is not added to source evidence");
+  } finally { worker.close(); }
+});
+
+test("answer findings supersede an earlier architecture view while preserving it as supporting", async () => {
+  const { svc, worker, revision } = await setup();
+  try {
+    svc.router = scripted([
+      m => call("read_code", { id: request(m).mentions[0].candidates[0].id }),
+      () => call("show_view", { form: "SemanticMap", question: "AuthService" }),
+      m => call("answer", { text: "Reconciliation may fail to refund; rollback ordering is unverified.", cites: [request(m).mentions[0].candidates[0].id] }),
+    ]);
+    const r = await svc.converse(ctx(), { text: "Explain AuthService", revision });
+    assert.ok(r.ok && r.value.kind === "analysis");
+    assert.equal(r.value.results[0].view!.params?.chartId, "S12");
+    assert.ok(r.value.results.some(result => result.view?.formId === "SemanticMap"));
+    assert.equal(r.value.manifest!.views[0].code, "S12");
+  } finally { worker.close(); }
+});

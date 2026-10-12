@@ -19,9 +19,10 @@ export type ResponseView = z.infer<typeof ResponseViewSchema>;
 
 export const ResponseManifestSchema = z.object({
   schemaVersion: z.literal("response.v1"), policyVersion: z.enum(["portfolio.v1", "portfolio.v2", "portfolio.v3", "portfolio.v4"]),
+  answerContext: z.string().max(6000).optional(),
   snapshotId: z.string().regex(/^snapshot:[a-f0-9]{64}$/).optional(),
   responseId: z.string().min(1), revision: z.string().min(1), question: z.string(),
-  plan: z.object({ intent: z.enum(["structure", "behavior", "data", "state", "reliability", "concurrency", "quality", "general"]), concerns: z.array(z.string()), primaryCode: z.string(), supportingCodes: z.array(z.string()).max(3), scope: z.enum(["subject", "repository"]), subject: z.string().optional(), classification: z.object({basis:z.enum(["keyword","primary-view","general"]),matches:z.array(z.object({concern:z.string(),terms:z.array(z.string()),firstIndex:z.number().int().nonnegative()}).strict()).max(8)}).strict().optional(), recommendations:z.array(z.object({code:z.string(),score:z.number(),reasons:z.array(z.string()).max(8)}).strict()).max(3).optional(), evidenceStatus: z.enum(["checked", "not-checked"]) }).strict().optional(),
+  plan: z.object({ intent: z.enum(["structure", "behavior", "data", "state", "reliability", "concurrency", "quality", "general"]), concerns: z.array(z.string()), primaryCode: z.string(), supportingCodes: z.array(z.string()).max(3), scope: z.enum(["subject", "repository"]), subject: z.string().optional(), classification: z.object({basis:z.enum(["keyword","primary-view","general"]),matches:z.array(z.object({concern:z.string(),terms:z.array(z.string()),firstIndex:z.number().int().nonnegative(),source:z.literal("answer").optional()}).strict()).max(8)}).strict().optional(), recommendations:z.array(z.object({code:z.string(),score:z.number(),reasons:z.array(z.string()).max(8)}).strict()).max(3).optional(), evidenceStatus: z.enum(["checked", "not-checked"]) }).strict().optional(),
   explorationAvailability: z.array(z.object({ code: z.string(), available: z.boolean(), reason: z.string().optional(), basis: z.literal("revision-preflight") }).strict()).max(60).optional(),
   interpretation: z.string(), subjectRefs: z.array(SemanticRefSchema),
   primaryViewId: z.string(), views: z.array(ResponseViewSchema).max(60),

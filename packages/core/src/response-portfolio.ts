@@ -1,3 +1,4 @@
+import { boundAnswerContext } from "./answer-visual.ts";
 import { nativeConcerns } from "./answer-planning.ts";
 import { planResponse } from "./plugins/steps/index.ts";
 import { createHash } from "node:crypto";
@@ -20,18 +21,18 @@ export function bindSelectedChart(view: ViewSpec, chartCode?: string): ViewSpec 
 }
 
 /** A deterministic portfolio over validated views. Availability means requestable, not proven evidence coverage. */
-export function responsePortfolio(input: { views: ViewSpec[]; catalog: CatalogEntry[]; question: string; evidenceKinds?: Record<string, number>; responseId?: string; context?: { scope: "subject" | "repository"; subject?: string; seeds?: string[] } }): ResponseManifest {
+export function responsePortfolio(input: { views: ViewSpec[]; catalog: CatalogEntry[]; question: string; answerContext?: string; evidenceKinds?: Record<string, number>; responseId?: string; context?: { scope: "subject" | "repository"; subject?: string; seeds?: string[] } }): ResponseManifest {
   const first = input.views[0];
   if (!first || input.views.some((v) => v.revision !== first.revision)) throw new Error("A response portfolio needs views from one revision");
   const question = input.question.slice(0, 1000);
-  const responseId = input.responseId ?? `response:${hash(first.revision + question + input.views.map((v) => v.id).join("|"))}`;
+  const responseId = input.responseId ?? `response:${hash(input.answerContext ? JSON.stringify([first.revision, question, input.views.map(v => v.id), boundAnswerContext(input.answerContext)]) : first.revision + question + input.views.map((v) => v.id).join("|"))}`;
   const refs = [...new Map(input.views.flatMap((v) => v.nodes.flatMap((n) => n.entityRefs.map((id) => [id, { id, label: n.label, kind: n.kind }] as const)))).values()];
   const primaryCode = viewCode(first, input.catalog);
   const descriptors: ResponseView[] = [];
   const subject = input.context?.subject ?? (typeof first.params?.subject === "string" ? first.params.subject : undefined);
   const scope = input.context?.scope ?? (first.params?.scope === "subject" || subject ? "subject" as const : "repository" as const);
   const seeds = scope === "subject" ? [...new Set(input.context?.seeds?.length ? input.context.seeds : first.nodes.flatMap((n) => n.entityRefs))].slice(0, 40) : [];
-  const planning = planResponse({ question, primaryCode, views: input.views, catalog: input.catalog, scope, subject, evidenceKinds: input.evidenceKinds, availability: new Map() });
+  const planning = planResponse({ question, answerContext: boundAnswerContext(input.answerContext), primaryCode, views: input.views, catalog: input.catalog, scope, subject, evidenceKinds: input.evidenceKinds, availability: new Map() });
   const relevant = new Set([primaryCode, ...planning.plan!.supportingCodes]);
   const add = (code: string, form: string, label: string, available: boolean, reason?: string, view?: ViewSpec) => {
     const id = `${responseId}:${hash(code + (view?.id ?? ""))}`;
@@ -64,6 +65,7 @@ export function responsePortfolio(input: { views: ViewSpec[]; catalog: CatalogEn
       ...Object.values(CHART_REGISTRY).filter(d => d.id !== "generic").map(d => ({ code: d.id, ...planning.availability.get(d.id)!, basis: "revision-preflight" as const })),
       ...input.catalog.filter(n => n.formId !== "GeneratedChart").map(n => ({ code: n.code, available: n.available && n.formId !== "HypothesisGraph", reason: n.formId === "HypothesisGraph" ? "Start this investigation by pasting a stack trace." : n.reason, basis: "revision-preflight" as const })),
     ],
+    ...(input.answerContext ? { answerContext: boundAnswerContext(input.answerContext) } : {}),
     snapshotId: first.evidenceProjection?.snapshotId,
     revision: first.revision, question, interpretation: first.route?.because ?? first.formReason ?? "Related views use this question and revision.",
     subjectRefs: refs, primaryViewId: descriptors[0]!.id, views: [...descriptors.filter(d => d.viewId), ...planning.plan!.supportingCodes.flatMap(code => descriptors.filter(d => d.code === code && !d.viewId)), ...descriptors.filter(d => !d.viewId && !planning.plan!.supportingCodes.includes(d.code))],

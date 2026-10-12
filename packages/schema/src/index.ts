@@ -1065,11 +1065,27 @@ export interface ChatAnalysisResult {
   view?: ViewSpec;
   claims: Claim[];
 }
+export interface AnswerReview {
+  verdict: "SUPPORTED" | "REPAIRABLE" | "UNRESOLVED";
+  relevance: boolean; coverage: boolean; evidence: boolean; certainty: boolean; consistency: boolean;
+  requirements: string[]; gaps: string[];
+  supportedFindings?: { text: string; entityIds: string[] }[];
+  nextAction: "continue" | "request_source" | "request_access" | "clarify" | "test" | "inspect_conflict";
+}
+export interface AnswerInvestigation {
+  id: string; question: string; revision: string; supportedFindings?: AnswerReview["supportedFindings"]; missingEvidence: string[]; nextAction: AnswerReview["nextAction"];
+  inspectedIds: string[]; sourceHashes: Record<string, string>;
+  sourceReads: Record<string, { total: number; contentHash: string; ranges: [number, number][] }>;
+  observations: { name: string; arguments: Record<string, unknown>; content: string }[];
+}
+export type AnswerValidationSummary = Omit<AnswerValidation, "investigation"> & { investigation?: Pick<AnswerInvestigation, "id" | "question" | "revision" | "supportedFindings" | "missingEvidence" | "nextAction"> };
+export interface AnswerValidation { question: string; status: "SUPPORTED" | "UNRESOLVED"; repairAttempts: number; review: AnswerReview; investigation?: AnswerInvestigation }
+
 export type ConverseResult =
   // `thinking`: the old-style, pre-answer text (why this form, the caption) — kept for the trace, not meant as the reply.
   // `message` is the composed answer; with no grounded answer available, `message` falls back to that same text and
   // `thinking` is omitted rather than duplicated.
-  | { kind: "analysis"; results: ChatAnalysisResult[]; message: string; thinking?: string; manifest?: ResponseManifest }
+  | { kind: "analysis"; validation?: AnswerValidation; results: ChatAnalysisResult[]; message: string; thinking?: string; manifest?: ResponseManifest }
   | { kind: "view"; view: ViewSpec; claims: Claim[]; message: string; thinking?: string; manifest?: ResponseManifest }
   | { kind: "explanation"; explanation: ExplainResult; message: string }
   | { kind: "resume"; workspaceId: Id; message: string }

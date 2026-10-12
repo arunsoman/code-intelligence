@@ -12,6 +12,9 @@ export interface ChatStep {
   fromStep?: number;
   /** Entity ids a view starts from; set by the tool-calling agent, never by a planned step. */
   seeds?: string[];
+  /** Trusted agent presentation fields, not accepted from the scripted planner. */
+  chartCode?: string;
+  answerContext?: string;
 }
 export interface ChatPlan { steps: ChatStep[] }
 export interface ChatPlanRequest {
