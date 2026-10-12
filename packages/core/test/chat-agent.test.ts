@@ -6,6 +6,7 @@ import { OPEN } from "../src/access.ts";
 import { CHAT_TOOLS, checkArgs, toolByName } from "../src/chat-tools.ts";
 import type { AgentMessage, AgentReply, AgentToolSpec, RouterModel } from "../src/llm-router.ts";
 import { resolveMentions, within } from "../src/mentions.ts";
+import { chartCitesOverlap } from "../src/answer-visual.ts";
 import { policyFor } from "../src/access.ts";
 import { copyFixture, ctx, setup as ingest } from "./helpers.ts";
 
@@ -272,5 +273,33 @@ test("a new_intent question the chat agent declines still falls back to the orig
     };
     const r = await svc.converse(ctx(), { text: "what's the hierarchy concept in this project?", revision });
     assert.ok(r.ok && r.value.kind === "message" && /unsupported query/.test(r.value.message), "falls through to the classifier's own refusal, unchanged");
+  } finally { worker.close(); }
+});
+
+test("chartCitesOverlap: a chart depicts the answer if it touches the same file as something cited, even at a different granularity", () => {
+  const nodes = (refs: string[][]) => refs.map((entityRefs, i) => ({ id: `n:${i}`, entityRefs } as any));
+  const cls = "class:src/auth/service.ts#AuthService", method = "method:src/auth/service.ts#AuthService.login";
+  const other = "function:src/db/users.ts#findByEmail";
+  assert.equal(chartCitesOverlap([], { nodes: nodes([[other]]) } as any), true, "nothing cited means nothing to contradict");
+  assert.equal(chartCitesOverlap([cls], { nodes: nodes([[method]]) } as any), true, "a cited class's own method, shown instead of the class node, still counts");
+  assert.equal(chartCitesOverlap([cls], { nodes: nodes([[other]]) } as any), false, "a chart entirely from a different file depicts something the answer never discussed");
+  assert.equal(chartCitesOverlap([cls, other], { nodes: nodes([[other]]) } as any), true, "one of several cited files appearing is enough");
+});
+
+test("a chart with no overlap with what the answer cited is replaced by a minimal view built from the cited elements", async () => {
+  const { svc, worker, revision } = await setup();
+  try {
+    const tokenFn = "function:src/auth/token.ts#signToken";
+    svc.router = scripted([
+      () => call("show_view", { form: "SemanticMap", question: "database user lookups", subject: "src/db/users.ts" }),
+      () => call("read_code", { id: tokenFn }),
+      () => call("answer", { text: "Tokens are signed in the auth module.", cites: [tokenFn] }),
+    ]);
+    const r = await svc.converse(ctx(), { text: "Where are tokens signed?", revision });
+    assert.ok(r.ok && r.value.kind === "analysis");
+    const primary = r.value.results[0].view!;
+    assert.equal(primary.formId, "SemanticMap", "the SemanticMap seeded from the wrong file was rejected, not kept");
+    assert.ok(primary.nodes.some(n => n.entityRefs.includes(tokenFn)), "the fallback view is built from exactly what the answer cited");
+    assert.ok(primary.gaps.some(g => /didn't correspond to what the answer cited/.test(g)));
   } finally { worker.close(); }
 });

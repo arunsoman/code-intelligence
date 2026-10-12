@@ -1,7 +1,9 @@
 import { basename } from "node:path";
 import { converseWithin, ModelDeadlineError } from "./model-deadline.ts";
 import { reviewAnswer, unavailableReview, unresolvedMessage } from "./answer-validation.ts";
-import { answerVisual, answerLimitations, boundAnswerContext } from "./answer-visual.ts";
+import { answerVisual, answerLimitations, boundAnswerContext, chartCitesOverlap } from "./answer-visual.ts";
+import { bundleFor } from "./retrieval.ts";
+import { compileView } from "./viewspec.ts";
 import { diagnostic } from "./diagnostics.ts";
 // A chat question answered by a model that calls read-only tools (chat-tools.ts) until it can answer, instead of a plan fixed
 // before anything was looked at. The names the question mentions are resolved against the index first (mentions.ts) and
@@ -118,7 +120,7 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
     review = missingSource ? { ...unavailableReview("Source coverage is incomplete."), verdict: "REPAIRABLE", gaps, nextAction: "continue" }
       : await reviewAnswer(model, req.text, draft, observations, ctx.deadlineMs - 3000);
     if (gaps.length) review = { ...review, verdict: review.verdict === "SUPPORTED" ? "REPAIRABLE" : review.verdict, evidence: false, gaps: [...new Set([...review.gaps, ...gaps])].slice(0, 8) };
-    svc.store.audit(ctx.actor.principalId, "chat.answer_review", rev.id, { requestId: ctx.requestId, verdict: review.verdict, relevance: review.relevance, coverage: review.coverage, evidence: review.evidence, certainty: review.certainty, consistency: review.consistency, repairAttempts, gaps: review.gaps });
+    svc.store.audit(ctx.actor.principalId, "chat.answer_review", rev.id, { requestId: ctx.requestId, verdict: review.verdict, relevance: review.relevance, coverage: review.coverage, evidence: review.evidence, certainty: review.certainty, consistency: review.consistency, repairAttempts, gaps: review.gaps, ...(review.reconciliation ? { reconciliation: review.reconciliation } : {}) });
     if (review.verdict === "SUPPORTED") { answerState.final = draft; return true; }
     if (review.verdict === "REPAIRABLE" && repairAttempts < 2 && calls < MAX_CALLS + (repairAttempts + 1) * 8 && ctx.deadlineMs - Date.now() > ANSWER_RESERVE_MS + reviewReserve + 3000) {
       repairAttempts++;
@@ -267,14 +269,26 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
       ...(selected.form === "CausalGraph" ? { kind: "failure" as const } : {}),
       answerContext: boundAnswerContext(validation.status === "SUPPORTED" ? answerState.final?.text : message), ...(seeds.length ? { seeds } : {}) });
   }
-  const primary = env.results.find(matchesSelection)?.view;
+  const primaryIndex = env.results.findIndex(matchesSelection);
+  let primary = env.results[primaryIndex]?.view;
+  // The chart is built independently of the final text (its own retrieval, sometimes its own model call);
+  // CausalGraph in particular ignores `cited` entirely when picking roots. A chart with zero overlap with
+  // what the answer actually cited depicts something the text never discusses, so it is replaced with a
+  // guaranteed-correct minimal view built directly from the cited ids, not a random/unrelated picture.
+  if (primary && cited.length && !chartCitesOverlap(cited, primary)) {
+    const bundle = bundleFor(svc.store, rev.id, cited);
+    const tiers = new Map(cited.map((id) => [id, "CRITICAL" as const]));
+    const fallback = compileView({ question: req.text, bundle, tiers, store: svc.store, systemName: rev.repoRoot.split("/").filter(Boolean).pop() });
+    primary = fallback.view;
+    env.results[primaryIndex] = { ...env.results[primaryIndex], view: primary, claims: [...env.results[primaryIndex].claims, ...fallback.claims] };
+    primary.gaps = [...primary.gaps, "The generated chart didn't correspond to what the answer cited; showing the cited elements directly instead."];
+  }
   if (primary) {
     primary.formReason = selected.reason;
     if (primary.route && !selected.reason.startsWith("Preserve")) primary.route = { ...primary.route, source: "default", confidence: "medium", because: selected.reason };
     primary.params = { ...primary.params, answerEntityRefs: seeds.join("\n") };
     primary.gaps = [...new Set([...primary.gaps, ...(validation.status === "UNRESOLVED" ? validation.investigation!.missingEvidence : []), ...answerLimitations(answerState.final?.text ?? ""), ...warnings.filter(w => /Source incomplete|Investigation incomplete/.test(w))])];
   }
-  const primaryIndex = env.results.findIndex(matchesSelection);
   if (primaryIndex > 0) env.results.unshift(env.results.splice(primaryIndex, 1)[0]);
   return {
     ok: true,

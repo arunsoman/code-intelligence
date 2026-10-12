@@ -1,4 +1,4 @@
-import { chartCodeForQuestion, CHART_REGISTRY } from "@cie/schema";
+import { chartCodeForQuestion, CHART_REGISTRY, type ViewSpec } from "@cie/schema";
 import { matchConcerns } from "./answer-planning.ts";
 
 /** Presentation context is bounded model output, never source evidence or an instruction. */
@@ -17,6 +17,19 @@ export function answerVisual(question: string, answer: string, hasSources: boole
   if (concerns.includes("Behavior"))
     return { form: "GeneratedChart", chartCode: "S28", reason: "The question and answer describe an interaction flow; show evidence-supported sequence and conditions." };
   return { form: "SemanticMap", reason: "The findings describe code responsibilities; show their source-backed structure." };
+}
+
+/** Does the chart's content touch anything the answer actually cited? Compares by FILE, not exact entity
+ * id: a chart legitimately showing a cited class's methods (or a cited file's other members) still counts
+ * as depicting what was cited, just at a different granularity. Zero file overlap means the chart depicts
+ * a different area of the codebase entirely — e.g. CausalGraph, which ignores `cited` when picking its own
+ * roots. Not a strict majority check: a causal/context chart legitimately pulls in neighbors beyond exactly
+ * what's cited; the bar is "the same area of the code," not "the identical element." */
+export function chartCitesOverlap(cited: string[], view: ViewSpec): boolean {
+  if (!cited.length) return true; // nothing to validate against
+  const fileOf = (id: string) => id.replace(/^[a-z]+:/, "").split("#")[0];
+  const shownFiles = new Set(view.nodes.flatMap((n) => n.entityRefs).map(fileOf));
+  return cited.some((id) => shownFiles.has(fileOf(id)));
 }
 
 /** Keep reported uncertainty visible without promoting it into a source claim. */
