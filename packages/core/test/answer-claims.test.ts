@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { claimsFromAnswer, claimsFromContainer, renderEnumeration } from "../src/claim.ts";
+import { claimsFromAnswer, claimsFromContainer, claimsFromLocate, renderEnumeration, renderLocation } from "../src/claim.ts";
 import { verifyClaims } from "../src/verifier.ts";
 import { policyFor } from "../src/access.ts";
 import type { ToolEnv } from "../src/chat-tools.ts";
@@ -101,5 +101,22 @@ test("enumerating a file's members answers 'how many X are in Y' with zero model
     const staleVerifications = verifyClaims(svc.store, claims);
     assert.ok(staleVerifications.every((v) => v.status === "UNRESOLVED"), "every claim's recorded file hash is now stale");
     assert.ok(staleVerifications.every((v) => /changed on disk/.test(v.reason)));
+  } finally { worker.close(); }
+});
+
+test("locating a single matched entity answers 'where is X defined' with zero model calls", async () => {
+  const repo = demoRepo();
+  const { svc, worker, revision } = await setup(undefined, repo);
+  try {
+    const entity = svc.store.entities(revision).find((e) => e.name === "checkFraud")!;
+    assert.ok(entity, "fixture must contain checkFraud");
+    const claims = claimsFromLocate(svc.store, revision, entity.entityId);
+    assert.equal(claims.length, 1);
+    assert.equal(claims[0].predicate, "located_at");
+    const verifications = verifyClaims(svc.store, claims);
+    assert.equal(verifications[0].status, "VERIFIED");
+    const message = renderLocation(entity, verifications);
+    assert.match(message, /checkFraud is defined in src\/payments\/fraud\.ts \(function\)/);
+    assert.match(message, /with no model call involved/);
   } finally { worker.close(); }
 });

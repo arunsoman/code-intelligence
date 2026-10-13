@@ -19,7 +19,7 @@ import { modelFailureNotice } from "./model-failure.ts";
 import { validateChatPlan } from "./chat-plan.ts";
 import { executeChatPlan } from "./chat-execution.ts";
 import { runChatAgent } from "./chat-agent.ts";
-import { claimsFromContainer, renderEnumeration } from "./claim.ts";
+import { claimsFromContainer, claimsFromLocate, renderEnumeration, renderLocation } from "./claim.ts";
 import { verifyClaims } from "./verifier.ts";
 import { chartCodeForQuestion, CHART_REGISTRY, CHAT_QUESTION_MAX_CHARS, SCHEMA_CHALLENGE, SCHEMA_EXPLANATION, SCHEMA_HYPOTHESES, SCHEMA_NAME_ARCH, SCHEMA_NAME_CONCEPT, SCHEMA_REPRESENTATION } from "@cie/schema";
 import { applyVerdict, gateClaim, modelText, wilson, withChallenge } from "./claims.ts";
@@ -850,6 +850,21 @@ export class Answering {
           const verifications = verifyClaims(this.store, claims);
           const message = renderEnumeration(container.name, claims, verifications, (id) => this.store.entitiesById(indexed.id, [id])[0]?.kind);
           return ok(ctx, { kind: "message", message }, { revision: indexed.id, warnings: [], completeness: verifications.every((v) => v.status === "VERIFIED") ? "COMPLETE" : "PARTIAL" });
+        }
+      }
+    }
+    // Deterministic locate answering: "where is X defined/located/implemented" questions whose subject resolves to
+    // exactly one indexed entity are answered from that entity's own span — no model call.
+    if (indexed && /\bwhere (is|are|does)\b/i.test(text)) {
+      const access = policyFor(this.store, indexed.repoRoot);
+      const mentions = resolveMentions(this.store, indexed.id, text, access);
+      const matches = mentions.resolved.flatMap((m) => m.matches);
+      if (matches.length === 1) {
+        const claims = claimsFromLocate(this.store, indexed.id, matches[0].entityId);
+        if (claims.length) {
+          const verifications = verifyClaims(this.store, claims);
+          const message = renderLocation(matches[0], verifications);
+          return ok(ctx, { kind: "message", message }, { revision: indexed.id, warnings: [], completeness: verifications[0]?.status === "VERIFIED" ? "COMPLETE" : "PARTIAL" });
         }
       }
     }

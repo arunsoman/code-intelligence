@@ -65,6 +65,33 @@ export function claimsFromContainer(store: Store, revision: string, containerId:
   });
 }
 
+/**
+ * Deterministic `locate` answering: one claim naming exactly where an entity is defined, directly from its own
+ * indexed span — no relationship lookup, no model call.
+ */
+export function claimsFromLocate(store: Store, revision: string, entityId: string): AnswerClaim[] {
+  const entity = store.entitiesById(revision, [entityId])[0];
+  if (!entity) return [];
+  const span = entity.spans[0];
+  return [{
+    claimId: `claim:${revision}:located_at:${entityId}`,
+    predicate: "located_at",
+    subject: { entityId, label: entity.name },
+    object: { literal: entity.file },
+    evidence: span ? [span] : [],
+    derivation: "extracted",
+    status: span ? "VERIFIED" : "UNRESOLVED",
+    statusReason: span ? undefined : `${entity.name} has no recorded source span`,
+    revision,
+  }];
+}
+
+export function renderLocation(entity: { name: string; kind: string; file: string }, verifications: AnswerClaimVerification[]): string {
+  const status = verifications[0];
+  if (status?.status !== "VERIFIED") return `${entity.name} could not be independently verified: ${status?.reason ?? "no evidence recorded"}.`;
+  return `${entity.name} is defined in ${entity.file} (${entity.kind}), verified against the indexed source, with no model call involved.`;
+}
+
 /** Renders `claimsFromContainer`'s output as the plain-text answer a user would read — one sentence stating what
  * was found and verified, naming exactly what was left out rather than silently dropping it. `kindOf` looks up each
  * member's entity kind (from the same store query that produced the claims) so a container with a single uniform
