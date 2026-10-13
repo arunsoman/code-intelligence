@@ -120,3 +120,28 @@ test("locating a single matched entity answers 'where is X defined' with zero mo
     assert.match(message, /with no model call involved/);
   } finally { worker.close(); }
 });
+
+test("the live converse() path returns answer + proof + an initial chart + alternate visuals, not just a message", async () => {
+  const { StubProvider } = await import("@cie/model");
+  const { Service } = await import("../src/service.ts");
+  const { Store } = await import("../src/store.ts");
+  const { WorkerClient } = await import("../src/worker.ts");
+  const { randomUUID } = await import("node:crypto");
+  const repo = demoRepo();
+  const store = new Store(":memory:");
+  const worker = new WorkerClient();
+  const svc = new Service(store, worker, new StubProvider());
+  try {
+    const c = () => ({ requestId: randomUUID(), idempotencyKey: randomUUID(), traceId: randomUUID(), actor: { principalId: "t", tenantId: "t", sessionId: "t" }, deadlineMs: Date.now() + 30_000 });
+    const indexed = await svc.ingestRepository(c(), { repoPath: repo });
+    assert.ok(indexed.ok);
+    const r = await svc.converse(c(), { text: "How many error classes does errors.ts define?", revision: indexed.value.id });
+    assert.ok(r.ok && r.value.kind === "view", "a verified deterministic answer gets a real chart, not a bare message");
+    assert.match(r.value.message, /defines 6 classes/);
+    assert.match(r.value.message, /^Proof:/m, "the message carries a distinct Proof section");
+    assert.equal(r.value.view.nodes.length, 6, "the initial chart's nodes are exactly the verified claims");
+    assert.ok(r.value.manifest, "the outer converse() attached an alternate-visuals manifest");
+    const shown = r.value.manifest!.views.filter((v) => v.relevant && !v.primary && v.status !== "unavailable");
+    assert.ok(shown.length > 0, "at least one alternate visual is actually offered");
+  } finally { worker.close(); store.db.close(); }
+});

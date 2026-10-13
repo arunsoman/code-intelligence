@@ -19,8 +19,9 @@ import { modelFailureNotice } from "./model-failure.ts";
 import { validateChatPlan } from "./chat-plan.ts";
 import { executeChatPlan } from "./chat-execution.ts";
 import { runChatAgent } from "./chat-agent.ts";
-import { claimsFromContainer, claimsFromLocate, renderEnumeration, renderLocation } from "./claim.ts";
+import { buildAnswerView, claimsFromContainer, claimsFromLocate, renderEnumeration, renderLocation, renderProof } from "./claim.ts";
 import { verifyClaims } from "./verifier.ts";
+import type { AnswerClaim, AnswerClaimVerification } from "@cie/schema";
 import { chartCodeForQuestion, CHART_REGISTRY, CHAT_QUESTION_MAX_CHARS, SCHEMA_CHALLENGE, SCHEMA_EXPLANATION, SCHEMA_HYPOTHESES, SCHEMA_NAME_ARCH, SCHEMA_NAME_CONCEPT, SCHEMA_REPRESENTATION } from "@cie/schema";
 import { applyVerdict, gateClaim, modelText, wilson, withChallenge } from "./claims.ts";
 import { buildFailureGraph, buildInvariantGraph } from "./forms/causal.ts";
@@ -54,6 +55,22 @@ const explicitChartCode = chartCodeForQuestion;
 function matchingChartPlan(plan: ChartOutput | ChartOutputV2 | null, chartCode?: string): ChartOutput | ChartOutputV2 | null {
   if (!plan || !chartCode) return plan;
   return "contractVersion" in plan && plan.contractVersion === "chart.v2" && plan.chartId === chartCode ? plan : null;
+}
+
+/**
+ * The full four-part contract for a deterministic, zero-model answer: a clear answer, a "Proof:" section, an
+ * initial chart built straight from the verified claims (`buildAnswerView`), and — via the view's
+ * `answerEntityRefs` param — the alternate-visuals manifest `Answering.converse` attaches automatically to any
+ * `kind: "view"` result (see its `manifestFor` call). A degenerate case with nothing verified still answers and
+ * proves, just without a chart to build one from.
+ */
+function deterministicResult(ctx: CallContext, store: Store, revision: string, question: string, systemName: string, answerText: string, claims: AnswerClaim[], verifications: AnswerClaimVerification[]): ApiResult<ConverseResult> {
+  const message = [answerText, renderProof(claims, verifications)].join("\n\n");
+  const completeness = verifications.length && verifications.every((v) => v.status === "VERIFIED") ? "COMPLETE" as const : "PARTIAL" as const;
+  const built = buildAnswerView(store, revision, question, systemName, claims, verifications);
+  if (!built) return ok(ctx, { kind: "message", message }, { revision, warnings: [], completeness });
+  built.view.answer = message;
+  return ok(ctx, { kind: "view", view: built.view, claims: built.claims, message }, { revision, warnings: [], completeness });
 }
 
 /**
@@ -848,8 +865,8 @@ export class Answering {
         const claims = claimsFromContainer(this.store, indexed.id, container.entityId);
         if (claims.length) {
           const verifications = verifyClaims(this.store, claims);
-          const message = renderEnumeration(container.name, claims, verifications, (id) => this.store.entitiesById(indexed.id, [id])[0]?.kind);
-          return ok(ctx, { kind: "message", message }, { revision: indexed.id, warnings: [], completeness: verifications.every((v) => v.status === "VERIFIED") ? "COMPLETE" : "PARTIAL" });
+          const answerText = renderEnumeration(container.name, claims, verifications, (id) => this.store.entitiesById(indexed.id, [id])[0]?.kind);
+          return deterministicResult(ctx, this.store, indexed.id, text, indexed.repoRoot.split("/").filter(Boolean).pop() ?? "repository", answerText, claims, verifications);
         }
       }
     }
@@ -863,8 +880,8 @@ export class Answering {
         const claims = claimsFromLocate(this.store, indexed.id, matches[0].entityId);
         if (claims.length) {
           const verifications = verifyClaims(this.store, claims);
-          const message = renderLocation(matches[0], verifications);
-          return ok(ctx, { kind: "message", message }, { revision: indexed.id, warnings: [], completeness: verifications[0]?.status === "VERIFIED" ? "COMPLETE" : "PARTIAL" });
+          const answerText = renderLocation(matches[0], verifications);
+          return deterministicResult(ctx, this.store, indexed.id, text, indexed.repoRoot.split("/").filter(Boolean).pop() ?? "repository", answerText, claims, verifications);
         }
       }
     }

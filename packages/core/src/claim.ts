@@ -2,9 +2,11 @@
 // instead of prose — nothing here changes retrieval or what the model does; it only runs after a turn has already
 // finished, from `env`/`cited` the agent loop (chat-agent.ts) already built. Per the migration plan's own stage 3:
 // "wrapping existing retrieval output, logged not yet user-facing." The verifier (verifier.ts) is the consumer.
-import type { AnswerClaim, AnswerClaimVerification } from "@cie/schema";
+import type { AnswerClaim, AnswerClaimVerification, Claim, ViewSpec } from "@cie/schema";
 import type { ToolEnv } from "./chat-tools.ts";
 import type { Store } from "./store.ts";
+import { bundleFor } from "./retrieval.ts";
+import { compileView } from "./viewspec.ts";
 
 /**
  * One `cited_in_answer` claim per entity the final answer cited, for exactly the entities Gate A (chat-agent.ts's
@@ -107,4 +109,34 @@ export function renderEnumeration(containerName: string, claims: AnswerClaim[], 
     `${containerName} defines ${verified.length} ${noun}: ${names.join(", ")}.`,
     unresolved ? `${unresolved} other member(s) could not be independently verified and were left out of the count.` : `All ${verified.length} were independently verified against the indexed source, with no model call involved.`,
   ].join(" ");
+}
+
+/** The proof section every deterministic answer carries: one line per claim, naming exactly what was verified and
+ * why, or exactly why it was not — never silent about which parts of the answer are actually backed by evidence. */
+export function renderProof(claims: AnswerClaim[], verifications: AnswerClaimVerification[]): string {
+  const statusOf = new Map(verifications.map((v) => [v.claimId, v]));
+  const lines = claims.map((c) => {
+    const v = statusOf.get(c.claimId);
+    const file = c.evidence[0]?.sourceId;
+    return `- ${c.subject.label ?? c.subject.entityId}${file ? ` (${file})` : ""}: ${v?.status ?? "UNKNOWN"}${v?.reason ? ` — ${v.reason}` : ""}`;
+  });
+  return ["Proof:", ...lines].join("\n");
+}
+
+/**
+ * The initial chart for a deterministic answer: a minimal, guaranteed-correct view built directly from the claims
+ * that actually verified, reusing the same `bundleFor` + `compileView` machinery chat-agent.ts already uses to
+ * rebuild a chart when a model-chosen one doesn't match the answer's citations (chat-agent.ts). `answerEntityRefs`
+ * is set on the view's params so the outer `Answering.converse` automatically attaches alternate representations
+ * (`manifestFor`) — the "explore this answer as" visuals — without this function needing to build them itself.
+ */
+export function buildAnswerView(store: Store, revision: string, question: string, systemName: string, claims: AnswerClaim[], verifications: AnswerClaimVerification[]): { view: ViewSpec; claims: Claim[] } | null {
+  const statusOf = new Map(verifications.map((v) => [v.claimId, v]));
+  const verifiedIds = [...new Set(claims.filter((c) => statusOf.get(c.claimId)?.status === "VERIFIED").map((c) => c.subject.entityId))];
+  if (!verifiedIds.length) return null;
+  const bundle = bundleFor(store, revision, verifiedIds);
+  const tiers = new Map(verifiedIds.map((id) => [id, "CRITICAL" as const]));
+  const compiled = compileView({ question, bundle, tiers, store, systemName });
+  compiled.view.params = { ...compiled.view.params, answerEntityRefs: verifiedIds.join("\n") };
+  return compiled;
 }
