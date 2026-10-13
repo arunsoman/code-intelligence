@@ -72,18 +72,30 @@ test("reviewer format retry recovers a valid assessment without another writer p
   let calls = 0;
   const model: RouterModel = { name: "format-retry", choose: async () => null, converse: async (messages) => {
     calls++;
-    if (calls === 2) assert.match(messages[0].content, /previous assessment was invalid/);
-    return { content: "", toolCalls: [{ name: "review_answer", arguments: calls === 1 ? { ...supported, evidence: false } : supported }] };
+    if (calls === 2) assert.match(messages[0].content, /nextAction.*must be one of/);
+    return { content: "", toolCalls: [{ name: "review_answer", arguments: calls === 1 ? { ...supported, nextAction: "bogus" } : supported }] };
   } };
   const result = await reviewAnswer(model, "Explain AuthService", { text: "Draft", cites: [] }, [], Date.now() + 5000);
   assert.equal(result.verdict, "SUPPORTED"); assert.equal(calls, 2);
 });
 
-test("persistently malformed reviewer approval remains unresolved after one format retry", async () => {
+test("self-contradictory SUPPORTED approval is reconciled to repairable without retrying", async () => {
   let calls = 0;
-  const model: RouterModel = { name: "invalid-review", choose: async () => null, converse: async () => {
+  const model: RouterModel = { name: "inconsistent-review", choose: async () => null, converse: async () => {
     calls++; return { content: "", toolCalls: [{ name: "review_answer", arguments: { ...supported, coverage: false } }] };
   } };
   const result = await reviewAnswer(model, "Question", { text: "Draft", cites: [] }, [], Date.now() + 5000);
+  assert.equal(result.verdict, "REPAIRABLE"); assert.equal(calls, 1);
+  assert.match(result.gaps[0], /coverage/);
+  assert.equal(result.reconciliation?.originalVerdict, "SUPPORTED");
+});
+
+test("persistently invalid reviewer shape remains unresolved after one format retry", async () => {
+  let calls = 0;
+  const model: RouterModel = { name: "invalid-review", choose: async () => null, converse: async () => {
+    calls++; return { content: "", toolCalls: [{ name: "review_answer", arguments: { ...supported, injected: "x" } }] };
+  } };
+  const result = await reviewAnswer(model, "Question", { text: "Draft", cites: [] }, [], Date.now() + 5000);
   assert.equal(result.verdict, "UNRESOLVED"); assert.equal(calls, 2);
+  assert.match(result.gaps[0], /Unexpected field "injected"/);
 });

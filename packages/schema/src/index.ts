@@ -1071,6 +1071,8 @@ export interface AnswerReview {
   requirements: string[]; gaps: string[];
   supportedFindings?: { text: string; entityIds: string[] }[];
   nextAction: "continue" | "request_source" | "request_access" | "clarify" | "test" | "inspect_conflict";
+  /** Set when the reviewer's raw verdict/checks/gaps disagreed with each other and were reconciled deterministically, instead of discarding the assessment. Diagnostic only. */
+  reconciliation?: { originalVerdict: "SUPPORTED" | "REPAIRABLE" | "UNRESOLVED"; reason: string };
 }
 export interface AnswerInvestigation {
   id: string; question: string; revision: string; supportedFindings?: AnswerReview["supportedFindings"]; missingEvidence: string[]; nextAction: AnswerReview["nextAction"];

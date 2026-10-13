@@ -12,7 +12,7 @@ import { runtimeHotness } from "./hotness.ts";
 import { LENSES, protectedTier } from "./context.ts";
 import { revisionIndex, scoreEntity, tierOf, WEIGHTS, type SalienceContext, type Scored, type Weights } from "./salience.ts";
 import type { Store } from "./store.ts";
-import { answerConcepts, navigateHierarchy, overviewSeeds, productionEntities, sourceModule } from "./overview.ts";
+import { answerConcepts, navigateHierarchy, overviewSeeds, productionEntities, questionAllowsNonProduction, sourceModule, withoutTestEntities } from "./overview.ts";
 
 const STOP = new Set(["show", "how", "does", "the", "what", "why", "work", "works", "working", "can", "could", "would", "and", "for", "are", "this", "that", "with", "from", "everything", "about", "me", "all", "is", "do", "of", "in", "to", "a", "an", "it", "my", "which", "give", "overview", "whole", "tell", "explain", "describe", "list", "find"]);
 // Crude suffix stripping so "authentication" matches `auth/`. Heuristic, not linguistics.
@@ -221,7 +221,8 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
   const allEntities = store.entities(revision);
   const fileOf = new Map(allEntities.map((e) => [e.entityId, e.file]));
   const isDenied = (id: string) => access.deniedEntity(id, (x) => fileOf.get(x));
-  const symbols = (opts.scope === "repository" ? productionEntities(allEntities) : allEntities).filter((e) => symbolKinds.has(e.kind));
+  const symbols = (questionAllowsNonProduction(question) ? allEntities
+    : opts.scope === "repository" ? productionEntities(allEntities) : withoutTestEntities(allEntities)).filter((e) => symbolKinds.has(e.kind));
   const scored = new Map(symbols.map((e) => [e.entityId, scoreEntity(e, ctx)]));
   const byId = new Map(symbols.map((e) => [e.entityId, e]));
   if (opts.lens && opts.lens !== "default") for (const sc of scored.values()) { const p = protectedTier(sc.tier, sc.factors); if (p.protectedBy) { sc.tier = p.tier; sc.factors.push({ factor: "USER_OVERRIDE", rawValue: 0, normalizedScore: 0, reason: `kept visible under the ${opts.lens} lens: ${p.protectedBy}`, evidenceIds: [] }); } }

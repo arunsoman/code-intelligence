@@ -1,16 +1,40 @@
 import type { Store } from "./store.ts";
 import { policyFor } from "./access.ts";
+import { isTestFile } from "./module-tests.ts";
 import { revisionIndex } from "./salience.ts";
 import type { ArchConcept, Entity } from "@cie/schema";
 
-/** Test helpers can be nested inside production files, especially Rust modules. */
-export function productionEntities(entities: Entity[]): Entity[] {
+/** The one place a question opts back into seeing test/fixture/example code — shared by every retrieval path that otherwise excludes it. */
+export const questionAllowsNonProduction = (question: string) => /\b(?:tests?|fixtures?|examples?)\b|(?:^|\/)__tests__\//i.test(question);
+
+/** Entities nested inside a colocated test module — e.g. Rust's `#[cfg(test)] mod tests { ... }`, which conventional
+ * path-based test detection cannot see because the test code lives in an otherwise-production-named file. */
+function nestedTestEntityIds(entities: Entity[]): Set<string> {
   const testScopes = new Map<string, Entity["spans"]>();
   for (const e of entities) if (e.kind === "module" && /^(?:tests?|fixtures?|__tests__)$|(?:^|_)tests?(?:_|$)/i.test(e.name)) {
     testScopes.set(e.file, [...(testScopes.get(e.file) ?? []), ...e.spans]);
   }
-  return entities.filter((e) => productionSource(e.file) && !e.spans.some((span) => (testScopes.get(e.file) ?? []).some((scope) =>
-    scope.startByte <= span.startByte && scope.endByteExclusive >= span.endByteExclusive)));
+  const ids = new Set<string>();
+  for (const e of entities) if ((e.spans ?? []).some((span) => (testScopes.get(e.file) ?? []).some((scope) =>
+    scope.startByte <= span.startByte && scope.endByteExclusive >= span.endByteExclusive))) ids.add(e.entityId);
+  return ids;
+}
+
+/** Test helpers can be nested inside production files, especially Rust modules. Also hard-excludes docs/demo/fixtures/
+ * examples by path convention (see `productionSource`) — right for a repository-wide overview or an explicit name/path
+ * lookup, where showing a stray doc snippet as a top hit is clearly wrong. General question-driven retrieval wants
+ * `withoutTestEntities` instead: an embedded sample application under `fixtures/` is a legitimate subject to answer
+ * questions about, so it must not be hard-excluded there, only genuine test code. */
+export function productionEntities(entities: Entity[]): Entity[] {
+  const nested = nestedTestEntityIds(entities);
+  return entities.filter((e) => productionSource(e.file) && !nested.has(e.entityId));
+}
+
+/** Narrower than `productionEntities`: excludes only genuine test code (conventional test paths/filenames, plus a
+ * colocated test module), leaving docs/demo/fixtures/examples to graduated relevance ranking instead of a hard cut. */
+export function withoutTestEntities(entities: Entity[]): Entity[] {
+  const nested = nestedTestEntityIds(entities);
+  return entities.filter((e) => !isTestFile(e.file) && !nested.has(e.entityId));
 }
 
 export function navigateHierarchy(store: Store, revision: string, question: string, subjects: string[] = []) {

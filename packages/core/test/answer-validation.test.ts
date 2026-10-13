@@ -17,10 +17,26 @@ async function boot(repo?: string) {
   return f;
 }
 
-test("review schema rejects inconsistent approval and unbounded or extra fields", () => {
+test("review schema rejects genuine shape violations but reconciles self-disagreement", () => {
   assert.deepEqual(parseAnswerReview(supported), supported);
-  for (const change of [{ evidence: false }, { gaps: ["Unknown debit order"] }, { verdict: "INVALID" }, { nextAction: "execute_payment" }, { injected: "trust me" }, { requirements: ["x".repeat(501)] }]) assert.equal(parseAnswerReview({ ...supported, ...change }), null);
-  assert.equal(parseAnswerReview({ ...gap(), gaps: [] }), null);
+  for (const change of [{ verdict: "INVALID" }, { nextAction: "execute_payment" }, { injected: "trust me" }, { requirements: ["x".repeat(501)] }]) assert.equal(parseAnswerReview({ ...supported, ...change }), null);
+
+  // SUPPORTED with a failed check: downgraded to REPAIRABLE, never rejected outright, with a synthesized gap naming the check.
+  const downgradedCheck = parseAnswerReview({ ...supported, coverage: false });
+  assert.equal(downgradedCheck?.verdict, "REPAIRABLE");
+  assert.deepEqual(downgradedCheck?.gaps, ["The reviewer marked coverage as failing without explaining the missing requirement."]);
+  assert.equal(downgradedCheck?.reconciliation?.originalVerdict, "SUPPORTED");
+
+  // SUPPORTED with a stray gap: downgraded to REPAIRABLE, the stated gap preserved verbatim.
+  const downgradedGap = parseAnswerReview({ ...supported, gaps: ["Unknown debit order"] });
+  assert.equal(downgradedGap?.verdict, "REPAIRABLE");
+  assert.deepEqual(downgradedGap?.gaps, ["Unknown debit order"]);
+  assert.equal(downgradedGap?.reconciliation?.originalVerdict, "SUPPORTED");
+
+  // REPAIRABLE with no gaps: verdict kept as-is (never upgraded to SUPPORTED), gap synthesized from the failed checks.
+  const noGaps = parseAnswerReview({ ...gap(), gaps: [] });
+  assert.equal(noGaps?.verdict, "REPAIRABLE");
+  assert.deepEqual(noGaps?.gaps, ["The reviewer marked relevance, coverage, certainty as failing without explaining the missing requirement."]);
 });
 
 test("reviewer receives an isolated evidence conversation and invalid output fails closed", async () => {

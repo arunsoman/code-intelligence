@@ -1,6 +1,6 @@
 import type { Entity } from "@cie/schema";
 import type { AccessPolicy } from "./access.ts";
-import { isNonProductionFile } from "./module-tests.ts";
+import { productionEntities, questionAllowsNonProduction } from "./overview.ts";
 import { queryTerms } from "./retrieval.ts";
 import type { Store } from "./store.ts";
 
@@ -11,8 +11,8 @@ const normalized = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 /** Source lookup must not depend on which nodes survive a diagram's display cutoff.
  * Match the entire accessible index, weighting distinctive query words over common names. */
 export function sourceCandidates(store: Store, revision: string, query: string, access: AccessPolicy): Entity[] {
-  const includeTests = /\b(?:tests?|fixtures?|examples?)\b|(?:^|\/)__tests__\//i.test(query);
-  const entities = store.entities(revision).filter(e => !access.denied(e.file) && (includeTests || !isNonProductionFile(e.file)));
+  const accessible = store.entities(revision).filter(e => !access.denied(e.file));
+  const entities = questionAllowsNonProduction(query) ? accessible : productionEntities(accessible);
   const terms = [...new Set(queryTerms(query.replace(/(?<=\w)-(?=\w)/g, "")).filter(t => !GENERIC.has(t)).map(normalized))];
   if (!terms.length) return [];
   const hits = entities.map(e => ({ e, name: normalized(e.name), path: normalized(e.file) }));

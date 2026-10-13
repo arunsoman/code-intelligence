@@ -142,15 +142,26 @@ export const CHAT_TOOLS: ChatTool[] = [
     description: "Find classes, functions, methods and files by name or by what they are about. Use it to locate something before reading it, or when a name in the question did not resolve.",
     parameters: obj({ query: str("A name, partial name or a few words describing the code") }, ["query"]),
     async run(env, { query }) {
+      // A lexical name/path hit is not treated as authoritative on its own: the broader relevance
+      // retrieval (semantic/task-match, concept-aware) always runs too, and either corroborates a
+      // direct hit or flags it as resting on a generic word alone — this is what keeps an unrelated
+      // same-repo match (a test fixture, another package's same-named helper) from being presented
+      // as an established answer just because it matched text.
       const q = query as string;
       const named = resolveMentions(env.svc.store, env.rev.id, q, env.access).resolved.flatMap((m) => m.matches);
       const direct = sourceCandidates(env.svc.store, env.rev.id, q, env.access);
-      if (direct.length) return [`${direct.length} indexed name/path match(es) for "${q}" (read implementations to establish relevance):`, ...direct.map(e => line(env, e))].join("\n");
       const r = retrieveForQuestion(env.svc.store, env.rev.id, q, { access: env.access, maxNodes: 12 });
-      const related = r.bundle.entities.filter((e) => e.kind !== "file" && r.scored.get(e.entityId)?.factors.some((f) => f.factor === "TASK_MATCH" && f.normalizedScore > 0))
+      const corroborated = (id: string) => (r.scored.get(id)?.score ?? 0) > 0;
+      const confirmed = direct.filter(e => corroborated(e.entityId));
+      const uncorroborated = direct.filter(e => !corroborated(e.entityId));
+      const related = r.bundle.entities.filter((e) => e.kind !== "file" && !direct.some(d => d.entityId === e.entityId) && r.scored.get(e.entityId)?.factors.some((f) => f.factor === "TASK_MATCH" && f.normalizedScore > 0))
         .sort((a, b) => (r.scored.get(b.entityId)?.score ?? 0) - (r.scored.get(a.entityId)?.score ?? 0));
       const all = [...new Map([...named.map((m) => ({ entityId: m.entityId, name: m.name, file: m.file, kind: m.kind })), ...related].map((e) => [e.entityId, e])).values()].slice(0, 12);
-      return all.length ? [`${all.length} tentative semantic candidate(s) for "${q}"; no direct source name/path match was found. These are not established domain matches:`, ...all.map((e) => line(env, e))].join("\n") : `Nothing in this revision matches "${q}".`;
+      const sections: string[] = [];
+      if (confirmed.length) sections.push(`${confirmed.length} indexed name/path match(es) for "${q}", also supported by the broader relevance retrieval (read implementations to establish relevance):`, ...confirmed.map(e => line(env, e)));
+      if (uncorroborated.length) sections.push(`${uncorroborated.length} name/path match(es) for "${q}" on generic/common terms only; nothing else in this investigation supports them as belonging to this question's domain — verify the implementation's actual subject before relying on it:`, ...uncorroborated.map(e => line(env, e)));
+      if (all.length) sections.push(`${all.length} tentative semantic candidate(s) for "${q}"; these are not established domain matches:`, ...all.map(e => line(env, e)));
+      return sections.length ? sections.join("\n") : `Nothing in this revision matches "${q}".`;
     },
   },
   {
