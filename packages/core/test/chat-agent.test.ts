@@ -81,7 +81,7 @@ test("the agent starts from resolved mentions, reads the code, and cites only wh
     svc.router = model;
     const r = await svc.converse(ctx(), { text: "what is the job of AuthService?", revision });
     assert.ok(r.ok && r.value.kind === "analysis");
-    assert.match(r.value.message, /^AuthService signs users in\.\n\nBased on: AuthService \(src\/auth\/service\.ts\)\.$/);
+    assert.match(r.value.message, /^AuthService signs users in\.\n\nBased on: AuthService \(src\/auth\/service\.ts\)\.\n\nProof:\n- AuthService \(src\/auth\/service\.ts\): VERIFIED/);
     assert.equal(r.value.validation?.repairAttempts, 1);
     assert.match(r.value.thinking!, /read_code\(id="class:src\/auth\/service\.ts#AuthService"\)/);
     assert.equal(request(model.calls[0].messages).mentions[0].name, "AuthService");
