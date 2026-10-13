@@ -127,7 +127,7 @@ export function InsightsPanel({ revision: openedRevision, view, onClose, onAsk, 
       setTab(TABS[n].id); requestAnimationFrame(() => document.getElementById(`tab-${TABS[n].id}`)?.focus());
     }
   };
-  const reindexFb = buttonFeedback({ className: "secondary small", busy: reindex.phase === "busy" });
+  const reindexFb = buttonFeedback({ className: "secondary small", busy: reindex.phase === "busy", skeleton: reindex.phase === "busy" });
   return (
     <div className="modal-backdrop">
       <section className="modal insights dialog" role="dialog" aria-modal="true" aria-label="Insights" tabIndex={-1} onKeyDown={onKey}

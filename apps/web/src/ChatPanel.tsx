@@ -36,7 +36,7 @@ export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend,
   useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [messages.length, busy]);
   useEffect(() => { if (seed?.n) setText(seed.text); }, [seed?.n, seed]); // eslint-disable-line react-hooks/exhaustive-deps
   const send = () => { const t = text.trim(); if (t && !busy) { onSend(t); setText(""); } };
-  const sendFb = buttonFeedback({ busy });
+  const sendFb = buttonFeedback({ busy, skeleton: busy });
   return (
     <section className="chat" aria-label="Conversation">
       <div className="between"><h2>Conversation</h2><button className="link small" onClick={onNewContext} disabled={busy} aria-label="Start a new conversation context">＋ New context</button></div>

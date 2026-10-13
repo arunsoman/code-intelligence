@@ -43,25 +43,42 @@ test("buttons show idle, hover and pressed as three different images, and a pend
     await b.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: box.x + box.width / 2, y: box.y + box.height / 2 }); await wait(300);
     const hover = await faceHash(b, box);
 
-    await b.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, x: box.x + box.width / 2, y: box.y + box.height / 2 }); await wait(300);
+    // Count requests to the enqueue endpoint before the triggering click, so a rapid double-click's debounce
+    // can be verified directly (the request count), not just inferred from the UI.
+    await b.eval(`(() => { window.__enqueueCalls = 0; const f = window.fetch.bind(window); window.fetch = (...a) => { if (String(a[0]).includes('/enqueue')) window.__enqueueCalls++; return f(...a); }; })()`);
+    const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+    await b.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, x: cx, y: cy }); await wait(300);
     const pressed = await faceHash(b, box);
-    await b.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, x: box.x + box.width / 2, y: box.y + box.height / 2 });
+    // This mouseup is the real, single triggering click (mousedown+mouseup at the same point is a click).
+    // Immediately follow it with a second full click, with no wait in between: that second one must be
+    // swallowed by the debounce guard, not dispatch a second enqueue request.
+    await b.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, x: cx, y: cy });
+    await b.send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, x: cx, y: cy });
+    await b.send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, x: cx, y: cy });
 
     assert.notEqual(hover, idle, "the button looks different when the pointer is over it");
     assert.notEqual(pressed, idle, "the button looks different while it is held down");
     assert.notEqual(pressed, hover, "hover and pressed are distinct");
 
-    // Clicking Index starts a background job: the button must announce it, keep its label, and not just fade.
-    await b.eval(`[...document.querySelectorAll('button')].find((x) => x.textContent.trim() === 'Index').click()`);
+    // The pending state (and its skeleton shimmer) must be visible immediately - before any network round-trip -
+    // which is exactly what distinguishes a real click-time guard from a busy flag that only flips once a
+    // server response lands.
+    const instant = await b.eval<{ busy: string | null; skeleton: boolean }>(`(() => {
+      const el = [...document.querySelectorAll('button')].find((x) => x.textContent.trim().includes('Index'));
+      return { busy: el.getAttribute('aria-busy'), skeleton: el.classList.contains('skeleton') };
+    })()`);
+    assert.equal(instant.busy, "true", "aria-busy is set the instant the click registers, not after the network call");
+    assert.ok(instant.skeleton, "the skeleton shimmer shows immediately too");
     await b.waitFor(() => `!!document.querySelector('button[aria-busy="true"] .spinner')`, 15_000, "the pending Index button");
-    const pending = await b.eval<{ text: string; opacity: string; busy: string; spin: string }>(`(() => {
+    const pending = await b.eval<{ text: string; opacity: string; busy: string; spin: string; enqueueCalls: number }>(`(() => {
       const el = document.querySelector('button[aria-busy="true"]');
-      return { text: el.textContent.trim(), opacity: getComputedStyle(el).opacity, busy: el.getAttribute('aria-busy'), spin: getComputedStyle(el.querySelector('.spinner')).animationName };
+      return { text: el.textContent.trim(), opacity: getComputedStyle(el).opacity, busy: el.getAttribute('aria-busy'), spin: getComputedStyle(el.querySelector('.spinner')).animationName, enqueueCalls: window.__enqueueCalls };
     })()`);
     assert.equal(pending.text, "Index", "the pending label is unchanged, so the layout does not jump");
     assert.equal(pending.opacity, "1", "the pending button is not merely faded");
     assert.equal(pending.busy, "true");
     assert.notEqual(pending.spin, "none", "the spinner is animated by default");
+    assert.equal(pending.enqueueCalls, 1, "the rapid second click was debounced, not dispatched as a second enqueue request");
 
     // Reduced motion must stop the animation but keep the affordance.
     await b.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });

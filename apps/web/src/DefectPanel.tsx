@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { DetectorFinding, JobView, ResolvedEvidence } from "@cie/schema";
 import { call } from "./api.ts";
 import { Loading } from "./Skeleton.tsx";
+import { buttonFeedback } from "./button.ts";
+import { useClickGuard } from "./use-click-guard.ts";
 import { GLOSSARY, GROUP_H, KIND_INFO, KIND_LABEL, LEVEL_INFO, ROW, RULE_HINT, SEVERITIES, STATUS_INFO, type Row, type TriageStatus,
   filterFindings, flatten, groupByFile, groupByFile as groupsOf, locationOf, offsetOf, relative, rowLabel, sevClass, severityCounts, statusOf, truncateMiddle, windowOf } from "./defect-list.ts";
 
@@ -149,11 +151,12 @@ export function DefectPanel({ revision, onClose }: { revision: string; onClose: 
   }, [finding?.id, finding?.version, revision]);
 
   const busy = !!job && ["QUEUED", "RUNNING"].includes(job.state);
-  const detect = async () => {
+  const detectGuard = useClickGuard(async () => {
     setError(null); setElapsed(0);
     const r = await call<JobView>("C26", "detect", { revision }, crypto.randomUUID());
     if (r.ok) setJob(r.value); else setError(r.error.message);
-  };
+  });
+  const analyzeFb = buttonFeedback({ className: "d-analyze", busy: detectGuard.pending, skeleton: detectGuard.skeleton });
 
   // triage (UX-04/05/21/24): statuses tracked in this browser
   const setStatus = (ids: string[], status: TriageStatus | null) => {
@@ -308,7 +311,7 @@ export function DefectPanel({ revision, onClose }: { revision: string; onClose: 
             {analyzedAt && !busy && <span aria-hidden="true">· analyzed {relative(analyzedAt)}</span>}
           </div>
           <div className="d-cta-row">
-            <button className="d-analyze" disabled={busy || loading} onClick={() => void detect()}>{busy ? "Analyzing…" : findings.length ? "Re-analyze" : "Analyze indexed code"}</button>
+            <button className={analyzeFb.className} aria-busy={analyzeFb["aria-busy"]} disabled={busy || loading || detectGuard.pending} onClick={detectGuard.run}>{analyzeFb.spinner && <span className="spinner" aria-hidden="true" />}{busy ? "Analyzing…" : findings.length ? "Re-analyze" : "Analyze indexed code"}</button>
             {busy && <div className="d-progress" title={job?.message ?? "analyzing"}><div className="bar"><span className={job?.total ? undefined : "indeterminate"} style={job?.total ? { width: `${Math.round(((job.done ?? 0) / job.total) * 100)}%` } : undefined} /></div></div>}
           </div>
           {error && <p role="alert" className="d-error">{error}</p>}

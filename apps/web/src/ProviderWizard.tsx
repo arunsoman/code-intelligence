@@ -60,7 +60,7 @@ export function ProviderWizard({ onClose, revision: _revision }: { onClose: () =
   };
 
   const total = titles.length;
-  return <Modal title="Create provider" onClose={onClose} className="wide tall provider-wizard" actions={<><span className="muted small">Step {step + 1}{guide ? ` of ${total}` : " · LLM planning"}</span>{step > 0 && guide && <button className="secondary" disabled={loading} onClick={() => setStep((step - 1) as Step)}>Back</button>}{step === 0 ? <button disabled={!name || loading} onClick={next}>{loading ? "Generating…" : "Continue"}</button> : guide && step < total - 1 ? <button onClick={next}>Yes / Continue</button> : guide ? <button onClick={onClose}>Done</button> : null}</>}>
+  return <Modal title="Create provider" onClose={onClose} dismissible={false} className="wide tall provider-wizard" actions={<><span className="muted small">Step {step + 1}{guide ? ` of ${total}` : " · LLM planning"}</span>{step > 0 && guide && <button className="secondary" disabled={loading} onClick={() => setStep((step - 1) as Step)}>Back</button>}{step === 0 ? <button disabled={!name || loading} onClick={next}>{loading ? "Generating…" : "Continue"}</button> : guide && step < total - 1 ? <button onClick={next}>Yes / Continue</button> : guide ? <button onClick={onClose}>Done</button> : null}</>}>
     <div onKeyDown={onKeyDown} className="provider-step">{guide && <div className="provider-progress" aria-label={`Step ${step + 1} of ${total}`}>{Array.from({ length: total }, (_, i) => <span key={i} className={i <= step ? "active" : ""} />)}</div>}<h3>{titles[step]}</h3>{body()}</div>
   </Modal>;
 }

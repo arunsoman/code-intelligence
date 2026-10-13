@@ -3,13 +3,16 @@
 // pending state: the visible label is unchanged (so the layout does not jump), the state is announced with
 // aria-busy, and a spinner — not a faded label on its own — shows it. `buttonFeedback` is the one place that
 // decides the class and attribute so the components cannot drift apart, and it is unit-tested without a browser.
+// `skeleton` is an additional, optional shimmer on the button face for the instant between a click and the
+// pending state landing (see `useClickGuard`); it is its own class so a caller can use pending/skeleton
+// independently, but in practice they are driven by the same `pending` flag together.
 export interface ButtonFeedback {
   className: string | undefined;
   "aria-busy": "true" | undefined;
   spinner: boolean;
 }
 
-export function buttonFeedback(o: { className?: string; busy?: boolean }): ButtonFeedback {
-  const className = [o.className, o.busy ? "pending" : ""].filter(Boolean).join(" ") || undefined;
+export function buttonFeedback(o: { className?: string; busy?: boolean; skeleton?: boolean }): ButtonFeedback {
+  const className = [o.className, o.busy ? "pending" : "", o.skeleton ? "skeleton" : ""].filter(Boolean).join(" ") || undefined;
   return { className, "aria-busy": o.busy ? "true" : undefined, spinner: !!o.busy };
 }

@@ -15,6 +15,8 @@ import type { ChatAnalysisResult } from "@cie/schema";
 import { RepositoryGit } from "./RepositoryGit.tsx";
 import type { RepositoryGitInfo } from "@cie/schema";
 import { buttonFeedback } from "./button.ts";
+import { useClickGuard } from "./use-click-guard.ts";
+import { toast, ToastHost } from "./Toast.tsx";
 import { Canvas } from "./Canvas.tsx";
 import { ChatPanel, type Message, type MessageAlt } from "./ChatPanel.tsx";
 import { ModelMenu } from "./ModelMenu.tsx";
@@ -376,9 +378,8 @@ export function App() {
   const primed = useRef(false);
   const jobActive = jobs.some((j) => j.state === "QUEUED" || j.state === "RUNNING");
   const runningJob = (kind: string) => jobs.some((j) => j.kind === kind && (j.state === "QUEUED" || j.state === "RUNNING"));
-  const indexFb = buttonFeedback({ busy: runningJob("index") });
-  const extractFb = buttonFeedback({ className: "secondary", busy: runningJob(MODE_INFO.hierarchy.jobKind) });
-  const saveFb = buttonFeedback({ busy: (busy ?? "").startsWith("Saving") });
+  const [cancellingIds, setCancellingIds] = useState<Set<string>>(new Set());
+  const isCancelling = (id: string) => cancellingIds.has(id);
   const onJobDone = async (j: JobView) => {
     if (j.state === "SUCCEEDED") {
       const warnings = j.result?.warnings ?? [];
@@ -434,17 +435,28 @@ export function App() {
     setError(null); setNotice(null);
     if (kind === "index") setNotice(info?.revision?.repoRoot === selectedRepoRef.current && !!selectedRepoRef.current ? "Checking the repository for file changes; unchanged parses will be reused…" : "Building an initial index for this repository…");
     const r = await call<JobView>("C07", "enqueue", kind === "index" ? { kind, repoPath: repoPath.trim() } : { kind, revision: info?.revision?.id }, uuid());
-    if (!r.ok) return setError(failMsg(r));
+    if (!r.ok) { toast(failMsg(r), "error"); return setError(failMsg(r)); }
     await syncJobs();
   };
   const cancelJob = async (j: JobView) => {
-    const r = await call<{ job: JobView; cancelled: boolean; reason?: string }>("C07", "cancelJob", { jobId: j.id }, uuid());
-    if (!r.ok) return setError(failMsg(r));
-    if (!r.value.cancelled && r.value.reason) setNotice(r.value.reason);
-    await syncJobs();
+    if (isCancelling(j.id)) return; // debounced: a cancel already in flight for this job
+    setCancellingIds((s) => new Set(s).add(j.id));
+    try {
+      const r = await call<{ job: JobView; cancelled: boolean; reason?: string }>("C07", "cancelJob", { jobId: j.id }, uuid());
+      if (!r.ok) { toast(failMsg(r), "error"); return setError(failMsg(r)); }
+      if (!r.value.cancelled && r.value.reason) setNotice(r.value.reason);
+      await syncJobs();
+    } finally {
+      setCancellingIds((s) => { const n = new Set(s); n.delete(j.id); return n; });
+    }
   };
-  const index = () => void startJob("index");
-  const extract = () => void startJob(MODE_INFO.hierarchy.jobKind);
+  const indexGuard = useClickGuard(() => startJob("index"));
+  const extractGuard = useClickGuard(() => startJob(MODE_INFO.hierarchy.jobKind));
+  const indexFb = buttonFeedback({ busy: runningJob("index") || indexGuard.pending, skeleton: indexGuard.skeleton });
+  const extractFb = buttonFeedback({ className: "secondary", busy: runningJob(MODE_INFO.hierarchy.jobKind) || extractGuard.pending, skeleton: extractGuard.skeleton });
+  const saveFb = buttonFeedback({ busy: (busy ?? "").startsWith("Saving"), skeleton: (busy ?? "").startsWith("Saving") });
+  const index = () => indexGuard.run();
+  const extract = () => extractGuard.run();
   const toggleHosted = async (allow: boolean) => {
     const root = info?.revision?.repoRoot;
     if (!root) return;
@@ -659,7 +671,11 @@ export function App() {
     };
     const name = wsName || view?.question || "Untitled investigation";
     const r = await call<{ workspaceId: string; receipt: { resourceVersion: number } }>("C13", "saveWorkspace", { workspaceId: ws.id, name, expectedVersion: ws.version, revision, state }, uuid());
-    if (!r.ok) return setError(r.error.code === "VERSION_CONFLICT" ? "This investigation was saved elsewhere since you opened it. Re-open it before saving." : failMsg(r));
+    if (!r.ok) {
+      const msg = r.error.code === "VERSION_CONFLICT" ? "This investigation was saved elsewhere since you opened it. Re-open it before saving." : failMsg(r);
+      toast(msg, "error");
+      return setError(msg);
+    }
     setWs({ id: r.value.workspaceId, version: r.value.receipt.resourceVersion });
     setNotice(`Saved “${name}” (v${r.value.receipt.resourceVersion})`);
     await refresh();
@@ -730,6 +746,7 @@ export function App() {
 
   return (
     <div className="app" data-canvas-focus={canvasFocus ? "true" : undefined}>
+      <ToastHost />
       {picking && <FolderPicker initialPath={repoPath} onClose={() => setPicking(false)} onPick={(p) => { selectRepository(p, true); setPicking(false); log("PICK_REPO", p); }} />}
       {galleryOpen && <VisualsGallery revision={info?.revision?.id} onClose={() => setGalleryOpen(false)} onShow={(it: CatalogEntry, q: string) => { setGalleryOpen(false); void askForm(q, it.formId, undefined, undefined, undefined, undefined, selectedChartId(it)); }} />}
       {providerWizardOpen && <ProviderWizard revision={info?.revision?.id} onClose={() => setProviderWizardOpen(false)} />}
@@ -740,7 +757,7 @@ export function App() {
       )}
       {jobsOpen && (
         <Modal title="Background work" onClose={() => setJobsOpen(false)} actions={<><span className="muted small">Indexing and extraction run in the background; nothing is saved from a cancelled or interrupted run.</span><button onClick={() => setJobsOpen(false)}>Done</button></>}>
-          <JobBar jobs={jobs} onCancel={(j) => void cancelJob(j)} />
+          <JobBar jobs={jobs} onCancel={(j) => void cancelJob(j)} cancelling={isCancelling} />
           {jobs.length === 0 ? <p className="muted">No jobs yet.</p> : (
             <ul className="dirs" tabIndex={0} aria-label="Recent jobs">
               {jobs.map((j) => <li key={j.id}><span className="mono">{j.kind}</span><span className="muted small">{j.state.toLowerCase()}{j.message ? ` — ${j.message}` : ""}</span></li>)}
@@ -845,7 +862,7 @@ export function App() {
             <button className="link" style={{fontSize: '11px'}} onClick={() => setRepoExpanded(e => !e)} aria-expanded={repoExpanded} aria-controls="repo-section-body">{repoExpanded ? 'Hide' : 'Show'}</button>
           </h2>
           <div id="repo-section-body" hidden={!repoExpanded}>
-          <JobBar jobs={jobs} onCancel={(j) => void cancelJob(j)} />
+          <JobBar jobs={jobs} onCancel={(j) => void cancelJob(j)} cancelling={isCancelling} />
           <label htmlFor="repo">Repository path</label>
           <input id="repo" value={repoPath} onChange={(e) => selectRepository(e.target.value)} onBlur={() => { if (selectedRepoRef.current) void refresh(selectedRepoRef.current); }} placeholder="" />
           <p className="hint">Example: /home/user/my-project</p>
@@ -864,9 +881,9 @@ export function App() {
           }} />
           <div className="row">
             <button className="secondary" onClick={() => openDialog(() => setPicking(true))} disabled={!!busy || jobActive}>Browse…</button>
-            <button onClick={index} disabled={!repoPath.trim() || !!busy || jobActive} className={indexFb.className} aria-busy={indexFb["aria-busy"]} title={info?.revision?.repoRoot === selectedRepoRef.current ? "Incrementally update the selected repository index" : "Build an initial index for the selected repository"}>{indexFb.spinner && <span className="spinner" aria-hidden="true" />}{info?.revision?.repoRoot === selectedRepoRef.current ? "Update index" : "Index"}</button>
+            <button onClick={index} disabled={!repoPath.trim() || !!busy || jobActive || indexGuard.pending} className={indexFb.className} aria-busy={indexFb["aria-busy"]} title={info?.revision?.repoRoot === selectedRepoRef.current ? "Incrementally update the selected repository index" : "Build an initial index for the selected repository"}>{indexFb.spinner && <span className="spinner" aria-hidden="true" />}{info?.revision?.repoRoot === selectedRepoRef.current ? "Update index" : "Index"}</button>
           </div>
-          <button className={extractFb.className} onClick={extract} disabled={!info?.revision || !!busy || jobActive} aria-busy={extractFb["aria-busy"]} title={MODE_INFO.hierarchy.help}>{extractFb.spinner && <span className="spinner" aria-hidden="true" />}{MODE_INFO.hierarchy.button}{hierarchyConcepts ? ` (${hierarchyConcepts})` : ""}</button>
+          <button className={extractFb.className} onClick={extract} disabled={!info?.revision || !!busy || jobActive || extractGuard.pending} aria-busy={extractFb["aria-busy"]} title={MODE_INFO.hierarchy.help}>{extractFb.spinner && <span className="spinner" aria-hidden="true" />}{MODE_INFO.hierarchy.button}{hierarchyConcepts ? ` (${hierarchyConcepts})` : ""}</button>
           {info?.hosted && info.revision && (
             <div className="egress">
               <label><input type="checkbox" checked={info.allowHosted} onChange={(e) => void toggleHosted(e.target.checked)} /> Allow the hosted model for this repo</label>
@@ -1017,7 +1034,7 @@ export function App() {
           void evidence(row.evidenceIds).then(items => setDrawer({kind:"inspect",title:row.label,sub:"Direct static call evidence",notes:[`Result membership: ${row.result}. Unknown membership is not exclusion.`],claimIds:[],evidence:items}));
         }} />}
         <div id="response-view-panel" role={responseWorkspace.workspace ? "tabpanel" : undefined} aria-labelledby={responseWorkspace.workspace ? `tab-${responseWorkspace.workspace.activeId}` : undefined} className="stage" aria-busy={responseWorkspace.waiting || phase === "composing" ? "true" : undefined}>
-          {responseWorkspace.waiting ? <div className="empty-chart-state" role="status"><strong>{responseWorkspace.active?.label}</strong><p>{responseWorkspace.active?.status === "generating" ? "Generating this view from the same question and revision…" : responseWorkspace.active?.reason ?? "Select this tab to generate its view."}</p>{["failed","available"].includes(responseWorkspace.active?.status ?? "") && <button onClick={() => void responseWorkspace.generate(responseWorkspace.active!.id)}>{responseWorkspace.active?.status === "failed" ? "Retry this view" : "Generate this view"}</button>}</div> : view?.matrix && drawMode === "matrix" ? (
+          {responseWorkspace.waiting ? <div className="empty-chart-state" role="status"><strong>{responseWorkspace.active?.label}</strong><p>{responseWorkspace.active?.status === "generating" ? "Generating this view from the same question and revision…" : responseWorkspace.active?.reason ?? "Select this tab to generate its view."}</p>{["failed","available"].includes(responseWorkspace.active?.status ?? "") && <button onClick={() => void responseWorkspace.generate(responseWorkspace.active!.id)}>{responseWorkspace.active?.status === "failed" ? "Retry this view" : "Generate this view"}</button>}{["generating","queued"].includes(responseWorkspace.active?.status ?? "") && <button className="secondary" onClick={responseWorkspace.cancel} title="Stop waiting on this view. Nothing already computed elsewhere is lost.">Stop waiting</button>}</div> : view?.matrix && drawMode === "matrix" ? (
             <MatrixView matrix={eff!.view.matrix!} stale={eff!.stale} selected={new Set(cellSel)} onPick={(c, r, k, add) => void inspectCell(c, r, k, add)} />
           ) : view?.terrain ? (
             <TerrainView view={view} weights={terrainWeights} onWeights={setTerrainWeights} selected={new Set(selection)}

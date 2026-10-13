@@ -14,6 +14,12 @@ test("button feedback: a pending button keeps its classes, announces aria-busy a
   assert.deepEqual(buttonFeedback({ className: "secondary", busy: false }), { className: "secondary", "aria-busy": undefined, spinner: false });
 });
 
+test("button feedback: skeleton is its own class, independent of pending, and does not change aria-busy/spinner", () => {
+  assert.deepEqual(buttonFeedback({ skeleton: true }), { className: "skeleton", "aria-busy": undefined, spinner: false });
+  assert.deepEqual(buttonFeedback({ className: "secondary", busy: true, skeleton: true }), { className: "secondary pending skeleton", "aria-busy": "true", spinner: true });
+  assert.deepEqual(buttonFeedback({ className: "secondary", busy: true, skeleton: false }), { className: "secondary pending", "aria-busy": "true", spinner: true });
+});
+
 test("button feedback: hover, pressed and pending states are defined for every button kind, and reduced motion is respected", () => {
   const css = read("../src/styles.css");
   assert.match(css, /button:not\(:disabled\):hover \{/, "primary buttons react to hover");
@@ -25,6 +31,8 @@ test("button feedback: hover, pressed and pending states are defined for every b
   assert.match(css, /button\.pending:disabled \{[^}]*opacity: 1/, "a pending button is not merely faded");
   assert.match(css, /button \.spinner \{[^}]*animation:/, "the pending affordance is a spinner, not just a label");
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?button \.spinner \{ animation: none/, "reduced motion stops the spinner animation");
+  assert.match(css, /button\.skeleton:disabled \{[^}]*animation: cie-shimmer/, "the skeleton class shimmers using the same convention as content skeletons");
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ button\.skeleton:disabled \{ animation: none/, "reduced motion stops the button skeleton shimmer too");
 });
 
 test("button feedback: the work-starting buttons use the convention", () => {

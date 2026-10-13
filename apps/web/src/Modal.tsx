@@ -8,6 +8,9 @@ import { useEffect, useRef, type KeyboardEvent, type MouseEvent, type ReactNode 
  * - Focus trap: Tab cycles through focusable elements inside the modal.
  * - Returns focus to the element that opened the modal on close.
  * - Consistent title styling and action footer layout.
+ * - `dismissible={false}` (default true) drops all three of the above: no ✕, Esc does nothing, the
+ *   backdrop does nothing. For a dialog whose job is to force a choice before the app can be used
+ *   (e.g. no model configured yet) — exiting must go through the dialog's own action buttons.
  */
 type ModalProps = {
   title: string;
@@ -16,11 +19,12 @@ type ModalProps = {
   className?: string;
   actions?: ReactNode;
   initialFocusRef?: React.RefObject<HTMLElement | null>;
+  dismissible?: boolean;
 };
 
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-export function Modal({ title, onClose, children, className = "", actions, initialFocusRef }: ModalProps) {
+export function Modal({ title, onClose, children, className = "", actions, initialFocusRef, dismissible = true }: ModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<Element | null>(null);
 
@@ -44,8 +48,7 @@ export function Modal({ title, onClose, children, className = "", actions, initi
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
-      e.preventDefault();
-      onClose();
+      if (dismissible) { e.preventDefault(); onClose(); }
       return;
     }
     if (e.key !== "Tab") return;
@@ -69,7 +72,7 @@ export function Modal({ title, onClose, children, className = "", actions, initi
   };
 
   const onBackdropClick = (e: MouseEvent<HTMLDivElement>) => {
-    if (e.target === e.currentTarget) onClose();
+    if (dismissible && e.target === e.currentTarget) onClose();
   };
 
   return (
@@ -85,15 +88,17 @@ export function Modal({ title, onClose, children, className = "", actions, initi
       >
         <div className="modal-head">
           <h2>{title}</h2>
-          <button
-            type="button"
-            className="icon-close"
-            onClick={onClose}
-            aria-label={`Close ${title}`}
-            title="Close (Esc)"
-          >
-            ✕
-          </button>
+          {dismissible && (
+            <button
+              type="button"
+              className="icon-close"
+              onClick={onClose}
+              aria-label={`Close ${title}`}
+              title="Close (Esc)"
+            >
+              ✕
+            </button>
+          )}
         </div>
 
         <div className="modal-body">{children}</div>
