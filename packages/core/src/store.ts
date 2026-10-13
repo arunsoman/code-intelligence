@@ -8,7 +8,7 @@ import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { migrate } from "./migrations.ts";
 import { clearHistoryCache } from "./gitinfo.ts";
-import { ChartOutput, ChartOutputV2, type AnalysisBatch, type ChartOutput as ChartPlan, type ChartOutputV2 as ChartPlanV2, type Claim, type ConceptCard, type Entity, type EvidenceRef, type Fact, type JobView, type Relationship, type Verdict } from "@cie/schema";
+import { ChartOutput, ChartOutputV2, type AnalysisBatch, type ChartOutput as ChartPlan, type ChartOutputV2 as ChartPlanV2, type Claim, type ConceptCard, type ConceptClusterRaw, type Entity, type EvidenceRef, type Fact, type JobView, type Relationship, type Verdict } from "@cie/schema";
 
 export interface RevisionRow { id: string; repoRoot: string; gitHead: string | null; createdAt: string; analyzerVersion: string; diagnostics: AnalysisBatch["diagnostics"]; fileCount: number }
 
@@ -126,6 +126,30 @@ export class Store {
     const im = this.db.prepare("insert or replace into rev_files values (?,?,?)");
     for (const [file, digest] of Object.entries(manifest ?? {})) im.run(revision, file, digest);
   }
+  /** Leaf-level concept clusters the worker already found for free (shape.rs's AST-shape hash, shared framework
+   * role). Content-addressed: an unchanged cluster's row is reused (insert-or-ignore) and only a new
+   * `concept_revisions` pointer is added, instead of duplicating the concept row on every re-index. */
+  insertConceptClusters(revision: string, clusters: ConceptClusterRaw[] | undefined) {
+    if (!clusters?.length) return;
+    const ins = this.db.prepare("insert or ignore into structural_concepts(concept_id, kind, level, name, description, name_source, parent_id, member_signature, created_at) values (?,?,0,?,null,?,null,?,?)");
+    const rev = this.db.prepare("insert or ignore into structural_concept_revisions(revision, concept_id) values (?,?)");
+    const mem = this.db.prepare("insert or ignore into structural_concept_members(concept_id, member_entity_id, member_concept_id) values (?,?,null)");
+    const now = new Date().toISOString();
+    for (const c of clusters) {
+      ins.run(c.clusterId, c.kind, c.heuristicName ?? null, c.heuristicName ? "heuristic" : "none", c.memberEntityIds.slice().sort().join("|"), now);
+      rev.run(revision, c.clusterId);
+      for (const id of c.memberEntityIds) mem.run(c.clusterId, id);
+    }
+  }
+  /** Leaf-level concept clusters recorded for `revision` (zero-LLM shape/framework-role clustering from the
+   * worker; see `insertConceptClusters`). Roll-up to higher levels and LLM naming are not built yet. */
+  conceptClusters(revision: string): { conceptId: string; kind: string; name: string | null; memberEntityIds: string[] }[] {
+    const rows = this.db.prepare(
+      "select c.concept_id as concept_id, c.kind as kind, c.name as name from structural_concepts c join structural_concept_revisions cr on cr.concept_id = c.concept_id where cr.revision = ? order by c.concept_id",
+    ).all(revision) as { concept_id: string; kind: string; name: string | null }[];
+    const members = this.db.prepare("select member_entity_id from structural_concept_members where concept_id = ? and member_entity_id is not null order by member_entity_id");
+    return rows.map((r) => ({ conceptId: r.concept_id, kind: r.kind, name: r.name, memberEntityIds: (members.all(r.concept_id) as { member_entity_id: string }[]).map((m) => m.member_entity_id) }));
+  }
   /** What the parser reported for each file of a revision (digest of its rows), or an empty map for a revision stored before that was recorded. */
   revisionFiles(revision: string): Record<string, string> {
     return Object.fromEntries((this.db.prepare("select file, digest from rev_files where revision = ?").all(revision) as { file: string; digest: string }[]).map((r) => [r.file, r.digest]));
@@ -140,6 +164,7 @@ export class Store {
       this.db.prepare("insert into revisions values (?,?,?,?,?,?,?)").run(row.id, row.repoRoot, row.gitHead, row.createdAt, row.analyzerVersion, JSON.stringify(row.diagnostics), files);
       this.insertRows(b.revision, b, this.ownerOf(b));
       this.insertManifest(b.revision, b.manifest);
+      this.insertConceptClusters(b.revision, b.conceptClusters);
     });
     clearHistoryCache(b.repoRoot); // a newly indexed revision means the repository may have advanced
     return row;

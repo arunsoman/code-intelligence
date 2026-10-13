@@ -9,6 +9,8 @@ pub struct RawSymbol {
     pub start: usize,
     pub end: usize,
     pub exported: bool,
+    /// Structural AST shape, independent of naming — see shape.rs.
+    pub shape_hash: String,
 }
 
 #[derive(Debug, Clone)]
@@ -416,6 +418,7 @@ impl<'a> Walker<'a> {
             start: node.start_byte(),
             end: node.end_byte(),
             exported,
+            shape_hash: crate::shape::shape_hash(node),
         });
         self.out.symbols.len() - 1
     }

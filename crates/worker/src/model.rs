@@ -35,6 +35,24 @@ pub struct Entity {
     /// Hash of this symbol's own source text, so "did this symbol change?" is exact rather than file-granular.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol_hash: Option<String>,
+    /// Hash of this symbol's AST shape (grammar node kinds only, no identifier/literal text) — see shape.rs.
+    /// Two entities sharing a shape_hash are structurally identical regardless of naming.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape_hash: Option<String>,
+}
+
+/// A group of entities the worker found structurally identical (same kind, same shape_hash) across at least two
+/// files — the zero-LLM, zero-text-comparison signal for "these are the same concept declared more than once"
+/// (e.g. the same enum shape redeclared in several generated API clients). Content-addressed by its sorted member
+/// ids, so an unchanged cluster gets the same `cluster_id` on every re-index.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ConceptClusterRaw {
+    pub cluster_id: String,
+    pub kind: String,
+    pub member_entity_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub heuristic_name: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -89,6 +107,9 @@ pub struct AnalysisBatch {
     pub manifest: std::collections::BTreeMap<String, String>,
     pub changed_files: Vec<String>,
     pub removed_files: Vec<String>,
+    /// Zero-LLM concept clusters found this pass (index.rs's `cluster_concepts`) — only computed on a full index,
+    /// empty on a delta/unchanged batch; the caller re-derives clusters from the full entity set when it needs them.
+    pub concept_clusters: Vec<ConceptClusterRaw>,
 }
 
 /// The revision the caller already holds, and what it holds of it, so only what differs needs to be sent back.

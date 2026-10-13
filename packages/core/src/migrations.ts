@@ -1081,6 +1081,34 @@ export const MIGRATIONS: Migration[] = [
       create index re_records_revision on re_records(revision, kind);`),
     down: (db) => db.exec("drop table re_records;"),
   },
+  {
+    // CIE v2: bottom-up concept hierarchy (research-backed design — Code-Craft/HCGS bottom-up traversal,
+    // call-graph hierarchical abstraction's structural-clustering-before-naming, HINTs' finding that a parent
+    // label needs sampled evidence not just child names). This slice persists the leaf-level clusters the worker
+    // already finds for free (shape.rs's AST-shape hash, and shared framework role) — content-addressed by
+    // `concept_id` so an unchanged cluster is reused across revisions via `structural_concept_revisions` instead
+    // of duplicated. Roll-up to higher levels and LLM naming are not built yet; `level` is always 0 here. Named
+    // `structural_*`, not `concepts`/`concept_versions` — those are reserved, legacy names a prior migration (44,
+    // "remove-model-concept-cards") explicitly drops; reusing them collided with that cleanup.
+    version: 52, name: "structural-concepts",
+    up: (db) => db.exec(`
+      create table structural_concepts(
+        concept_id text primary key, kind text not null, level integer not null,
+        name text, description text, name_source text not null,
+        parent_id text references structural_concepts(concept_id), member_signature text not null, created_at text not null);
+      create index structural_concepts_parent on structural_concepts(parent_id);
+      create table structural_concept_revisions(
+        revision text not null references revisions(id) on delete cascade, concept_id text not null references structural_concepts(concept_id),
+        primary key(revision, concept_id));
+      create index structural_concept_revisions_by_revision on structural_concept_revisions(revision);
+      create table structural_concept_members(
+        concept_id text not null references structural_concepts(concept_id), member_entity_id text, member_concept_id text,
+        primary key(concept_id, member_entity_id, member_concept_id));
+      create index structural_concept_members_by_entity on structural_concept_members(member_entity_id);
+      create index structural_concept_members_by_concept on structural_concept_members(member_concept_id);
+      create table structural_concept_terms(term text not null, concept_id text not null references structural_concepts(concept_id), primary key(term, concept_id));`),
+    down: (db) => db.exec("drop table structural_concept_terms; drop table structural_concept_members; drop table structural_concept_revisions; drop table structural_concepts;"),
+  },
 ];
 export function currentVersion(db: DatabaseSync): number {
   db.exec("create table if not exists schema_version(version integer not null, name text not null, applied_at text not null)");

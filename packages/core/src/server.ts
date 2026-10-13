@@ -85,6 +85,8 @@ export function opsFor(svc: Service) {
     "C11/listConcepts": { mutating: false, run: (c, b) => svc.listConcepts(c, b ?? {}) },
     // The source of one function-like element: the leaf of the concept tree.
     "C11/conceptCode": { mutating: false, run: (c, b) => svc.entityCode(c, b ?? {}) },
+    // Zero-LLM structural clusters found at index time (shape/framework-role) — no build step, always current.
+    "C11/structuralConcepts": { mutating: false, run: (c, b) => svc.structuralConcepts(c, b ?? {}) },
     "C19/refresh": { mutating: false, run: (c, b) => svc.refreshView(c, b) },
     "C19/overlays": { mutating: false, run: (c, b) => svc.overlays(c, b) },
     "C19/setOverride": { mutating: true, run: (c, b) => svc.setOverride(c, b) },

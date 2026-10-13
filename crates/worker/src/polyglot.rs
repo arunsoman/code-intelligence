@@ -167,6 +167,7 @@ impl<'a> Poly<'a> {
             start: n.start_byte(),
             end: n.end_byte(),
             exported,
+            shape_hash: crate::shape::shape_hash(n),
         });
         self.out.symbols.len() - 1
     }

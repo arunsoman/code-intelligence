@@ -51,7 +51,11 @@ export interface EvidenceRef {
   location: { kind: "CodeLocation"; span: SourceSpan } | { kind: string; [k: string]: unknown };
   class: EvidenceClass; observedAt: string; accessScopeId: Id; state: EvidenceState;
 }
-export interface Entity { entityId: Id; kind: string; name: string; file: string; spans: SourceSpan[]; symbolHash?: string }
+export interface Entity { entityId: Id; kind: string; name: string; file: string; spans: SourceSpan[]; symbolHash?: string; shapeHash?: string }
+
+/** A zero-LLM concept cluster the worker found this index (index.rs's `cluster_concepts`): entities that are the
+ * same concept declared more than once, found from AST shape or shared framework role — see crates/worker/src/shape.rs. */
+export interface ConceptClusterRaw { clusterId: string; kind: "exact-shape" | "framework-role"; memberEntityIds: Id[]; heuristicName?: string }
 export interface Relationship {
   id: Id; from: Id; to: Id; kind: string; evidence: EvidenceRef[]; resolution: ResolutionKind; label?: string;
 }
@@ -70,6 +74,8 @@ export interface AnalysisBatch {
   /** Digest of everything emitted per file (revision id left out); "" holds rows that belong to no file. */
   manifest?: Record<string, string>;
   changedFiles?: string[]; removedFiles?: string[];
+  /** Zero-LLM concept clusters found this pass; empty/absent on a delta or unchanged batch (older parsers too). */
+  conceptClusters?: ConceptClusterRaw[];
 }
 /** What a caller holds of a revision, so the parser can send back only what differs. */
 export interface BaseRevision { revision: RevisionId; analyzerVersion: string; digests: Record<string, string> }
@@ -1247,6 +1253,15 @@ export interface ConceptHierarchyView {
   /** Present on a summary-only read: the arrays above are empty and this says how many concepts the current version holds. */
   summary?: { concepts: number };
 }
+
+/** A zero-LLM structural concept cluster (`ConceptClusterRaw`, worker shape/framework-role clustering), resolved
+ * with its members' names/kinds/files for display. Distinct from `SemanticConcept`/`ConceptHierarchyView` above
+ * (code-idiom tags, one member each) — this is cross-file duplicate/role grouping, not idiom recognition. */
+export interface StructuralConceptCluster {
+  id: Id; kind: "exact-shape" | "framework-role"; name: string | null;
+  members: { entityId: Id; name: string; kind: string; file: string }[];
+}
+export interface StructuralConceptsView { revision: RevisionId; clusters: StructuralConceptCluster[] }
 
 /** The source of one function-like entity: the leaf of the concept tree, "a piece of code". Bounded, and honest about a file that changed since it was indexed. */
 export interface EntityCode {

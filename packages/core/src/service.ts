@@ -28,7 +28,7 @@ import { validateChatPlan } from "./chat-plan.ts";
 import { executeChatPlan } from "./chat-execution.ts";
 import { runChatAgent } from "./chat-agent.ts";
 import type {
-  AnalysisBatch, ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptHierarchyView, ConceptStore, EntityCode, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceBundle, EvidenceRef, ExplainResult, ExplanationOutput,
+  AnalysisBatch, ApiError, ApiResult, CallContext, ChallengeOutput, ChangesSince, Claim, ConceptCard, ConceptHierarchyView, ConceptStore, EntityCode, ConverseResult, DirListing, EditorContext, EditorEvent, EvidenceBundle, EvidenceRef, ExplainResult, ExplanationOutput, StructuralConceptCluster, StructuralConceptsView,
   ChartOutput, ChartOutputV2, ChartId, HypothesesOutput, ModelProvider, ModelRequest, NameArchOutput, NameConceptOutput, RepresentationOutput, ResolvedEvidence, JobView, SavedState, VerdictKind, ViewRoute, ViewSpec, SourceSpan,
   DefectDetectionInput, DetectorFinding, BenchmarkPolicy, BenchmarkResult, Fact, Entity, Relationship,
 } from "@cie/schema";
@@ -2099,6 +2099,22 @@ export class Service {
       links: this.store.crossAxisLinks(versionRevision),
       stats: null,
     });
+  }
+
+  /** Zero-LLM structural concept clusters the worker found at index time (shape.rs's AST-shape hash, shared
+   * framework role) — see store.ts's `conceptClusters`. Separate from `conceptHierarchy` above: no build step,
+   * always current for whatever revision is indexed, nothing to go stale. */
+  structuralConcepts(ctx: CallContext, req: { revision?: string }): ApiResult<StructuralConceptsView> {
+    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
+    const raw = this.store.conceptClusters(rev.id);
+    const allIds = [...new Set(raw.flatMap((c) => c.memberEntityIds))];
+    const entityById = new Map(this.store.entitiesById(rev.id, allIds).map((e) => [e.entityId, e]));
+    const clusters: StructuralConceptsView["clusters"] = raw.map((c) => ({
+      id: c.conceptId, kind: c.kind as StructuralConceptCluster["kind"], name: c.name,
+      members: c.memberEntityIds.flatMap((id) => { const e = entityById.get(id); return e ? [{ entityId: id, name: e.name, kind: e.kind, file: e.file }] : []; }),
+    }));
+    return ok(ctx, { revision: rev.id, clusters }, { revision: rev.id, warnings: [] });
   }
 
   private hierarchyView(rev: RevisionRow, version: number, result: Awaited<ReturnType<typeof buildHierarchy>>): ConceptHierarchyView {

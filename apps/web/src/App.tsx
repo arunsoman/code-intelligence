@@ -8,7 +8,7 @@ import { useResponseWorkspace } from "./use-response-workspace.ts";
 import type { CanvasState } from "./response-workspace.ts";
 import type { EntityCode, ResponseManifest } from "@cie/schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AnswerValidationSummary, ApiResult, AuditEvent, JobView, ChangesSince, Claim, ConverseResult, EditorContext, ExplainResult, MapOverlays, MatrixAxis, MatrixCell, ResolvedEvidence, RevisionInfo, SavedState, StatusInfo, VerdictKind, ViewNode, ViewSpec, WorkspaceOpen } from "@cie/schema";
+import type { AnswerValidationSummary, ApiResult, AuditEvent, JobView, ChangesSince, Claim, ConverseResult, EditorContext, ExplainResult, MapOverlays, MatrixAxis, MatrixCell, ResolvedEvidence, RevisionInfo, SavedState, StatusInfo, StructuralConceptsView, VerdictKind, ViewNode, ViewSpec, WorkspaceOpen } from "@cie/schema";
 import { call } from "./api.ts";
 import { selectedChartId } from "./chart-selection.ts";
 import type { ChatAnalysisResult } from "@cie/schema";
@@ -165,6 +165,9 @@ export function App() {
   const [exceptions, setExceptions] = useState<ExceptionRow[]>([]);
   const [browsingHierarchy, setBrowsingHierarchy] = useState(false);
   const [hierarchyConcepts, setHierarchyConcepts] = useState(0);
+  // Structural clusters (shape/framework-role) need no "Build concept hierarchy" step, so they can exist even
+  // when hierarchyConcepts is 0; the browser button must still appear in that case.
+  const [hasStructuralConcepts, setHasStructuralConcepts] = useState(false);
   const [jobsOpen, setJobsOpen] = useState(false);
   const [cardPins, setCardPins] = useState<{ title: string; ids: string[] } | null>(null);
   const [audit, setAudit] = useState<{ events: AuditEvent[]; chain: { ok: boolean } } | null>(null);
@@ -261,10 +264,13 @@ export function App() {
           setRepoPath(rev.repoRoot);
         }
         const h = await call<ConceptHierarchyView>("C11", "conceptHierarchy", { revision: rev.id, summary: true });
+        const sc = await call<StructuralConceptsView>("C11", "structuralConcepts", { revision: rev.id });
         if (selectedRepoRef.current !== rev.repoRoot) return;
         setHierarchyConcepts(h.ok && h.value.version > 0 ? (h.value.summary?.concepts ?? 0) : 0);
+        setHasStructuralConcepts(sc.ok && sc.value.clusters.length > 0);
       } else {
         setHierarchyConcepts(0);
+        setHasStructuralConcepts(false);
       }
     } else setError(s.error.message);
     if (l.ok) setWorkspaces(l.value);
@@ -752,7 +758,7 @@ export function App() {
       {providerWizardOpen && <ProviderWizard revision={info?.revision?.id} onClose={() => setProviderWizardOpen(false)} />}
       {outlineOpen && <Outline rendered={rendered} level={level} onClose={() => setOutlineOpen(false)} onPick={(id) => { const n = rendered.nodes.find((x) => x.id === id); setOutlineOpen(false); if (n) void inspectNode(n); }} />}
       {browsingHierarchy && (
-        <ConceptHierarchyBrowser revision={info?.revision?.id} jobs={jobs} onShowJobs={() => openDialog(() => setJobsOpen(true))} onClose={() => { setBrowsingHierarchy(false); void refresh(); }}
+        <ConceptHierarchyBrowser revision={info?.revision?.id} jobs={jobs} hasStructuralConcepts={hasStructuralConcepts} onShowJobs={() => openDialog(() => setJobsOpen(true))} onClose={() => { setBrowsingHierarchy(false); void refresh(); }}
           onAsk={(p) => { setCardPins(p); setBrowsingHierarchy(false); say("assistant", `Referring to “${p.title}” (${p.ids.length} element(s)). Ask your question; they are in the context.`); }} />
       )}
       {jobsOpen && (
@@ -892,7 +898,7 @@ export function App() {
                 : "Not approved: answers use the offline model, and nothing leaves this machine."}</p>
             </div>
           )}
-          {hierarchyConcepts > 0 && <button className="secondary" onClick={() => openDialog(() => setBrowsingHierarchy(true))}>Browse concept hierarchy</button>}
+          {(hierarchyConcepts > 0 || hasStructuralConcepts) && <button className="secondary" onClick={() => openDialog(() => setBrowsingHierarchy(true))}>Browse concept hierarchy</button>}
           </div>
         </section>
 

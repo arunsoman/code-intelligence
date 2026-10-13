@@ -98,6 +98,8 @@ impl SourceIrBundle {
                         start: d.span.start_byte,
                         end: d.span.end_byte_exclusive,
                         exported: true,
+                        // No tree-sitter node for a declarative Nirdosha IR entry; not applicable.
+                        shape_hash: String::new(),
                     });
                     raw.symbols.len() - 1
                 });

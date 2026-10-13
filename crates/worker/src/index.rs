@@ -519,6 +519,7 @@ fn derive_entity_rows(rec: &FileRec, rev: &str) -> EntityRows {
         file: rec.rel.clone(),
         spans: vec![span(&rec.rel, &rec.hash, 0, 0)],
         symbol_hash: None,
+        shape_hash: None,
     });
     for s in &rec.raw.symbols {
         let mut id = format!("{}:{}#{}", s.kind, rec.rel, s.qualified);
@@ -538,6 +539,11 @@ fn derive_entity_rows(rec: &FileRec, rev: &str) -> EntityRows {
                 .src
                 .get(s.start..s.end)
                 .map(|t| sha(t.as_bytes())[..16].to_string()),
+            shape_hash: if s.shape_hash.is_empty() {
+                None
+            } else {
+                Some(s.shape_hash.clone())
+            },
         });
         relationships.push(Relationship {
             id: format!("rel:contains:{id}"),
@@ -1477,6 +1483,7 @@ pub fn index_repo(
                         file: rec.rel.clone(),
                         spans: vec![span(&rec.rel, &rec.hash, d.start, d.end)],
                         symbol_hash: None,
+                        shape_hash: None,
                     });
                 }
                 let rel_kind = match r.kind.as_str() {
@@ -1672,12 +1679,125 @@ pub fn index_repo(
             resolution: "OBSERVED",
         });
     }
+    let t_concepts = std::time::Instant::now();
+    cluster_concepts(&mut batch);
+    timing("concept clustering", t_concepts);
     let t_shard = std::time::Instant::now();
     merge_duplicate_rows(&mut batch);
     shard(&mut batch, base);
     timing("shard digests + delta", t_shard);
     timing("total index_repo", t_all);
     Ok(batch)
+}
+
+/// Zero-LLM, zero-text-comparison concept clustering: entities that are the same concept declared more than once,
+/// found from two signals the worker already computed for an entirely different purpose.
+///
+/// 1. Exact AST shape (shape.rs) shared by entities in at least two different files — the same construct (an enum,
+///    a DTO, a form) redeclared, usually by generated-client duplication (the same OpenAPI model copied into
+///    several frontend packages) rather than one coherent source of truth.
+/// 2. Framework role (frameworks/*, already extracted as `framework_role` facts) shared within the same top-level
+///    package — Spring/NestJS/Express controllers, services, guards and modules are already named by a human
+///    (`UserController`, `PaymentService`) and already tagged with their architectural role; grouping by that role
+///    gives a free, high-confidence concept ("Controllers in account-management") with no shape comparison and no
+///    naming model needed at all.
+///
+/// Both are content-addressed by their sorted member ids, so an unchanged cluster gets the same `cluster_id` on
+/// every re-index — the cache key a later stage uses to avoid re-naming (and re-paying for an LLM call on) a
+/// cluster that hasn't actually changed.
+fn cluster_concepts(batch: &mut AnalysisBatch) {
+    let file_of: HashMap<&str, &str> = batch
+        .entities
+        .iter()
+        .map(|e| (e.entity_id.as_str(), e.file.as_str()))
+        .collect();
+    let top_package = |file: &str| file.split('/').next().unwrap_or(file).to_string();
+    let short_name = |name: &str| {
+        name.rsplit(|c| c == '.' || c == '#')
+            .next()
+            .unwrap_or(name)
+            .to_string()
+    };
+    let cluster_id = |member_ids: &mut Vec<String>| -> String {
+        member_ids.sort();
+        format!("concept:{}", sha(member_ids.join("|").as_bytes()))
+    };
+    let mut clusters: Vec<ConceptClusterRaw> = Vec::new();
+
+    // Signal 1: exact AST shape, spanning at least two files. Restricted to structural kinds — real-data
+    // measurement (925 behavioral vs. 305 structural clusters, avg 503 vs. 3526 bytes, zero overlap between the
+    // two) showed every function/method cluster was noise from trivial same-shaped one-liners (a getter, a
+    // single-field access) colliding by simplicity, not by concept, while every class/interface/enum/type cluster
+    // was real (OpenAPI-codegen duplication: the same enum redeclared across generated API clients).
+    let structural_kinds = ["class", "interface", "enum", "type"];
+    let mut by_shape: HashMap<(&str, &str), Vec<&Entity>> = HashMap::new();
+    for e in &batch.entities {
+        if !structural_kinds.contains(&e.kind.as_str()) {
+            continue;
+        }
+        if let Some(sh) = e.shape_hash.as_deref().filter(|s| !s.is_empty()) {
+            by_shape.entry((e.kind.as_str(), sh)).or_default().push(e);
+        }
+    }
+    for members in by_shape.values() {
+        if members.len() < 2 {
+            continue;
+        }
+        let distinct_files: std::collections::HashSet<&str> =
+            members.iter().map(|e| e.file.as_str()).collect();
+        if distinct_files.len() < 2 {
+            continue;
+        }
+        let mut ids: Vec<String> = members.iter().map(|e| e.entity_id.clone()).collect();
+        let mut name_counts: HashMap<String, usize> = HashMap::new();
+        for m in members {
+            *name_counts.entry(short_name(&m.name)).or_insert(0) += 1;
+        }
+        let heuristic_name = name_counts.into_iter().max_by_key(|(_, c)| *c).map(|(n, _)| n);
+        clusters.push(ConceptClusterRaw {
+            cluster_id: cluster_id(&mut ids),
+            kind: "exact-shape".into(),
+            member_entity_ids: ids,
+            heuristic_name,
+        });
+    }
+
+    // Signal 2: shared framework role within the same top-level package.
+    let mut by_role: HashMap<(String, String), Vec<String>> = HashMap::new();
+    for f in &batch.facts {
+        if f.predicate != "framework_role" {
+            continue;
+        }
+        let Some(value) = f.object.get("value") else { continue };
+        let (Some(role), Some(framework)) = (
+            value.get("role").and_then(|v| v.as_str()),
+            value.get("framework").and_then(|v| v.as_str()),
+        ) else {
+            continue;
+        };
+        let Some(&file) = file_of.get(f.subject.as_str()) else { continue };
+        let key = (format!("{framework}:{role}"), top_package(file));
+        by_role.entry(key).or_default().push(f.subject.clone());
+    }
+    for ((role_key, package), member_ids) in by_role {
+        if member_ids.len() < 2 {
+            continue;
+        }
+        let mut ids: Vec<String> = member_ids.into_iter().collect::<std::collections::HashSet<_>>().into_iter().collect();
+        if ids.len() < 2 {
+            continue;
+        }
+        let role = role_key.split(':').nth(1).unwrap_or(&role_key);
+        clusters.push(ConceptClusterRaw {
+            cluster_id: cluster_id(&mut ids),
+            kind: "framework-role".into(),
+            member_entity_ids: ids,
+            heuristic_name: Some(format!("{package} {role}s")),
+        });
+    }
+
+    clusters.sort_by(|a, b| a.cluster_id.cmp(&b.cluster_id));
+    batch.concept_clusters = clusters;
 }
 
 /// Rows with the same id are one row: the same edge seen from two call sites, or the same fact emitted twice.
@@ -2125,6 +2245,7 @@ fn resolve_framework_metadata<E, S>(
                         file: rec.rel.clone(),
                         spans: vec![span(&rec.rel, &rec.hash, m.start, m.end)],
                         symbol_hash: None,
+                        shape_hash: None,
                     });
                     framework_entity_id.insert(
                         format!("{}:{}:{}", rec.rel, m.kind.as_str(), m.name),
@@ -2160,6 +2281,7 @@ fn resolve_framework_metadata<E, S>(
                         file: rec.rel.clone(),
                         spans: vec![span(&rec.rel, &rec.hash, m.start, m.end)],
                         symbol_hash: None,
+                        shape_hash: None,
                     });
                     framework_entity_id.insert(
                         format!("{}:{}:{}", rec.rel, m.kind.as_str(), m.name),
@@ -3680,5 +3802,75 @@ mod parse_cache_bug {
             files - 1,
             "{files} files, one edited: {reused} parses reused (the parse cache holds at most {CACHE_LIMIT} files, so reuse stops there)"
         );
+    }
+}
+
+#[cfg(test)]
+mod concept_tests {
+    use super::*;
+
+    fn fixture(files: &[(&str, &str)]) -> AnalysisBatch {
+        let dir = std::env::temp_dir().join(format!("cie-concepts-{}-{}", std::process::id(), files.len()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (rel, content) in files {
+            let path = dir.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, content).unwrap();
+        }
+        let b = index_repo(&dir, None, None).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        b
+    }
+
+    #[test]
+    fn redeclaring_the_same_enum_shape_in_two_files_forms_an_exact_shape_cluster() {
+        // Same shape (two variants, no values) under two different names, in two different generated-client copies.
+        let b = fixture(&[
+            ("app-a/src/models/userType.ts", "export enum UserTypeEnum { Individual, Corporate }\n"),
+            ("app-b/src/models/userType.ts", "export enum AccountTypeEnum { Individual, Corporate }\n"),
+            // A third, differently-shaped enum must not join the cluster.
+            ("app-a/src/models/status.ts", "export enum Status { Active, Inactive, Pending }\n"),
+        ]);
+        let a = b.entities.iter().find(|e| e.name == "UserTypeEnum").unwrap();
+        let c = b.entities.iter().find(|e| e.name == "AccountTypeEnum").unwrap();
+        assert!(a.shape_hash.is_some(), "an enum declaration must get a shape hash");
+        assert_eq!(a.shape_hash, c.shape_hash, "same member count/shape must hash identically regardless of naming");
+        let cluster = b
+            .concept_clusters
+            .iter()
+            .find(|c| c.kind == "exact-shape" && c.member_entity_ids.contains(&a.entity_id))
+            .expect("the two same-shaped enums must form an exact-shape cluster");
+        assert_eq!(cluster.member_entity_ids.len(), 2);
+        assert!(cluster.member_entity_ids.contains(&c.entity_id));
+        assert!(!b.concept_clusters.iter().any(|cl| cl.kind == "exact-shape"
+            && cl.member_entity_ids.iter().any(|id| id.contains("Status"))),
+            "a differently-shaped enum must not be pulled into the cluster");
+    }
+
+    #[test]
+    fn a_shape_appearing_only_once_does_not_cluster() {
+        let b = fixture(&[("app-a/src/models/status.ts", "export enum Status { Active, Inactive }\n")]);
+        assert!(b.concept_clusters.iter().all(|c| c.kind != "exact-shape"));
+    }
+
+    #[test]
+    fn two_spring_services_in_one_package_form_a_framework_role_cluster() {
+        let b = fixture(&[
+            (
+                "src/main/java/mls/billing/InvoiceService.java",
+                "package mls.billing;\nimport org.springframework.stereotype.Service;\n@Service\npublic class InvoiceService {}\n",
+            ),
+            (
+                "src/main/java/mls/billing/RefundService.java",
+                "package mls.billing;\nimport org.springframework.stereotype.Service;\n@Service\npublic class RefundService {}\n",
+            ),
+        ]);
+        let cluster = b
+            .concept_clusters
+            .iter()
+            .find(|c| c.kind == "framework-role")
+            .expect("two @Service classes in the same top-level package must form a framework-role cluster");
+        assert_eq!(cluster.member_entity_ids.len(), 2);
+        assert!(cluster.heuristic_name.as_deref().unwrap_or("").contains("provider"));
     }
 }

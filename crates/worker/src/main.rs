@@ -14,6 +14,7 @@ mod profiling;
 mod protocol;
 mod regexfind;
 mod rust_language;
+mod shape;
 mod source_ir;
 
 use crate::canon::KnownHash;

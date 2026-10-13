@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ConceptHierarchyView, JobView } from "@cie/schema";
+import type { ConceptHierarchyView, JobView, StructuralConceptsView } from "@cie/schema";
 import { call } from "./api.ts";
 import { Loading } from "./Skeleton.tsx";
 import { Modal } from "./Modal.tsx";
@@ -15,22 +15,43 @@ interface Props {
   onClose: () => void;
   /** Hand a concept's code elements to the conversation, as the concept-card dialog does. */
   onAsk: (pin: { title: string; ids: string[] }) => void;
+  /** Structural clusters need no "Build concept hierarchy" step, so the tabbed view must still open even when the
+   * built hierarchy itself is empty — the parent already knows this (it is why the Browse button is showing). */
+  hasStructuralConcepts?: boolean;
 }
 
-type Tab = "tree" | "concepts" | "invariants" | "architecture" | "packages" | "build";
+type Tab = "tree" | "concepts" | "structural" | "invariants" | "architecture" | "packages" | "build";
 const TABS: { id: Tab; label: string }[] = [
-  { id: "tree", label: "Tree" }, { id: "concepts", label: "Concepts" }, { id: "invariants", label: "Invariants" }, { id: "architecture", label: "Architecture" },
+  { id: "tree", label: "Tree" }, { id: "concepts", label: "Concepts" }, { id: "structural", label: "Duplicates & roles" }, { id: "invariants", label: "Invariants" }, { id: "architecture", label: "Architecture" },
   { id: "packages", label: "Across packages" }, { id: "build", label: "About this build" },
 ];
 const PAGE = 100;
 
-export function ConceptHierarchyBrowser({ revision, jobs = [], onShowJobs, onClose, onAsk }: Props) {
+export function ConceptHierarchyBrowser({ revision, jobs = [], onShowJobs, onClose, onAsk, hasStructuralConcepts }: Props) {
   const [view, setView] = useState<ConceptHierarchyView | null>(null);
   const [version, setVersion] = useState<number | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("tree");
+  const [tabDefaulted, setTabDefaulted] = useState(false);
+  useEffect(() => {
+    if (tabDefaulted || view === null) return;
+    setTabDefaulted(true);
+    if (isEmptyHierarchy(view) && hasStructuralConcepts) setTab("structural");
+  }, [view, hasStructuralConcepts, tabDefaulted]);
   const [filter, setFilter] = useState("");
   const [shown, setShown] = useState(PAGE);
+  const [structural, setStructural] = useState<StructuralConceptsView | null>(null);
+  const [structuralError, setStructuralError] = useState<string | null>(null);
+  useEffect(() => {
+    if (tab !== "structural" || structural) return;
+    void call<StructuralConceptsView>("C11", "structuralConcepts", { revision }).then((r) => { if (r.ok) setStructural(r.value); else setStructuralError(r.error.message); });
+  }, [tab, structural, revision]);
+  const structuralGroups = useMemo(() => {
+    const clusters = (structural?.clusters ?? []).filter((c) => !filter || (c.name ?? "").toLowerCase().includes(filter.toLowerCase()) || c.members.some((m) => m.name.toLowerCase().includes(filter.toLowerCase())));
+    const byKind = new Map<string, typeof clusters>();
+    for (const c of clusters) byKind.set(c.kind, [...(byKind.get(c.kind) ?? []), c]);
+    return [...byKind.entries()].map(([kind, list]) => ({ kind, clusters: list.sort((a, b) => b.members.length - a.members.length) }));
+  }, [structural, filter]);
 
   const load = useCallback(async (v?: number) => {
     const r = await call<ConceptHierarchyView>("C11", "conceptHierarchy", { revision, version: v });
@@ -52,7 +73,7 @@ export function ConceptHierarchyBrowser({ revision, jobs = [], onShowJobs, onClo
   const current = view?.versions[0]?.version;
   const selected = view?.versions.find((v) => v.version === view.version);
   const prov = selected ? namingProvenance(selected.provider) : null;
-  const empty = isEmptyHierarchy(view);
+  const empty = isEmptyHierarchy(view) && !hasStructuralConcepts;
 
   return (
     <Modal title="Concept hierarchy" onClose={onClose} className="full"
@@ -74,7 +95,7 @@ export function ConceptHierarchyBrowser({ revision, jobs = [], onShowJobs, onClo
             <p className="small">{hierarchySummary(view)}</p>
             <div className="row wrap">
               <label>Version <select value={view.version} onChange={(e) => setVersion(Number(e.target.value))}>{view.versions.map((v) => <option key={v.version} value={v.version}>v{v.version} · {v.concepts} concepts · {v.createdAt.slice(0, 16).replace("T", " ")}</option>)}</select></label>
-              {tab === "concepts" && <label>Filter <input type="search" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="name, shape or function" /></label>}
+              {(tab === "concepts" || tab === "structural") && <label>Filter <input type="search" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="name, shape or function" /></label>}
             </div>
             <div className="tabs" role="tablist" aria-label="Hierarchy sections">
               {TABS.map((t) => <button key={t.id} role="tab" id={`ch-tab-${t.id}`} aria-selected={tab === t.id} aria-controls="ch-panel" className={`tab ${tab === t.id ? "on" : ""}`} onClick={() => setTab(t.id)}>{t.label}</button>)}
@@ -101,6 +122,30 @@ export function ConceptHierarchyBrowser({ revision, jobs = [], onShowJobs, onClo
                   {groups.some((g) => g.concepts.length > shown) && <button className="link small" onClick={() => setShown((n) => n + PAGE)}>Show more</button>}
                 </>
               ))}
+              {tab === "structural" && (
+                structuralError ? <div className="banner error" role="alert">{structuralError}</div> :
+                !structural ? <Loading pending rows={4} lines={2} label="Loading structural clusters" /> :
+                structuralGroups.length === 0 ? <p className="muted">{filter ? `No cluster matches “${filter}”.` : "No cross-file duplicates or shared framework roles found."}</p> : (
+                  <>
+                    <p className="muted small">Found at index time, no model involved: the same declaration shape redeclared across files (usually generated-client duplication), and classes sharing a framework role (Spring/NestJS/Express controllers, services, guards) within one package.</p>
+                    {structuralGroups.map(({ kind, clusters }) => (
+                      <section key={kind} aria-label={kind}>
+                        <h3 className="small"><span className="chip">{kind === "exact-shape" ? "same shape, redeclared" : "shared framework role"}</span> {clusters.length} cluster(s)</h3>
+                        <ul className="cardlist inline">
+                          {clusters.slice(0, shown).map((c) => (
+                            <li key={c.id}>
+                              <div className="between"><strong>{c.name ?? "(unnamed)"}</strong><span className="muted small">{c.members.length} element(s)</span></div>
+                              <p className="small">{c.members.slice(0, 10).map((m) => m.name).join(", ")}{c.members.length > 10 ? `, and ${c.members.length - 10} more` : ""}</p>
+                              <div className="row wrap small"><button className="link" onClick={() => onAsk({ title: c.name ?? "structural cluster", ids: c.members.slice(0, 8).map((m) => m.entityId) })}>Ask about its {c.members.length} element(s)</button></div>
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
+                    ))}
+                    {structuralGroups.some((g) => g.clusters.length > shown) && <button className="link small" onClick={() => setShown((n) => n + PAGE)}>Show more</button>}
+                  </>
+                )
+              )}
               {tab === "invariants" && (invariants.length === 0 ? <p className="muted">No guarded values were found.</p> : (
                 <ul className="cardlist inline">
                   {invariants.slice(0, shown).map((i) => (

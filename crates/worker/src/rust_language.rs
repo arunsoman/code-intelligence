@@ -88,6 +88,7 @@ impl<'a> RustWalker<'a> {
             start: node.start_byte(),
             end: node.end_byte(),
             exported,
+            shape_hash: crate::shape::shape_hash(node),
         });
         self.out.symbols.len() - 1
     }
