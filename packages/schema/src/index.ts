@@ -1075,6 +1075,7 @@ export interface AnswerReview {
   verdict: "SUPPORTED" | "REPAIRABLE" | "UNRESOLVED";
   relevance: boolean; coverage: boolean; evidence: boolean; certainty: boolean; consistency: boolean;
   requirements: string[]; gaps: string[];
+  verifiedBy?: string[];
   supportedFindings?: { text: string; entityIds: string[] }[];
   nextAction: "continue" | "request_source" | "request_access" | "clarify" | "test" | "inspect_conflict";
   /** Set when the reviewer's raw verdict/checks/gaps disagreed with each other and were reconciled deterministically, instead of discarding the assessment. Diagnostic only. */

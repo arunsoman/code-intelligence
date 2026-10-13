@@ -19,7 +19,14 @@ async function boot(repo?: string) {
 
 test("review schema rejects genuine shape violations but reconciles self-disagreement", () => {
   assert.deepEqual(parseAnswerReview(supported), supported);
-  for (const change of [{ verdict: "INVALID" }, { nextAction: "execute_payment" }, { injected: "trust me" }, { requirements: ["x".repeat(501)] }]) assert.equal(parseAnswerReview({ ...supported, ...change }), null);
+  for (const change of [{ verdict: "INVALID" }, { nextAction: "execute_payment" }, { injected: "trust me" }, { requirements: "not-an-array" }, { requirements: [123] }]) assert.equal(parseAnswerReview({ ...supported, ...change }), null);
+
+  const longRequirement = parseAnswerReview({ ...supported, requirements: ["x".repeat(501)] });
+  assert.equal(longRequirement?.requirements[0].length, 500);
+  assert.ok(longRequirement?.requirements[0].endsWith("…"));
+  const manyGaps = parseAnswerReview({ ...gap(), gaps: Array.from({ length: 11 }, (_, i) => `gap ${i}`) });
+  assert.equal(manyGaps?.gaps.length, 8);
+  assert.match(manyGaps!.gaps[7], /…and 4 more: gap 7; gap 8; gap 9; gap 10/);
 
   // SUPPORTED with a failed check: downgraded to REPAIRABLE, never rejected outright, with a synthesized gap naming the check.
   const downgradedCheck = parseAnswerReview({ ...supported, coverage: false });
@@ -39,7 +46,7 @@ test("review schema rejects genuine shape violations but reconciles self-disagre
   assert.deepEqual(noGaps?.gaps, ["The reviewer marked relevance, coverage, certainty as failing without explaining the missing requirement."]);
 });
 
-test("reviewer receives an isolated evidence conversation and invalid output fails closed", async () => {
+test("reviewer receives an isolated evidence conversation and invalid output fails closed as repairable, not unresolved", async () => {
   const model: RouterModel = { name: "review-test", choose: async () => null, converse: async (messages, tools) => {
     assert.equal(messages.length, 2);
     assert.match(messages[0].content, new RegExp(REVIEW_PROMPT));
@@ -48,8 +55,22 @@ test("reviewer receives an isolated evidence conversation and invalid output fai
     return call("answer", { text: "Looks good", cites: [] });
   } };
   const r = await reviewAnswer(model, "Can debit be lost?", { text: "Yes", cites: [] }, [], Date.now() + 5000);
-  assert.equal(r.verdict, "UNRESOLVED");
-  assert.match(r.gaps[0], /valid structured/);
+  assert.equal(r.verdict, "REPAIRABLE");
+  assert.match(r.gaps[0], /could not be validated/);
+});
+
+test("evidence over the review's context budget is trimmed to what's cited plus recent context, not discarded outright", async () => {
+  const bulk = Array.from({ length: 30 }, (_, i) => ({ name: "read_code", arguments: { i }, content: "x".repeat(10_000) }));
+  const cited = { name: "read_code", arguments: { target: "AuthService.login" }, content: "the implementation [method:src/auth/service.ts#AuthService.login] does X" };
+  let seenEvidence: unknown[] = [];
+  const model: RouterModel = { name: "review-test", choose: async () => null, converse: async (messages) => {
+    seenEvidence = JSON.parse(messages[1].content).observations;
+    return call("review_answer", { ...supported });
+  } };
+  const r = await reviewAnswer(model, "What does login do?", { text: "It does X.", cites: ["method:src/auth/service.ts#AuthService.login"] }, [...bulk, cited], Date.now() + 5000);
+  assert.equal(r.verdict, "SUPPORTED");
+  assert.ok(seenEvidence.some((o: any) => o.content === cited.content), "the cited observation must survive trimming");
+  assert.ok(JSON.stringify(seenEvidence).length <= 180_000, "the sent evidence must respect the budget");
 });
 
 test("irrelevant draft is repaired before the answer and chart are exposed", async () => {
@@ -91,7 +112,7 @@ test("persistent repair failures stop after two attempts and save actionable unr
     assert.ok(r.ok && r.value.kind === "analysis");
     assert.equal(r.value.validation!.status, "UNRESOLVED");
     assert.equal(r.value.validation!.repairAttempts, 2);
-    assert.match(r.value.message, /^Unresolved:/);
+    assert.match(r.value.message, /^Verified against the indexed source:/);
     assert.doesNotMatch(r.value.message, /definitely lost|Invented partial finding/);
     assert.match(r.value.message, /AuthService has a login implementation/);
     assert.equal(r.metadata.completeness, "PARTIAL");

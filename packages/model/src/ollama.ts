@@ -47,7 +47,8 @@ Rules:
 - Reply with one JSON object that matches the required schema, and nothing else.
 - Cite evidence only by copying ids from relationships[].evidenceIds or facts[].evidenceIds exactly. Never invent ids. If you cannot ground a statement, omit it.
 - Refer to entities only by the exact entityId strings given.
-- Do not claim runtime behavior; the bundle contains static analysis only.`;
+- Do not claim runtime behavior; the bundle contains static analysis only.
+- A shared word between the question and an entity's name does not establish that the entity belongs to the requested domain; confirm domain fit from the entity's own file and role, not the name alone. Test fixtures and examples do not establish production behavior unless the question explicitly asks about them. If nothing in the bundle belongs to the requested domain, say so instead of reasoning from the nearest lexical match.`;
 
 export function modelEvidence(req: Pick<ModelRequest, "purpose" | "bundle">) {
   const { bundle } = req;

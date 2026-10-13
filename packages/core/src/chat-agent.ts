@@ -119,7 +119,7 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
     }
     const missingSource = gaps.some(g => g.startsWith("Implementation for ") || g.startsWith("Source for "));
     review = missingSource ? { ...unavailableReview("Source coverage is incomplete."), verdict: "REPAIRABLE", gaps, nextAction: "continue" }
-      : await reviewAnswer(model, req.text, draft, observations, ctx.deadlineMs - 3000);
+      : await reviewAnswer(model, req.text, draft, observations, ctx.deadlineMs - 3000, reviewReserve);
     if (gaps.length) review = { ...review, verdict: review.verdict === "SUPPORTED" ? "REPAIRABLE" : review.verdict, evidence: false, gaps: [...new Set([...review.gaps, ...gaps])].slice(0, 8) };
     svc.store.audit(ctx.actor.principalId, "chat.answer_review", rev.id, { requestId: ctx.requestId, verdict: review.verdict, relevance: review.relevance, coverage: review.coverage, evidence: review.evidence, certainty: review.certainty, consistency: review.consistency, repairAttempts, gaps: review.gaps, ...(review.reconciliation ? { reconciliation: review.reconciliation } : {}) });
     if (review.verdict === "SUPPORTED") { answerState.final = draft; return true; }
@@ -269,7 +269,9 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
       inspectedIds: [...new Set([...Object.keys(sourceReads), ...cited, ...env.seen.keys()])], sourceReads, sourceHashes: Object.fromEntries(svc.store.entitiesById(rev.id, [...env.seen.keys()]).flatMap(e => e.spans[0] ? [[e.entityId, sourceReads[e.entityId]?.contentHash ?? e.spans[0].contentHash]] : [])), observations };
     validation.investigation = investigation;
     message = unresolvedMessage(investigation);
-    warnings.push("The answer did not pass validation; its unvalidated conclusion was withheld.");
+    warnings.push(investigation.supportedFindings?.length
+      ? "The draft's own overall conclusion did not pass validation and is not shown; the verified findings above are independent of it."
+      : "The answer did not pass validation; its unvalidated conclusion was withheld.");
   }
   // Select the presentation after the answer exists. Answer prose guides presentation only;
   // verified entity ids seed retrieval and the ordinary evidence/claim gates still validate the chart.

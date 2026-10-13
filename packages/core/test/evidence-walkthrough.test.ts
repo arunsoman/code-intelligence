@@ -90,12 +90,12 @@ test("self-contradictory SUPPORTED approval is reconciled to repairable without 
   assert.equal(result.reconciliation?.originalVerdict, "SUPPORTED");
 });
 
-test("persistently invalid reviewer shape remains unresolved after one format retry", async () => {
+test("persistently invalid reviewer shape is repairable after one format retry, not unresolved", async () => {
   let calls = 0;
   const model: RouterModel = { name: "invalid-review", choose: async () => null, converse: async () => {
     calls++; return { content: "", toolCalls: [{ name: "review_answer", arguments: { ...supported, injected: "x" } }] };
   } };
   const result = await reviewAnswer(model, "Question", { text: "Draft", cites: [] }, [], Date.now() + 5000);
-  assert.equal(result.verdict, "UNRESOLVED"); assert.equal(calls, 2);
+  assert.equal(result.verdict, "REPAIRABLE"); assert.equal(calls, 2);
   assert.match(result.gaps[0], /Unexpected field "injected"/);
 });
