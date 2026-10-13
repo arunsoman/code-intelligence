@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { appendFileSync, readFileSync, mkdirSync, writeFileSync, unlinkSync, symlinkSync } from "node:fs";
+import { appendFileSync, readFileSync, mkdirSync, writeFileSync, unlinkSync, symlinkSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import type { AnswerReview } from "@cie/schema";
 import type { RouterModel, AgentMessage } from "../src/llm-router.ts";
@@ -139,6 +139,45 @@ test("saved investigation resumes with evidence, rejects other actors and change
     f.svc.store.denyPath(repo, "src/auth");
     const denied = await f.svc.converse(ctx(), request);
     assert.ok(!denied.ok); assert.equal(denied.error.code, "FORBIDDEN");
+  } finally { f.worker.close(); }
+});
+
+test("saved investigation resumes across a re-index after a rename, via the carried-forward canonical identity", async () => {
+  const repo = copyFixture(), f = await boot(repo);
+  try {
+    let writes = 0;
+    f.svc.router = { name: "rename-resume-setup", choose: async () => null, converse: async (messages, tools) => {
+      if (tools[0].name === "review_answer") return call("review_answer", { ...gap("UNRESOLVED") });
+      if (writes++ === 0) return call("read_code", { id: target(messages) });
+      return call("answer", { text: "Unknown ordering.", cites: [target(messages)] });
+    } };
+    const first = await f.svc.converse(ctx(), { text: "Explain AuthService", revision: f.revision, sessionId: "rename-resume" });
+    assert.ok(first.ok && first.value.kind === "analysis");
+    const oldId = first.value.validation!.investigation!.inspectedIds.find((x) => x.includes("AuthService"))!;
+    const id = first.value.validation!.investigation!.id;
+
+    // A move, not an edit: the class body is byte-identical, so its symbolHash (crates/worker) is unchanged — this is
+    // exactly the C08 "BODY_IDENTICAL" rename signal (registry.ts) the resume path now re-resolves through.
+    renameSync(join(repo, "src/auth/service.ts"), join(repo, "src/auth/identity-service.ts"));
+    writeFileSync(join(repo, "src/api/routes.ts"), readFileSync(join(repo, "src/api/routes.ts"), "utf8").replace('"../auth/service"', '"../auth/identity-service"'));
+    const reindexed = await f.svc.ingestRepository(ctx(), { repoPath: repo });
+    assert.ok(reindexed.ok);
+    assert.notEqual(reindexed.value.id, f.revision, "renaming a file must produce a new content-addressed revision");
+
+    const request = { text: `continue investigation ${id}`, revision: reindexed.value.id, sessionId: "rename-resume" };
+    let answered = false;
+    f.svc.router = { name: "rename-resumed", choose: async () => null, converse: async (messages, tools) => {
+      if (tools[0].name === "review_answer") return call("review_answer", { ...supported });
+      answered = true;
+      assert.ok(messages.some((m) => m.role === "tool" && /class AuthService/.test(m.content)), "the previously read source survives the rename");
+      assert.ok(!messages.some((m) => m.role === "tool" && m.content.includes(oldId)), "the replayed history no longer names the pre-rename id");
+      return call("answer", { text: "AuthService signs users in.", cites: [target(messages)] });
+    } };
+    const resumed = await f.svc.converse(ctx(), request);
+    assert.ok(resumed.ok && resumed.value.kind === "analysis", JSON.stringify(!resumed.ok && resumed.error));
+    assert.equal(resumed.value.validation!.status, "SUPPORTED", JSON.stringify(resumed.value.message));
+    assert.ok(answered, "the resumed conversation reached the model instead of failing closed on STALE_REVISION");
+    assert.ok(!resumed.metadata.warnings.some((w) => /did not survive/.test(w)), "the renamed symbol carried forward; nothing should be reported dropped");
   } finally { f.worker.close(); }
 });
 

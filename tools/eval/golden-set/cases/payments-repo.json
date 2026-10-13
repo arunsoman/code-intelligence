@@ -1,0 +1,90 @@
+[
+  {
+    "id": "payments-repo-locate-checkfraud",
+    "repo": "payments-repo",
+    "question": "Where is checkFraud defined?",
+    "type": "locate",
+    "expectedFacts": ["fraud.ts", "checkFraud"],
+    "notes": "Single, unambiguous symbol lookup."
+  },
+  {
+    "id": "payments-repo-enumerate-error-types",
+    "repo": "payments-repo",
+    "question": "What error classes does this payments service define, and what are they called?",
+    "type": "enumerate",
+    "expectedFacts": ["DuplicateRequestError", "FraudRejectedError", "InsufficientFundsError", "CardDeclinedError", "GatewayTimeoutError", "CaptureFailedError"],
+    "notes": "Structural analog of the original 'how many user types' transcript that motivated this eval: six sibling Error subclasses in one file (src/errors.ts), the same fan-out shape as several near-duplicate UserType-style enums. If the chat agent burns its investigation budget chasing each subclass individually instead of reading errors.ts once, this case should fail or come back UNRESOLVED."
+  },
+  {
+    "id": "payments-repo-count-error-types",
+    "repo": "payments-repo",
+    "question": "How many distinct error classes are defined in this codebase?",
+    "type": "count",
+    "expectedFacts": ["6"],
+    "notes": "Same fan-out shape as the enumerate case above, phrased as a count instead of a list."
+  },
+  {
+    "id": "payments-repo-trace-charge",
+    "repo": "payments-repo",
+    "question": "What does charge call, in order?",
+    "type": "trace",
+    "expectedFacts": ["claimKey", "checkFraud", "reserve", "authorize"],
+    "notes": "charge() in payment-service.ts calls claimKey, checkFraud, ledger.reserve, authorize, then queue.publish; a correct trace should name these in roughly that order."
+  },
+  {
+    "id": "payments-repo-explain-adjustbalance",
+    "repo": "payments-repo",
+    "question": "Why is adjustBalance not transactional?",
+    "type": "explain",
+    "expectedFacts": ["background", "transactional"],
+    "notes": "ledger.ts has a comment directly above adjustBalance: 'Used by background jobs; deliberately not transactional.' A correct answer should surface that reason, not just confirm the fact."
+  },
+  {
+    "id": "payments-repo-overview-explain-project",
+    "repo": "payments-repo",
+    "question": "Explain what this project does.",
+    "type": "overview",
+    "expectedFacts": ["payment", "ledger"],
+    "notes": "The second original transcript that motivated this eval ('explain the project?') routes through this same overview path. Also check manually (not scored here) that the profile paragraph appears exactly once in the message (see the Stage 1 regression test in packages/core/test/architecture-question.test.ts)."
+  },
+  {
+    "id": "payments-repo-risk-highest-file",
+    "repo": "payments-repo",
+    "question": "Where is it riskiest to change things in this codebase?",
+    "type": "risk",
+    "expectedFacts": ["composite change-risk score"],
+    "notes": "Scoring only checks for the standard risk-report phrasing (chat-execution.ts), since which file actually wins is not something to hand-predict; a human should read the full answer during labeling and confirm the named file and its stated factors make sense."
+  },
+  {
+    "id": "payments-repo-open-retry-mechanism",
+    "repo": "payments-repo",
+    "question": "Is there a retry mechanism for failed payments?",
+    "type": "open",
+    "expectedFacts": ["authorize"],
+    "notes": "authorize() in gateway-client.ts retries up to 3 times before raising GatewayTimeoutError; demoRepo()'s second commit also appends a literal '// retry budget tuned' comment to that file. This is the kind of question the v2 proposal's 'open' template targets (no clean single-claim contract); a human should judge whether the answer actually identifies the retry loop, not just mentions the word."
+  },
+  {
+    "id": "payments-repo-out-of-scope-stripe",
+    "repo": "payments-repo",
+    "question": "What HTTP status code does Stripe's API return for a declined card?",
+    "type": "out_of_scope",
+    "expectedFacts": [],
+    "notes": "Pure external-knowledge question; nothing in this repo answers it. Correct behavior is to say this is outside the indexed repository (optionally noting CardDeclinedError exists locally for a *different* reason). Scored manually: substring containment can't verify a correct refusal/redirection, only that the system didn't silently fabricate a specific status code as if it were evidenced."
+  },
+  {
+    "id": "payments-repo-compare-reserve-vs-commit",
+    "repo": "payments-repo",
+    "question": "What's the difference between reserve and commit in ledger.ts?",
+    "type": "compare",
+    "expectedFacts": ["held", "balance"],
+    "notes": "reserve() increases held and checks InsufficientFundsError; commit() decreases both balance and held. Both call db.transaction and db.update."
+  },
+  {
+    "id": "payments-repo-route-config-absent",
+    "repo": "payments-repo",
+    "question": "What HTTP routes and configuration values does this service expose?",
+    "type": "route",
+    "expectedFacts": [],
+    "notes": "This fixture uses no recognized web framework (no Express/NestJS/Spring routes) and has no .env/application.yml — get_routes/get_config/the route/config fact predicates should legitimately come back empty. This case exists to catch a regression where the system fabricates a route or config value instead of truthfully reporting none found; needs a human read of the actual answer, not substring scoring. Known gap: the golden set has no case yet where routes/config genuinely exist — add one against a richer fixture (e.g. fixtures/sample-repo's src/api/routes.ts) when curating further."
+  }
+]

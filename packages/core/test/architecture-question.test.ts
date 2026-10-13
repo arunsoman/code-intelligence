@@ -22,6 +22,12 @@ test("'what architecture does this project follow?' gets a map and an architectu
   assert.match(r.value.message, /Languages: TypeScript/);
   assert.match(r.value.message, /layered|organised by feature/);
   assert.doesNotMatch(r.value.message, /Nothing in this repository matches/);
+  // Regression: the profile paragraph was once spliced into the lead, the answer and view.gaps independently,
+  // so it appeared twice in the final message. It must now appear exactly once, and gaps (genuine limitations)
+  // must not carry it at all.
+  const occurrences = r.value.message.match(/Inferred from folder names, imports and call directions/g) ?? [];
+  assert.equal(occurrences.length, 1, "the profile paragraph must appear exactly once in the message");
+  assert.ok(!r.value.view.gaps.some((g) => g.startsWith("Inferred from folder names")), "the profile paragraph must not be duplicated into view.gaps");
   worker.close();
 });
 

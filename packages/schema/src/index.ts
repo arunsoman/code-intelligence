@@ -1083,6 +1083,31 @@ export interface AnswerInvestigation {
 export type AnswerValidationSummary = Omit<AnswerValidation, "investigation"> & { investigation?: Pick<AnswerInvestigation, "id" | "question" | "revision" | "supportedFindings" | "missingEvidence" | "nextAction"> };
 export interface AnswerValidation { question: string; status: "SUPPORTED" | "UNRESOLVED"; repairAttempts: number; review: AnswerReview; investigation?: AnswerInvestigation }
 
+// ---- CIE v2 stage 3 (shadow mode): an AnswerClaim re-describes an already-finished answer as a checkable graph
+// instead of prose, and the deterministic verifier (verifier.ts) checks each one against the store directly — no
+// model call, no timeout-based fail-closed gate the way answer-validation.ts's reviewAnswer has. Computed and
+// logged only for now (claim.ts/verifier.ts, wired into chat-agent.ts's post-loop assembly); nothing user-facing
+// reads these yet. Named distinctly from the pre-existing `Claim` (the chart/verdict claim at line 127 above, a
+// different concept entirely) to avoid colliding with it. Query planning (QuerySpec), the answer assembler
+// (AnswerModel) and the proof pack are later stages' concern and are not declared here until something actually
+// builds them, to avoid dead, unverified type surface.
+export type AnswerClaimDerivation = "extracted" | "computed" | "inferred";
+export type AnswerClaimStatus = "VERIFIED" | "INFERRED" | "UNRESOLVED";
+export interface AnswerClaimRef { entityId: Id; label?: string }
+export interface AnswerClaim {
+  claimId: Id; predicate: string; subject: AnswerClaimRef; object: AnswerClaimRef | { literal: string | number | boolean };
+  evidence: SourceSpan[]; derivation: AnswerClaimDerivation;
+  /** Set only for a `derivation: "computed"` claim, so the computation can be re-run rather than trusted as-is. */
+  computation?: { op: string; inputs: string[] };
+  status: AnswerClaimStatus; statusReason?: string; revision: RevisionId;
+}
+export interface AnswerClaimVerification { claimId: Id; status: AnswerClaimStatus; reason: string }
+
+/** The one length a chat question is actually answered at (the chat-agent/planner input). Shared by the client, so the
+ * composer can warn before sending, and the server, so truncation past this point is never silent (see CallContext
+ * warnings on ConverseResult). `converse`'s hard rejection ceiling is separate and far higher (100,000 chars, answering.ts). */
+export const CHAT_QUESTION_MAX_CHARS = 6000;
+
 export type ConverseResult =
   // `thinking`: the old-style, pre-answer text (why this form, the caption) — kept for the trace, not meant as the reply.
   // `message` is the composed answer; with no grounded answer available, `message` falls back to that same text and

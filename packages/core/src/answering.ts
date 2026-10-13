@@ -19,7 +19,9 @@ import { modelFailureNotice } from "./model-failure.ts";
 import { validateChatPlan } from "./chat-plan.ts";
 import { executeChatPlan } from "./chat-execution.ts";
 import { runChatAgent } from "./chat-agent.ts";
-import { chartCodeForQuestion, CHART_REGISTRY, SCHEMA_CHALLENGE, SCHEMA_EXPLANATION, SCHEMA_HYPOTHESES, SCHEMA_NAME_ARCH, SCHEMA_NAME_CONCEPT, SCHEMA_REPRESENTATION } from "@cie/schema";
+import { claimsFromContainer, renderEnumeration } from "./claim.ts";
+import { verifyClaims } from "./verifier.ts";
+import { chartCodeForQuestion, CHART_REGISTRY, CHAT_QUESTION_MAX_CHARS, SCHEMA_CHALLENGE, SCHEMA_EXPLANATION, SCHEMA_HYPOTHESES, SCHEMA_NAME_ARCH, SCHEMA_NAME_CONCEPT, SCHEMA_REPRESENTATION } from "@cie/schema";
 import { applyVerdict, gateClaim, modelText, wilson, withChallenge } from "./claims.ts";
 import { buildFailureGraph, buildInvariantGraph } from "./forms/causal.ts";
 import { buildHypothesis } from "./forms/hypothesis.ts";
@@ -52,6 +54,36 @@ const explicitChartCode = chartCodeForQuestion;
 function matchingChartPlan(plan: ChartOutput | ChartOutputV2 | null, chartCode?: string): ChartOutput | ChartOutputV2 | null {
   if (!plan || !chartCode) return plan;
   return "contractVersion" in plan && plan.contractVersion === "chart.v2" && plan.chartId === chartCode ? plan : null;
+}
+
+/**
+ * Re-anchors a saved investigation onto a new revision using the stable identities C08 already computes on every
+ * ingest (registry.ts): an inspected id whose structural form (`kind:file#qualifiedName`) is unchanged carries over
+ * directly; one that moved or was renamed is re-resolved through its canonical id. An id that cannot be resolved
+ * (deleted, or an ambiguous split into several candidates) is dropped on its own — degrading that one piece of
+ * evidence rather than refusing to resume the whole investigation, the way a bare revision-equality check used to.
+ */
+function remapCheckpointAcrossRevision(svc: Service, checkpoint: AnswerInvestigation, toRevision: string): { checkpoint: AnswerInvestigation; dropped: number } {
+  if (checkpoint.revision === toRevision) return { checkpoint, dropped: 0 };
+  const idMap = new Map<string, string>();
+  for (const id of checkpoint.inspectedIds) {
+    if (svc.store.entitiesById(toRevision, [id]).length) { idMap.set(id, id); continue; }
+    const canon = svc.registry.canonOf(checkpoint.revision, id);
+    const resolved = canon ? svc.registry.entityIn(toRevision, canon) : [];
+    if (resolved.length === 1) idMap.set(id, resolved[0]);
+  }
+  const remapRecord = <T>(rec: Record<string, T>): Record<string, T> => Object.fromEntries(Object.entries(rec).flatMap(([id, v]) => idMap.has(id) ? [[idMap.get(id)!, v]] : []));
+  // The replayed tool-call history (chat-agent.ts's resume path pushes `observations` back into the conversation
+  // verbatim) embeds old ids as literal text — `[kind:old/file.ts#Name]` markers and raw `read_code` arguments — so
+  // those must be rewritten too, or the model would see a transcript naming ids that `env.seen` no longer recognizes.
+  const renamed = [...idMap].filter(([from, to]) => from !== to).sort((a, b) => b[0].length - a[0].length);
+  const remapText = (text: string): string => renamed.reduce((s, [from, to]) => s.split(from).join(to), text);
+  const observations = checkpoint.observations.map((o) => ({ ...o, content: remapText(o.content), arguments: renamed.length ? JSON.parse(remapText(JSON.stringify(o.arguments))) : o.arguments }));
+  const supportedFindings = checkpoint.supportedFindings?.map((f) => ({ ...f, entityIds: f.entityIds.map((id) => idMap.get(id) ?? id) }));
+  return {
+    checkpoint: { ...checkpoint, revision: toRevision, inspectedIds: [...new Set(idMap.values())], sourceReads: remapRecord(checkpoint.sourceReads), sourceHashes: remapRecord(checkpoint.sourceHashes), observations, supportedFindings },
+    dropped: checkpoint.inspectedIds.length - idMap.size,
+  };
 }
 
 export class Answering {
@@ -805,6 +837,22 @@ export class Answering {
     const view = req.view ?? null;
     const revision = req.revision ?? view?.revision;
     const indexed = revision ? this.store.revision(revision) : this.store.latestRevision();
+    // Deterministic enumerate answering: "how many X / what X / list X" questions whose subject resolves to an
+    // indexed container (file, class, interface, enum) are answered from one relationship lookup, each member
+    // verified against the live index — no model call, no tool-calling budget. Falls through untouched otherwise.
+    if (indexed && /\b(how many|what are|which|list)\b/i.test(text)) {
+      const access = policyFor(this.store, indexed.repoRoot);
+      const mentions = resolveMentions(this.store, indexed.id, text, access);
+      const container = mentions.resolved.flatMap((m) => m.matches).find((m) => ["file", "class", "interface", "enum"].includes(m.kind));
+      if (container) {
+        const claims = claimsFromContainer(this.store, indexed.id, container.entityId);
+        if (claims.length) {
+          const verifications = verifyClaims(this.store, claims);
+          const message = renderEnumeration(container.name, claims, verifications, (id) => this.store.entitiesById(indexed.id, [id])[0]?.kind);
+          return ok(ctx, { kind: "message", message }, { revision: indexed.id, warnings: [], completeness: verifications.every((v) => v.status === "VERIFIED") ? "COMPLETE" : "PARTIAL" });
+        }
+      }
+    }
     const resumeMatch = /^continue investigation ([a-zA-Z0-9:_-]{1,120})$/i.exec(text);
     if (resumeMatch) {
       const sessionId = req.sessionId?.trim() || ctx.actor.sessionId || ctx.idempotencyKey || ctx.requestId;
@@ -812,12 +860,14 @@ export class Answering {
         .get(ctx.actor.tenantId, ctx.actor.principalId, sessionId, resumeMatch[1]) as { response_json: string } | undefined;
       const checkpoint = saved ? (JSON.parse(saved.response_json) as { value: { validation?: { investigation?: AnswerInvestigation } } }).value.validation?.investigation : undefined;
       if (!checkpoint) return fail(ctx, { code: "NOT_FOUND", message: "This saved investigation is not available in this conversation.", retryable: false });
-      if (!indexed || indexed.id !== checkpoint.revision) return fail(ctx, { code: "STALE_REVISION", message: "The indexed revision changed; ask the original question again to collect fresh evidence.", retryable: false });
+      if (!indexed) return fail(ctx, { code: "STALE_REVISION", message: "The indexed revision changed; ask the original question again to collect fresh evidence.", retryable: false });
+      const { checkpoint: resumeCheckpoint, dropped } = remapCheckpointAcrossRevision(this.svc, checkpoint, indexed.id);
+      if (!resumeCheckpoint.inspectedIds.length) return fail(ctx, { code: "STALE_REVISION", message: "None of the previously inspected elements survived re-indexing; start a fresh investigation.", retryable: false });
       const access = policyFor(this.store, indexed.repoRoot);
-      const entities = this.store.entitiesById(indexed.id, checkpoint.inspectedIds);
-      if (entities.length !== checkpoint.inspectedIds.length) return fail(ctx, { code: "STALE_REVISION", message: "An inspected element is no longer indexed; start a fresh investigation.", retryable: false });
+      const entities = this.store.entitiesById(indexed.id, resumeCheckpoint.inspectedIds);
+      if (entities.length !== resumeCheckpoint.inspectedIds.length) return fail(ctx, { code: "STALE_REVISION", message: "An inspected element is no longer indexed; start a fresh investigation.", retryable: false });
       if (entities.some(e => access.denied(e.file))) return fail(ctx, { code: "FORBIDDEN", message: "Source access changed; start a fresh investigation with permitted evidence.", retryable: false });
-      for (const [id, expected] of Object.entries(checkpoint.sourceHashes)) {
+      for (const [id, expected] of Object.entries(resumeCheckpoint.sourceHashes)) {
         const entity = entities.find(e => e.entityId === id), source = entity?.spans[0]?.sourceId;
         if (!source) return fail(ctx, { code: "STALE_REVISION", message: "An inspected source is no longer available; re-index and ask again.", retryable: false });
         try {
@@ -827,7 +877,8 @@ export class Answering {
         } catch { return fail(ctx, { code: "STALE_REVISION", message: "Inspected source changed; re-index and ask the original question again.", retryable: false }); }
       }
       if (!this.svc.router?.converse) return fail(ctx, { code: "INSUFFICIENT_EVIDENCE", message: "A tool-calling model is required to continue this investigation.", retryable: true });
-      const answered = await runChatAgent(this.svc, ctx, indexed, this.svc.router, { text: checkpoint.question, history: [], resume: checkpoint, pins: req.pins });
+      const answered = await runChatAgent(this.svc, ctx, indexed, this.svc.router, { text: resumeCheckpoint.question, history: [], resume: resumeCheckpoint, pins: req.pins });
+      if (answered?.ok && dropped) return { ...answered, metadata: { ...answered.metadata, warnings: [...answered.metadata.warnings, `${dropped} previously inspected element(s) did not survive re-indexing and were dropped from this resumed investigation.`] } };
       return answered ?? fail(ctx, { code: "INSUFFICIENT_EVIDENCE", message: "The model could not continue this investigation.", retryable: true });
     }
     if (indexed) {
@@ -888,13 +939,21 @@ export class Answering {
       const history = session.turns.filter((turn) => turn.seq > session.context.openedAtSeq && (turn.role === "user" || turn.role === "assistant")).slice(0, -1).slice(-6).map((turn) => ({ role: turn.role, text: turn.text.slice(0, 1500) }));
       const files = [...new Set(selected.map((n) => n.file).filter(Boolean))];
       const subject = files.length === 1 ? files[0] : typeof view?.params?.chatSubject === "string" ? view.params.chatSubject : view?.formId === "TestConfidence" && typeof view.params?.subject === "string" ? view.params.subject : undefined;
+      // The chat agent and the legacy planner both only ever see the first CHAT_QUESTION_MAX_CHARS of the question
+      // (the 100,000-char ceiling above is a separate, much larger request-validation limit). That truncation used to
+      // be silent; it is now reported back as an explicit warning whenever it actually happens.
+      const truncated = text.length > CHAT_QUESTION_MAX_CHARS;
+      const truncationWarning = `The question was truncated to the first ${CHAT_QUESTION_MAX_CHARS} characters before being answered.`;
       if (this.svc.router.converse) {
-        const answered = await runChatAgent(this.svc, ctx, rev, this.svc.router, { text: text.slice(0, 6000), history, subject, pins: req.pins });
-        if (answered) return answered;
+        const answered = await runChatAgent(this.svc, ctx, rev, this.svc.router, { text: text.slice(0, CHAT_QUESTION_MAX_CHARS), history, subject, pins: req.pins });
+        if (answered) return truncated && answered.ok ? { ...answered, metadata: { ...answered.metadata, warnings: [...answered.metadata.warnings, truncationWarning] } } : answered;
       } else if (this.svc.router?.plan) {
         try {
-          const plan = validateChatPlan(await this.svc.router.plan({ text: text.slice(0, 6000), history, subject }));
-          if (plan?.steps.length) return executeChatPlan(this.svc, ctx, rev, plan, subject, req.pins);
+          const plan = validateChatPlan(await this.svc.router.plan({ text: text.slice(0, CHAT_QUESTION_MAX_CHARS), history, subject }));
+          if (plan?.steps.length) {
+            const executed = await executeChatPlan(this.svc, ctx, rev, plan, subject, req.pins);
+            return truncated && executed.ok ? { ...executed, metadata: { ...executed.metadata, warnings: [...executed.metadata.warnings, truncationWarning] } } : executed;
+          }
           if (!plan) plannerWarning = "The multi-step planner did not return a valid plan; only the single-question route was attempted.";
         } catch { plannerWarning = "The multi-step planner did not return a valid plan; only the single-question route was attempted."; }
       }
@@ -905,10 +964,11 @@ export class Answering {
         if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision; index a repository first", retryable: false });
         const r = await this.ask(ctx, { question: question || "Give me an overview of the whole project", revision: rev.id, overview: true, form: "SemanticMap", level: 1 });
         const profile = projectProfile(this.store, rev.id);
-        if (r.ok) { r.value.view.formReason = "Representative code across languages and source modules, grouped by responsibility. Zoom in for detail."; r.value.view.gaps.unshift(profile.text); }
-        // The answer to "what is this project" is its profile, then what the map shows.
+        if (r.ok) r.value.view.formReason = "Representative code across languages and source modules, grouped by responsibility. Zoom in for detail.";
+        // The profile paragraph is inserted into the answer exactly once; it is not also repeated into gaps or the lead
+        // (gaps is for genuine limitations, and the lead is this turn's own short notice, kept separate per viewMessage).
         if (r.ok) r.value.view.answer = redactBuilt(this.store, rev, { view: { ...r.value.view, answer: [r.value.view.answer, profile.text].filter(Boolean).join("\n\n") }, claims: [] }).view.answer;
-        return asView(r, `${lead} ${profile.text}`);
+        return asView(r, lead);
     };
     switch (intent.type) {
       case "query": {

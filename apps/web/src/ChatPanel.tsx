@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { buttonFeedback } from "./button.ts";
+import { CHAT_QUESTION_MAX_CHARS } from "@cie/schema";
 import type { AnswerValidationSummary, ChatAnalysisResult } from "@cie/schema";
 
 /** One alternative view the router considered for the same question. */
@@ -133,6 +134,9 @@ export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend,
         <label className="sr" htmlFor="chat-input">Message</label>
         <textarea ref={textareaRef} id="chat-input" rows={3} value={text} placeholder={referents.length ? "Ask about the selected elements…" : "Ask a question, or paste a stack trace…"}
           onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} disabled={!canAsk} />
+        {text.length > CHAT_QUESTION_MAX_CHARS && (
+          <p className="muted small" role="status">Only the first {CHAT_QUESTION_MAX_CHARS.toLocaleString()} characters ({text.length.toLocaleString()} typed) will be answered; the rest is truncated.</p>
+        )}
         <button type="submit" className={sendFb.className} aria-busy={sendFb["aria-busy"]} disabled={!text.trim() || busy || !canAsk}>{sendFb.spinner && <span className="spinner" aria-hidden="true" />}Send</button>
       </form>
     </section>
