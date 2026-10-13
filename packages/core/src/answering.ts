@@ -19,7 +19,7 @@ import { modelFailureNotice } from "./model-failure.ts";
 import { validateChatPlan } from "./chat-plan.ts";
 import { executeChatPlan } from "./chat-execution.ts";
 import { runChatAgent } from "./chat-agent.ts";
-import { buildAnswerView, claimsFromContainer, claimsFromLocate, renderEnumeration, renderLocation, renderProof } from "./claim.ts";
+import { buildAnswerView, claimsFromContainer, claimsFromEntities, claimsFromLocate, renderEnumeration, renderLocation, renderProof, verifyAndProve } from "./claim.ts";
 import { verifyClaims } from "./verifier.ts";
 import type { AnswerClaim, AnswerClaimVerification } from "@cie/schema";
 import { chartCodeForQuestion, CHART_REGISTRY, CHAT_QUESTION_MAX_CHARS, SCHEMA_CHALLENGE, SCHEMA_EXPLANATION, SCHEMA_HYPOTHESES, SCHEMA_NAME_ARCH, SCHEMA_NAME_CONCEPT, SCHEMA_REPRESENTATION } from "@cie/schema";
@@ -952,9 +952,18 @@ export class Answering {
 
     const entityIds = selected.flatMap((n) => n.entityRefs);
     // A steering turn adjusts the current view, so it does not repeat why that kind of view was chosen.
+    // The one place every chart-producing branch below (query, mapCommand, ask, and overview() further down) turns
+    // a built view into the reply: the Proof section is attached once, here, from whatever entities the view is
+    // actually about — not re-implemented per branch — the same way the deterministic templates and the agent loop
+    // get theirs from `verifyAndProve`/`claimsFromEntities` (claim.ts).
     const asView = (r: ApiResult<{ view: ViewSpec; claims: Claim[] }>, lead: string, steering = false): ApiResult<ConverseResult> => {
       if (!r.ok) return r as ApiResult<never>;
-      const { message, thinking } = viewMessage(r.value.view, lead, steering);
+      const { message: baseMessage, thinking } = viewMessage(r.value.view, lead, steering);
+      const seeds = [...new Set(typeof r.value.view.params?.answerEntityRefs === "string"
+        ? r.value.view.params.answerEntityRefs.split("\n").filter(Boolean)
+        : r.value.view.nodes.filter((n) => n.tier !== "HIDDEN" && !n.ghost).flatMap((n) => n.entityRefs))].slice(0, 20);
+      const proof = seeds.length ? verifyAndProve(this.store, claimsFromEntities(this.store, r.value.view.revision, seeds)).proof : "";
+      const message = proof ? [baseMessage, proof].join("\n\n") : baseMessage;
       return ok(ctx, { kind: "view", view: r.value.view, claims: r.value.claims, message, ...(thinking ? { thinking } : {}) }, { ...r.metadata, warnings: [...r.metadata.warnings, ...(plannerWarning ? [plannerWarning] : [])] });
     };
     const asExplain = (r: ApiResult<ExplainResult>, lead = ""): ApiResult<ConverseResult> =>

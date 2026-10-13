@@ -2,11 +2,41 @@
 // instead of prose — nothing here changes retrieval or what the model does; it only runs after a turn has already
 // finished, from `env`/`cited` the agent loop (chat-agent.ts) already built. Per the migration plan's own stage 3:
 // "wrapping existing retrieval output, logged not yet user-facing." The verifier (verifier.ts) is the consumer.
-import type { AnswerClaim, AnswerClaimVerification, Claim, ViewSpec } from "@cie/schema";
+import type { AnswerClaim, AnswerClaimRef, AnswerClaimVerification, Claim, Entity, ViewSpec } from "@cie/schema";
 import type { ToolEnv } from "./chat-tools.ts";
 import type { Store } from "./store.ts";
 import { bundleFor } from "./retrieval.ts";
 import { compileView } from "./viewspec.ts";
+import { verifyClaims } from "./verifier.ts";
+
+/** The one place an `AnswerClaim` object gets built from an entity the index already has, for any predicate — every
+ * specific builder below (container members, a located entity, an arbitrary set shown in a view) differs only in
+ * which entities and which predicate, never in how the claim or its evidence/status is assembled. */
+function claimFrom(entity: Entity, revision: string, predicate: string, object: AnswerClaimRef | { literal: string }): AnswerClaim {
+  const span = entity.spans[0];
+  return {
+    claimId: `claim:${revision}:${predicate}:${entity.entityId}`,
+    predicate, subject: { entityId: entity.entityId, label: entity.name }, object,
+    evidence: span ? [span] : [], derivation: "extracted",
+    status: span ? "VERIFIED" : "UNRESOLVED",
+    statusReason: span ? undefined : `${entity.name} has no recorded source span`,
+    revision,
+  };
+}
+
+/** The one place a result verifies its claims and renders the Proof section every answer-producing path (the
+ * deterministic templates, the agent loop, and every chart-producing branch via `asView`) attaches to its message —
+ * called once per result, never re-implemented per branch. */
+export function verifyAndProve(store: Store, claims: AnswerClaim[]): { verifications: AnswerClaimVerification[]; proof: string } {
+  const verifications = verifyClaims(store, claims);
+  return { verifications, proof: renderProof(claims, verifications) };
+}
+
+/** Claims for an arbitrary set of entity ids (e.g. everything a chart shows) — the general case `asView` uses when
+ * no more specific builder (container membership, a located entity) applies. */
+export function claimsFromEntities(store: Store, revision: string, entityIds: string[], predicate = "shown_in_view"): AnswerClaim[] {
+  return store.entitiesById(revision, entityIds).map((e) => claimFrom(e, revision, predicate, { literal: e.file }));
+}
 
 /**
  * One `cited_in_answer` claim per entity the final answer cited, for exactly the entities Gate A (chat-agent.ts's
@@ -50,21 +80,7 @@ export function claimsFromContainer(store: Store, revision: string, containerId:
   const container = store.entitiesById(revision, [containerId])[0];
   if (!container) return [];
   const memberIds = store.relationshipsFor(revision, containerId).filter((r) => r.kind === "contains" && r.from === containerId).map((r) => r.to);
-  const members = store.entitiesById(revision, memberIds);
-  return members.map((m) => {
-    const span = m.spans[0];
-    return {
-      claimId: `claim:${revision}:member_of:${containerId}:${m.entityId}`,
-      predicate: "member_of",
-      subject: { entityId: m.entityId, label: m.name },
-      object: { entityId: containerId, label: container.name },
-      evidence: span ? [span] : [],
-      derivation: "extracted" as const,
-      status: span ? ("VERIFIED" as const) : ("UNRESOLVED" as const),
-      statusReason: span ? undefined : `${m.name} has no recorded source span`,
-      revision,
-    };
-  });
+  return store.entitiesById(revision, memberIds).map((m) => claimFrom(m, revision, "member_of", { entityId: containerId, label: container.name }));
 }
 
 /**
@@ -73,19 +89,7 @@ export function claimsFromContainer(store: Store, revision: string, containerId:
  */
 export function claimsFromLocate(store: Store, revision: string, entityId: string): AnswerClaim[] {
   const entity = store.entitiesById(revision, [entityId])[0];
-  if (!entity) return [];
-  const span = entity.spans[0];
-  return [{
-    claimId: `claim:${revision}:located_at:${entityId}`,
-    predicate: "located_at",
-    subject: { entityId, label: entity.name },
-    object: { literal: entity.file },
-    evidence: span ? [span] : [],
-    derivation: "extracted",
-    status: span ? "VERIFIED" : "UNRESOLVED",
-    statusReason: span ? undefined : `${entity.name} has no recorded source span`,
-    revision,
-  }];
+  return entity ? [claimFrom(entity, revision, "located_at", { literal: entity.file })] : [];
 }
 
 export function renderLocation(entity: { name: string; kind: string; file: string }, verifications: AnswerClaimVerification[]): string {

@@ -5,8 +5,7 @@ import { answerVisual, answerLimitations, boundAnswerContext, chartCitesOverlap 
 import { bundleFor } from "./retrieval.ts";
 import { compileView } from "./viewspec.ts";
 import { diagnostic } from "./diagnostics.ts";
-import { claimsFromAnswer, renderProof } from "./claim.ts";
-import { verifyClaims } from "./verifier.ts";
+import { claimsFromAnswer, verifyAndProve } from "./claim.ts";
 // A chat question answered by a model that calls read-only tools (chat-tools.ts) until it can answer, instead of a plan fixed
 // before anything was looked at. The names the question mentions are resolved against the index first (mentions.ts) and
 // handed to the model as facts, so "what is MiFilter" starts from MiFilter's class rather than from a guess at a picture.
@@ -254,12 +253,13 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
   // indexed — that is reported to the user as a real warning, not buried in a log line no one reads.
   if (cited.length) {
     const claims = claimsFromAnswer(env, rev.id, cited);
-    const verifications = verifyClaims(svc.store, claims);
+    const { verifications, proof } = verifyAndProve(svc.store, claims);
     const failed = verifications.filter(v => v.status === "UNRESOLVED");
     diagnostic("claims.verified", { requestId: ctx.requestId, revision: rev.id, claims: claims.length, verified: claims.length - failed.length, unresolved: failed.map(v => ({ claimId: v.claimId, reason: v.reason })) });
     for (const f of failed) warnings.push(`Citation check failed: ${f.reason}.`);
-    // Same Proof: section every deterministic template (claim.ts) carries, so the agent-loop path reads the same way.
-    message = [message, renderProof(claims, verifications)].join("\n\n");
+    // Same Proof: section every chart-producing branch (asView, answering.ts) and every deterministic template
+    // (claim.ts) carries, from the one shared verifyAndProve pipeline — not re-implemented here.
+    message = [message, proof].join("\n\n");
   }
   const validation: AnswerValidation = { question: req.text, status: answerState.final && review.verdict === "SUPPORTED" ? "SUPPORTED" : "UNRESOLVED", repairAttempts, review };
   if (validation.status === "UNRESOLVED") {
