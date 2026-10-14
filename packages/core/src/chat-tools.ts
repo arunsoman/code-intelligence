@@ -28,6 +28,9 @@ export interface ToolEnv {
   results: ChatAnalysisResult[];
   /** Source intervals actually delivered, distinct from symbols merely discovered. */
   sourceReads?: Map<string, { total: number; contentHash: string; ranges: [number, number][] }>;
+  /** Entities whose semantic IR was rendered with ir_of: inspected structurally, though literal values,
+   * exact types and comments remain unseen until read_code escalates to the source (the IR-first ladder). */
+  irReads?: Set<string>;
   warnings: string[];
 }
 export type JsonSchema = { type: "object"; properties: Record<string, { type: "string" | "integer" | "array"; description?: string; enum?: string[]; maxLength?: number; items?: { type: "string" }; maxItems?: number }>; required: string[]; additionalProperties: false };
@@ -160,11 +163,13 @@ export const CHAT_TOOLS: ChatTool[] = [
       const uncorroborated = direct.filter(e => !corroborated(e.entityId));
       const related = r.bundle.entities.filter((e) => e.kind !== "file" && !direct.some(d => d.entityId === e.entityId) && r.scored.get(e.entityId)?.factors.some((f) => f.factor === "TASK_MATCH" && f.normalizedScore > 0))
         .sort((a, b) => (r.scored.get(b.entityId)?.score ?? 0) - (r.scored.get(a.entityId)?.score ?? 0));
-      const all = [...new Map([...named.map((m) => ({ entityId: m.entityId, name: m.name, file: m.file, kind: m.kind })), ...related].map((e) => [e.entityId, e])).values()].slice(0, 12);
+      const all = [...new Map([...named.map((m) => ({ entityId: m.entityId, name: m.name, file: m.file, kind: m.kind })), ...related].map((e) => [e.entityId, e])).values()].slice(0, 6);
       const sections: string[] = [];
-      if (confirmed.length) sections.push(`${confirmed.length} indexed name/path match(es) for "${q}", also supported by the broader relevance retrieval (read implementations to establish relevance):`, ...confirmed.map(e => line(env, e)));
-      if (uncorroborated.length) sections.push(`${uncorroborated.length} name/path match(es) for "${q}" on generic/common terms only; nothing else in this investigation supports them as belonging to this question's domain — verify the implementation's actual subject before relying on it:`, ...uncorroborated.map(e => line(env, e)));
-      if (all.length) sections.push(`${all.length} tentative semantic candidate(s) for "${q}"; these are not established domain matches:`, ...all.map(e => line(env, e)));
+      // Result caps keep each observation small: the model pays for every line in every later turn, and
+      // beyond the first handful it rarely reads deeper — a focused follow-up find_code is cheaper.
+      if (confirmed.length) sections.push(`${confirmed.length} indexed name/path match(es) for "${q}", also supported by the broader relevance retrieval (read implementations to establish relevance):`, ...confirmed.slice(0, 6).map(e => line(env, e)));
+      if (uncorroborated.length) sections.push(`${uncorroborated.length} name/path match(es) for "${q}" on generic/common terms only; nothing else in this investigation supports them as belonging to this question's domain — verify the implementation's actual subject before relying on it:`, ...uncorroborated.slice(0, 4).map(e => line(env, e)));
+      if (all.length) sections.push(`${all.length} tentative semantic candidate(s) for "${q}"; these are not established domain matches:`, ...all.slice(0, 5).map(e => line(env, e)));
       return sections.length ? sections.join("\n") : `Nothing in this revision matches "${q}".`;
     },
   },
@@ -265,7 +270,7 @@ export const CHAT_TOOLS: ChatTool[] = [
       }
       const symbols = scoped.filter((e) => ["class", "interface", "function", "method"].includes(e.kind));
       const priority = /engine|service|manager|controller|consumer|processor|writer|reserve|posting|rollback|impl|job|listener/i;
-      const representative = [...symbols].sort((a, b) => Number(priority.test(b.name)) - Number(priority.test(a.name)) || ["class", "interface"].indexOf(a.kind) - ["class", "interface"].indexOf(b.kind) || a.file.localeCompare(b.file) || a.name.localeCompare(b.name)).slice(0, 40);
+      const representative = [...symbols].sort((a, b) => Number(priority.test(b.name)) - Number(priority.test(a.name)) || ["class", "interface"].indexOf(a.kind) - ["class", "interface"].indexOf(b.kind) || a.file.localeCompare(b.file) || a.name.localeCompare(b.name)).slice(0, 24);
       const counts = new Map<string, number>();
       for (const e of scoped) counts.set(e.kind, (counts.get(e.kind) ?? 0) + 1);
       const lines = [
@@ -411,6 +416,7 @@ export const CHAT_TOOLS: ChatTool[] = [
       if (!(e.irDump ?? "").length) return `No stored IR for [${e.entityId}] (files and data-only elements have none). Use read_code for its source.`;
       const [r] = renderIrs([{ entityId: e.entityId, name: e.name, file: e.file, irDump: e.irDump! }]);
       note(env, e);
+      (env.irReads ??= new Set()).add(e.entityId); // IR-tier inspection: citable without a source read
       env.svc.store.audit(env.ctx.actor.principalId, "chat.ir", env.rev.id, { entity: e.entityId });
       return [`${e.kind} ${e.name} (${e.file}) — semantic IR:`, r?.render ?? "(render failed)", "Cite [" + e.entityId + "] when you use this; read_code shows the source when literals or types matter."].join("\n");
     },

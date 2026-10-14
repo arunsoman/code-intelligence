@@ -178,7 +178,7 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
     const isApi = url.pathname.startsWith("/api/") || url.pathname === "/healthz";
     const actor = isApi ? identify(req) : null;
     if (isApi && !actor) return send(res, 401, { ok: false, error: { code: "UNAUTHORIZED", message: "not authenticated", retryable: false } });
-    const mk = (idem: string, deadlineMs = 60_000): CallContext => ({ requestId: randomUUID(), idempotencyKey: idem, actor: actor!, deadlineMs: Date.now() + deadlineMs, traceId: randomUUID() });
+    const mk = (idem: string, deadlineMs = Number(process.env.CIE_API_DEADLINE_MS) || 60_000): CallContext => ({ requestId: randomUUID(), idempotencyKey: idem, actor: actor!, deadlineMs: Date.now() + deadlineMs, traceId: randomUUID() });
     /** The service for this caller: the single one, or the tenant's own after the tenant and member are checked. */
     const serviceFor = (c: CallContext): { svc: Service } | { failure: ApiResult<never> } => {
       if (!(target instanceof TenantHost)) return { svc: target };
@@ -220,7 +220,9 @@ export function buildHandler(target: Service | TenantHost, opts: { identify?: Id
       }
       const idem = String(req.headers["idempotency-key"] ?? "");
       if (op.mutating && !idem) return send(res, 400, { ok: false, error: { code: "INVALID_SCHEMA", message: "Idempotency-Key header required", retryable: false } });
-      const ctx = mk(idem, m[1] === "C15" && m[2] === "converse" ? 180_000 : 60_000);
+      // Converse runs the full agent (retrieval, reads, review) and needs a larger budget than read ops;
+      // CIE_API_DEADLINE_MS raises it for slow (e.g. cloud-relayed) models, never lowers it below the default.
+      const ctx = mk(idem, m[1] === "C15" && m[2] === "converse" ? Math.max(Number(process.env.CIE_API_DEADLINE_MS) || 0, 180_000) : 60_000);
       // In a multi-tenant server a path is only usable if the tenant is allowed to read it: indexing, and even browsing for it.
       const opKey = `${m[1]}/${m[2]}`;
       if (target instanceof TenantHost && ["C01/switchBranch", "C01/fetchBranches"].includes(opKey)) return send(res, 403, { ok: false, error: { code: "FORBIDDEN", message: "Branch switching and fetching are available only in the local app.", retryable: false } });

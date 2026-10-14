@@ -133,6 +133,22 @@ export function buildRequest(question: string, labels: string[]): RouterRequest 
 
 /** A model running in the local Ollama daemon. A hosted (":cloud" / "-cloud") model is allowed when
  * explicitly named: the daemon forwards the request to ollama.com, so the question leaves the machine. */
+
+/** Local and cloud-relayed models wrap JSON in code fences or lead with prose despite `format`/tool
+ * schemas; salvage the object instead of failing the call and paying for a full prompt re-send. */
+function salvageJson(text: string): unknown {
+  const attempt = (s: string): unknown => { try { return JSON.parse(s); } catch { return undefined; } };
+  const direct = attempt(text.trim());
+  if (direct !== undefined) return direct;
+  for (const m of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)) {
+    const fenced = attempt(m[1].trim());
+    if (fenced !== undefined) return fenced;
+  }
+  const first = text.indexOf("{"), last = text.lastIndexOf("}");
+  if (first >= 0 && last > first) return attempt(text.slice(first, last + 1));
+  return undefined;
+}
+
 export class OllamaRouter implements RouterModel {
   readonly name: string;
   readonly hosted: boolean;
@@ -174,8 +190,10 @@ export class OllamaRouter implements RouterModel {
     ];
     try {
       const body = this.hosted
-        ? { model: this.name, stream: false, think: false, options: { temperature: 0 }, tools: [{ type: "function", function: { name: "classify_intent", description: "Choose one query intent or identify an unsupported or ambiguous request", parameters: schema } }], messages: [{ ...messages[0], content: `${system}\nAnswer by calling the classify_intent tool.` }, messages[1]] }
-        : { model: this.name, stream: false, think: false, keep_alive: "30m", options: { temperature: 0, num_predict: 180, num_ctx: 4096 }, format: schema, messages };
+        // num_predict bounds the classification: one enum pick needs tens of tokens, not the thousands
+        // a cloud relay happily rambles when uncapped.
+        ? { model: this.name, stream: false, think: false, options: { temperature: 0, num_predict: 96 }, tools: [{ type: "function", function: { name: "classify_intent", description: "Choose one query intent or identify an unsupported or ambiguous request", parameters: schema } }], messages: [{ ...messages[0], content: `${system}\nAnswer by calling the classify_intent tool.` }, messages[1]] }
+        : { model: this.name, stream: false, think: false, keep_alive: "30m", options: { temperature: 0, num_predict: 96, num_ctx: 4096 }, format: schema, messages };
       const requestBody = JSON.stringify(body);
       logLlmTraffic("router.classify", "request", requestBody);
       const response = await fetch(`${base}/api/chat`, { method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(this.opts.timeoutMs ?? 30_000), body: requestBody });
@@ -183,9 +201,12 @@ export class OllamaRouter implements RouterModel {
       logLlmTraffic("router.classify", "response", rawResponse);
       if (!response.ok) return null;
       const message = (JSON.parse(rawResponse) as { message?: { content?: string; tool_calls?: { function?: { arguments?: unknown } }[] } }).message;
-      const raw = this.hosted ? message?.tool_calls?.[0]?.function?.arguments : message?.content;
+      let raw: unknown = this.hosted ? message?.tool_calls?.[0]?.function?.arguments : message?.content;
+      // A hosted model occasionally answers in prose instead of the requested tool call; salvage that
+      // instead of failing the classification and re-paying the whole prompt on a retry.
+      if (this.hosted && raw === undefined && typeof message?.content === "string") raw = message.content;
       let value: unknown = raw;
-      if (typeof raw === "string") { try { value = JSON.parse(raw); } catch { return null; } }
+      if (typeof raw === "string") { value = salvageJson(raw); if (value === undefined) return null; }
       if (!value || typeof value !== "object") return null;
       const candidate = value as Record<string, unknown>;
       if (typeof candidate.intent_id === "number") {
@@ -308,7 +329,7 @@ export class OllamaRouter implements RouterModel {
     // A small local model is held to the schema by constrained decoding (what scripts/eval-tiny-models.ts measured). Hosted models
     // ignore `format` and `think: false` and reason in prose, so they answer through a tool call instead, which they do respect.
     const body = this.hosted
-      ? { model: this.name, stream: false, think: false, options: { temperature: 0 }, tools: [{ type: "function", function: { name: "choose", description: "Record which label the message is and the name it mentions", parameters: schema } }], messages: [{ role: "system", content: `${req.system}\nAnswer by calling the choose tool.` }, { role: "user", content: req.user }] }
+      ? { model: this.name, stream: false, think: false, options: { temperature: 0, num_predict: 64 }, tools: [{ type: "function", function: { name: "choose", description: "Record which label the message is and the name it mentions", parameters: schema } }], messages: [{ role: "system", content: `${req.system}\nAnswer by calling the choose tool.` }, { role: "user", content: req.user }] }
       : { model: this.name, stream: false, think: false, keep_alive: "30m", options: { temperature: 0, num_predict: 40, num_ctx: 4096 }, format: schema, messages: [{ role: "system", content: req.system }, { role: "user", content: req.user }] };
     try {
       const requestBody = JSON.stringify(body);
@@ -319,7 +340,7 @@ export class OllamaRouter implements RouterModel {
       if (!r.ok) return null;
       const msg = (JSON.parse(raw) as { message?: { content?: string; tool_calls?: { function?: { arguments?: unknown } }[] } }).message;
       const args = msg?.tool_calls?.[0]?.function?.arguments;
-      const a = (this.hosted ? (typeof args === "string" ? JSON.parse(args) : args ?? {}) : JSON.parse(msg?.content ?? "{}")) as Partial<RouterAnswer>;
+      const a = (this.hosted ? (typeof args === "string" ? salvageJson(args) : args ?? {}) : salvageJson(msg?.content ?? "") ?? {}) as Partial<RouterAnswer>;
       return typeof a.label === "string" && req.labels.includes(a.label) ? { label: a.label, target: typeof a.target === "string" ? a.target.slice(0, 120) : "" } : null;
     } catch { return null; }
   }

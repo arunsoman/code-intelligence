@@ -94,6 +94,55 @@ test("the agent starts from resolved mentions, reads the code, and cites only wh
   } finally { worker.close(); }
 });
 
+test("the writer's history is compacted: old narration and stale tool results stop being re-sent verbatim", async () => {
+  const { svc, worker, revision } = await setup();
+  try {
+    const narration = "Let me reason about this step at length, as a chatty model would. ".repeat(40); // ~2.9KB of scratch thinking per turn
+    const supported = { verdict: "SUPPORTED", relevance: true, coverage: true, evidence: true, certainty: true, consistency: true, requirements: ["Explain AuthService"], gaps: [], verifiedBy: ["class:src/auth/service.ts#AuthService"], nextAction: "continue" };
+    const turns: ((m: AgentMessage[], tools: { name: string }[]) => AgentReply)[] = [];
+    for (let i = 0; i < 8; i++) turns.push((_m, tools) => tools[0].name === "review_answer" ? call("review_answer", { ...supported }) : call("find_code", { query: "AuthService" }, narration));
+    turns.push((m, tools) => {
+      if (tools[0].name === "review_answer") return call("review_answer", { ...supported });
+      const serialized = JSON.stringify(m);
+      assert.ok(!serialized.includes("as a chatty model would. ".repeat(20)), "ancient narration must be stubbed, not re-sent every turn");
+      assert.ok(serialized.includes("earlier narration trimmed"), "the model sees that its old narration was trimmed");
+      assert.ok(serialized.includes("earlier output trimmed"), "stale tool results are stubbed to heads");
+      assert.ok(m.slice(-8).some((x) => x.role === "tool" && x.content.length > 700), "recent tool results stay full");
+      return call("answer", { text: "AuthService signs users in.", cites: [] });
+    });
+    const model = scripted(turns as never);
+    svc.router = model;
+    const r = await svc.converse(ctx(), { text: "what is the job of AuthService?", revision });
+    assert.ok(r.ok && r.value.kind === "analysis");
+    assert.equal(r.value.validation?.status, "SUPPORTED");
+    assert.equal(r.value.validation?.repairAttempts, 0);
+  } finally { worker.close(); }
+});
+
+test("an IR-first investigation needs no source read: ir_of alone is citable evidence", async () => {
+  const { svc, worker, revision } = await setup();
+  try {
+    const model = scripted([
+      (m) => call("ir_of", { id: request(m).mentions[0].candidates[0].id }),
+      (m) => {
+        const ir = m.find((x) => x.role === "tool")!.content;
+        assert.match(ir, /semantic IR/, "the observation is the rendered IR");
+        assert.match(ir, /let\b|when\b|return\b|call\b/, "the IR shows the body's structure");
+        return call("answer", { text: "AuthService signs users in.", cites: [request(m).mentions[0].candidates[0].id] });
+      },
+    ]);
+    svc.router = model;
+    const r = await svc.converse(ctx(), { text: "what is the job of AuthService?", revision });
+    // The gate used to force read_code for any cited element without a source read; an ir_of render is
+    // now a genuine inspection of the body's structure, so this passes with no repair at all.
+    assert.ok(r.ok && r.value.kind === "analysis");
+    assert.equal(r.value.validation?.status, "SUPPORTED");
+    assert.equal(r.value.validation?.repairAttempts, 0);
+    assert.match(r.value.message, /^AuthService signs users in\./);
+    assert.match(r.value.thinking!, /ir_of\(id="class:src\/auth\/service\.ts#AuthService"\)/);
+  } finally { worker.close(); }
+});
+
 test("a withheld draft's full prose is replaced in history after repair, not kept alongside the retry", async () => {
   const { svc, worker, revision } = await setup();
   try {
