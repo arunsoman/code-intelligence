@@ -100,6 +100,7 @@ impl SourceIrBundle {
                         exported: true,
                         // No tree-sitter node for a declarative Nirdosha IR entry; not applicable.
                         shape_hash: String::new(),
+                        ir: None,
                     });
                     raw.symbols.len() - 1
                 });

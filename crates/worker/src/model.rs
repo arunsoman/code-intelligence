@@ -39,6 +39,15 @@ pub struct Entity {
     /// Two entities sharing a shape_hash are structurally identical regardless of naming.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shape_hash: Option<String>,
+    /// Hash of this symbol's semantic IR (ir.rs): local identifiers blanked, external names and
+    /// control-flow idioms kept. Stable across a rename that also renames locals — the input C08's
+    /// identity matching needed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ir_hash: Option<String>,
+    /// Serialized IR tree, present only when the parse ran with CIE_IR_DUMP=1 (plan step 4: stored
+    /// behind a flag, for whatever later needs to walk structure; never persisted by default).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ir_dump: Option<String>,
 }
 
 /// A group of entities the worker found structurally identical (same kind, same shape_hash) across at least two
@@ -53,6 +62,21 @@ pub struct ConceptClusterRaw {
     pub member_entity_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub heuristic_name: Option<String>,
+    /// Per-pair evidence for `near-duplicate` clusters: the two members, their IR shingle similarity
+    /// and a short structural-diff summary. Absent for exact-shape and framework-role clusters.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pairs: Vec<ConceptPairRaw>,
+}
+
+/// One member pair of a near-duplicate cluster (ir.rs's `compare`): similarity in 0..1 (thousandths)
+/// and the diff summary text shown as the pair's evidence.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ConceptPairRaw {
+    pub a: String,
+    pub b: String,
+    pub similarity: f64,
+    pub diff: String,
 }
 
 #[derive(Serialize, Clone, Debug)]

@@ -33,7 +33,7 @@ const SKIP_DIRS: &[&str] = &[
     "vendor",
     "site-packages",
 ];
-pub const ANALYZER_VERSION: &str = "worker-0.5.0/tree-sitter-typescript-0.23+rust-0.24+nirdosha-v2+defect-semantic-v2+ast-metrics-v1+gitignore-aware-walk+uml-class-v1";
+pub const ANALYZER_VERSION: &str = "worker-0.6.0/tree-sitter-typescript-0.23+rust-0.24+nirdosha-v2+defect-semantic-v2+ast-metrics-v1+gitignore-aware-walk+uml-class-v1+semantic-ir-v1";
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -480,6 +480,9 @@ struct EntityRows {
     entities: Vec<Entity>,
     relationships: Vec<Relationship>,
     facts: Vec<Fact>,
+    /// entity id → IR kind sequence for function/method entities with a lowered IR — the input the
+    /// near-duplicate clustering needs (Phase 2). In-memory only; never serialized anywhere.
+    ir_seqs: Vec<(String, Vec<u16>)>,
 }
 
 /// Per-file entity + identity derivation, independent per file: entity ids embed the file-relative path,
@@ -510,6 +513,7 @@ fn derive_entity_rows(rec: &FileRec, rev: &str) -> EntityRows {
     let mut entities: Vec<Entity> = Vec::new();
     let mut relationships: Vec<Relationship> = Vec::new();
     let mut facts: Vec<Fact> = Vec::new();
+    let mut ir_seqs: Vec<(String, Vec<u16>)> = Vec::new();
     let mut seen_ids: HashMap<String, usize> = HashMap::new();
     let fid = format!("file:{}", rec.rel);
     entities.push(Entity {
@@ -520,6 +524,8 @@ fn derive_entity_rows(rec: &FileRec, rev: &str) -> EntityRows {
         spans: vec![span(&rec.rel, &rec.hash, 0, 0)],
         symbol_hash: None,
         shape_hash: None,
+        ir_hash: None,
+        ir_dump: None,
     });
     for s in &rec.raw.symbols {
         let mut id = format!("{}:{}#{}", s.kind, rec.rel, s.qualified);
@@ -544,7 +550,26 @@ fn derive_entity_rows(rec: &FileRec, rev: &str) -> EntityRows {
             } else {
                 Some(s.shape_hash.clone())
             },
+            ir_hash: s.ir.as_ref().and_then(|i| (!i.hash.is_empty()).then_some(i.hash.clone())),
+            ir_dump: s.ir.as_ref().and_then(|i| i.dump.clone()),
         });
+        // The per-symbol control-flow summary (Phase 5's evidence input for the S2/S3 chart
+        // compilers): loop/branch/return counts from the lowered IR, evidence-linked to the span, and
+        // the IR kind sequence handed to the near-duplicate clustering below.
+        if matches!(s.kind, "function" | "method") {
+            if let Some(ir) = &s.ir {
+                facts.push(Fact {
+                    id: format!("fact:ir:{}:{}", rec.rel, s.start),
+                    subject: id.clone(),
+                    predicate: "ir_control_flow".into(),
+                    object: json!({"kind":"IrControlFlow","loops":ir.loops,"branches":ir.branches,
+                        "returns":ir.returns,"nodes":ir.nodes}),
+                    evidence: vec![evidence(&rec.rel, &rec.hash, s.start, s.end, "STATIC_PARSED")],
+                    resolution: "PARSED",
+                });
+                ir_seqs.push((id.clone(), ir.kind_seq.clone()));
+            }
+        }
         relationships.push(Relationship {
             id: format!("rel:contains:{id}"),
             from: fid.clone(),
@@ -582,6 +607,7 @@ fn derive_entity_rows(rec: &FileRec, rev: &str) -> EntityRows {
         entities,
         relationships,
         facts,
+        ir_seqs,
     }
 }
 
@@ -1162,6 +1188,10 @@ pub fn index_repo(
         // Honour .gitignore even when the root is not (yet) a git checkout — e.g. a directory copied
         // without its .git folder should still keep its generated/vendored files out of the index.
         .require_git(false)
+        // Framework config lives in dotfiles (`.env`, `.env.local`): the walker's default hidden-file filter
+        // would silently drop them from the index. Explicitly walk hidden files; the directory skip-list
+        // above still keeps `.git` and friends out.
+        .hidden(false)
         .filter_entry(|e| {
             !(e.file_type().map_or(false, |ft| ft.is_dir())
                 && e.file_name()
@@ -1200,7 +1230,24 @@ pub fn index_repo(
                     ))
         })
         .collect();
+    // Dotfile config (`.env`, `.env.local`) is routinely gitignored — that is the point of `.env` — so collect
+    // config files explicitly, bypassing ignore rules, or a framework repo's secrets-metadata never gets indexed.
+    if let Ok(rd) = std::fs::read_dir(&root) {
+        {
+            for e in rd.flatten() {
+                let p = e.path();
+                let Some(n) = p.file_name().and_then(|s| s.to_str()) else { continue };
+                if p.is_file() {
+                    let rel = p.strip_prefix(&root).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+                    if is_config_file(&rel) && !paths.contains(&p) {
+                        paths.push(p);
+                    }
+                }
+            }
+        }
+    }
     paths.sort();
+    paths.dedup();
     timing("walk", t_all);
     let t_pass1 = std::time::Instant::now();
 
@@ -1456,8 +1503,13 @@ pub fn index_repo(
     // per-file duplicate-name counter matches the global pass). Runs in parallel, merged in file order;
     // `rec.ids` must be complete before resolution below.
     let ent_rows = parallel_map(&recs, |rec| derive_entity_rows(rec, &rev));
+    // entity id → IR kind sequence (function/method only): the near-duplicate clustering's input.
+    let mut ir_seqs: HashMap<String, Vec<u16>> = HashMap::new();
     for (rows, rec) in ent_rows.into_iter().zip(recs.iter_mut()) {
         rec.ids = rows.ids;
+        for (id, seq) in rows.ir_seqs {
+            ir_seqs.insert(id, seq);
+        }
         batch.entities.extend(rows.entities);
         batch.relationships.extend(rows.relationships);
         batch.facts.extend(rows.facts);
@@ -1484,6 +1536,8 @@ pub fn index_repo(
                         spans: vec![span(&rec.rel, &rec.hash, d.start, d.end)],
                         symbol_hash: None,
                         shape_hash: None,
+                        ir_hash: None,
+                        ir_dump: None,
                     });
                 }
                 let rel_kind = match r.kind.as_str() {
@@ -1680,7 +1734,19 @@ pub fn index_repo(
         });
     }
     let t_concepts = std::time::Instant::now();
-    cluster_concepts(&mut batch);
+    // The language walker and the framework probe both recognize @Transactional-style annotations, so a
+    // method can end up with two uses_transaction facts (the generic one and the richer framework one).
+    // Keep the richer framework fact and drop the generic duplicate for the same subject: the duplicate
+    // id'd rows inflate fact counts without adding information. (Class-level and method-level detections
+    // differ in subject and are kept separately.)
+    let framework_txs: std::collections::HashSet<String> = batch.facts.iter()
+        .filter(|g| g.id.starts_with("fact:framework:tx:") && g.predicate == "uses_transaction")
+        .map(|g| g.subject.clone())
+        .collect();
+    batch.facts.retain(|f| {
+        !(f.id.starts_with("fact:tx:") && f.predicate == "uses_transaction" && framework_txs.contains(&f.subject))
+    });
+    cluster_concepts(&mut batch, &ir_seqs);
     timing("concept clustering", t_concepts);
     let t_shard = std::time::Instant::now();
     merge_duplicate_rows(&mut batch);
@@ -1691,7 +1757,7 @@ pub fn index_repo(
 }
 
 /// Zero-LLM, zero-text-comparison concept clustering: entities that are the same concept declared more than once,
-/// found from two signals the worker already computed for an entirely different purpose.
+/// found from three signals the worker already computed for an entirely different purpose.
 ///
 /// 1. Exact AST shape (shape.rs) shared by entities in at least two different files — the same construct (an enum,
 ///    a DTO, a form) redeclared, usually by generated-client duplication (the same OpenAPI model copied into
@@ -1701,11 +1767,14 @@ pub fn index_repo(
 ///    (`UserController`, `PaymentService`) and already tagged with their architectural role; grouping by that role
 ///    gives a free, high-confidence concept ("Controllers in account-management") with no shape comparison and no
 ///    naming model needed at all.
+/// 3. Near-duplicate logic (functions/methods only): symbols whose lowered semantic IR (ir.rs) shares at least 85%
+///    of its 3-shingles with a peer's, gated by a minimum IR node count — copy-pasted code under a different or
+///    locally-retouched name, which byte digests alone miss (C08's registry sees it, the Identity tab shows it).
 ///
 /// Both are content-addressed by their sorted member ids, so an unchanged cluster gets the same `cluster_id` on
 /// every re-index — the cache key a later stage uses to avoid re-naming (and re-paying for an LLM call on) a
 /// cluster that hasn't actually changed.
-fn cluster_concepts(batch: &mut AnalysisBatch) {
+fn cluster_concepts(batch: &mut AnalysisBatch, ir_seqs: &HashMap<String, Vec<u16>>) {
     let file_of: HashMap<&str, &str> = batch
         .entities
         .iter()
@@ -1718,9 +1787,11 @@ fn cluster_concepts(batch: &mut AnalysisBatch) {
             .unwrap_or(name)
             .to_string()
     };
-    let cluster_id = |member_ids: &mut Vec<String>| -> String {
+    let cluster_id = |kind: &str, member_ids: &mut Vec<String>| -> String {
+        // Kind-prefixed so two signals that ever hold the same member set (possible: a framework-role
+        // and a near-duplicate cluster over the same functions) still get distinct concept rows.
         member_ids.sort();
-        format!("concept:{}", sha(member_ids.join("|").as_bytes()))
+        format!("concept:{kind}:{}", sha(member_ids.join("|").as_bytes()))
     };
     let mut clusters: Vec<ConceptClusterRaw> = Vec::new();
 
@@ -1755,10 +1826,11 @@ fn cluster_concepts(batch: &mut AnalysisBatch) {
         }
         let heuristic_name = name_counts.into_iter().max_by_key(|(_, c)| *c).map(|(n, _)| n);
         clusters.push(ConceptClusterRaw {
-            cluster_id: cluster_id(&mut ids),
+            cluster_id: cluster_id("exact-shape", &mut ids),
             kind: "exact-shape".into(),
             member_entity_ids: ids,
             heuristic_name,
+            pairs: vec![],
         });
     }
 
@@ -1789,10 +1861,99 @@ fn cluster_concepts(batch: &mut AnalysisBatch) {
         }
         let role = role_key.split(':').nth(1).unwrap_or(&role_key);
         clusters.push(ConceptClusterRaw {
-            cluster_id: cluster_id(&mut ids),
+            cluster_id: cluster_id("framework-role", &mut ids),
             kind: "framework-role".into(),
             member_entity_ids: ids,
             heuristic_name: Some(format!("{package} {role}s")),
+            pairs: vec![],
+        });
+    }
+
+    // Signal 3: near-duplicate logic (functions/methods only). The exact-shape signal is deliberately
+    // not applied to these kinds — real-data measurement showed trivial one-liners collide — so this
+    // compares the semantic-IR kind sequences (ir.rs) with two gates that remove both the noise and
+    // the cost: a minimum IR node count (nothing under it can be a meaningful copy) and a Jaccard
+    // similarity over 3-shingles of the IR kind sequences (near-identical, not identical-only).
+    // Candidates are joined through a length-sorted sliding window: Jaccard can never exceed
+    // min/max, so a pair outside the window is out of reach and never compared.
+    let near_dup_kinds = ["function", "method"];
+    let threshold = 0.85_f64;
+    let mut cands: Vec<(&Entity, &Vec<u16>)> = batch
+        .entities
+        .iter()
+        .filter(|e| near_dup_kinds.contains(&e.kind.as_str()))
+        .filter_map(|e| ir_seqs.get(&e.entity_id).map(|s| (e, s)))
+        .filter(|(_, s)| s.len() >= crate::ir::MIN_IR_NODES as usize)
+        .collect();
+    cands.sort_by_key(|(_, s)| s.len());
+    let mut parent: Vec<usize> = (0..cands.len()).collect();
+    fn find(p: &mut Vec<usize>, mut x: usize) -> usize {
+        while p[x] != x {
+            p[x] = p[p[x]];
+            x = p[x];
+        }
+        x
+    }
+    fn union(p: &mut Vec<usize>, a: usize, b: usize) {
+        let (ra, rb) = (find(p, a), find(p, b));
+        if ra != rb {
+            p[ra.max(rb)] = ra.min(rb);
+        }
+    }
+    let mut edges: Vec<(usize, usize, f64, String)> = Vec::new();
+    for i in 0..cands.len() {
+        let li = cands[i].1.len();
+        for j in i + 1..cands.len() {
+            let lj = cands[j].1.len();
+            // Jaccard ≤ min/max: once the smaller side cannot reach the threshold, stop the window.
+            if lj as f64 > li as f64 / threshold {
+                break;
+            }
+            let (sim, diff) = crate::ir::compare(cands[i].1, cands[j].1);
+            if sim >= threshold {
+                union(&mut parent, i, j);
+                edges.push((i, j, sim, diff));
+            }
+        }
+    }
+    let groups = edges.iter().fold(std::collections::HashMap::<usize, Vec<usize>>::new(), |mut g, (i, j, _, _)| {
+        let r = find(&mut parent, *i);
+        g.entry(r).or_default().push(*i);
+        if !g[&r].contains(j) {
+            g.entry(r).or_default().push(*j);
+        }
+        g
+    });
+    for (_, mut members) in groups {
+        members.sort();
+        members.dedup();
+        if members.len() < 2 {
+            continue;
+        }
+        let mut ids: Vec<String> = members.iter().map(|&i| cands[i].0.entity_id.clone()).collect();
+        // Per-pair evidence: strongest pairs first, bounded so a big component stays reportable.
+        let mut picked: Vec<(usize, usize, f64, String)> = edges
+            .iter()
+            .filter(|(i, j, _, _)| members.contains(i) && members.contains(j))
+            .map(|(i, j, s, d)| (*i, *j, *s, d.clone()))
+            .collect();
+        picked.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        picked.truncate(8);
+        let pairs = picked
+            .into_iter()
+            .map(|(i, j, sim, diff)| ConceptPairRaw {
+                a: cands[i].0.entity_id.clone(),
+                b: cands[j].0.entity_id.clone(),
+                similarity: sim,
+                diff,
+            })
+            .collect();
+        clusters.push(ConceptClusterRaw {
+            cluster_id: cluster_id("near-duplicate", &mut ids),
+            kind: "near-duplicate".into(),
+            member_entity_ids: ids,
+            heuristic_name: None,
+            pairs,
         });
     }
 
@@ -2246,6 +2407,8 @@ fn resolve_framework_metadata<E, S>(
                         spans: vec![span(&rec.rel, &rec.hash, m.start, m.end)],
                         symbol_hash: None,
                         shape_hash: None,
+                        ir_hash: None,
+                        ir_dump: None,
                     });
                     framework_entity_id.insert(
                         format!("{}:{}:{}", rec.rel, m.kind.as_str(), m.name),
@@ -2282,6 +2445,8 @@ fn resolve_framework_metadata<E, S>(
                         spans: vec![span(&rec.rel, &rec.hash, m.start, m.end)],
                         symbol_hash: None,
                         shape_hash: None,
+                        ir_hash: None,
+                        ir_dump: None,
                     });
                     framework_entity_id.insert(
                         format!("{}:{}:{}", rec.rel, m.kind.as_str(), m.name),
@@ -3810,7 +3975,14 @@ mod concept_tests {
     use super::*;
 
     fn fixture(files: &[(&str, &str)]) -> AnalysisBatch {
-        let dir = std::env::temp_dir().join(format!("cie-concepts-{}-{}", std::process::id(), files.len()));
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static SEQ: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "cie-concepts-{}-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::SeqCst),
+            files.len()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         for (rel, content) in files {
             let path = dir.join(rel);
@@ -3851,6 +4023,75 @@ mod concept_tests {
     fn a_shape_appearing_only_once_does_not_cluster() {
         let b = fixture(&[("app-a/src/models/status.ts", "export enum Status { Active, Inactive }\n")]);
         assert!(b.concept_clusters.iter().all(|c| c.kind != "exact-shape"));
+    }
+
+    #[test]
+    fn copy_pasted_logic_under_different_names_forms_a_near_duplicate_cluster() {
+        // Two copies of the same moderately-sized logic: a local was renamed and a string differs,
+        // so the byte digests differ; the semantic IR (locals blanked) still matches them.
+        let a = r#"export function chargeCard(card: Card, amount: number) {
+  const limit = card.available - amount;
+  if (limit < 0) { throw new Error("over limit"); }
+  const receipt = { id: card.id, amount, remaining: limit };
+  journal.append("charge", receipt);
+  audit.record("charged", card.owner, amount);
+  return receipt;
+}"#;
+        let b = r#"export function invoiceClient(client: Card, total: number) {
+  const headroom = client.available - total;
+  if (headroom < 0) { throw new Error("over limit"); }
+  const receipt = { id: client.id, total, remaining: headroom };
+  journal.append("invoice", receipt);
+  audit.record("invoiced", client.owner, total);
+  return receipt;
+}"#;
+        let b = fixture(&[
+            ("app-a/src/billing/charge.ts", &format!("{a}\n")),
+            ("app-b/src/billing/invoice.ts", &format!("{b}\n")),
+        ]);
+        let fn_a = b.entities.iter().find(|e| e.name == "chargeCard").unwrap();
+        let fn_b = b.entities.iter().find(|e| e.name == "invoiceClient").unwrap();
+        assert!(fn_a.ir_hash.is_some() && fn_b.ir_hash.is_some(), "a function must get a semantic-IR hash");
+        // The IR digest must differ from the byte digest: a local rename did not break it.
+        assert_ne!(fn_a.symbol_hash, fn_b.symbol_hash, "the two copies' byte hashes must differ (locals renamed)");
+        assert_eq!(fn_a.ir_hash, fn_b.ir_hash, "blanked locals must make the structural copy identical");
+        let cluster = b
+            .concept_clusters
+            .iter()
+            .find(|c| c.kind == "near-duplicate")
+            .expect("copied logic under different names must form a near-duplicate cluster");
+        assert_eq!(cluster.member_entity_ids.len(), 2);
+        assert!(cluster.member_entity_ids.contains(&fn_a.entity_id));
+        let pair = cluster.pairs.iter().find(|p| p.a == fn_a.entity_id || p.b == fn_a.entity_id)
+            .expect("the cluster carries per-pair evidence");
+        assert!(pair.similarity >= 0.85, "identical control flow scores at least the threshold: {}", pair.similarity);
+        // One-liners stay out (the documented exact-shape noise), and a truly different function doesn't join.
+        assert!(!b.concept_clusters.iter().any(|c| c.kind == "near-duplicate"
+            && c.member_entity_ids.iter().any(|id| id.contains("get"))),
+            "trivial one-liners must not cluster");
+    }
+
+    #[test]
+    fn a_function_below_the_node_gate_never_clusters_as_near_duplicate() {
+        let b = fixture(&[
+            ("app-a/src/x.ts", "export function get(x: Item) { const n = x.name; return n.slice(0, 4); }\n"),
+            ("app-b/src/y.ts", "export function get(x: Item) { const n = x.name; return n.slice(0, 4); }\n"),
+        ]);
+        assert!(b.concept_clusters.iter().all(|c| c.kind != "near-duplicate"),
+            "same-shaped one-liners must stay below the near-duplicate gate");
+    }
+
+    #[test]
+    fn every_function_and_method_carries_an_ir_control_flow_fact() {
+        let b = fixture(&[
+            ("src/dup.ts", "export function charge(x: number) { let t = 0; if (x > 0) { for (const s of [1, 2]) { t += s; } } return t; }\n"),
+        ]);
+        let fid = b.entities.iter().find(|e| e.name == "charge").unwrap().entity_id.clone();
+        let f = b.facts.iter().find(|f| f.subject == fid && f.predicate == "ir_control_flow")
+            .expect("each function carries one IR control-flow fact");
+        assert_eq!(f.object["kind"], "IrControlFlow");
+        assert!(f.object["loops"].as_u64().unwrap() >= 1 && f.object["branches"].as_u64().unwrap() >= 1);
+        assert!(!f.evidence.is_empty(), "the IR fact is evidence-linked");
     }
 
     #[test]

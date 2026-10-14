@@ -11,6 +11,9 @@ pub struct RawSymbol {
     pub exported: bool,
     /// Structural AST shape, independent of naming — see shape.rs.
     pub shape_hash: String,
+    /// Semantic-IR digest of this symbol (locals blanked, external names kept) — see ir.rs.
+    /// `None` only when the symbol had no parseable node; the hash itself is always stored.
+    pub ir: Option<crate::ir::IrDigest>,
 }
 
 #[derive(Debug, Clone)]
@@ -186,6 +189,11 @@ pub struct RawFile {
     /// Framework-specific metadata emitted by plugins; the AST stays framework-agnostic.
     pub framework_metadata: Vec<crate::frameworks::RawFrameworkMetadata>,
     pub had_errors: bool,
+}
+
+/// The short name a symbol's IR blanks: its own name, up to the last dot.
+fn short_of(name: &str) -> String {
+    name.rsplit('.').next().unwrap_or(name).to_string()
 }
 
 fn heritage_type_name(t: &str) -> String {
@@ -419,6 +427,7 @@ impl<'a> Walker<'a> {
             end: node.end_byte(),
             exported,
             shape_hash: crate::shape::shape_hash(node),
+            ir: Some(crate::ir::ir_hash(node, self.src, crate::ir::Lang::Ts, &short_of(&name))),
         });
         self.out.symbols.len() - 1
     }

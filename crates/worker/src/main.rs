@@ -5,6 +5,7 @@ mod frameworks;
 mod index;
 mod artifact;
 mod evidence;
+mod ir;
 mod language;
 mod metrics;
 mod model;

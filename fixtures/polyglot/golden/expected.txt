@@ -41,6 +41,9 @@ E method:python/app/ledger.py#Ledger.reserve
 E method:python/app/service.py#PaymentService.__init__
 E method:python/app/service.py#PaymentService._notify
 E method:python/app/service.py#PaymentService.charge
+E spring:message_listener:java/src/main/java/com/acme/pay/CaptureListener.java:178
+E spring:route:java/src/main/java/com/acme/pay/PaymentController.java:316
+E spring:route:java/src/main/java/com/acme/pay/PaymentController.java:479
 E struct:go/cmd/main.go#Server
 E struct:go/internal/ledger/ledger.go#Ledger
 E test:go/internal/ledger/ledger_test.go#TestReserve
@@ -78,7 +81,7 @@ F imports_external file:python/app/service.py "django.db" PARSED
 F throws method:go/internal/ledger/ledger.go#Ledger.Reserve "panic" PARSED
 F throws method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.charge "FraudRejectedException" PARSED
 F throws method:python/app/service.py#PaymentService.charge "InsufficientFunds" PARSED
-F uses_transaction method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.charge true PARSED
+F uses_transaction method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.charge true STATIC_RESOLVED
 F uses_transaction method:python/app/service.py#PaymentService.charge true PARSED
 F writes method:java/src/main/java/com/acme/ledger/LedgerService.java#LedgerService.reserve "balance" PARSED
 F writes method:java/src/main/java/com/acme/pay/PaymentController.java#PaymentController.PaymentController "paymentService" PARSED
@@ -114,6 +117,8 @@ R calls method:python/app/service.py#PaymentService.charge > method:python/app/s
 R calls test:go/internal/ledger/ledger_test.go#TestReserve > method:go/internal/ledger/ledger.go#Ledger.Reserve RESOLVED
 R calls test:java/src/test/java/com/acme/pay/PaymentServiceTest.java#PaymentServiceTest.chargesAnAccount > method:java/src/main/java/com/acme/pay/PaymentService.java#PaymentService.charge RESOLVED
 R calls test:python/tests/test_service.py#test_charges_account > class:python/app/service.py#PaymentService RESOLVED
+R exposes_route class:java/src/main/java/com/acme/pay/PaymentController.java#PaymentController > spring:route:java/src/main/java/com/acme/pay/PaymentController.java:316 STATIC_RESOLVED
+R exposes_route class:java/src/main/java/com/acme/pay/PaymentController.java#PaymentController > spring:route:java/src/main/java/com/acme/pay/PaymentController.java:479 STATIC_RESOLVED
 R imports file:go/cmd/main.go > file:go/internal/ledger/ledger.go RESOLVED
 R imports file:java/src/main/java/com/acme/pay/PaymentService.java > file:java/src/main/java/com/acme/ledger/LedgerService.java RESOLVED
 R imports file:python/app/api.py > file:python/app/service.py RESOLVED

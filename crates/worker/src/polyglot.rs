@@ -168,6 +168,11 @@ impl<'a> Poly<'a> {
             end: n.end_byte(),
             exported,
             shape_hash: crate::shape::shape_hash(n),
+            ir: Some(crate::ir::ir_hash(n, self.src, match self.lang {
+                Lang::Java => crate::ir::Lang::Java,
+                Lang::Go => crate::ir::Lang::Go,
+                Lang::Python => crate::ir::Lang::Python,
+            }, name.rsplit('.').next().unwrap_or(&name).to_string().as_str())),
         });
         self.out.symbols.len() - 1
     }

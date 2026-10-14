@@ -1,4 +1,5 @@
 E class:ts/shapes.ts#Circle
+E field:ts/shapes.ts#Circle.radius
 E file:rust/src/lib.rs
 E file:rust/src/util.rs
 E file:ts/main.ts

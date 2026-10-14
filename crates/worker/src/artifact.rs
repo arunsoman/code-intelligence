@@ -1580,7 +1580,7 @@ mod tests {
 
     #[test]
     fn unknown_magic_refuses_to_guess() {
-        let dir = std::env::temp_dir().join(format!("cie-artifact-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("cie-artifact-test-{}-mystery", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("mystery.bin");
         std::fs::write(&file, b"\x13\x37CAFE\x00\x00NOT A REAL FORMAT").unwrap();
@@ -1593,7 +1593,7 @@ mod tests {
     #[test]
     fn end_to_end_probe_writes_hash_and_respects_size_limit() {
         let jar = zip_build(&[("META-INF/MANIFEST.MF", 0, b"Manifest-Version: 1.0\r\n".to_vec())]);
-        let dir = std::env::temp_dir().join(format!("cie-artifact-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("cie-artifact-test-{}-probe", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("probe-e2e.jar");
         std::fs::write(&file, &jar).unwrap();
