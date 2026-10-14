@@ -6,6 +6,8 @@ mod index;
 mod artifact;
 mod evidence;
 mod ir;
+mod irpdg;
+mod irrender;
 mod language;
 mod metrics;
 mod model;
@@ -486,6 +488,56 @@ fn content_root_one_shot(args: &[String]) {
 /// One-shot mode for the concept-hierarchy motif phase: `worker conceptMotifs <pdgs.json>` where the
 /// file holds the graphs as a JSON array (the same objects `pdg.ts` produces). One process per build
 /// keeps the synchronous call site intact while every repo-wide graph scan runs natively.
+/// One-shot mode for the concept-hierarchy graph phase: `worker irPdgs <entities.json>` where the
+/// file holds `{maxStatements, entities:[{entityId,file,irHash,irDump}]}` — folding each entity's
+/// stored semantic IR into its PDG in Rust (core keeps the reference folder and the reuse plan).
+fn ir_pdgs_one_shot(args: &[String]) {
+    let path = match args.first() {
+        Some(p) if !args.iter().skip(1).any(|a| a.starts_with("--")) => p,
+        _ => fail_usage("exactly one input file is required"),
+    };
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            println!("{}", json!({"error": {"code": "NOT_FOUND", "message": format!("{path}: {e}")}}));
+            std::process::exit(1);
+        }
+    };
+    let req: irpdg::IrPdgRequest = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => {
+            println!("{}", json!({"error": {"code": "INVALID_SCHEMA", "message": e.to_string()}}));
+            std::process::exit(1);
+        }
+    };
+    println!("{}", json!({"results": irpdg::fold_batch(&req)}));
+}
+
+/// One-shot mode for IR-first model contexts: `worker irRender <entities.json>` where the file
+/// holds `{maxLines?, entities:[{entityId, irDump}]}` — renders each stored semantic IR dump as
+/// deterministic pseudocode (irrender.rs); core keeps the thin router and the budget.
+fn ir_render_one_shot(args: &[String]) {
+    let path = match args.first() {
+        Some(p) if !args.iter().skip(1).any(|a| a.starts_with("--")) => p,
+        _ => fail_usage("exactly one input file is required"),
+    };
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            println!("{}", json!({"error": {"code": "NOT_FOUND", "message": format!("{path}: {e}")}}));
+            std::process::exit(1);
+        }
+    };
+    let req: irrender::IrRenderRequest = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => {
+            println!("{}", json!({"error": {"code": "INVALID_SCHEMA", "message": e.to_string()}}));
+            std::process::exit(1);
+        }
+    };
+    println!("{}", json!({"results": irrender::render_batch(&req)}));
+}
+
 fn concept_motifs_one_shot(args: &[String]) {
     let path = match args.first() {
         Some(p) if !args.iter().skip(1).any(|a| a.starts_with("--")) => p,
@@ -525,6 +577,14 @@ fn main() {
     if !argv.is_empty() {
         if argv[0] == "contentRoot" {
             content_root_one_shot(&argv[1..]);
+            return;
+        }
+        if argv[0] == "irPdgs" {
+            ir_pdgs_one_shot(&argv[1..]);
+            return;
+        }
+        if argv[0] == "irRender" {
+            ir_render_one_shot(&argv[1..]);
             return;
         }
         if argv[0] == "conceptMotifs" {

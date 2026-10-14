@@ -1,17 +1,17 @@
-// Shared fixtures for the concept-hierarchy tests. Everything is hermetic: real TypeScript files in a
-// temp directory, revisions stored directly through store.putBatch — the Rust parser is never needed,
-// because buildConceptHierarchy reads the source tree itself through the TypeScript compiler.
+// Shared fixtures for the concept-hierarchy tests. Everything is hermetic: real TypeScript files in
+// a temp directory, indexed once by the real worker (a sync one-frame spawn) so every entity carries
+// its semantic-IR dump — which is exactly what the graph phase now folds. No model, no server.
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StubProvider } from "@cie/model";
 import type { AnalysisBatch, Entity } from "@cie/schema";
 import { Service } from "../src/service.ts";
 import { Store } from "../src/store.ts";
-import { WorkerClient } from "../src/worker.ts";
+import { defaultWorkerPath, WorkerClient } from "../src/worker.ts";
 import { localMotifBatch } from "../src/concept-hierarchy/motifs.ts";
-import { clearPdgSourceCache } from "../src/concept-hierarchy/pdg.ts";
 
 export const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
@@ -32,7 +32,6 @@ export function makeRepo(files: Record<string, string>): string {
  * depend on the parser's symbol hashing.
  */
 export function entitiesFor(files: Record<string, string>): Entity[] {
-  clearPdgSourceCache();
   const ents: Entity[] = [];
   for (const [file, src] of Object.entries(files)) {
     for (const m of src.matchAll(/(?:export )?(?:async )?function (\w+)/g)) {
@@ -47,10 +46,26 @@ export function entitiesFor(files: Record<string, string>): Entity[] {
 }
 
 /** Store one revision of the given files, with the per-file digests the incremental path reads. */
+
+/** One framed `index` round-trip against the built worker binary, synchronously (test bodies stay sync). */
+function indexSync(repoRoot: string): AnalysisBatch {
+  const frame = (req: object) => { const b = Buffer.from(JSON.stringify(req)); const h = Buffer.alloc(4); h.writeUInt32BE(b.length); return Buffer.concat([h, b]); };
+  const r = spawnSync(defaultWorkerPath(), [], { input: frame({ id: "helpers", op: "index", params: { repoPath: repoRoot } }), encoding: "buffer", maxBuffer: 1024 * 1024 * 1024, timeout: 120_000 });
+  if (!r.stdout || r.stdout.length < 4) throw new Error(`worker index failed: ${String(r.stderr ?? "").slice(0, 300)}`);
+  const len = r.stdout.readUInt32BE(0);
+  const resp = JSON.parse(r.stdout.subarray(4, 4 + len).toString());
+  if (!resp.ok) throw new Error(`worker index failed: ${JSON.stringify(resp.error)}`);
+  try {
+    return JSON.parse(readFileSync(resp.handle, "utf8"));
+  } finally {
+    try { rmSync(resp.handle, { force: true }); } catch { /* the temp dir cleans it anyway */ }
+  }
+}
+
 export function putRevision(store: Store, rev: string, repoRoot: string, files: Record<string, string>): void {
-  const manifest = Object.fromEntries(Object.entries(files).map(([f, c]) => [f, sha(c)]));
-  const batch: AnalysisBatch = { revision: rev, gitHead: null, repoRoot, entities: entitiesFor(files), facts: [], relationships: [], diagnostics: [], analyzerVersion: "concept-test", manifest };
-  store.putBatch(batch);
+  const batch = indexSync(repoRoot);
+  // The fixture picks the revision id (tests address it by name); everything else is the real worker's.
+  store.putBatch({ ...batch, revision: rev, gitHead: null });
 }
 
 let fakeWorker: string | null = null;

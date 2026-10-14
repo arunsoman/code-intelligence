@@ -4,7 +4,7 @@
 // compute (contracts §10) without the identity drifting between runtimes.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildAllPdgs, clearPdgSourceCache } from "../src/concept-hierarchy/pdg.ts";
+import { buildAllPdgs } from "../src/concept-hierarchy/pdg.ts";
 import { matchMotifs, matchMotifsBatch } from "../src/concept-hierarchy/motifs.ts";
 import { Store } from "../src/store.ts";
 import { ACCUMULATE, COLLECT, DISPATCH, FLAG, LEDGER, NULLFALLBACK, RESOURCES, RETRY, RETHROW, makeRepo, putRevision } from "./concept-hierarchy-helpers.ts";
@@ -18,8 +18,7 @@ test("the worker matches motifs exactly as the TypeScript reference, occurrence 
   const repo = makeRepo(files);
   const store = new Store(":memory:");
   putRevision(store, "rev", repo, files);
-  clearPdgSourceCache();
-  const { pdgs } = buildAllPdgs(store, "rev", repo);
+  const { pdgs } = buildAllPdgs(store, "rev");
   assert.ok(pdgs.length >= 9, `one graph per fixture function (got ${pdgs.length})`);
   const local = pdgs.map((g) => matchMotifs(g));
   const offloaded = matchMotifsBatch(pdgs);
@@ -33,8 +32,7 @@ test("the offloaded batch is a drop-in for the reference on an empty and a repea
   const repo = makeRepo(files);
   const store = new Store(":memory:");
   putRevision(store, "rev", repo, files);
-  clearPdgSourceCache();
-  const { pdgs } = buildAllPdgs(store, "rev", repo);
+  const { pdgs } = buildAllPdgs(store, "rev");
   assert.deepEqual(matchMotifsBatch([]), []);
   const twice = [...pdgs, pdgs[0]];
   const offloaded = matchMotifsBatch(twice);

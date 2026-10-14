@@ -12,7 +12,7 @@ const invariantsOf = (files: Record<string, string>) => {
   const repo = makeRepo(files);
   const store = new Store(":memory:");
   putRevision(store, "rev-a", repo, files);
-  const { pdgs } = buildAllPdgs(store, "rev-a", repo);
+  const { pdgs } = buildAllPdgs(store, "rev-a");
   return buildInvariants(store, "rev-a", pdgs);
 };
 

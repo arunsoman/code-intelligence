@@ -36,6 +36,7 @@ import { chartCodeForQuestion, CHART_REGISTRY, SCHEMA_CHALLENGE, SCHEMA_EXPLANAT
 import { applyVerdict, gateClaim, modelText, wilson, withChallenge } from "./claims.ts";
 import { claimOf } from "./forms/common.ts";
 import { buildHierarchy, persistHierarchy, type NamingAdapter } from "./concept-hierarchy/index.ts";
+import { conceptIrView, renderIrs, similarOf } from "./irfirst.ts";
 import { buildFailureGraph, buildInvariantGraph } from "./forms/causal.ts";
 import { short } from "./forms/common.ts";
 import { buildHypothesis } from "./forms/hypothesis.ts";
@@ -2259,6 +2260,51 @@ export class Service {
       const startLine = buf.subarray(0, span.startByte).toString("utf8").split("\n").length;
       return ok(ctx, { ...base, file: span.sourceId, startLine, endLine: startLine + lines.length - 1, text, truncated, state: stale ? "STALE" as const : "CURRENT" as const }, { revision: rev.id });
     } catch { return unavailable(); }
+  }
+
+  /** IR-first (plan): a stored symbol's semantic IR rendered as deterministic pseudocode — what a
+   *  model reads instead of re-parsed source; the source slice stays available beside it. */
+  irOf(ctx: CallContext, req: { revision?: string; entityId?: unknown; maxLines?: unknown }): ApiResult<{ entityId: string; name: string; file: string; state: "CURRENT" | "UNAVAILABLE" | "WITHHELD"; render: string | null }> {
+    if (!req || typeof req.entityId !== "string" || !req.entityId || req.entityId.length > 600) return fail(ctx, { code: "INVALID_SCHEMA", message: "entityId must be a non-empty string", retryable: false });
+    const maxLines = req.maxLines === undefined || req.maxLines === null ? undefined : req.maxLines;
+    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
+    const e = this.store.entitiesById(rev.id, [req.entityId])[0];
+    if (!e) return fail(ctx, { code: "NOT_FOUND", message: "no such code element in this revision", retryable: false });
+    const base = { entityId: e.entityId, name: e.name, file: e.file, render: null as string | null };
+    if (policyFor(this.store, rev.repoRoot).denied(e.file)) return ok(ctx, { ...base, file: "(not shown)", state: "WITHHELD" as const }, { revision: rev.id });
+    if (!(e.irDump ?? "").length) return ok(ctx, { ...base, state: "UNAVAILABLE" as const }, { revision: rev.id });
+    const [render] = renderIrs([{ entityId: e.entityId, name: e.name, file: e.file, irDump: e.irDump! }], typeof maxLines === "number" ? maxLines : undefined);
+    return ok(ctx, { ...base, state: "CURRENT" as const, render: render.render }, { revision: rev.id });
+  }
+
+  /** IR-first (plan): structurally nearest stored symbols by the stored vectors — "code shaped like
+   *  this", rename-stable, across files and languages. */
+  similarOf(ctx: CallContext, req: { revision?: string; entityId?: unknown; topK?: unknown }): ApiResult<{ entityId: string; similar: import("./irfirst.ts").Similar[] }> {
+    if (!req || typeof req.entityId !== "string" || !req.entityId || req.entityId.length > 600) return fail(ctx, { code: "INVALID_SCHEMA", message: "entityId must be a non-empty string", retryable: false });
+    const topK = req.topK === undefined ? 8 : req.topK;
+    if (!Number.isInteger(topK) || (topK as number) < 1 || (topK as number) > 50) return fail(ctx, { code: "INVALID_SCHEMA", message: "topK must be an integer in 1..50", retryable: false });
+    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
+    const access = policyFor(this.store, rev.repoRoot);
+    const similar = similarOf(this.store, rev.id, req.entityId, topK as number).filter((x) => !access.denied(x.file));
+    return ok(ctx, { entityId: req.entityId, similar: topK === undefined ? similar : similar.slice(0, topK as number) }, { revision: rev.id });
+  }
+
+  /** IR-first (plan): a concept card — the concept's live members with each member's rendered IR,
+   *  the grounding unit for conversations. Members in revoked files are withheld, not listed. */
+  conceptIr(ctx: CallContext, req: { revision?: string; conceptId?: unknown; maxMembers?: unknown }): ApiResult<{ revision: string; conceptId: string; name: string | null; kind: string; renderedCount: number; members: { entityId: string; name: string; file: string; render: string | null; state: "CURRENT" | "WITHHELD" }[] }> {
+    if (!req || typeof req.conceptId !== "string" || !req.conceptId || req.conceptId.length > 600) return fail(ctx, { code: "INVALID_SCHEMA", message: "conceptId must be a non-empty string", retryable: false });
+    if (req.maxMembers !== undefined && (!Number.isInteger(req.maxMembers) || (req.maxMembers as number) < 1 || (req.maxMembers as number) > 50)) return fail(ctx, { code: "INVALID_SCHEMA", message: "maxMembers must be an integer in 1..50", retryable: false });
+    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
+    const access = policyFor(this.store, rev.repoRoot);
+    const view = conceptIrView(this.store, rev.id, req.conceptId, { maxMembers: typeof req.maxMembers === "number" ? req.maxMembers : undefined });
+    if (!view) return fail(ctx, { code: "NOT_FOUND", message: "no such concept in this revision (or its members were re-indexed away)", retryable: false });
+    const members = view.members.map((m) => access.denied(m.file)
+      ? { ...m, file: "(not shown)", render: null, state: "WITHHELD" as const }
+      : { ...m, state: "CURRENT" as const });
+    return ok(ctx, { revision: rev.id, conceptId: view.conceptId, name: view.name, kind: view.kind, renderedCount: members.filter((m) => m.state === "CURRENT" && m.render).length, members }, { revision: rev.id });
   }
 
   /** File/line for spans that are recorded on findings (the detector's fact location, before any evidence was resolved). */

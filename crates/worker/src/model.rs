@@ -44,10 +44,15 @@ pub struct Entity {
     /// identity matching needed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ir_hash: Option<String>,
-    /// Serialized IR tree, present only when the parse ran with CIE_IR_DUMP=1 (plan step 4: stored
-    /// behind a flag, for whatever later needs to walk structure; never persisted by default).
+    /// Serialized IR tree (ir.rs), persisted by default since it is the inspection surface for the
+    /// semantic IR; `CIE_IR_DUMP=0` trades the bytes away for artifact size.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ir_dump: Option<String>,
+    /// Deterministic structural embedding of the IR (ir.rs `ir_vec`): sparse (dim, value×100)
+    /// pairs flattened to `[d0, v0, d1, v1, …]`. Cosine over these is a zero-model structural
+    /// similarity between any two symbols — exact-match is `irHash`, this is approximate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ir_vec: Option<Vec<i16>>,
 }
 
 /// A group of entities the worker found structurally identical (same kind, same shape_hash) across at least two

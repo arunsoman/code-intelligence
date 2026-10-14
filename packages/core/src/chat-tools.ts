@@ -13,6 +13,7 @@ import { coveredChildren } from "./source-coverage.ts";
 import { sourceCandidates } from "./code-search.ts";
 import { resolveMentions } from "./mentions.ts";
 import { retrieveForQuestion } from "./retrieval.ts";
+import { renderIrs } from "./irfirst.ts";  // IR-first pull tools (ir_of); similar_of/concept_of dynamic-import the rest
 import type { Service } from "./service.ts";
 import type { RevisionRow } from "./store.ts";
 import { VISUALS } from "./visuals.ts";
@@ -62,7 +63,10 @@ export function checkArgs(schema: JsonSchema, args: unknown): string | null {
 }
 
 const note = (env: ToolEnv, e: Pick<Entity, "entityId" | "name" | "file">) => { env.seen.set(e.entityId, { name: e.name, file: e.file }); return e.entityId; };
-const line = (env: ToolEnv, e: Pick<Entity, "entityId" | "name" | "file" | "kind">) => `- [${note(env, e)}] ${e.kind} ${e.name} — ${e.file}`;
+// The id itself already contains the file path (`kind:file#name`, or `file:path` for a file entity), so repeating
+// it here would only duplicate what's inside the brackets; kind and name are kept since a file entity's id has no
+// `#name` suffix to recover its name from.
+const line = (env: ToolEnv, e: Pick<Entity, "entityId" | "name" | "file" | "kind">) => `- [${note(env, e)}] ${e.kind} ${e.name}`;
 
 /** The entity an argument names: its id, or a name looked up the same way a question's mentions are. */
 function entityFor(env: ToolEnv, ref: string): Entity | null {
@@ -395,6 +399,65 @@ export const CHAT_TOOLS: ChatTool[] = [
       }
       if (!lines.length) return "No framework module graph found.";
       return lines.join("\n");
+    },
+  },
+  {
+    name: "ir_of",
+    description: "Read a function or method's semantic IR — a deterministic pseudocode of what it does: calls, guards (`when:`/`loop:`), assignments. Locals, literals values ($t) are private; x.[?] is a computed field; x += y is a compound write. Cheaper and language-uniform vs read_code — prefer it for structure questions; escalate to read_code when literal values, comments or exact types matter.",
+    parameters: obj({ id: str("An id from an earlier result, or the exact name of the element") }, ["id"]),
+    async run(env, { id }) {
+      const e = entityFor(env, id as string);
+      if (!e) return `No accessible element is called or identified by "${id}". Try find_code.`;
+      if (!(e.irDump ?? "").length) return `No stored IR for [${e.entityId}] (files and data-only elements have none). Use read_code for its source.`;
+      const [r] = renderIrs([{ entityId: e.entityId, name: e.name, file: e.file, irDump: e.irDump! }]);
+      note(env, e);
+      env.svc.store.audit(env.ctx.actor.principalId, "chat.ir", env.rev.id, { entity: e.entityId });
+      return [`${e.kind} ${e.name} (${e.file}) — semantic IR:`, r?.render ?? "(render failed)", "Cite [" + e.entityId + "] when you use this; read_code shows the source when literals or types matter."].join("\n");
+    },
+  },
+  {
+    name: "similar_of",
+    description: "List the structurally nearest stored symbols to one element — 'code shaped like this', by the indexed IR vectors, stable across renames and languages. Use it to find near-duplicates, copies of a pattern, or where else this logic lives.",
+    parameters: obj({ id: str("An id from an earlier result, or the exact name of the element"), topK: { type: "integer", description: "How many results (1-50, default 8)" } }, ["id"]),
+    async run(env, { id, topK = 8 }) {
+      const e = entityFor(env, id as string);
+      if (!e) return `No accessible element is called or identified by "${id}". Try find_code.`;
+      note(env, e);
+      const { similarOf } = await import("./irfirst.ts");
+      const hits = similarOf(env.svc.store, env.rev.id, e.entityId, Number.isInteger(Number(topK)) ? Number(topK) : 8).filter((x) => !env.access.denied(x.file));
+      if (!hits.length) return `No structural neighbors are in the index yet for [${e.entityId}] (vectors index functions/methods with stored IR).`;
+      const lines = [];
+      const byId = new Map(env.svc.store.entitiesById(env.rev.id, hits.map((h) => h.entityId)).map((x) => [x.entityId, x]));
+      for (const h of hits) {
+        const he = byId.get(h.entityId);
+        if (he) lines.push(`  ${Math.round(h.similarity * 100)}% ${line(env, he)}`);
+      }
+      return [`${hits.length} structural neighbor(s) of [${e.entityId}] (similarity is approximate, not identity):`, ...lines].join("\n");
+    },
+  },
+  {
+    name: "concept_of",
+    description: "Read a concept card: a named group of related code pieces (e.g. a duplicated logic family or an inferred concept) with each member's semantic IR. Concept ids and names come from earlier results or the concept store. Use it to answer at the level of 'this concept' rather than file by file.",
+    parameters: obj({ concept: str("A concept id from an earlier result, or a name fragment to search by") }, ["concept"]),
+    async run(env, { concept }) {
+      const q = (concept as string).trim().toLowerCase();
+      const clusters = env.svc.store.conceptClusters(env.rev.id);
+      const hit = clusters.find((c) => c.conceptId.toLowerCase() === q)
+        ?? clusters.find((c) => (c.name ?? "").toLowerCase() === q)
+        ?? clusters.find((c) => (c.name ?? "").toLowerCase().includes(q));
+      if (!hit) return `No concept matches "${concept}". Concepts exist for near-duplicate families and inferred groupings; a concept search (C11/listConcepts) may help.`;
+      const { conceptIrView } = await import("./irfirst.ts");
+      const card = conceptIrView(env.svc.store, env.rev.id, hit.conceptId, { maxMembers: 12 });
+      if (!card) return `Concept "${hit.conceptId}" is not attached to this revision (its members may have been re-indexed).`;
+      const byId = new Map(env.svc.store.entitiesById(env.rev.id, card.members.map((m) => m.entityId)).map((x) => [x.entityId, x]));
+      const body = card.members.flatMap((m) => {
+        const e = byId.get(m.entityId);
+        if (!e || env.access.denied(e.file)) return [];
+        note(env, e);
+        return [`[${m.entityId}] ${e.name} (${e.file})`, ...(m.render ? ["```", m.render.split("\n").slice(1).join("\n"), "```"] : ["(member without stored IR)"])];
+      });
+      env.svc.store.audit(env.ctx.actor.principalId, "chat.concept_ir", env.rev.id, { concept: hit.conceptId });
+      return [`Concept [${card.conceptId}]${card.name ? ` “${card.name}”` : ""} (${card.kind}; ${card.renderedCount}/${card.members.length} members carry IR):`, ...body].join("\n");
     },
   },
   {

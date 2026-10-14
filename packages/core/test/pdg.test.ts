@@ -1,16 +1,19 @@
-// PDG behavior on small TypeScript fixtures, using the current statement-graph API.
+// PDG behavior on small TypeScript fixtures: real worker indexing (every entity carries its IR
+// dump), then the graph phase routed to `worker irPdgs`. The fold is Rust; these tests pin its
+// statement-graph API from the TypeScript side.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Entity } from "@cie/schema";
-import { buildPdgForFunction, clearPdgSourceCache } from "../src/concept-hierarchy/pdg.ts";
-import { makeRepo } from "./concept-hierarchy-helpers.ts";
+import { buildAllPdgs } from "../src/concept-hierarchy/pdg.ts";
+import { Store } from "../src/store.ts";
+import { makeRepo, putRevision } from "./concept-hierarchy-helpers.ts";
 
 function build(src: string, name = "f") {
   const repo = makeRepo({ "fixture.ts": src });
-  clearPdgSourceCache();
-  const entity: Entity = { entityId: `function:fixture.ts#${name}`, kind: "function", name, file: "fixture.ts", spans: [] };
-  const pdg = buildPdgForFunction(repo, entity);
-  assert.ok(pdg, `a PDG is built for ${name}`);
+  const store = new Store(":memory:");
+  putRevision(store, "rev", repo, { "fixture.ts": src });
+  const { pdgs, unresolved } = buildAllPdgs(store, "rev");
+  const pdg = pdgs.find((p) => p.entityId === `function:fixture.ts#${name}`);
+  assert.ok(pdg, `a PDG is built for ${name} (unresolved: ${unresolved.join(", ") || "none"})`);
   return pdg!;
 }
 

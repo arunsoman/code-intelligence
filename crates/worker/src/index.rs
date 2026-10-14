@@ -33,7 +33,7 @@ const SKIP_DIRS: &[&str] = &[
     "vendor",
     "site-packages",
 ];
-pub const ANALYZER_VERSION: &str = "worker-0.6.0/tree-sitter-typescript-0.23+rust-0.24+nirdosha-v2+defect-semantic-v2+ast-metrics-v1+gitignore-aware-walk+uml-class-v1+semantic-ir-v1";
+pub const ANALYZER_VERSION: &str = "worker-0.6.0/tree-sitter-typescript-0.23+rust-0.24+nirdosha-v2+defect-semantic-v2+ast-metrics-v1+gitignore-aware-walk+uml-class-v1+semantic-ir-v2";
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -526,6 +526,7 @@ fn derive_entity_rows(rec: &FileRec, rev: &str) -> EntityRows {
         shape_hash: None,
         ir_hash: None,
         ir_dump: None,
+        ir_vec: None,
     });
     for s in &rec.raw.symbols {
         let mut id = format!("{}:{}#{}", s.kind, rec.rel, s.qualified);
@@ -552,6 +553,7 @@ fn derive_entity_rows(rec: &FileRec, rev: &str) -> EntityRows {
             },
             ir_hash: s.ir.as_ref().and_then(|i| (!i.hash.is_empty()).then_some(i.hash.clone())),
             ir_dump: s.ir.as_ref().and_then(|i| i.dump.clone()),
+            ir_vec: s.ir.as_ref().filter(|i| !i.vec.is_empty()).map(|i| i.vec.iter().flat_map(|(d, v)| [*d as i16, i16::from(*v)]).collect()),
         });
         // The per-symbol control-flow summary (Phase 5's evidence input for the S2/S3 chart
         // compilers): loop/branch/return counts from the lowered IR, evidence-linked to the span, and
@@ -1538,7 +1540,7 @@ pub fn index_repo(
                         shape_hash: None,
                         ir_hash: None,
                         ir_dump: None,
-                    });
+                        ir_vec: None,                    });
                 }
                 let rel_kind = match r.kind.as_str() {
                     "role" => "requires_role",
@@ -2409,7 +2411,7 @@ fn resolve_framework_metadata<E, S>(
                         shape_hash: None,
                         ir_hash: None,
                         ir_dump: None,
-                    });
+                        ir_vec: None,                    });
                     framework_entity_id.insert(
                         format!("{}:{}:{}", rec.rel, m.kind.as_str(), m.name),
                         id.clone(),
@@ -2447,7 +2449,7 @@ fn resolve_framework_metadata<E, S>(
                         shape_hash: None,
                         ir_hash: None,
                         ir_dump: None,
-                    });
+                        ir_vec: None,                    });
                     framework_entity_id.insert(
                         format!("{}:{}:{}", rec.rel, m.kind.as_str(), m.name),
                         id.clone(),

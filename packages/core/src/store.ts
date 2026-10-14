@@ -273,6 +273,22 @@ export class Store {
     const get = this.db.prepare("select json from entities where revision = ? and entity_id = ?");
     return ids.flatMap((id) => { const r = get.get(rev, id) as any; return r ? [JSON.parse(r.json) as Entity] : []; });
   }
+  /** Structural vectors only, entity metadata straight off the columns — never the whole JSON:
+   *  the dumps inside it can dwarf the vectors by orders of magnitude. */
+  irVecs(rev: string): Map<string, { vec: number[]; kind: string; name: string; file: string }> {
+    const rows = this.db.prepare(
+      "select entity_id, kind, name, file, json_extract(json, '$.irVec') as vec from entities where revision = ? and json like '%\"irVec\"%'",
+    ).all(rev) as { entity_id: string; kind: string; name: string; file: string; vec: string | null }[];
+    const out = new Map<string, { vec: number[]; kind: string; name: string; file: string }>();
+    for (const r of rows) {
+      if (!r.vec) continue;
+      try {
+        const v = JSON.parse(r.vec) as number[];
+        if (Array.isArray(v) && v.length) out.set(r.entity_id, { vec: v, kind: r.kind, name: r.name, file: r.file });
+      } catch { /* corrupt row: skip, not fail */ }
+    }
+    return out;
+  }
   relationshipsFor(rev: string, entityId: string): Relationship[] {
     // Two index lookups, not `from_id = ? or to_id = ?`: SQLite plans that OR as a scan of every relationship in the revision, once per entity.
     // Reads are ordered explicitly, as the indexes that existed when they were written happened to give: emission order within a file (rowid). Which index SQLite scans, and so the order

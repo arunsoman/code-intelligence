@@ -11,7 +11,7 @@ const motifsOf = (files: Record<string, string>, fn: string): string[] => {
   const repo = makeRepo(files);
   const store = new Store(":memory:");
   putRevision(store, "rev", repo, files);
-  const { pdgs } = buildAllPdgs(store, "rev", repo);
+  const { pdgs } = buildAllPdgs(store, "rev");
   const g = pdgs.find((p) => p.entityId.endsWith(`#${fn}`));
   assert.ok(g, `graph for ${fn}`);
   return matchMotifs(g!).map((m) => m.motif);
@@ -66,7 +66,7 @@ test("motifs bind the variables they matched, so composition rules can pair on t
   const repo = makeRepo({ "src/l.ts": LEDGER });
   const store = new Store(":memory:");
   putRevision(store, "rev", repo, { "src/l.ts": LEDGER });
-  const { pdgs } = buildAllPdgs(store, "rev", repo);
+  const { pdgs } = buildAllPdgs(store, "rev");
   const g = pdgs.find((p) => p.entityId.endsWith("#withdraw"))!;
   const gw = matchMotifs(g).find((m) => m.motif === "guarded-write")!;
   assert.equal(gw.binds.var, "balance");

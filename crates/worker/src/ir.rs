@@ -12,10 +12,10 @@
 //!   have dedicated nodes, `for`/`while`/`do` are one `Loop`, and parenthesized expressions vanish.
 //!
 //! The hash (`ir_hash`) is stored unconditionally on every symbol and threads onto `Entity` next to
-//! `shape_hash`. The serialized IR tree itself and the kind sequence used for near-duplicate
-//! shingling ride along in memory (`IrDigest`): the dump is persisted only when `CIE_IR_DUMP=1`
-//! (it has no query value on its own), and the kind sequence is a process-local table, so nothing
-//! beyond the hash ever needs to be re-derived from source.
+//! `shape_hash`. The serialized IR tree itself rides along in memory (`IrDigest`): the tree is
+//! persisted by default (set `CIE_IR_DUMP=0` to trade inspection for artifact size) while the
+//! kind sequence used for near-duplicate shingling stays a process-local table, so nothing
+//! beyond the hash and the dump ever needs to be re-derived from source.
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock, RwLock};
@@ -41,8 +41,11 @@ pub enum Ir {
     Function(Vec<Ir>),
     /// A local declaration with its (lowered) initializer.
     VarDecl(Vec<Ir>),
-    /// An assignment (`=`, `+=`, … all normalize to one node).
-    Assign(Vec<Ir>),
+    /// An assignment (`=`, `+=`, … all normalize to one node). `aug` records that the source was a
+    /// compound or incrementing form (the old value is read) — used only by the serialized dump so
+    /// consumers can rebuild the self-fed data edge; the hash text deliberately carries no mention
+    /// of it, since `a += b` and `a = a + b` must stay one node.
+    Assign { kids: Vec<Ir>, aug: bool },
     /// Any loop (for/while/do/foreach).
     Loop(Vec<Ir>),
     /// Any branch (if, ternary, switch/match).
@@ -63,8 +66,13 @@ pub enum Ir {
     Lit(&'static str),
     /// An externally bound identifier, kept by name.
     Named(Box<str>),
-    /// A locally bound identifier: blanked (this is the node C08's old text digest was missing).
-    Ref,
+    /// A locally bound identifier: blanked in the hash (this is the node C08's old text digest was
+    /// missing). The slot numbers which local it belongs to — assigned per unique local name on the
+    /// first occurrence in the deterministic lowering walk — but the hash text never prints it, so
+    /// a rename (which keeps every slot) and the hash values are exactly what they were before
+    /// slots existed. The serialized dump (`IrSer`) does print slot and resolved name, which is
+    /// what lets downstream consumers rebuild def-use chains from the stored tree.
+    Ref(u16),
     /// Anything not classified, tagged with why (a grammar kind, or an operator tag); children lowered.
     Unknown(Box<str>, Vec<Ir>),
 }
@@ -80,6 +88,11 @@ const ATTR: &str = "attr";
 const LIT: &str = "lit";
 const REF: &str = "ref";
 const NAME: &str = "name";
+/// Operator tokens that read the assigned value (`+=`, `++`-family, bit shifts): any unnamed child
+/// carrying one marks the assign as augmented. `=` and `:=` never appear here.
+const COMPOUND_OPS: &[&str] = &[
+    "+=", "-=", "*=", "/=", "%=", "**=", "<<=", ">>=", ">>>=", "&=", "|=", "^=", "&&=", "||=", "÷=", "&^=", "<<=", "+:", "-:", "*:", "/:", "%:", "&:", "|:", "^:", "<<:", ">>:",
+];
 
 impl Ir {
     /// Stable, compact serialization — the input to the semantic hash. Names of external identifiers
@@ -88,7 +101,7 @@ impl Ir {
         match self {
             Ir::Function(cs) => push("f", cs, out),
             Ir::VarDecl(cs) => push("d", cs, out),
-            Ir::Assign(cs) => push("a", cs, out),
+            Ir::Assign { kids: cs, aug: _ } => push("a", cs, out),
             Ir::Loop(cs) => push("L", cs, out),
             Ir::Conditional(cs) => push("C", cs, out),
             Ir::Return(cs) => push("R", cs, out),
@@ -129,7 +142,7 @@ impl Ir {
                 out.push(':');
                 out.push_str(n);
             }
-            Ir::Ref => out.push('v'),
+            Ir::Ref(_) => out.push('v'),
             Ir::Unknown(tag, cs) => {
                 out.push('u');
                 out.push(':');
@@ -146,7 +159,7 @@ impl Ir {
         match self {
             Ir::Function(_) => FN,
             Ir::VarDecl(_) => DECL,
-            Ir::Assign(_) => ASSIGN,
+            Ir::Assign { .. } => ASSIGN,
             Ir::Loop(_) => LOOP,
             Ir::Conditional(_) => COND,
             Ir::Return(_) => RET,
@@ -160,14 +173,14 @@ impl Ir {
             Ir::Attr(..) => ATTR,
             Ir::Lit(_) => LIT,
             Ir::Named(_) => NAME,
-            Ir::Ref => REF,
+            Ir::Ref(_) => REF,
             Ir::Unknown(..) => "unknown",
         }
     }
 
     fn child_labels<'a>(&'a self) -> Option<&'a [Ir]> {
         match self {
-            Ir::Function(cs) | Ir::VarDecl(cs) | Ir::Assign(cs) | Ir::Loop(cs)
+            Ir::Function(cs) | Ir::VarDecl(cs) | Ir::Assign { kids: cs, aug: _ } | Ir::Loop(cs)
             | Ir::Conditional(cs) | Ir::Return(cs) | Ir::Unknown(_, cs) => Some(cs),
             _ => None,
         }
@@ -210,8 +223,12 @@ pub struct IrDigest {
     pub branches: u32,
     pub returns: u32,
     pub kind_seq: Vec<u16>,
-    /// Serialized IR tree; `None` unless `CIE_IR_DUMP=1` — persisted behind the caller's flag only.
+    /// Serialized IR tree; persisted by default, `None` when the parse ran with CIE_IR_DUMP=0.
     pub dump: Option<String>,
+    /// Deterministic structural embedding of the tree (see `ir_vec`): sparse (dim, value) pairs,
+    /// L2-normalized and quantized ×100. Cosine over these compares two symbols' structure without
+    /// any model call — the exact-match companion to `hash`.
+    pub vec: Vec<(u16, i8)>,
 }
 
 /// The lowered IR of one symbol plus everything index.rs's clustering and fact emission need from it.
@@ -241,10 +258,11 @@ fn count_of(root: &Ir) -> (u32, u32, u32, u32) {
             _ => {}
         }
         match n {
-            Ir::Function(cs) | Ir::VarDecl(cs) | Ir::Assign(cs) | Ir::Loop(cs)
+            Ir::Function(cs) | Ir::VarDecl(cs) | Ir::Loop(cs)
             | Ir::Conditional(cs) | Ir::Return(cs) | Ir::Unknown(_, cs) => {
                 stack.extend(cs.iter())
             }
+            Ir::Assign { kids: cs, aug: _ } => stack.extend(cs.iter()),
             Ir::IntDiv(a, b) | Ir::FloatDiv(a, b) | Ir::Mod(a, b) | Ir::And(a, b) | Ir::Or(a, b) => {
                 stack.push(a);
                 stack.push(b);
@@ -255,7 +273,7 @@ fn count_of(root: &Ir) -> (u32, u32, u32, u32) {
                 stack.extend(args.iter());
             }
             Ir::Attr(o, _) => stack.push(o),
-            Ir::Lit(_) | Ir::Named(_) | Ir::Ref => {}
+            Ir::Lit(_) | Ir::Named(_) | Ir::Ref(_) => {}
         }
     }
     (nodes, loops, branches, returns)
@@ -369,11 +387,11 @@ const JAVA_CALLS: &[&str] = &["method_invocation", "object_creation_expression",
 const GO_CALLS: &[&str] = &["call_expression"];
 const PY_CALLS: &[&str] = &["call"];
 
-const TS_MEMBERS: &[&str] = &["member_expression"];
-const RUST_MEMBERS: &[&str] = &["field_expression"];
-const JAVA_MEMBERS: &[&str] = &["field_access"];
-const GO_MEMBERS: &[&str] = &["selector_expression"];
-const PY_MEMBERS: &[&str] = &["attribute"];
+const TS_MEMBERS: &[&str] = &["member_expression", "subscript_expression"];
+const RUST_MEMBERS: &[&str] = &["field_expression", "index_expression"];
+const JAVA_MEMBERS: &[&str] = &["field_access", "array_access", "element_access", "method_invocation"];
+const GO_MEMBERS: &[&str] = &["selector_expression", "index_expression"];
+const PY_MEMBERS: &[&str] = &["attribute", "subscript"];
 
 const PARENS: &[&str] = &["parenthesized_expression"];
 
@@ -450,6 +468,150 @@ fn members_of(lang: Lang) -> &'static [&'static str] {
     }
 }
 
+/// Embedding dimensions for `ir_vec`. Small enough that every entity carries it; large enough that
+/// two unrelated bodies rarely collide on all their mass.
+pub const IR_VEC_DIMS: usize = 128;
+
+/// FNV-1a — the deterministic feature-bucket hash (no randomness anywhere: the same tree always
+/// lands on the same dims, across processes, platforms and language tables).
+fn fnv1a(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+/// A structural embedding of one lowered IR tree, built with the hashing trick: every node votes
+/// for a dimension from stable feature strings, signed by a second bit, so unrelated bodies wash
+/// out and repeated structures pile up. Features: node kinds, kind-at-depth (position profile),
+/// external names and field accesses (what the body ACTS ON), call arities, operator tags, literal
+/// types — everything the semantic hash keeps, minus the identifier blanking (locals contribute
+/// structurally, not by name, exactly as the hash does). L2-normalized then quantized ×100 to i8,
+/// returned sparse and dim-sorted: `[dim, value, dim, value, …]`. The exact-match companion to the
+/// semantic hash: equal structures → equal vectors; cosine over two vectors approximates how much
+/// structure two symbols share before any exact compare.
+pub fn ir_vec(root: &Ir) -> Vec<(u16, i8)> {
+    let mut counts = vec![0f32; IR_VEC_DIMS];
+    fn bump(counts: &mut [f32], feat: &str) {
+        let h = fnv1a(feat);
+        let dim = (h % crate::ir::IR_VEC_DIMS as u64) as usize;
+        let sign = ((h >> 32) & 1) as f32 * 2.0 - 1.0;
+        counts[dim] += sign;
+    }
+    fn walk(n: &Ir, depth: usize, counts: &mut [f32]) {
+        let d = depth.min(8);
+        match n {
+            Ir::Function(cs) => {
+                bump(counts, "k:fn");
+                bump(counts, &format!("k@{d}:fn"));
+                for c in cs {
+                    walk(c, depth + 1, counts);
+                }
+            }
+            Ir::VarDecl(cs) => {
+                bump(counts, "k:decl");
+                bump(counts, &format!("k@{d}:decl"));
+                for c in cs {
+                    walk(c, depth + 1, counts);
+                }
+            }
+            Ir::Assign { kids, aug } => {
+                bump(counts, "k:assign");
+                bump(counts, &format!("k@{d}:assign"));
+                if *aug {
+                    bump(counts, "aug");
+                }
+                for c in kids {
+                    walk(c, depth + 1, counts);
+                }
+            }
+            Ir::Loop(cs) => {
+                bump(counts, "k:loop");
+                bump(counts, &format!("k@{d}:loop"));
+                for c in cs {
+                    walk(c, depth + 1, counts);
+                }
+            }
+            Ir::Conditional(cs) => {
+                bump(counts, "k:branch");
+                bump(counts, &format!("k@{d}:branch"));
+                for c in cs {
+                    walk(c, depth + 1, counts);
+                }
+            }
+            Ir::Return(cs) => {
+                bump(counts, "k:ret");
+                bump(counts, &format!("k@{d}:ret"));
+                for c in cs {
+                    walk(c, depth + 1, counts);
+                }
+            }
+            Ir::IntDiv(a, b) | Ir::FloatDiv(a, b) | Ir::Mod(a, b) | Ir::And(a, b) | Ir::Or(a, b) => {
+                bump(counts, &format!("k:{}", n.label()));
+                bump(counts, &format!("k@{}:{}", d, n.label()));
+                walk(a, depth + 1, counts);
+                walk(b, depth + 1, counts);
+            }
+            Ir::Not(a) => {
+                bump(counts, "k:not");
+                walk(a, depth + 1, counts);
+            }
+            Ir::Call(callee, args) => {
+                bump(counts, "k:call");
+                bump(counts, &format!("call:{}", args.len()));
+                walk(callee, depth + 1, counts);
+                for c in args {
+                    walk(c, depth + 1, counts);
+                }
+            }
+            Ir::Attr(o, name) => {
+                bump(counts, "k:attr");
+                if !name.is_empty() {
+                    bump(counts, &format!("a:{name}"));
+                }
+                walk(o, depth + 1, counts);
+            }
+            Ir::Lit(t) => {
+                bump(counts, "k:lit");
+                bump(counts, &format!("lit:{t}"));
+            }
+            Ir::Named(x) => {
+                bump(counts, "k:name");
+                bump(counts, &format!("n:{x}"));
+            }
+            Ir::Ref(_) => {
+                bump(counts, "k:ref");
+            }
+            Ir::Unknown(tag, cs) => {
+                if !tag.is_empty() {
+                    bump(counts, &format!("u:{tag}"));
+                }
+                for c in cs {
+                    walk(c, depth + 1, counts);
+                }
+            }
+        }
+    }
+    walk(root, 0, &mut counts);
+    let norm = counts.iter().map(|c| c * c).sum::<f32>().sqrt();
+    if norm <= 0.0 {
+        return vec![];
+    }
+    let mut out: Vec<(u16, i8)> = counts
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| **c > 1e-6)
+        .map(|(dim, c)| (dim as u16, ((c / norm) * 100.0).round().clamp(-127.0, 127.0) as i8))
+        .filter(|(_, v)| *v != 0)
+        .collect();
+    out.sort_by_key(|(d, _)| *d);
+    out.dedup_by_key(|(d, _)| *d);
+    out
+}
+
+
 /// One grammar node kind. Used as the `Unknown` tag and in structural-diff labels.
 fn kind_tag(k: &str) -> Box<str> {
     let t = k.rsplit("::").next().unwrap_or(k);
@@ -523,17 +685,47 @@ pub fn is_comment_kind(kind: &str) -> bool {
     matches!(kind, "comment" | "line_comment" | "block_comment" | "documentation_comment" | "doc_comment" | "hash_bang_line" | "shebang_line" | "multiline_comment" | "html_comment")
 }
 
-fn lower_children(node: Node, src: &[u8], lang: Lang, blank: &HashSet<String>) -> Vec<Ir> {
+/// Local-identifier slotting: which blanked use belongs to which local. The blank set stays the
+/// pre-collected authority on what is local; the slot map orders it — a name gets the next free slot
+/// the first time the lowering walk meets it, so slots depend only on traversal order, never on the
+/// names themselves. Rename a local and the dump's names change while every slot stays put.
+struct SlotTable<'a> {
+    blank: &'a HashSet<String>,
+    map: HashMap<String, u16>,
+    names: Vec<String>,
+}
+
+impl<'a> SlotTable<'a> {
+    fn is_local(&self, text: &str) -> bool {
+        self.blank.contains(text)
+    }
+
+    fn slot(&mut self, text: &str) -> u16 {
+        if let Some(&s) = self.map.get(text) {
+            return s;
+        }
+        let s = self.names.len() as u16;
+        self.names.push(text.to_string());
+        self.map.insert(text.to_string(), s);
+        s
+    }
+}
+
+fn lower_children(node: Node, src: &[u8], lang: Lang, st: &mut SlotTable) -> Vec<Ir> {
     let mut c = node.walk();
-    node.named_children(&mut c)
-        .filter(|ch| !is_comment_kind(ch.kind()))
-        .map(|ch| lower(ch, src, lang, blank))
-        .collect()
+    let mut out = Vec::new();
+    for ch in node.named_children(&mut c) {
+        if is_comment_kind(ch.kind()) {
+            continue;
+        }
+        out.push(lower(ch, src, lang, st));
+    }
+    out
 }
 
 /// Lower one node. Dispatches per language's tables; anything unclassified still lowers (Unknown)
 /// with its children lowered, so the IR covers every byte of the symbol without ever failing.
-fn lower(node: Node, src: &[u8], lang: Lang, blank: &HashSet<String>) -> Ir {
+fn lower(node: Node, src: &[u8], lang: Lang, st: &mut SlotTable) -> Ir {
     let kind = node.kind();
     if is_comment_kind(kind) {
         // Lowered to nothing: the callers of `lower_children` already filter comments; this arm only
@@ -549,35 +741,51 @@ fn lower(node: Node, src: &[u8], lang: Lang, blank: &HashSet<String>) -> Ir {
             .unwrap_or(Ir::Unknown("key".into(), vec![]));
         let value = node
             .child_by_field_name("value")
-            .map(|v| lower(v, src, lang, blank))
+            .map(|v| lower(v, src, lang, st))
             .unwrap_or(Ir::Unknown("value".into(), vec![]));
         return Ir::Unknown("pair".into(), vec![key, value]);
     }
     if is_in(kind, loops_of(lang)) {
-        return Ir::Loop(lower_children(node, src, lang, blank));
+        return Ir::Loop(lower_children(node, src, lang, st));
     }
     if is_in(kind, conds_of(lang)) {
-        return Ir::Conditional(lower_children(node, src, lang, blank));
+        return Ir::Conditional(lower_children(node, src, lang, st));
     }
     if matches!(kind, "return_statement" | "return_expression") {
-        return Ir::Return(lower_children(node, src, lang, blank));
+        return Ir::Return(lower_children(node, src, lang, st));
     }
     if is_in(kind, vardecls_of(lang)) {
-        return Ir::VarDecl(lower_children(node, src, lang, blank));
+        return Ir::VarDecl(lower_children(node, src, lang, st));
     }
     if is_in(kind, assigns_of(lang)) {
-        return Ir::Assign(lower_children(node, src, lang, blank));
+        // Compound forms (`+=`, `-=`, `++=…`) read the old value; the operator token is an anonymous
+        // child, so scan the node's tokens. `=` and `:=` are not in the set and stay plain assigns.
+        let mut aug = matches!(kind, "augmented_assignment_expression" | "compound_assignment_expr" | "augmented_assignment");
+        let mut c = node.walk();
+        for i in 0..node.child_count() {
+            if let Some(ch) = node.child(i) {
+                if ch.is_named() {
+                    continue;
+                }
+                let t = ch.utf8_text(src).unwrap_or("");
+                if COMPOUND_OPS.contains(&t) {
+                    aug = true;
+                }
+            }
+        }
+        let _ = c;
+        return Ir::Assign { kids: lower_children(node, src, lang, st), aug };
     }
     if is_in(kind, calls_of(lang)) {
-        return lower_call(node, src, lang, blank);
+        return lower_call(node, src, lang, st);
     }
     if is_in(kind, members_of(lang)) {
-        return lower_member(node, src, lang, blank);
+        return lower_member(node, src, lang, st);
     }
     if is_in(kind, PARENS) {
         // Parens are grammar noise: flatten to the parenthesized expression itself.
         return match node.named_child(0) {
-            Some(ch) => lower(ch, src, lang, blank),
+            Some(ch) => lower(ch, src, lang, st),
             None => Ir::Unknown(kind_tag(kind), vec![]),
         };
     }
@@ -586,10 +794,11 @@ fn lower(node: Node, src: &[u8], lang: Lang, blank: &HashSet<String>) -> Ir {
     }
     if is_in(kind, idents_of(lang)) && !is_type_ident(kind) {
         let text = node.utf8_text(src).unwrap_or("");
-        if blank.contains(text) {
-            // A locally bound use (or the symbol's own name): blanked. Also blank a field access
-            // that names the symbol itself (`this.signToken()` in a renamed method).
-            return Ir::Ref;
+        if st.is_local(text) {
+            // A locally bound use (or the symbol's own name): blanked to its slot. The slot orders
+            // unique local names by first occurrence, so it is rename-stable; also blank a field
+            // access that names the symbol itself (`this.signToken()` in a renamed method).
+            return Ir::Ref(st.slot(text));
         }
         return Ir::Named(text.into());
     }
@@ -599,31 +808,31 @@ fn lower(node: Node, src: &[u8], lang: Lang, blank: &HashSet<String>) -> Ir {
         let kids: Vec<Node> = node.named_children(&mut c).collect();
         let op = operator_of(node, src);
         if kids.len() == 2 {
-            return map_operator(&op, lower(kids[0], src, lang, blank), lower(kids[1], src, lang, blank));
+            return map_operator(&op, lower(kids[0], src, lang, st), lower(kids[1], src, lang, st));
         }
-        return Ir::Unknown(format!("op:{op}").into_boxed_str(), kids.iter().map(|k| lower(*k, src, lang, blank)).collect());
+        return Ir::Unknown(format!("op:{op}").into_boxed_str(), kids.iter().map(|k| lower(*k, src, lang, st)).collect());
     }
     if matches!(kind, "unary_expression" | "unary_operator") {
         let mut c = node.walk();
         let kids: Vec<Node> = node.named_children(&mut c).collect();
         let op = operator_of(node, src);
         if let [only] = kids[..] {
-            return map_unary(&op, lower(only, src, lang, blank));
+            return map_unary(&op, lower(only, src, lang, st));
         }
-        return Ir::Unknown(format!("un:{op}").into_boxed_str(), kids.iter().map(|k| lower(*k, src, lang, blank)).collect());
+        return Ir::Unknown(format!("un:{op}").into_boxed_str(), kids.iter().map(|k| lower(*k, src, lang, st)).collect());
     }
     // Comment nodes and other trivia never reach here: they are unnamed children and the walk only
     // takes named ones, so comments cannot break the hash (C08's old byte digest broke on them).
-    Ir::Unknown(kind_tag(kind), lower_children(node, src, lang, blank))
+    Ir::Unknown(kind_tag(kind), lower_children(node, src, lang, st))
 }
 
-fn lower_call(node: Node, src: &[u8], lang: Lang, blank: &HashSet<String>) -> Ir {
+fn lower_call(node: Node, src: &[u8], lang: Lang, st: &mut SlotTable) -> Ir {
     // A `new X(...)` expression is a call of X's constructor; `macro_invocation` keeps its name.
     let callee = match node.kind() {
         "method_invocation" => {
             let name = node.child_by_field_name("name").map(|n| n.utf8_text(src).unwrap_or("").to_string()).unwrap_or_default();
             match node.child_by_field_name("object") {
-                Some(o) => Ir::Attr(Box::new(lower(o, src, lang, blank)), name.into()),
+                Some(o) => Ir::Attr(Box::new(lower(o, src, lang, st)), name.into()),
                 None => Ir::Named(name.into_boxed_str()),
             }
         }
@@ -633,22 +842,22 @@ fn lower_call(node: Node, src: &[u8], lang: Lang, blank: &HashSet<String>) -> Ir
         }
         "new_expression" => node
             .child_by_field_name("constructor")
-            .map(|c| lower(c, src, lang, blank))
+            .map(|c| lower(c, src, lang, st))
             .unwrap_or(Ir::Unknown("new".into(), vec![])),
         "macro_invocation" => {
             let text = node.utf8_text(src).unwrap_or("");
             let name = text.split('!').next().unwrap_or("").trim();
             let name = name.rsplit("::").next().unwrap_or(name);
-            return Ir::Unknown(format!("macro:{name}").into_boxed_str(), lower_children(node, src, lang, blank));
+            return Ir::Unknown(format!("macro:{name}").into_boxed_str(), lower_children(node, src, lang, st));
         }
         _ => match node.child_by_field_name("function").or_else(|| node.named_child(0)) {
-            Some(f) => lower(f, src, lang, blank),
+            Some(f) => lower(f, src, lang, st),
             None => Ir::Unknown("call".into(), vec![]),
         },
     };
     let args = node
         .child_by_field_name("arguments")
-        .map(|a| lower(a, src, lang, blank))
+        .map(|a| lower(a, src, lang, st))
         .unwrap_or(Ir::Unknown("args".into(), vec![]));
     Ir::Call(Box::new(callee), vec![args])
 }
@@ -660,7 +869,13 @@ fn kind_of_type(t: &str) -> &str {
     base.rsplit(|c| c == '.' || c == ':' || c == '&').next().unwrap_or(base).trim()
 }
 
-fn lower_member(node: Node, src: &[u8], lang: Lang, blank: &HashSet<String>) -> Ir {
+/// Grammar kinds whose "member access" is computed (`a[k]`, `list[i]`, `dict[key]`): the trailing
+/// child is an index expression, not a field name, so lowering must not keep one.
+fn is_computed_kind(kind: &str) -> bool {
+    matches!(kind, "element_access_expression" | "index_expression" | "indexing_expression" | "array_access" | "subscript" | "subscript_expression" | "computed_property_name")
+}
+
+fn lower_member(node: Node, src: &[u8], lang: Lang, st: &mut SlotTable) -> Ir {
     let mut named: Vec<(Option<&str>, Node)> = {
         let mut c = node.walk();
         node.named_children(&mut c).map(|n| (None, n)).collect()
@@ -676,7 +891,7 @@ fn lower_member(node: Node, src: &[u8], lang: Lang, blank: &HashSet<String>) -> 
         .or_else(|| node.child_by_field_name("attribute"))
         .or_else(|| if named.len() >= 2 { let (_, n) = named.remove(named.len() - 1); Some(n) } else { None });
     let obj = obj_node
-        .map(|o| lower(o, src, lang, blank))
+        .map(|o| lower(o, src, lang, st))
         .unwrap_or(Ir::Unknown("member".into(), vec![]));
     let field_node = match field_node {
         Some(f) => f,
@@ -688,7 +903,11 @@ fn lower_member(node: Node, src: &[u8], lang: Lang, blank: &HashSet<String>) -> 
     } else {
         return Ir::Attr(Box::new(obj), Box::<str>::default());
     };
-    let field = if blank.contains(&field) { Box::<str>::default() } else { field.into_boxed_str() };
+    if is_computed_kind(node.kind()) {
+        // An index is not a name: the fold downstream treats Attr-with-no-name as a dynamic write.
+        return Ir::Attr(Box::new(obj), Box::<str>::default());
+    }
+    let field = if st.is_local(&field) { Box::<str>::default() } else { field.into_boxed_str() };
     Ir::Attr(Box::new(obj), field)
 }
 
@@ -881,7 +1100,8 @@ pub fn ir_hash(node: Node, src: &[u8], lang: Lang, own: &str) -> IrDigest {
     pin_labels();
     let mut blank = collect_locals(node, src, lang);
     blank.insert(own.to_string());
-    let root = lower_symbol_root(node, src, lang, &blank);
+    let mut st = SlotTable { blank: &blank, map: HashMap::new(), names: Vec::new() };
+    let root = lower_symbol_root(node, src, lang, &mut st);
     let mut d = IrDigest::default();
     d.count(&root);
     // Kind sequence, pre-order.
@@ -890,8 +1110,13 @@ pub fn ir_hash(node: Node, src: &[u8], lang: Lang, own: &str) -> IrDigest {
     while let Some(n) = stack.pop() {
         seq.push(intern(n.label()));
         match &n {
-            Ir::Function(cs) | Ir::VarDecl(cs) | Ir::Assign(cs) | Ir::Loop(cs)
+            Ir::Function(cs) | Ir::VarDecl(cs) | Ir::Loop(cs)
             | Ir::Conditional(cs) | Ir::Return(cs) | Ir::Unknown(_, cs) => {
+                for c in cs.iter().rev() {
+                    stack.push(c.clone());
+                }
+            }
+            Ir::Assign { kids: cs, aug: _ } => {
                 for c in cs.iter().rev() {
                     stack.push(c.clone());
                 }
@@ -908,7 +1133,7 @@ pub fn ir_hash(node: Node, src: &[u8], lang: Lang, own: &str) -> IrDigest {
                 stack.push((**callee).clone());
             }
             Ir::Attr(o, _) => stack.push((**o).clone()),
-            Ir::Lit(_) | Ir::Named(_) | Ir::Ref => {}
+            Ir::Lit(_) | Ir::Named(_) | Ir::Ref(_) => {}
         }
     }
     d.kind_seq = seq;
@@ -925,37 +1150,42 @@ pub fn ir_hash(node: Node, src: &[u8], lang: Lang, own: &str) -> IrDigest {
             .collect::<String>()[..16]
             .to_string()
     };
-    if std::env::var_os("CIE_IR_DUMP").is_some() {
-        d.dump = Some(serde_json::to_string(&IrSer(&root)).unwrap_or_default());
+    // Persisted by default: the tree is purely for inspection and adds no query surface, so the
+    // explicit opt-out (`CIE_IR_DUMP=0`) is there for artifact-size-sensitive deployments.
+    if std::env::var_os("CIE_IR_DUMP").map_or(true, |v| v != "0") {
+        d.dump = Some(serde_json::to_string(&IrSer(&root, &st.names)).unwrap_or_default());
     }
+    d.vec = ir_vec(&root);
     d
 }
 
 /// A symbol's IR root: a `Function` node holding its parameters and body when the node is a
 /// function-like declaration; otherwise the lowered node under one `Function` (classes lower their
 /// members; their methods appear as their own `Function` nodes, exactly as copies compare them).
-fn lower_symbol_root(node: Node, src: &[u8], lang: Lang, blank: &HashSet<String>) -> Ir {
+fn lower_symbol_root(node: Node, src: &[u8], lang: Lang, st: &mut SlotTable) -> Ir {
     let body = node.child_by_field_name("body");
     let params = node.child_by_field_name("parameters");
     if body.is_some() || params.is_some() {
         let mut kids = Vec::new();
         if let Some(p) = params {
             let mut c = p.walk();
-            kids.extend(p.named_children(&mut c).map(|ch| lower(ch, src, lang, blank)));
+            kids.extend(p.named_children(&mut c).map(|ch| lower(ch, src, lang, st)));
             let _ = c;
         }
         if let Some(b) = body {
             let mut c = b.walk();
-            kids.extend(b.named_children(&mut c).map(|ch| lower(ch, src, lang, blank)));
+            kids.extend(b.named_children(&mut c).map(|ch| lower(ch, src, lang, st)));
             let _ = c;
         }
         return Ir::Function(kids);
     }
-    Ir::Function(vec![lower(node, src, lang, blank)])
+    Ir::Function(vec![lower(node, src, lang, st)])
 }
 
-/// Serde view of the IR tree (for the `CIE_IR_DUMP=1` persistence flag).
-struct IrSer<'a>(&'a Ir);
+/// Serde view of the IR tree (persisted by default; `CIE_IR_DUMP=0` drops it). Carries the local
+/// name table so each blanked ref can serialize its slot and the name it stands for — the dump is
+/// the consumption surface (concept discovery reads it), while the hash stays name-free.
+struct IrSer<'a>(&'a Ir, &'a [String]);
 
 impl<'a> Serialize for IrSer<'a> {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -964,42 +1194,45 @@ impl<'a> Serialize for IrSer<'a> {
             Ir::Function(cs) => {
                 let mut st = s.serialize_struct("Ir", 2)?;
                 st.serialize_field("kind", FN)?;
-                let kids: Vec<IrSer> = cs.iter().map(IrSer).collect();
+                let kids: Vec<IrSer> = cs.iter().map(|c| IrSer(c, self.1)).collect();
                 st.serialize_field("children", &kids)?;
                 st.end()
             }
             Ir::VarDecl(cs) => {
                 let mut st = s.serialize_struct("Ir", 2)?;
                 st.serialize_field("kind", DECL)?;
-                let kids: Vec<IrSer> = cs.iter().map(IrSer).collect();
+                let kids: Vec<IrSer> = cs.iter().map(|c| IrSer(c, self.1)).collect();
                 st.serialize_field("children", &kids)?;
                 st.end()
             }
-            Ir::Assign(cs) => {
-                let mut st = s.serialize_struct("Ir", 2)?;
+            Ir::Assign { kids: cs, aug } => {
+                let mut st = s.serialize_struct("Ir", 3)?;
                 st.serialize_field("kind", ASSIGN)?;
-                let kids: Vec<IrSer> = cs.iter().map(IrSer).collect();
+                if *aug {
+                    st.serialize_field("aug", &true)?;
+                }
+                let kids: Vec<IrSer> = cs.iter().map(|c| IrSer(c, self.1)).collect();
                 st.serialize_field("children", &kids)?;
                 st.end()
             }
             Ir::Loop(cs) => {
                 let mut st = s.serialize_struct("Ir", 2)?;
                 st.serialize_field("kind", LOOP)?;
-                let kids: Vec<IrSer> = cs.iter().map(IrSer).collect();
+                let kids: Vec<IrSer> = cs.iter().map(|c| IrSer(c, self.1)).collect();
                 st.serialize_field("children", &kids)?;
                 st.end()
             }
             Ir::Conditional(cs) => {
                 let mut st = s.serialize_struct("Ir", 2)?;
                 st.serialize_field("kind", COND)?;
-                let kids: Vec<IrSer> = cs.iter().map(IrSer).collect();
+                let kids: Vec<IrSer> = cs.iter().map(|c| IrSer(c, self.1)).collect();
                 st.serialize_field("children", &kids)?;
                 st.end()
             }
             Ir::Return(cs) => {
                 let mut st = s.serialize_struct("Ir", 2)?;
                 st.serialize_field("kind", RET)?;
-                let kids: Vec<IrSer> = cs.iter().map(IrSer).collect();
+                let kids: Vec<IrSer> = cs.iter().map(|c| IrSer(c, self.1)).collect();
                 st.serialize_field("children", &kids)?;
                 st.end()
             }
@@ -1007,7 +1240,7 @@ impl<'a> Serialize for IrSer<'a> {
                 let mut st = s.serialize_struct("Ir", 3)?;
                 st.serialize_field("kind", "unknown")?;
                 st.serialize_field("tag", tag)?;
-                let kids: Vec<IrSer> = cs.iter().map(IrSer).collect();
+                let kids: Vec<IrSer> = cs.iter().map(|c| IrSer(c, self.1)).collect();
                 st.serialize_field("children", &kids)?;
                 st.end()
             }
@@ -1019,41 +1252,41 @@ impl<'a> Serialize for IrSer<'a> {
                 let mut st = s.serialize_struct("Ir", 3)?;
                 st.serialize_field("kind", k)?;
                 st.serialize_field("tag", &Option::<&str>::None)?;
-                st.serialize_field("children", &[IrSer(a), IrSer(b)])?;
+                st.serialize_field("children", &[IrSer(a, self.1), IrSer(b, self.1)])?;
                 st.end()
             }
             Ir::Mod(a, b) => {
                 let mut st = s.serialize_struct("Ir", 3)?;
                 st.serialize_field("kind", "mod")?;
                 st.serialize_field("tag", &Option::<&str>::None)?;
-                st.serialize_field("children", &[IrSer(a), IrSer(b)])?;
+                st.serialize_field("children", &[IrSer(a, self.1), IrSer(b, self.1)])?;
                 st.end()
             }
             Ir::And(a, b) => {
                 let mut st = s.serialize_struct("Ir", 3)?;
                 st.serialize_field("kind", "and")?;
                 st.serialize_field("tag", &Option::<&str>::None)?;
-                st.serialize_field("children", &[IrSer(a), IrSer(b)])?;
+                st.serialize_field("children", &[IrSer(a, self.1), IrSer(b, self.1)])?;
                 st.end()
             }
             Ir::Or(a, b) => {
                 let mut st = s.serialize_struct("Ir", 3)?;
                 st.serialize_field("kind", "or")?;
                 st.serialize_field("tag", &Option::<&str>::None)?;
-                st.serialize_field("children", &[IrSer(a), IrSer(b)])?;
+                st.serialize_field("children", &[IrSer(a, self.1), IrSer(b, self.1)])?;
                 st.end()
             }
             Ir::Not(a) => {
                 let mut st = s.serialize_struct("Ir", 2)?;
                 st.serialize_field("kind", "not")?;
-                st.serialize_field("child", &IrSer(a))?;
+                st.serialize_field("child", &IrSer(a, self.1))?;
                 st.end()
             }
             Ir::Call(callee, args) => {
                 let mut st = s.serialize_struct("Ir", 3)?;
                 st.serialize_field("kind", "call")?;
-                st.serialize_field("callee", &IrSer(callee))?;
-                let kids: Vec<IrSer> = args.iter().map(IrSer).collect();
+                st.serialize_field("callee", &IrSer(callee, self.1))?;
+                let kids: Vec<IrSer> = args.iter().map(|c| IrSer(c, self.1)).collect();
                 st.serialize_field("args", &kids)?;
                 st.end()
             }
@@ -1061,7 +1294,7 @@ impl<'a> Serialize for IrSer<'a> {
                 let mut st = s.serialize_struct("Ir", 3)?;
                 st.serialize_field("kind", "attr")?;
                 st.serialize_field("name", &if name.is_empty() { None } else { Some(name.to_string()) })?;
-                st.serialize_field("object", &IrSer(o))?;
+                st.serialize_field("object", &IrSer(o, self.1))?;
                 st.end()
             }
             Ir::Lit(t) => {
@@ -1076,9 +1309,13 @@ impl<'a> Serialize for IrSer<'a> {
                 st.serialize_field("of", &n.to_string())?;
                 st.end()
             }
-            Ir::Ref => {
-                let mut st = s.serialize_struct("Ir", 1)?;
+            Ir::Ref(slot) => {
+                let mut st = s.serialize_struct("Ir", 3)?;
                 st.serialize_field("kind", "ref")?;
+                st.serialize_field("slot", slot)?;
+                if let Some(name) = self.1.get(*slot as usize) {
+                    st.serialize_field("name", name)?;
+                }
                 st.end()
             }
         }
@@ -1209,6 +1446,52 @@ mod tests {
     fn trivial_one_liners_stay_below_the_cluster_threshold() {
         let a = "function get(x) { return x.name; }";
         assert!(ir_for(Lang::Ts, a, "get").nodes < MIN_IR_NODES);
+    }
+
+    #[test]
+    fn the_dump_carries_slots_and_names_but_the_hash_stays_name_free() {
+        let src = "function pay(account, amount) { let total = amount; reserve(account, total); return total; }";
+        let _d = ir_for(Lang::Ts, src, "pay");
+        let d = ir_for(Lang::Ts, src, "pay");
+        let dump = d.dump.expect("the dump persists by default");
+        // Params, the decl's initializer and the reserve argument all name their locals.
+        assert!(dump.contains("\"name\":\"account\""), "the dump names the locals: {dump}");
+        assert!(dump.contains("\"name\":\"total\""), "the dump names the locals: {dump}");
+        // Same-local uses share one slot: `total` appears at its decl and at both later uses.
+        let slots = dump.matches("\"name\":\"total\"").count();
+        assert!(slots >= 3, "total should appear for decl + 2 uses: {dump}");
+        // And the hash never saw any name (renames do not change it).
+        let renamed = "function pay(customer, quantity) { let grand = quantity; reserve(customer, grand); return grand; }";
+        assert_eq!(d.hash, ir_for(Lang::Ts, renamed, "pay").hash, "slots are positional, not name-derived");
+    }
+
+    #[test]
+    #[test]
+    fn the_vector_is_deterministic_rename_stable_and_tells_bodies_apart() {
+        let a = "function pay(account, amount) { let total = reserve(account, amount); if (total > 100) { throw new Reject(account); } return total; }";
+        let renamed = "function pay(customer, quantity) { let grand = reserve(customer, quantity); if (grand > 100) { throw new Reject(customer); } return grand; }";
+        let changed = "function pay(account, amount) { let total = reserve(account, amount); return total; }";
+        let (va, vr, vc) = (ir_for(Lang::Ts, a, "pay").vec, ir_for(Lang::Ts, renamed, "pay").vec, ir_for(Lang::Ts, changed, "pay").vec);
+        assert_eq!(va, vr, "a rename changes no feature the vector keeps");
+        assert_ne!(va, vc, "removing the guarded throw changes the vector");
+        assert!(!va.is_empty() && va.len() < 64, "sparse: {} dims of {}", va.len(), IR_VEC_DIMS);
+        let dims: Vec<u16> = va.iter().map(|(d, _)| *d).collect();
+        assert!(dims.windows(2).all(|w| w[0] < w[1]), "dim-sorted, no duplicates");
+        let norm: f64 = va.iter().map(|(_, v)| i32::from(*v).pow(2)).sum::<i32>() as f64;
+        let l2 = norm.sqrt();
+        assert!(l2 > 40.0 && l2 <= 105.0, "quantized L2 stays ≈ 100: {l2}");
+    }
+
+    fn slot_order_survives_a_rename() {
+        let a = "function f(alpha, beta) { let t = alpha + beta; work(t); return t; }";
+        let b = "function f(zz, yy) { let q = zz + yy; work(q); return q; }";
+        let da = ir_for(Lang::Ts, a, "f").dump.unwrap();
+        let db = ir_for(Lang::Ts, b, "f").dump.unwrap();
+        let slots_of = |d: &String| -> usize {
+            serde_json::from_str::<serde_json::Value>(d).unwrap().to_string()
+                .matches("\"slot\":").count()
+        };
+        assert_eq!(slots_of(&da), slots_of(&db));
     }
 
 

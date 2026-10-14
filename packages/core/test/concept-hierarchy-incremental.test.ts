@@ -110,7 +110,7 @@ test("above the full-rebuild threshold the orchestrator says so and rebuilds fro
   } finally { worker.close(); }
 });
 
-test("a repository that edits only whitespace still counts as changed and re-anchors honestly", async () => {
+test("a repository that edits only whitespace reuses the folded graph (comments never break the ir hash) and re-anchors honestly", async () => {
   const repo = makeRepoDir();
   const { svc, worker } = setupService(repo);
   try {
@@ -123,7 +123,9 @@ test("a repository that edits only whitespace still counts as changed and re-anc
     const b = await svc.buildConceptHierarchy(ctx(), { revision: "rev-b" });
     assert.ok(b.ok);
     assert.equal(b.value.stats!.fullRebuild, false);
-    assert.equal(b.value.stats!.pdgs.built, 1, "the comment changed the body text, so the graph is rebuilt");
+    assert.equal(b.value.stats!.pdgs.built, 0, "a comment never changes the folded shape, so every graph is reused whole");
+    const carried = b.value.stats!.pdgs.reused;
+    assert.ok(carried >= 4, `all graphs carried over (reused ${carried})`);
     const aTransfer = a.value.concepts.find((c) => c.kind === "transfer-form")!;
     const bTransfer = b.value.concepts.find((c) => c.kind === "transfer-form")!;
     assert.ok(bTransfer, JSON.stringify(b.value.concepts.map((c) => c.kind)));

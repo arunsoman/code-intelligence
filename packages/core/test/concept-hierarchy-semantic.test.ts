@@ -13,7 +13,7 @@ const conceptsOf = (files: Record<string, string>) => {
   const repo = makeRepo(files);
   const store = new Store(":memory:");
   putRevision(store, "rev-a", repo, files);
-  const { pdgs } = buildAllPdgs(store, "rev-a", repo);
+  const { pdgs } = buildAllPdgs(store, "rev-a");
   return buildSemanticConcepts(store, "rev-a", pdgs, [], localMotifBatch).concepts;
 };
 
@@ -92,7 +92,7 @@ test("concepts carry real store evidence when facts exist, and never fabricate e
   store.putEvidence("rev-a", evRef);
   const fact = { id: "fact:w1", subject: "function:src/ledger.ts#withdraw", predicate: "writes", object: { kind: "field", value: "balance" }, evidence: [evRef], resolution: "RESOLVED" };
   store.db.prepare("insert into facts(revision, id, subject, predicate, resolution, json, file, ev) values (?,?,?,?,?,?,?,?)").run("rev-a", fact.id, fact.subject, fact.predicate, fact.resolution, JSON.stringify(fact), "src/ledger.ts", JSON.stringify(["ev:w1"]));
-  const { pdgs } = buildAllPdgs(store, "rev-a", repo);
+  const { pdgs } = buildAllPdgs(store, "rev-a");
   const { concepts } = buildSemanticConcepts(store, "rev-a", pdgs, [], localMotifBatch);
   const transfer = concepts.find((c) => c.kind === "transfer-form")!;
   assert.deepEqual(transfer.evidenceIds, ["ev:w1"], "evidence comes only from the store");

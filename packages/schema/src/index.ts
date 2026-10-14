@@ -51,7 +51,7 @@ export interface EvidenceRef {
   location: { kind: "CodeLocation"; span: SourceSpan } | { kind: string; [k: string]: unknown };
   class: EvidenceClass; observedAt: string; accessScopeId: Id; state: EvidenceState;
 }
-export interface Entity { entityId: Id; kind: string; name: string; file: string; spans: SourceSpan[]; symbolHash?: string; shapeHash?: string; irHash?: string; irDump?: string }
+export interface Entity { entityId: Id; kind: string; name: string; file: string; spans: SourceSpan[]; symbolHash?: string; shapeHash?: string; irHash?: string; irDump?: string; irVec?: number[] }
 
 /** A zero-LLM concept cluster the worker found this index (index.rs's `cluster_concepts`): entities that are the
  * same concept declared more than once, found from AST shape or shared framework role — see crates/worker/src/shape.rs.

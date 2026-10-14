@@ -13,7 +13,7 @@
 import type { ArchConcept, CrossPackageConcept, EntryPoint, ExportSurface, Invariant, SemanticConcept } from "@cie/schema";
 import type { Store } from "../store.ts";
 import { conceptConfig } from "./config.ts";
-import { buildAllPdgs, clearPdgSourceCache } from "./pdg.ts";
+import { buildAllPdgs } from "./pdg.ts";
 import { buildSemanticConcepts } from "./semantic-concepts.ts";
 import { buildInvariants } from "./invariants.ts";
 import { buildArchitecturalTree } from "./architecture.ts";
@@ -92,8 +92,7 @@ export async function buildHierarchy(
 
   // --- phase 1: graphs
   const previousPdgs: Pdg[] = fullRebuild || !prev ? [] : store.pdgs(prev.id);
-  clearPdgSourceCache();
-  const g = lap(phases, "pdg", () => buildAllPdgs(store, revision, opts.repoRoot, previousPdgs));
+  const g = lap(phases, "pdg", () => buildAllPdgs(store, revision, previousPdgs));
   if (g.skipped.length) warnings.push(`${g.skipped.length} function(s) past the (uncalibrated) graph budget were not graphed`);
   if (g.unresolved.length) warnings.push(`${g.unresolved.length} function(s) had no locatable body in the source tree`);
   checkpoint?.();
