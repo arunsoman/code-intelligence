@@ -94,6 +94,29 @@ test("the agent starts from resolved mentions, reads the code, and cites only wh
   } finally { worker.close(); }
 });
 
+test("a withheld draft's full prose is replaced in history after repair, not kept alongside the retry", async () => {
+  const { svc, worker, revision } = await setup();
+  try {
+    const bigDraft = "AuthService signs users in. ".repeat(190); // long (close to the answer tool's 6000-char maxLength) but still valid, so it reaches review instead of being refused for its length
+    const model = scripted([
+      (m) => call("read_code", { id: request(m).mentions[0].candidates[0].id }),
+      // Cites an id never shown, so the local gap check downgrades this to REPAIRABLE even though the scripted review always says SUPPORTED.
+      (m) => call("answer", { text: bigDraft, cites: [request(m).mentions[0].candidates[0].id, "function:src/nowhere.ts#invented"] }),
+      (m) => {
+        const serialized = JSON.stringify(m);
+        assert.ok(!serialized.includes(bigDraft), "the rejected draft's full text must not still be in the next request's history");
+        assert.ok(serialized.includes("withheld after review"), "a short placeholder must stand in for it");
+        return call("answer", { text: "AuthService signs users in.", cites: [request(m).mentions[0].candidates[0].id] });
+      },
+    ]);
+    svc.router = model;
+    const r = await svc.converse(ctx(), { text: "what is the job of AuthService?", revision });
+    assert.ok(r.ok && r.value.kind === "analysis");
+    assert.equal(r.value.validation?.repairAttempts, 1);
+    assert.equal(model.calls.length, 3, "the assertion inside the third scripted turn must actually have run");
+  } finally { worker.close(); }
+});
+
 test("a model that answers with no tool call at all (not_analysis, or an answer with nothing cited) still gets a default view, never a blank canvas", async () => {
   const { svc, worker, revision } = await setup();
   try {
@@ -197,7 +220,7 @@ test("a reviewer that persistently times out ends the investigation as a process
     assert.match(r.value.message, /^Unresolved:/);
     assert.match(r.value.message, /interrupted by a model or tool failure, not by insufficient evidence/);
     assert.equal(r.value.validation?.investigation?.processFailure, true);
-    assert.ok(r.metadata.warnings.some((w) => /investigation stopped because the model\/tool call itself failed/.test(w)));
+    assert.ok(r.metadata.warnings.some((w) => /investigation stopped because a model or tool call itself failed/.test(w)));
   } finally { worker.close(); }
 });
 

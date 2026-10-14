@@ -130,6 +130,15 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
     if (review.verdict === "SUPPORTED") { answerState.final = draft; return true; }
     if (review.verdict === "REPAIRABLE" && repairAttempts < 2 && calls < MAX_CALLS + (repairAttempts + 1) * 8 && ctx.deadlineMs - Date.now() > ANSWER_RESERVE_MS + reviewReserve + 3000) {
       repairAttempts++;
+      // The rejected draft's full prose (often several KB) has done its job once the review has judged it; keeping
+      // it verbatim in `messages` only grows every later request by that much again, on top of whatever the next
+      // attempt adds, for an attempt the model is told not to repeat. The withheld-review message already carries
+      // everything the model needs to act (the gaps); the draft text itself is replaced in place, not appended
+      // over.
+      const lastAssistant = messages[messages.length - 1];
+      if (lastAssistant?.role === "assistant" && lastAssistant.toolCalls?.length === 1 && lastAssistant.toolCalls[0].name === "answer") {
+        lastAssistant.toolCalls = [{ name: "answer", arguments: { text: "[withheld after review; see the gaps below]", cites: lastAssistant.toolCalls[0].arguments.cites ?? [] } }];
+      }
       messages.push({ role: "tool", toolName: "answer", content: JSON.stringify({ status: "withheld", review }) }, { role: "user", content: "Repair the draft against the original question and the review gaps. Fetch the specific missing evidence or correct the conclusion. Existing identical tool calls are cached; change the target or continuation offset to obtain new evidence. Call answer again only after addressing the issues." });
       return false;
     }
@@ -281,7 +290,11 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
     validation.investigation = investigation;
     message = unresolvedMessage(investigation);
     warnings.push(processFailure
-      ? "The investigation stopped because the model/tool call itself failed, before a draft answer existed; retrying may succeed."
+      // True whether the failure was the writer's own turn (no draft was ever produced) or the independent
+      // reviewer's (a draft existed and its citations may even have verified, but the review itself could not
+      // complete) — this wording commits to neither, since claiming "before a draft existed" would be wrong
+      // in the second case.
+      ? "The investigation stopped because a model or tool call itself failed, not because of insufficient evidence; retrying may succeed."
       : investigation.supportedFindings?.length
       ? "The draft's own overall conclusion did not pass validation and is not shown; the verified findings above are independent of it."
       : "The answer did not pass validation; its unvalidated conclusion was withheld.");
