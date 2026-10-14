@@ -6,3 +6,4 @@ export { OllamaProvider, modelEvidence, listInstalledModels, hasModel, resolveMo
 export { createProvider } from "./factory.ts";
 export type { ProviderChoice } from "./factory.ts";
 export { BudgetController, type BudgetPolicy } from "./budget.ts";
+export { logLlmTraffic } from "./llm-log.ts";

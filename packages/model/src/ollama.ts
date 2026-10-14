@@ -3,6 +3,7 @@
 // Output is requested as JSON constrained by the registry schema, then re-validated by the gateway.
 import { z } from "zod";
 import { OUTPUT_SCHEMAS, type ModelProvider, type ModelRequest } from "@cie/schema";
+import { logLlmTraffic } from "./llm-log.ts";
 
 export interface OllamaOptions { baseUrl?: string; model: string; timeoutMs?: number; /** Reasoning effort for models that support it; "low" keeps interactive latency down. */ think?: "low" | "medium" | "high" | "off" }
 
@@ -150,7 +151,7 @@ export class OllamaProvider implements ModelProvider {
     ];
     let lastErr = "";
     for (let attempt = 0; attempt < 2; attempt++) {
-      const content = await this.chat(messages, schema);
+      const content = await this.chat(`model.${req.purpose}`, messages, schema);
       let parsed: unknown;
       try { parsed = JSON.parse(content); } catch { lastErr = "reply was not valid JSON"; parsed = undefined; }
       if (parsed !== undefined) {
@@ -163,15 +164,19 @@ export class OllamaProvider implements ModelProvider {
     throw new Error(`ollama output failed schema validation after repair: ${lastErr}`);
   }
 
-  private async chat(messages: { role: string; content: string }[], format: unknown): Promise<string> {
+  private async chat(agent: string, messages: { role: string; content: string }[], format: unknown): Promise<string> {
+    const requestBody = JSON.stringify({ model: this.model, stream: false, format, options: { temperature: 0 }, messages, ...(this.think === "off" ? { think: false } : { think: this.think }) });
+    logLlmTraffic(agent, "request", requestBody);
     const res = await fetch(`${this.baseUrl}/api/chat`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       signal: AbortSignal.timeout(this.timeoutMs),
-      body: JSON.stringify({ model: this.model, stream: false, format, options: { temperature: 0 }, messages, ...(this.think === "off" ? { think: false } : { think: this.think }) }),
+      body: requestBody,
     });
-    if (!res.ok) throw new Error(`ollama ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    const body = (await res.json()) as { message?: { content?: string } };
+    const raw = await res.text();
+    logLlmTraffic(agent, "response", raw);
+    if (!res.ok) throw new Error(`ollama ${res.status}: ${raw.slice(0, 200)}`);
+    const body = JSON.parse(raw) as { message?: { content?: string } };
     if (!body.message?.content) throw new Error("ollama returned no content");
     return body.message.content;
   }

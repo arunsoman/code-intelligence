@@ -7,6 +7,7 @@
 // caller falls back to the general map; nothing is guessed in its place.
 import { readFileSync } from "node:fs";
 import type { FormId, ViewRoute } from "@cie/schema";
+import { logLlmTraffic } from "@cie/model";
 import { HashEmbedder, cosine } from "./embeddings.ts";
 import { EXEMPLARS, INTENT_EXEMPLARS } from "./route-exemplars.ts";
 import { VISUALS } from "./visuals.ts";
@@ -175,9 +176,13 @@ export class OllamaRouter implements RouterModel {
       const body = this.hosted
         ? { model: this.name, stream: false, think: false, options: { temperature: 0 }, tools: [{ type: "function", function: { name: "classify_intent", description: "Choose one query intent or identify an unsupported or ambiguous request", parameters: schema } }], messages: [{ ...messages[0], content: `${system}\nAnswer by calling the classify_intent tool.` }, messages[1]] }
         : { model: this.name, stream: false, think: false, keep_alive: "30m", options: { temperature: 0, num_predict: 180, num_ctx: 4096 }, format: schema, messages };
-      const response = await fetch(`${base}/api/chat`, { method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(this.opts.timeoutMs ?? 30_000), body: JSON.stringify(body) });
+      const requestBody = JSON.stringify(body);
+      logLlmTraffic("router.classify", "request", requestBody);
+      const response = await fetch(`${base}/api/chat`, { method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(this.opts.timeoutMs ?? 30_000), body: requestBody });
+      const rawResponse = await response.text();
+      logLlmTraffic("router.classify", "response", rawResponse);
       if (!response.ok) return null;
-      const message = (await response.json() as { message?: { content?: string; tool_calls?: { function?: { arguments?: unknown } }[] } }).message;
+      const message = (JSON.parse(rawResponse) as { message?: { content?: string; tool_calls?: { function?: { arguments?: unknown } }[] } }).message;
       const raw = this.hosted ? message?.tool_calls?.[0]?.function?.arguments : message?.content;
       let value: unknown = raw;
       if (typeof raw === "string") { try { value = JSON.parse(raw); } catch { return null; } }
@@ -195,13 +200,17 @@ export class OllamaRouter implements RouterModel {
   async plan(req: ChatPlanRequest): Promise<ChatPlan | null> {
     const base = this.opts.baseUrl ?? process.env.CIE_OLLAMA_URL ?? "http://127.0.0.1:11434";
     try {
+      const requestBody = JSON.stringify({ model: this.name, stream: false, think: false, keep_alive: "30m", options: { temperature: 0, num_predict: 800, num_ctx: 8192 }, format: CHAT_PLAN_SCHEMA, messages: chatPlanPrompt(req) });
+      logLlmTraffic("router.plan", "request", requestBody);
       const r = await fetch(`${base}/api/chat`, {
         method: "POST", headers: { "content-type": "application/json" },
         signal: AbortSignal.timeout(this.opts.timeoutMs ?? 30_000),
-        body: JSON.stringify({ model: this.name, stream: false, think: false, keep_alive: "30m", options: { temperature: 0, num_predict: 800, num_ctx: 8192 }, format: CHAT_PLAN_SCHEMA, messages: chatPlanPrompt(req) }),
+        body: requestBody,
       });
+      const raw = await r.text();
+      logLlmTraffic("router.plan", "response", raw);
       if (!r.ok) return null;
-      const body = await r.json() as { message?: { content?: string } };
+      const body = JSON.parse(raw) as { message?: { content?: string } };
       return validateChatPlan(JSON.parse(body.message?.content ?? "null"));
     } catch { return null; }
   }
@@ -222,9 +231,13 @@ export class OllamaRouter implements RouterModel {
       { role: "user", content: JSON.stringify({ providerName: req.providerName, repositoryContext: req.context ?? "No repository context was supplied; mark project-specific details as assumptions." }) },
     ];
     try {
-      const r = await fetch(`${base}/api/chat`, { method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(this.opts.timeoutMs ?? 45_000), body: JSON.stringify({ model: this.name, stream: false, think: false, keep_alive: "30m", options: { temperature: 0, num_predict: 5000, num_ctx: 8192 }, format: schema, messages }) });
+      const requestBody = JSON.stringify({ model: this.name, stream: false, think: false, keep_alive: "30m", options: { temperature: 0, num_predict: 5000, num_ctx: 8192 }, format: schema, messages });
+      logLlmTraffic("router.providerGuide", "request", requestBody);
+      const r = await fetch(`${base}/api/chat`, { method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(this.opts.timeoutMs ?? 45_000), body: requestBody });
+      const raw = await r.text();
+      logLlmTraffic("router.providerGuide", "response", raw);
       if (!r.ok) return null;
-      const body = await r.json() as { message?: { content?: string } };
+      const body = JSON.parse(raw) as { message?: { content?: string } };
       const parsed = JSON.parse(body.message?.content ?? "null");
       return validateProviderGuide(parsed, req.providerName);
     } catch { return null; }
@@ -246,9 +259,13 @@ export class OllamaRouter implements RouterModel {
       ? { model: this.name, stream: false, think: false, options: { temperature: 0 }, tools: [{ type: "function", function: { name: "recommend_charts", description: "Return ranked chart codes from the supplied catalog", parameters: schema } }], messages: [{ ...messages[0], content: `${system} Answer by calling the recommend_charts tool.` }, messages[1]] }
       : { model: this.name, stream: false, think: false, keep_alive: "30m", options: { temperature: 0, num_predict: 400, num_ctx: 8192 }, format: schema, messages };
     try {
-      const r = await fetch(`${base}/api/chat`, { method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(this.opts.timeoutMs ?? 30_000), body: JSON.stringify(body) });
+      const requestBody = JSON.stringify(body);
+      logLlmTraffic("router.recommendCharts", "request", requestBody);
+      const r = await fetch(`${base}/api/chat`, { method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(this.opts.timeoutMs ?? 30_000), body: requestBody });
+      const rawResponse = await r.text();
+      logLlmTraffic("router.recommendCharts", "response", rawResponse);
       if (!r.ok) return { codes: [], outcome: "http-error", httpStatus: r.status };
-      const msg = (await r.json() as { message?: { content?: string; tool_calls?: { function?: { arguments?: unknown } }[] } }).message;
+      const msg = (JSON.parse(rawResponse) as { message?: { content?: string; tool_calls?: { function?: { arguments?: unknown } }[] } }).message;
       const raw = this.hosted ? msg?.tool_calls?.[0]?.function?.arguments : msg?.content;
       let parsed: unknown;
       try { parsed = typeof raw === "string" ? JSON.parse(raw) : raw; }
@@ -264,13 +281,18 @@ export class OllamaRouter implements RouterModel {
     const base = this.opts.baseUrl ?? process.env.CIE_OLLAMA_URL ?? "http://127.0.0.1:11434";
     const wire = messages.map((m) => m.role === "assistant" ? { role: "assistant", content: m.content, ...(m.toolCalls?.length ? { tool_calls: m.toolCalls.map((c) => ({ function: { name: c.name, arguments: c.arguments } })) } : {}) }
       : m.role === "tool" ? { role: "tool", content: m.content, tool_name: m.toolName } : { role: m.role, content: m.content });
+    const agent = tools.some((t) => t.name === "review_answer") ? "router.converse:review" : "router.converse:chat";
     try {
+      const requestBody = JSON.stringify({ model: this.name, stream: false, think: false, keep_alive: "30m", options: { temperature: 0, num_ctx: 32_768 }, tools: tools.map((t) => ({ type: "function", function: t })), messages: wire });
+      logLlmTraffic(agent, "request", requestBody);
       const r = await fetch(`${base}/api/chat`, {
         method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.any([signal, AbortSignal.timeout(this.opts.timeoutMs ?? 60_000)]),
-        body: JSON.stringify({ model: this.name, stream: false, think: false, keep_alive: "30m", options: { temperature: 0, num_ctx: 32_768 }, tools: tools.map((t) => ({ type: "function", function: t })), messages: wire }),
+        body: requestBody,
       });
+      const raw = await r.text();
+      logLlmTraffic(agent, "response", raw);
       if (!r.ok) return null;
-      const body = await r.json() as { message?: { content?: string; tool_calls?: { function?: { name?: string; arguments?: unknown } }[] } };
+      const body = JSON.parse(raw) as { message?: { content?: string; tool_calls?: { function?: { name?: string; arguments?: unknown } }[] } };
       const toolCalls = (body.message?.tool_calls ?? []).flatMap((c) => {
         const name = c.function?.name, raw = c.function?.arguments;
         let args: unknown = raw;
@@ -289,9 +311,13 @@ export class OllamaRouter implements RouterModel {
       ? { model: this.name, stream: false, think: false, options: { temperature: 0 }, tools: [{ type: "function", function: { name: "choose", description: "Record which label the message is and the name it mentions", parameters: schema } }], messages: [{ role: "system", content: `${req.system}\nAnswer by calling the choose tool.` }, { role: "user", content: req.user }] }
       : { model: this.name, stream: false, think: false, keep_alive: "30m", options: { temperature: 0, num_predict: 40, num_ctx: 4096 }, format: schema, messages: [{ role: "system", content: req.system }, { role: "user", content: req.user }] };
     try {
-      const r = await fetch(`${base}/api/chat`, { method: "POST", body: JSON.stringify(body), signal: AbortSignal.timeout(this.opts.timeoutMs ?? 30_000) });
+      const requestBody = JSON.stringify(body);
+      logLlmTraffic("router.choose", "request", requestBody);
+      const r = await fetch(`${base}/api/chat`, { method: "POST", body: requestBody, signal: AbortSignal.timeout(this.opts.timeoutMs ?? 30_000) });
+      const raw = await r.text();
+      logLlmTraffic("router.choose", "response", raw);
       if (!r.ok) return null;
-      const msg = ((await r.json()) as { message?: { content?: string; tool_calls?: { function?: { arguments?: unknown } }[] } }).message;
+      const msg = (JSON.parse(raw) as { message?: { content?: string; tool_calls?: { function?: { arguments?: unknown } }[] } }).message;
       const args = msg?.tool_calls?.[0]?.function?.arguments;
       const a = (this.hosted ? (typeof args === "string" ? JSON.parse(args) : args ?? {}) : JSON.parse(msg?.content ?? "{}")) as Partial<RouterAnswer>;
       return typeof a.label === "string" && req.labels.includes(a.label) ? { label: a.label, target: typeof a.target === "string" ? a.target.slice(0, 120) : "" } : null;
@@ -453,11 +479,13 @@ export class OllamaGenerationRouter implements GenerationRouter {
     this.hosted = /[:-]cloud$/i.test(this.model);
   }
   async generate(req: GenerationRequest): Promise<GenerationResponse> {
+    const requestBody = JSON.stringify({ model: this.model, stream: false, think: false, format: req.schema,
+      options: { temperature: 0, num_predict: req.maxOutputTokens, num_ctx: req.maxInputTokens + req.maxOutputTokens },
+      messages: [{ role: "system", content: req.system }, { role: "user", content: req.user }] });
+    logLlmTraffic("generation.generate", "request", requestBody);
     const res = await fetch(`${this.endpoint}/api/chat`, {
       method: "POST", redirect: "error", signal: req.signal, headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: this.model, stream: false, think: false, format: req.schema,
-        options: { temperature: 0, num_predict: req.maxOutputTokens, num_ctx: req.maxInputTokens + req.maxOutputTokens },
-        messages: [{ role: "system", content: req.system }, { role: "user", content: req.user }] }),
+      body: requestBody,
     });
     if (!res.ok || !res.body) { await res.body?.cancel(); throw new Error("generation provider unavailable"); }
     const reader = res.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
@@ -470,7 +498,9 @@ export class OllamaGenerationRouter implements GenerationRouter {
         chunks.push(value);
       }
     } finally { await reader.cancel(); }
-    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+    const rawResponse = Buffer.concat(chunks).toString("utf8");
+    logLlmTraffic("generation.generate", "response", rawResponse);
+    const body = JSON.parse(rawResponse) as {
       message?: { content?: string }; prompt_eval_count?: number; eval_count?: number;
     };
     if (typeof body.message?.content !== "string" || Buffer.byteLength(body.message.content) > req.maxOutputBytes) throw new Error("invalid generation response");
