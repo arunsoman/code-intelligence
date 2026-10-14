@@ -30,6 +30,26 @@ test("rename continuity: a renamed function keeps its canonical identity, caller
   worker.close();
 });
 
+test("rename with local retouching: renaming a function and renaming its parameter is still a supported rename, because the semantic IR blanks locals", async () => {
+  const dir = copyFixture();
+  const { svc, worker, revision: r1 } = await setup(undefined, dir);
+  const reg = new Registry(svc.store);
+  reg.registerRevision(r1, null);
+  // The body text changes, and the old file-byte digest blanked only the symbol's own name, so this never matched;
+  // the lowered IR leaves every *local* identifier unspoken, and the digest survives.
+  edit(dir, "src/auth/token.ts", (s) => s.replaceAll("signToken", "issueToken").replaceAll("userId", "uid"));
+  const r2 = await reindex(svc, dir);
+  const out = reg.registerRevision(r2, r1);
+  const rename = out.proposals.find((p) => p.kind === "RENAME" && p.oldIds[0].endsWith("#signToken"))!;
+  assert.ok(rename, JSON.stringify(out.proposals.map((p) => [p.kind, p.oldIds, p.newIds])));
+  assert.equal(rename.state, "SUPPORTED");
+  assert.equal(rename.strength, "BODY_IDENTICAL");
+  assert.equal(reg.canonOf(r2, "function:src/auth/token.ts#issueToken"), reg.canonOf(r1, "function:src/auth/token.ts#signToken"));
+  // Untouched symbols still carry their own identity, even with same-shaped neighbours elsewhere.
+  assert.equal(reg.canonOf(r2, "function:src/auth/token.ts#verifyToken"), reg.canonOf(r1, "function:src/auth/token.ts#verifyToken"));
+  worker.close();
+});
+
 test("duplicate names: the same name in two files is two identities, and identical-bodied candidates after a deletion are proposals, never merged", async () => {
   const dir = copyFixture();
   const body = "(x: number) { return x * 2 + 1; }";
@@ -154,6 +174,8 @@ test("deleting a repository also removes its identities, lineage, workspaces, an
   edit(dir, "src/auth/token.ts", (s) => s.replaceAll("signToken", "issueToken")); edit(dir, "src/auth/service.ts", (s) => s.replaceAll("signToken", "issueToken"));
   const r2 = await reindex(svc, dir);
   assert.ok(svc.registry.proposals().length > 0, "the service registered both revisions on ingest");
+  // Answers require a built concept hierarchy (see conceptRequirement); every ask-based test builds one first.
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision: r2 })).ok);
   const ask = await svc.ask(ctx(), { question: "how does login work", revision: r2 });
   assert.ok(ask.ok);
   const ws = svc.workspaceLog.create("a", { name: "mine", revision: r2 }) as any;

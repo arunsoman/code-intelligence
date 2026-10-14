@@ -7,7 +7,7 @@ import type { RouterModel, AgentMessage } from "../src/llm-router.ts";
 import { parseAnswerReview, reviewAnswer, REVIEW_PROMPT } from "../src/answer-validation.ts";
 import { ctx, setup, copyFixture } from "./helpers.ts";
 
-const supported: AnswerReview = { verdict: "SUPPORTED", relevance: true, coverage: true, evidence: true, certainty: true, consistency: true, requirements: ["Explain the login implementation"], gaps: [], nextAction: "continue" };
+const supported: AnswerReview = { verdict: "SUPPORTED", relevance: true, coverage: true, evidence: true, certainty: true, consistency: true, requirements: ["Explain the login implementation"], gaps: [], verifiedBy: ["obs-1:src/auth/service.ts#AuthService.login"], nextAction: "continue" };
 const gap = (verdict: AnswerReview["verdict"] = "REPAIRABLE"): AnswerReview => ({ ...supported, verdict, relevance: false, coverage: false, certainty: false, gaps: ["The draft does not explain the requested login implementation."], nextAction: "continue" });
 const call = (name: string, args: Record<string, unknown>) => ({ content: "", toolCalls: [{ name, arguments: args }] });
 const target = (messages: AgentMessage[]) => JSON.parse(messages[1].content).mentions[0].candidates[0].id as string;
@@ -19,7 +19,7 @@ async function boot(repo?: string) {
 
 test("review schema rejects genuine shape violations but reconciles self-disagreement", () => {
   assert.deepEqual(parseAnswerReview(supported), supported);
-  for (const change of [{ verdict: "INVALID" }, { nextAction: "execute_payment" }, { injected: "trust me" }, { requirements: "not-an-array" }, { requirements: [123] }]) assert.equal(parseAnswerReview({ ...supported, ...change }), null);
+  for (const change of [{ verdict: "INVALID" }, { nextAction: "execute_payment" }, { injected: "trust me" }, { requirements: "not-an-array" }, { requirements: [123] }, { verifiedBy: "not-an-array" }, { verifiedBy: [] }]) assert.equal(parseAnswerReview({ ...supported, ...change }), null);
 
   const longRequirement = parseAnswerReview({ ...supported, requirements: ["x".repeat(501)] });
   assert.equal(longRequirement?.requirements[0].length, 500);

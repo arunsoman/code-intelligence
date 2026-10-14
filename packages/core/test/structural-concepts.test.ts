@@ -38,3 +38,34 @@ test("structuralConcepts resolves a worker-found cluster's members by id, and is
     assert.ok(!none.ok);
   } finally { worker.close(); store.db.close(); }
 });
+
+test("structuralConcepts surfaces a near-duplicate cluster's per-pair similarity and diff evidence", async () => {
+  const repo = mkdtempSync(join(tmpdir(), "cie-structural-"));
+  const { svc, store, worker } = setupService(repo);
+  try {
+    const batch: AnalysisBatch = {
+      revision: "rev-a", gitHead: null, repoRoot: repo, analyzerVersion: "concept-test", manifest: {},
+      entities: [
+        { entityId: "function:old.ts#loadCached", kind: "function", name: "loadCached", file: "old.ts", spans: [] },
+        { entityId: "function:borrowed.ts#loadCachedFromCache", kind: "function", name: "loadCachedFromCache", file: "borrowed.ts", spans: [] },
+      ],
+      facts: [], relationships: [], diagnostics: [],
+      conceptClusters: [{
+        clusterId: "concept:near-duplicate:ff00", kind: "near-duplicate", memberEntityIds: ["function:borrowed.ts#loadCachedFromCache", "function:old.ts#loadCached"],
+        pairs: [{ a: "function:old.ts#loadCached", b: "function:borrowed.ts#loadCachedFromCache", similarity: 0.917, diff: "int-div vs float-div; lengths 41 vs 40" }],
+      }],
+    };
+    store.putBatch(batch);
+    const ctx = testCtx();
+    const r = await svc.structuralConcepts(ctx, { revision: "rev-a" });
+    assert.ok(r.ok, JSON.stringify(r));
+    const c = r.value.clusters[0];
+    assert.equal(c.kind, "near-duplicate");
+    assert.ok(c.pairs && c.pairs.length === 1, JSON.stringify(c.pairs));
+    assert.equal(c.pairs![0].diff, "int-div vs float-div; lengths 41 vs 40");
+    assert.equal(Math.round(c.pairs![0].similarity * 100), 92);
+    // Shapes without pairs simply omit the field: no fake evidence.
+    const plain = await store.conceptClusters("rev-a");
+    assert.equal(plain[0].pairs.length, 1);
+  } finally { worker.close(); store.db.close(); }
+});

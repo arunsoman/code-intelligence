@@ -3,8 +3,6 @@
 // never merges anything; splits and merges, and any match that is ambiguous, stay proposals until a person confirms them, and any
 // confirmation can be reversed with its history kept.
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import type { ApiError, Entity } from "@cie/schema";
 import type { Store } from "./store.ts";
 
@@ -18,19 +16,15 @@ const CODE_KINDS = new Set(["function", "method", "class"]);
 const sha = (s: string) => createHash("sha256").update(s).digest("hex").slice(0, 16);
 const canonOfNew = (revision: string, entityId: string) => "canon:" + sha(revision + "|" + entityId);
 
-/** Digest of a symbol's text with its own name blanked, so that renaming it does not change the digest. */
-function bodyDigest(store: Store, revision: string, e: Entity, files: Map<string, Buffer | null>): string | null {
-  const rev = store.revision(revision, true);
-  const sp = e.spans[0];
-  if (!rev || !sp) return null;
-  try {
-    let buf = files.get(e.file);
-    if (buf === undefined) { try { buf = readFileSync(resolve(rev.repoRoot, e.file)); } catch { buf = null; } files.set(e.file, buf); }
-    if (!buf) return null;
-    const text = buf.subarray(sp.startByte, sp.endByteExclusive).toString("utf8");
-    const short = e.name.split(".").pop()!;
-    return sha(text.split(short).join("$").replace(/\s+/g, " "));
-  } catch { return null; }
+/**
+ * Digest of a symbol's semantic IR (worker ir.rs): the lowered control flow with every *local* identifier blanked
+ * — not just the symbol's own name, which the old byte-digest blanked — plus external names, calls and field
+ * accesses. A rename that also renames locals, reflows whitespace or touches comments keeps the digest; a real
+ * body edit breaks it. Revisions indexed before the IR existed carry no `irHash`; they keep their stored parent
+ * digest through the unchanged-symbol carry-forward instead, and simply do not digest-match across the boundary.
+ */
+function bodyDigest(_store: Store, _revision: string, e: Entity): string | null {
+  return e.irHash ?? null;
 }
 
 function shapeOf(store: Store, revision: string): Map<string, { callees: string[]; callers: string[] }> {
@@ -67,15 +61,15 @@ export class Registry {
       const newOnly: Entity[] = [], carried: Entity[] = [];
       for (const e of entities) (parent && parentIds.has(e.entityId) ? carried : newOnly).push(e);
       const oldOnly = parent ? [...parentIds].filter((id) => !nowIds.has(id)) : [];
-      const files = new Map<string, Buffer | null>();
-      // A carried symbol whose own text is unchanged (same symbol hash and name) has the digest it had: reading its file again would only give the same answer.
+      // A carried symbol whose own text is unchanged (same symbol hash and name) has the digest it had: reading
+      // its body again would only give the same answer, and it keeps working when the parent predates the IR.
       const before = parent ? new Map(this.store.entities(parent).map((e) => [e.entityId, e])) : new Map<string, Entity>();
       const parentRows = new Map<string, any>();
       for (const e of carried) parentRows.set(e.entityId, row(parent!, e.entityId));
       const digest = new Map<string, string | null>();
       for (const e of entities) {
         const was = before.get(e.entityId), p = parentRows.get(e.entityId);
-        digest.set(e.entityId, was && p && p.body_digest && was.symbolHash && was.symbolHash === e.symbolHash && was.name === e.name ? p.body_digest : bodyDigest(this.store, revision, e, files));
+        digest.set(e.entityId, was && p && p.body_digest && was.symbolHash && was.symbolHash === e.symbolHash && was.name === e.name ? p.body_digest : bodyDigest(this.store, revision, e));
       }
       for (const e of carried) { const p = parentRows.get(e.entityId); ins.run(revision, e.entityId, p.canon_id, digest.get(e.entityId) ?? null, JSON.stringify(shapes.get(e.entityId) ?? { callees: [], callers: [] })); }
       const proposals: Proposal[] = [];

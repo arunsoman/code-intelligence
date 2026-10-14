@@ -11,7 +11,7 @@ import { ctx, demoRepo, setup } from "./helpers.ts";
 test("removed concept-card generation refuses direct calls and jobs without calling the model", async (t) => {
   let calls = 0;
   const inner = new StubProvider();
-  const { svc, worker, revision } = await setup({ name: "spy", model: "test", hosted: false, generate(req) { calls++; return inner.generate(req); } });
+  const { svc, worker, revision } = await setup({ name: "spy", model: "test", hosted: false, generate(req) { calls++; return inner.generate(req); } }, undefined, { hierarchy: false });
   t.after(() => { worker.close(); svc.store.db.close(); });
   const result = await svc.extractConcepts(ctx(), { revision });
   assert.ok(!result.ok && result.error.code === "NOT_IMPLEMENTED");
@@ -23,7 +23,8 @@ test("removed concept-card generation refuses direct calls and jobs without call
 
 test("hierarchy concepts are mandatory and an existing older hierarchy is reported accurately", async (t) => {
   const repo = demoRepo();
-  const { svc, worker, revision } = await setup(undefined, repo);
+  // Deliberately no built hierarchy: this test asserts the missing-hierarchy guidance itself.
+  const { svc, worker, revision } = await setup(undefined, repo, { hierarchy: false });
   t.after(() => { worker.close(); svc.store.db.close(); });
   assert.match(conceptRequirement(svc.store, revision)!, /required.*Build concept hierarchy/);
   let classified = 0;

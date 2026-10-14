@@ -50,6 +50,28 @@ Notation hints per chartId:
 - S16 (UML class): include every supplied class/interface/enum and populate attributes[] from supplied field entities and operations[] from supplied method entities/signature facts. Use each member's own source evidenceIds; do not return name-only class boxes when members are present in the bundle.
 - S1, S2, S5, S6, generic: use the standard nodes[] and edges[] fields only.`;
 
+
+// ── Semantic IR facts (plan Phase 5) ─────────────────────────────────────────
+/** The worker's per-symbol control-flow summary (fact predicate `ir_control_flow`, emitted from the lowered
+ * semantic IR in the Rust worker): grounded loop/branch/return counts with the fact's evidence ids. Chart
+ * compilers that can carry a branch/loop annotation (S2 activity, S3 state) read this map directly from the
+ * bundle the caller already supplied — no new wire format, no bypassing ViewSpec's evidence model. */
+interface IrControlFlow { loops: number; branches: number; returns: number; nodes: number; evidenceIds: string[] }
+function irControlFlowFor(bundle: EvidenceBundle, valid?: Set<string>): Map<string, IrControlFlow> {
+  const out = new Map<string, IrControlFlow>();
+  for (const f of bundle.facts) {
+    if (f.predicate !== "ir_control_flow") continue;
+    const v = f.object as { kind?: string; loops?: number; branches?: number; returns?: number; nodes?: number };
+    if (v.kind !== "IrControlFlow") continue;
+    const evIds = f.evidence.filter((e) => !valid || valid.has(e.id)).map((e) => e.id);
+    if (!evIds.length) continue;
+    out.set(f.subject, { loops: v.loops ?? 0, branches: v.branches ?? 0, returns: v.returns ?? 0, nodes: v.nodes ?? 0, evidenceIds: evIds });
+  }
+  return out;
+}
+const irNote = (flow: IrControlFlow) =>
+  `Semantic IR (indexed control flow): ${flow.loops} loop(s), ${flow.branches} branch(es), ${flow.returns} return(s) across ${flow.nodes} IR nodes.`;
+
 let cacheDir: string | undefined;
 const cache = new Map<string, ChartPlan | ChartPlanV2>();
 
@@ -379,6 +401,12 @@ export function compileClassDiagramV2(o: { plan: ChartPlanV2; bundle: EvidenceBu
 
 export function compileStateMachineV2(o: { plan: ChartPlanStateMachine; bundle: EvidenceBundle; rev: RevisionRow; question: string; route: ViewRoute; run?: ModelRunRef; diag?: ChartCompileDiag; chartId?: string }): { view: ViewSpec; claims: Claim[]; diagnostics: ChartDiagnostics } {
   const valid = new Set(o.bundle.evidence.filter((e) => e.state === "CURRENT").map((e) => e.id));
+  // Semantic IR (plan Phase 5, scoped to S3): plan states are invented, but a state that cites an
+  // ir_control_flow fact's evidence is about that indexed function — it then carries the function's grounded
+  // loop/branch/return counts as notes, the IR fact's evidence, and the entity as the node's entityRef.
+  const byEntityId = new Map(o.bundle.entities.map((e) => [e.entityId, e]));
+  const irByEvidence = new Map<string, { entity: string; flow: IrControlFlow }>();
+  for (const [entity, flow] of irControlFlowFor(o.bundle, valid)) for (const ev of flow.evidenceIds) irByEvidence.set(ev, { entity, flow });
   const states = o.plan.chartId === "S3" ? o.plan.states : [];
   const nameOf = new Map(o.bundle.entities.filter((e) => e.kind !== "file").map((e) => [e.entityId, e.name]));
   const byEntity = new Map<string, string>();
@@ -397,10 +425,14 @@ export function compileStateMachineV2(o: { plan: ChartPlanStateMachine; bundle: 
     if (nodeIds.has(s.id)) { gaps.push(`Duplicate state ${s.id} was omitted.`); continue; }
     nodeIds.set(s.id, id);
     semantic.states.push({ nodeId: id, initial: !!s.isInitial, final: !!s.isFinal });
+    const backed = s.evidenceIds.flatMap((ev) => { const b = irByEvidence.get(ev); return b ? [b] : []; })[0];
+    const entityRef = backed?.entity;
     nodes.push({
-      id, entityRefs: [], label: s.label, kind: "state", file: "", claimIds: [], evidenceIds,
+      id, entityRefs: entityRef ? [entityRef] : [], label: s.label, kind: "state", file: entityRef ? (byEntityId.get(entityRef)?.file ?? "") : "", claimIds: [],
+      evidenceIds: backed ? [...new Set([...evidenceIds, ...backed.flow.evidenceIds])] : evidenceIds,
       tier: nodes.length === 0 ? "CRITICAL" : "RELEVANT", displayMode: "INFERENCE", unresolvedCalls: 0,
       role: "state", badge: s.isInitial ? "start" : s.isFinal ? "end" : undefined,
+      notes: backed ? [irNote(backed.flow)] : undefined,
       pos: { x: 0, y: 0 }
     });
   }
@@ -1281,13 +1313,27 @@ export function compileLegacyChartPlan(o: { plan: ChartPlan | ChartPlanV2; bundl
   };
 
   if (chartId === "S2") {
-    const semantic: ActivitySpec = { schemaVersion: "activity.v1", basis: "inferred-static", steps: nodes.map(n => ({ nodeId: n.id, shape: plan.nodes.find(s => s.entityId === n.entityRefs[0])?.shape ?? "process", ...(n.lane ? { lane: n.lane } : {}) })), links: edges.map(e => ({ edgeId: e.id, relationshipKind: e.kind ?? "unknown", ...(e.label ? { annotation: e.label } : {}) })) };
+    // Semantic IR (plan Phase 5, scoped to S2): the plan proposes process/decision shapes; the lowered IR's
+    // loop/branch/return facts ground the call — a step carrying an indexed branch becomes a decision site with
+    // the IR fact's own evidence on the node, and every IR-fact-bearing step keeps the counts as its notes.
+    const ir = irControlFlowFor(o.bundle, new Set(evidence.keys()));
+    const shapeOf = (n: ViewSpec["nodes"][number]): ActivitySpec["steps"][number]["shape"] => {
+      const planShape = plan.nodes.find(s => s.entityId === n.entityRefs[0])?.shape ?? "process";
+      const flow = n.entityRefs[0] ? ir.get(n.entityRefs[0]) : undefined;
+      if (planShape === "process" && (flow?.branches ?? 0) > 0) return "decision";
+      return planShape;
+    };
+    const withIr = (n: ViewSpec["nodes"][number]): ViewSpec["nodes"][number] => {
+      const flow = n.entityRefs[0] ? ir.get(n.entityRefs[0]) : undefined;
+      return flow ? { ...n, evidenceIds: [...new Set([...n.evidenceIds, ...flow.evidenceIds])], notes: [...(n.notes ?? []), irNote(flow)] } : n;
+    };
+    const semantic: ActivitySpec = { schemaVersion: "activity.v1", basis: "inferred-static", steps: nodes.map(n => ({ nodeId: n.id, shape: shapeOf(n), ...(n.lane ? { lane: n.lane } : {}) })), links: edges.map(e => ({ edgeId: e.id, relationshipKind: e.kind ?? "unknown", ...(e.label ? { annotation: e.label } : {}) })) };
     view.activity = semantic;
-    view.nodes = nodes.map(n => ({ ...n, displayMode: "INFERENCE" }));
-    view.edges = edges.map(e => ({ ...e, displayMode: "INFERENCE" }));
+    view.nodes = nodes.map(n => ({ ...withIr(n), displayMode: "INFERENCE" as const }));
+    view.edges = edges.map(e => ({ ...e, displayMode: "INFERENCE" as const }));
     if (laneNames.length) view.groups = laneNames.map(name => ({ id: `g:lane:${name}`, label: name, kind: "lane", childNodeIds: nodes.filter(n => n.lane === name).map(n => n.id), level: 1, evidenceIds: [...new Set(nodes.filter(n => n.lane === name).flatMap(n => n.evidenceIds))], displayMode: "INFERENCE" }));
-    if (nodes.length) gaps.push("Activity roles, lanes, ordering and branch annotations are static plan interpretations. Indexed calls do not prove control-flow exclusivity, runtime timing or parallel execution.");
-    view.legend = [{ label: "Interpreted activity", displayMode: "INFERENCE", description: "Roles and branch annotations are interpretations; inspect each indexed relationship for its actual kind." }];
+    if (nodes.length) gaps.push("Activity roles, lanes, ordering and branch annotations are static plan interpretations. Indexed calls do not prove control-flow exclusivity, runtime timing or parallel execution. Branch sites are grounded by the semantic IR facts cited on each step.");
+    view.legend = [{ label: "Interpreted activity", displayMode: "INFERENCE", description: "Roles and branch annotations are interpretations grounded by the cited semantic-IR facts; inspect each indexed relationship for its actual kind." }];
   }
 
   const diagnostics: ChartDiagnostics = {

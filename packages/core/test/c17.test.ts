@@ -69,20 +69,22 @@ test("confidence-bin intervals: stated confidence is checked against outcomes bi
   assert.equal(none.calibration().ece, null);
 });
 
-test("changed-model regression: a model that finds fewer seeded concepts is caught with a paired test; an unmeasured model is not trusted; a small difference is not called a regression", async () => {
+test("changed-model regression: a model with weaker naming is caught with a paired test; an unmeasured model is not trusted; a small difference is not called a regression", async () => {
   const a = await setup(new StubProvider(), demoRepo());
   const b = await setup(new DegradedProvider(), demoRepo());
   const e = new Evaluator(a.svc.store, "test");
   const runA = await e.runSuite(a.svc, SEEDED_CONCEPTS, a.svc.activeModel);
   const runB = await e.runSuite(b.svc, SEEDED_CONCEPTS, b.svc.activeModel);
-  assert.equal(runA.items.length, 18);
-  assert.equal(runA.metrics.recall.value, 1, `baseline finds every seeded concept: ${JSON.stringify(runA.items.filter((i) => i.expected && !i.predicted))}`);
+  // Suite v2: one naming item per built concept plus six absent-domain items.
+  assert.equal(runA.items.filter((i) => i.id.startsWith("absent:")).length, 6);
+  assert.ok(runA.items.length >= 18, `${runA.items.length} items in the suite`);
+  assert.equal(runA.metrics.recall.value, 1, `baseline names every concept it builds: ${JSON.stringify(runA.items.filter((i) => i.expected && !i.predicted))}`);
   assert.equal(runA.metrics.fp, 0, "and invents none of the absent ones");
   assert.ok(runB.metrics.recall.value! < 0.6, `the degraded model's recall ${runB.metrics.recall.value}`);
   const cmp = e.compare(runA, runB);
   assert.ok(cmp.comparable && cmp.regression, JSON.stringify(cmp));
   assert.ok(cmp.comparable && cmp.worseOnly >= 6 && cmp.betterOnly === 0 && cmp.pValue < 0.05);
-  assert.ok(cmp.comparable && cmp.changed.some((c) => /failure:/.test(c)));
+  assert.ok(cmp.comparable && cmp.changed.some((c) => /name:/.test(c)));
   // The same model twice: no regression, p = 1.
   const again = await e.runSuite(a.svc, SEEDED_CONCEPTS, a.svc.activeModel);
   const same = e.compare(runA, again);
@@ -103,7 +105,7 @@ test("changed-model regression: a model that finds fewer seeded concepts is caug
   assert.equal(e.releaseGate({ name: "stub", model: "deterministic-graph-v1" }, "seeded-concepts", { minRecall: 0.5, minPrecision: 0.5 }).pass, true);
   const strict = e.releaseGate({ name: "stub", model: "deterministic-graph-v1" }, "seeded-concepts", { minRecall: 0.95, minPrecision: 0.95 });
   assert.equal(strict.pass, false); assert.match(strict.reason, /lower bounds/);
-  assert.equal(e.releaseGate({ name: "degraded", model: "drops-cards" }, "seeded-concepts", { minRecall: 0.5, minPrecision: 0.5 }).pass, false, "the degraded model fails even a low bar");
+  assert.equal(e.releaseGate({ name: "degraded", model: "drops-names" }, "seeded-concepts", { minRecall: 0.5, minPrecision: 0.5 }).pass, false, "the degraded model fails even a low bar");
   assert.equal(e.releaseGate({ name: "ollama", model: "new:cloud" }, "seeded-concepts", { minRecall: 0, minPrecision: 0 }).pass, false, "an unmeasured model cannot pass any bar");
   a.worker.close(); b.worker.close();
 });

@@ -20,7 +20,7 @@ function walk(dir: string, out: string[] = []) {
 export function testTitles(): string[] {
   const titles: string[] = [];
   for (const f of walk(root)) {
-    if (/\.test\.ts$/.test(f)) for (const m of readFileSync(f, "utf8").matchAll(/^\s*test\((["'`])((?:\\.|(?!\1).)*)\1/gm)) titles.push(m[2]);
+    if (/\.test\.ts$/.test(f)) for (const m of readFileSync(f, "utf8").matchAll(/^\s*test\((["'`])((?:\\.|(?!\1).)*)\1/gm)) titles.push(m[2].replace(/\\(.)/g, "$1"));
     else if (f.endsWith(".rs")) for (const m of readFileSync(f, "utf8").matchAll(/#\[test\]\s*(?:async\s+)?fn\s+(\w+)/g)) titles.push(`rust:${m[1]}`);
   }
   return titles;

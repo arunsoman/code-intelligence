@@ -102,6 +102,13 @@ export class Collab {
       const keep = new Set<string>();
       const nodes = w.state.view.nodes.filter((n) => { const d = acc.denied(n.file); if (d) withheld++; else keep.add(n.id); return !d; });
       const view: ViewSpec = { ...w.state.view, nodes, edges: w.state.view.edges.filter((e) => keep.has(e.fromNodeId) && keep.has(e.toNodeId)), groups: w.state.view.groups.map((g) => ({ ...g, childNodeIds: g.childNodeIds.filter((c) => keep.has(c)) })), hidden: [] };
+      // The projected findings assert things about named code: any finding resting on code the reader
+      // cannot see is dropped with them, counted in the withheld tally.
+      if (w.state.view.findings?.length) {
+        const keptFindings = w.state.view.findings.filter((f) => f.subjectIds.every((id) => !acc.denied(entFile(id))));
+        withheld += w.state.view.findings.length - keptFindings.length;
+        view.findings = keptFindings;
+      }
       // The written answer names specific elements, so a reader missing some of those elements cannot keep the original
       // text (it was composed from the full view); it is rebuilt from what this reader can actually see, or dropped.
       if (withheld && view.answer !== undefined) view.answer = composeAnswer(view);
@@ -163,7 +170,7 @@ export class Collab {
   conceptsFor(principal: string, revision: string) {
     const all = this.store.concepts(revision, { includeRefuted: true });
     const mine = all.filter((c) => this.canSeeCard(principal, c));
-    return { concepts: mine.map((c) => { const cl = this.store.getClaim(c.claimId); return { id: c.id, title: c.title, kind: c.kind, state: cl?.state ?? "UNKNOWN", displayMode: cl?.displayMode ?? "HIDDEN", confirmedBy: (cl?.verdicts ?? []).filter((x) => x.verdict === "CONFIRM").map((x) => x.actorId), refutedBy: (cl?.verdicts ?? []).filter((x) => x.verdict === "REFUTE").map((x) => x.actorId) }; }), withheld: all.length - mine.length };
+    return { concepts: mine.map((c) => { const cl = this.store.getClaim(c.claimId); return { id: c.id, title: c.title, kind: c.kind, claimId: c.claimId, state: cl?.state ?? "UNKNOWN", displayMode: cl?.displayMode ?? "HIDDEN", confirmedBy: (cl?.verdicts ?? []).filter((x) => x.verdict === "CONFIRM").map((x) => x.actorId), refutedBy: (cl?.verdicts ?? []).filter((x) => x.verdict === "REFUTE").map((x) => x.actorId) }; }), withheld: all.length - mine.length };
   }
   /** A team member confirms or corrects a concept. It needs access to everything the concept rests on, it is attributed, and it never makes proof. */
   confirmSharedConcept(actor: string, req: { conceptId: string; verdict: "CONFIRM" | "REFUTE" | "DISPUTE"; explanation: string; expectedVersion: number }): { ok: true; state: string; displayMode: string; attributedTo: string } | Fail {

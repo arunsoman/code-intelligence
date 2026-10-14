@@ -127,28 +127,38 @@ export class Store {
     for (const [file, digest] of Object.entries(manifest ?? {})) im.run(revision, file, digest);
   }
   /** Leaf-level concept clusters the worker already found for free (shape.rs's AST-shape hash, shared framework
-   * role). Content-addressed: an unchanged cluster's row is reused (insert-or-ignore) and only a new
-   * `concept_revisions` pointer is added, instead of duplicating the concept row on every re-index. */
+   * role, near-duplicate IR logic copies). Content-addressed: an unchanged cluster's row is reused (insert-or-ignore)
+   * and only a new `concept_revisions` pointer is added, instead of duplicating the concept row on every re-index.
+   * Near-duplicate clusters' per-pair evidence (similarity, diff summary) rides the same concept id in its own
+   * pairs table, so the view never needs the raw worker batch again. */
   insertConceptClusters(revision: string, clusters: ConceptClusterRaw[] | undefined) {
     if (!clusters?.length) return;
     const ins = this.db.prepare("insert or ignore into structural_concepts(concept_id, kind, level, name, description, name_source, parent_id, member_signature, created_at) values (?,?,0,?,null,?,null,?,?)");
     const rev = this.db.prepare("insert or ignore into structural_concept_revisions(revision, concept_id) values (?,?)");
     const mem = this.db.prepare("insert or ignore into structural_concept_members(concept_id, member_entity_id, member_concept_id) values (?,?,null)");
+    const insPair = this.db.prepare("insert or ignore into structural_concept_pairs(concept_id, a, b, similarity, diff) values (?,?,?,?,?)");
     const now = new Date().toISOString();
     for (const c of clusters) {
       ins.run(c.clusterId, c.kind, c.heuristicName ?? null, c.heuristicName ? "heuristic" : "none", c.memberEntityIds.slice().sort().join("|"), now);
       rev.run(revision, c.clusterId);
       for (const id of c.memberEntityIds) mem.run(c.clusterId, id);
+      for (const p of c.pairs ?? []) insPair.run(c.clusterId, p.a, p.b, p.similarity, p.diff);
     }
   }
   /** Leaf-level concept clusters recorded for `revision` (zero-LLM shape/framework-role clustering from the
-   * worker; see `insertConceptClusters`). Roll-up to higher levels and LLM naming are not built yet. */
-  conceptClusters(revision: string): { conceptId: string; kind: string; name: string | null; memberEntityIds: string[] }[] {
+   * worker; see `insertConceptClusters`), with the near-duplicate pairs' evidence. Roll-up to higher levels and
+   * LLM naming are not built yet. */
+  conceptClusters(revision: string): { conceptId: string; kind: string; name: string | null; memberEntityIds: string[]; pairs: { a: string; b: string; similarity: number; diff: string }[] }[] {
     const rows = this.db.prepare(
       "select c.concept_id as concept_id, c.kind as kind, c.name as name from structural_concepts c join structural_concept_revisions cr on cr.concept_id = c.concept_id where cr.revision = ? order by c.concept_id",
     ).all(revision) as { concept_id: string; kind: string; name: string | null }[];
     const members = this.db.prepare("select member_entity_id from structural_concept_members where concept_id = ? and member_entity_id is not null order by member_entity_id");
-    return rows.map((r) => ({ conceptId: r.concept_id, kind: r.kind, name: r.name, memberEntityIds: (members.all(r.concept_id) as { member_entity_id: string }[]).map((m) => m.member_entity_id) }));
+    const pairs = this.db.prepare("select a, b, similarity, diff from structural_concept_pairs where concept_id = ? order by similarity desc, a, b");
+    return rows.map((r) => ({
+      conceptId: r.concept_id, kind: r.kind, name: r.name,
+      memberEntityIds: (members.all(r.concept_id) as { member_entity_id: string }[]).map((m) => m.member_entity_id),
+      pairs: (pairs.all(r.concept_id) as { a: string; b: string; similarity: number; diff: string }[]).map((p) => ({ a: p.a, b: p.b, similarity: p.similarity, diff: p.diff })),
+    }));
   }
   /** What the parser reported for each file of a revision (digest of its rows), or an empty map for a revision stored before that was recorded. */
   revisionFiles(revision: string): Record<string, string> {
@@ -301,9 +311,15 @@ export class Store {
     throw new Error("Concept cards have been removed. Build the concept hierarchy instead.");
   }
   /** Compatibility projection for existing views; these are structural hierarchy concepts, never model-generated cards. */
-  concepts(rev: string, _opts: { includeRefuted?: boolean } = {}): ConceptCard[] {
-    return this.semanticConcepts(rev).map((c) => ({ id: c.id, revision: rev, kind: "domain-concept", title: c.label ?? c.kind,
-      summary: c.soundness?.basis ?? c.kind, members: c.members, evidenceIds: c.evidenceIds, claimId: "",
+  /** Team verdicts attach to a concept's claim: refuted concepts leave the retrieval-facing projection. */
+  setConceptClaim(rev: string, conceptId: string, claimId: string) {
+    this.db.prepare("update semantic_concepts set json = json_set(json, '$.claimId', ?) where revision = ? and id = ?").run(claimId, rev, conceptId);
+  }
+  concepts(rev: string, opts: { includeRefuted?: boolean } = {}): ConceptCard[] {
+    return this.semanticConcepts(rev)
+      .filter((c) => opts.includeRefuted || this.getClaim((c as { claimId?: string }).claimId ?? "")?.state !== "REFUTED")
+      .map((c) => ({ id: c.id, revision: rev, kind: "domain-concept", title: c.label ?? c.kind,
+      summary: c.soundness?.basis ?? c.kind, members: c.members, evidenceIds: c.evidenceIds, claimId: (c as { claimId?: string }).claimId ?? "",
       statedConfidence: "low", source: "structural-hierarchy" }));
   }
   conceptVersions(_repoRoot: string): { version: number; revision: string; createdAt: string; provider: string; cards: number }[] { return []; }

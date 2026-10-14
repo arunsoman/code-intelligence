@@ -188,7 +188,8 @@ test("jobs: cancelling after some chunks finished still leaves no cards and no c
       }
     }
     const model = new Second();
-    const { svc, worker } = await setup(model, demoRepo());
+    // The test cancels the job mid-build and asserts nothing was left behind, so setup must not pre-build.
+    const { svc, worker } = await setup(model, demoRepo(), { hierarchy: false });
     const rev = svc.store.latestRevision()!.id;
     const claimsBefore = svc.store.db.prepare("select count(*) n from claims").get();
     const job = svc.enqueueJob(ctx(), { kind: "concept-hierarchy" });

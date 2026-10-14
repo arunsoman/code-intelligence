@@ -27,6 +27,11 @@ async function changedLabels(next: string): Promise<string[]> {
   writeFileSync(join(dir, "src/calc.ts"), next);
   const r2 = await svc.ingestRepository(ctx(), { repoPath: dir });
   assert.ok(r2.ok);
+  // conceptRequirement is revision-bound: a hierarchy built by setup() for r1 blocks the ask on r2.
+  // Build for the asked revision whenever the requirement would refuse the ask.
+  const { conceptRequirement } = await import("../src/overview.ts");
+  const req = conceptRequirement(svc.store, r2.value.id);
+  if (req) { const h = await svc.buildConceptHierarchy(ctx(), { revision: r2.value.id }); assert.ok(h.ok, JSON.stringify((h as { error?: { message?: string } }).error)); }
   const d = await svc.ask(ctx(), { question: "what changed since the last index", revision: r2.value.id, form: "SemanticDiff" } as any);
   assert.ok(d.ok);
   const changed = d.value.view.nodes.filter((n) => /-changed$/.test(n.role ?? ""));

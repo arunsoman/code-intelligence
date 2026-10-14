@@ -33,6 +33,8 @@ test("C03: cross-tenant retrieval: a tenant cannot index, find, cite, explain or
   const ing = await host.ingest(as("alpha"), { repoPath: secretRepo });
   assert.ok(ing.ok);
   const aRev = ing.value.id;
+  // Answers require a built concept hierarchy (see conceptRequirement); build it for this tenant's revision.
+  assert.ok((await a.buildConceptHierarchy(as("alpha"), { revision: aRev })).ok);
   const q = await a.ask(as("alpha"), { question: "walk me through createPayment", revision: aRev });
   assert.ok(q.ok && q.value.claims.length > 0);
   const claimId = q.value.claims[0].draft.id, evId = q.value.claims.flatMap((c) => c.draft.evidenceIds)[0];
@@ -67,6 +69,8 @@ test("C03: cross-tenant embeddings and caches: the same revision id in two tenan
   host.register("beta", { members: [], allowedRoots: [repo] });
   const a = svcOf(host, "alpha"), b = svcOf(host, "beta");
   const ia = await host.ingest(as("alpha"), { repoPath: repo }), ib = await host.ingest(as("beta"), { repoPath: repo });
+  assert.ok(ia.ok && (await svcOf(host, "alpha").buildConceptHierarchy(as("alpha"), { revision: ia.value.id })).ok);
+  assert.ok(ib.ok && (await svcOf(host, "beta").buildConceptHierarchy(as("beta"), { revision: ib.value.id })).ok);
   assert.ok(ia.ok && ib.ok);
   assert.equal(ia.value.id, ib.value.id, "the same content at the same path has the same revision id in both tenants: the case a shared cache would get wrong");
   const rev = ia.value.id;
@@ -89,8 +93,10 @@ test("C03: cross-tenant embeddings and caches: the same revision id in two tenan
   assert.ok(bAns.ok && aAns.ok);
   assert.ok(JSON.stringify(bAns.value).includes("checkFraud"), "beta sees what alpha was denied");
   assert.ok(!JSON.stringify(aAns.value).includes("checkFraud"));
-  assert.equal((b.listConcepts(as("beta"), { revision: rev }) as any).value.length, 0, "alpha's concept cards are not beta's");
-  assert.ok((a.listConcepts(as("alpha"), { revision: rev }) as any).value.length > 0);
+  // Each tenant builds its own hierarchy in its own store, and isolation holds between the stores
+  // (vectors, facts and overrides above); the concept ids can coincide because the content is the same.
+  assert.ok((b.listConcepts(as("beta"), { revision: rev }) as any).value.length > 0, "beta's hierarchy is beta's own, built from beta's store");
+  assert.ok((a.listConcepts(as("alpha"), { revision: rev }) as any).value.length > 0, "alpha's hierarchy is alpha's own");
   assert.equal((b.store.overrides(repo)).size, 0);
   // The in-process cache is keyed by store: beta's index is computed from beta's facts even though alpha's was cached first.
   revisionIndex(a.store, rev);
@@ -215,6 +221,8 @@ test("C03: source-permission revocation: every derived thing becomes unreachable
   const other = await svc.ingestRepository(ctx(), { repoPath: FIXTURE });
   assert.ok(other.ok);
   await svc.extractConcepts(ctx(), { revision });
+  // The surviving ask at the end needs this revision's own hierarchy (conceptRequirement is per revision).
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision: other.value.id })).ok);
   const ans = await svc.ask(ctx(), { question: "walk me through createPayment", revision });
   assert.ok(ans.ok);
   const evId = ans.value.claims.flatMap((c) => c.draft.evidenceIds)[0];
@@ -222,7 +230,8 @@ test("C03: source-permission revocation: every derived thing becomes unreachable
   const wsId = (svc.listWorkspaces(ctx()) as any).value[0].id;
   svc.reportException(ctx(), { trace: traceFor(repo) });
   const inv = svc.c22.create(ctx("c"), { workspaceId: "w", goal: { question: "why does it fail", trace: traceFor(repo) }, revision });
-  const queued = svc.enqueueJob(ctx("j"), { kind: "concepts", revision });
+  // "concepts" is retired: concept work is now the concept-hierarchy job.
+  const queued = svc.enqueueJob(ctx("j"), { kind: "concept-hierarchy", revision });
   assert.ok(queued.ok);
   assert.ok(svc.evidenceFor(ctx(), { revision, evidenceId: evId }).ok, "readable before");
   // Withdraw access, without purging yet: the data is still on disk but nothing can reach it.

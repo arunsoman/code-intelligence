@@ -2001,7 +2001,7 @@ export class Service {
    * claims/verdicts tables are untouched. `modelVersion` in the cache key keeps names from one model
    * from leaking into another's cache.
    */
-  private namingAdapter(rev: RevisionRow, control?: JobControl): NamingAdapter {
+  private namingAdapter(rev: RevisionRow, control?: JobControl, deadlineMs?: number): NamingAdapter {
     const modelVersion = `${this.model.name}/${this.model.model}`;
     const usage = { model: 0, offline: 0 };
     const notes = new Set<string>();
@@ -2013,7 +2013,9 @@ export class Service {
         const callCtx: CallContext = {
           requestId: `req-name:${randomUUID()}`, idempotencyKey: `naming:${rev.id}:${randomUUID()}`,
           actor: { principalId: "system", tenantId: "local", sessionId: "system" },
-          deadlineMs: Date.now() + 120_000, traceId: `trace-name:${randomUUID()}`,
+          // Naming has its own generous budget, but a caller with a nearer deadline still cancels it.
+          deadlineMs: deadlineMs !== undefined ? Math.min(Date.now() + 120_000, deadlineMs) : Date.now() + 120_000,
+          traceId: `trace-name:${randomUUID()}`,
         };
         const bundle: EvidenceBundle = { id: "naming", revision: rev.id, evidence: [], entities: [], relationships: [], facts: [], coverage: [], unresolved: [], tokenEstimate: 0 };
         const asked = this.callModel<NameConceptOutput & NameArchOutput>(callCtx, rev, { purpose: req.purpose, schemaId, question: req.question, bundle });
@@ -2037,7 +2039,7 @@ export class Service {
   async buildConceptHierarchy(ctx: CallContext, req: { revision?: string }, control?: JobControl): Promise<ApiResult<ConceptHierarchyView>> {
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
-    const adapter = this.namingAdapter(rev, control);
+    const adapter = this.namingAdapter(rev, control, ctx.deadlineMs);
     const result = await buildHierarchy(this.store, rev.id, { repoRoot: rev.repoRoot, adapter, control, provider: `${this.model.name}/${this.model.model}`, motifBatch: this.motifBatch });
     control?.commit();
     // Record who really wrote the names, not who was configured to: a hosted model that was not approved did not write them.
@@ -2047,6 +2049,21 @@ export class Service {
     // First, so it is the one the person sees in the completion notice: it is the reason the names are what they are.
     for (const n of [...(adapter.notes ?? [])].reverse()) if (!result.stats.warnings.includes(n)) result.stats.warnings.unshift(n);
     const version = persistHierarchy(this.store, result, provider);
+    // Every concept gets a real provenance claim grounded in its members' evidence, so team verdicts
+    // (confirm/refute with attribution) attach to the concept instead of dangling on claimId "".
+    // The assertion is concept-id-based, so a rebuilt (renamed) concept keeps its claim and its verdicts.
+    for (const c of result.concepts) {
+      if (!(c.members?.length)) continue;
+      const bundle = bundleFor(this.store, rev.id, c.members);
+      const claim = gateClaim({
+        assertion: `Concept ${c.id} is a ${c.kind} composed of ${c.members.length} named site(s).`,
+        claimClass: "concept", evidenceIds: (c.evidenceIds ?? []).slice(0, 6),
+        rationaleSummary: "Structural composition found in the indexed graph.", subjects: c.members,
+      }, bundle, { store: this.store });
+      if (claim.displayMode === "HIDDEN") continue;
+      this.store.putClaim(claim);
+      this.store.setConceptClaim(rev.id, c.id, claim.draft.id);
+    }
     this.store.audit(actor(ctx), "concept-hierarchy.build", rev.id, {
       version, concepts: result.concepts.length, invariants: result.invariants.length,
       archNodes: result.arch.length, crossPackage: result.crossPackage.length, fullRebuild: result.stats.fullRebuild,
@@ -2102,8 +2119,9 @@ export class Service {
   }
 
   /** Zero-LLM structural concept clusters the worker found at index time (shape.rs's AST-shape hash, shared
-   * framework role) — see store.ts's `conceptClusters`. Separate from `conceptHierarchy` above: no build step,
-   * always current for whatever revision is indexed, nothing to go stale. */
+   * framework role, and near-duplicate IR copies) — see store.ts's `conceptClusters`. Separate from
+   * `conceptHierarchy` above: no build step, always current for whatever revision is indexed, nothing to go
+   * stale. A near-duplicate cluster's pairs carry the per-pair similarity and structural-diff summary. */
   structuralConcepts(ctx: CallContext, req: { revision?: string }): ApiResult<StructuralConceptsView> {
     const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
     if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
@@ -2113,6 +2131,7 @@ export class Service {
     const clusters: StructuralConceptsView["clusters"] = raw.map((c) => ({
       id: c.conceptId, kind: c.kind as StructuralConceptCluster["kind"], name: c.name,
       members: c.memberEntityIds.flatMap((id) => { const e = entityById.get(id); return e ? [{ entityId: id, name: e.name, kind: e.kind, file: e.file }] : []; }),
+      ...(c.kind === "near-duplicate" && c.pairs.length ? { pairs: c.pairs.map((p) => ({ a: p.a, b: p.b, similarity: p.similarity, diff: p.diff })) } : {}),
     }));
     return ok(ctx, { revision: rev.id, clusters }, { revision: rev.id, warnings: [] });
   }

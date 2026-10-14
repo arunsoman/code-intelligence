@@ -28,12 +28,21 @@ export function copyFixture(): string {
   return dir;
 }
 
-export async function setup(model: ModelProvider = new StubProvider(), repo = FIXTURE) {
+export async function setup(model: ModelProvider = new StubProvider(), repo = FIXTURE, opts: { hierarchy?: boolean } = {}) {
   const worker = new WorkerClient();
   const svc = new Service(new Store(":memory:"), worker, model);
   svc.router = new ScriptedRouter();
   const r = await svc.ingestRepository(ctx(), { repoPath: repo });
   if (!r.ok) throw new Error(r.error.message);
+  // Answers route through the concept hierarchy (`conceptRequirement`); build it for the ingested
+  // revision so every test that asks a question exercises the real path. Tests that deliberately
+  // assert the missing-hierarchy guidance pass `{ hierarchy: false }`.
+  if (opts.hierarchy !== false) {
+    // Naming is the only model-bound phase of the build; give it its own short test budget so a slow or
+    // hung provider does not inherit the whole 30 s context deadline in every setup() (cancellation tests hang otherwise).
+    const h = await svc.buildConceptHierarchy({ ...ctx(), deadlineMs: Date.now() + 6_000 }, { revision: r.value.id });
+    if (!h.ok) throw new Error(`concept hierarchy failed: ${h.error.message}`);
+  }
   return { svc, worker, revision: r.value.id };
 }
 

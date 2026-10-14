@@ -11,7 +11,8 @@ import { copyFixture, setup } from "./helpers.ts";
 // The discovery toggle in the web app builds the hierarchy through C07/enqueue and reads it through C11/conceptHierarchy.
 // This is that exact path over HTTP, and the check that the two ways of discovering concepts keep separate stores.
 test("concept hierarchy over the gateway: build as a job, read it back, and leave the concept cards alone", async () => {
-  const { svc, worker } = await setup();
+  // The test drives the build through the gateway job itself, so setup must not pre-build the hierarchy.
+  const { svc, worker } = await setup(undefined, undefined, { hierarchy: false });
   const srv = createServer(buildHandler(svc));
   await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;

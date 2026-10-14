@@ -1109,6 +1109,19 @@ export const MIGRATIONS: Migration[] = [
       create table structural_concept_terms(term text not null, concept_id text not null references structural_concepts(concept_id), primary key(term, concept_id));`),
     down: (db) => db.exec("drop table structural_concept_terms; drop table structural_concept_members; drop table structural_concept_revisions; drop table structural_concepts;"),
   },
+  {
+    // Near-duplicate pair evidence (plan Phase 2): the per-pair similarity and structural-diff summary of a
+    // `"near-duplicate"` cluster. Keys are entity ids in `structural_concept_members`; the pairs ride the same
+    // content-addressed `concept_id`, so an unchanged cluster keeps its pairs across re-indexes.
+    version: 53, name: "structural-concept-pairs",
+    up: (db) => db.exec(`
+      create table structural_concept_pairs(
+        concept_id text not null references structural_concepts(concept_id),
+        a text not null, b text not null, similarity real not null, diff text not null,
+        primary key(concept_id, a, b));
+      create index structural_concept_pairs_by_concept on structural_concept_pairs(concept_id);`),
+    down: (db) => db.exec("drop table structural_concept_pairs;"),
+  },
 ];
 export function currentVersion(db: DatabaseSync): number {
   db.exec("create table if not exists schema_version(version integer not null, name text not null, applied_at text not null)");

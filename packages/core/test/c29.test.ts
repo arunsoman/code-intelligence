@@ -108,7 +108,8 @@ test("correction in a shared concept: a team confirmation or refutation is attri
   const bobIds = new Set(bob.concepts.map((c) => c.id));
   const hiddenFromBob = [...aliceIds].filter((id) => !bobIds.has(id));
   assert.equal(hiddenFromBob.length, bob.withheld);
-  const shared = alice.concepts.find((c) => bobIds.has(c.id) && c.kind === "failure-mode")!;
+  // Concept kinds are the structural vocabulary now; any shared concept exercises the same verdict flow.
+  const shared = alice.concepts.find((c) => bobIds.has(c.id) && c.claimId) ?? alice.concepts.find((c) => bobIds.has(c.id))!;
   const claim = (id: string) => svc.store.getClaim(svc.store.concepts(revision, { includeRefuted: true }).find((c) => c.id === id)!.claimId)!;
   // Alice confirms: it is attributed, never fact, and Bob sees it.
   const c1 = collab.confirmSharedConcept("alice", { conceptId: shared.id, verdict: "CONFIRM", explanation: "seen in prod", expectedVersion: claim(shared.id).version }) as any;

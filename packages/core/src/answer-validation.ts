@@ -22,7 +22,7 @@ const reviewTool: AgentToolSpec = {
     } },
 };
 export const unavailableReview = (gap: string): AnswerReview => ({ verdict: "UNRESOLVED", relevance: false, coverage: false, evidence: false, certainty: false, consistency: false, requirements: [], gaps: [gap], nextAction: "continue" });
-export const reviewProcessFailed = (gap: string): AnswerReview => ({ ...unavailableReview(gap), verdict: "REPAIRABLE" });
+export const reviewProcessFailed = (gap: string): AnswerReview => ({ ...unavailableReview(gap), verdict: "REPAIRABLE", processFailure: true });
 
 const MAX_LIST_ITEMS = 8, MAX_ITEM_CHARS = 500;
 
@@ -104,7 +104,20 @@ export function parseAnswerReview(value: unknown): AnswerReview | null {
   return "review" in outcome ? reconcile(outcome.review) : null;
 }
 
-const REVIEW_EVIDENCE_BUDGET_CHARS = 180_000;
+export const REVIEW_EVIDENCE_BUDGET_CHARS = 180_000;
+
+// A review reading a handful of lines and one reading several multi-method classes don't belong under the same
+// flat timer: the latter needs materially longer to read and reason over before it can answer honestly. This rate
+// is a conservative heuristic, not a per-model benchmark (no two backends process a character at the same speed) —
+// it exists only so a large evidence set gets a reserve big enough to plausibly succeed on a retry, instead of
+// repairAttempts retrying straight into the same fixed timeout (what actually happened: a review covering five-plus
+// methods across two classes kept exceeding a flat 12-35s reserve on every attempt).
+const REVIEW_MS_PER_EVIDENCE_CHAR = 0.5, REVIEW_RESERVE_CAP_MS = 120_000;
+
+/** How long a review call plausibly needs for `evidenceChars` worth of evidence, floored and capped by the caller's own bounds. */
+export function reviewTimeEstimate(evidenceChars: number, floorMs: number): number {
+  return Math.min(REVIEW_RESERVE_CAP_MS, Math.max(floorMs, Math.ceil(Math.min(evidenceChars, REVIEW_EVIDENCE_BUDGET_CHARS) * REVIEW_MS_PER_EVIDENCE_CHAR)));
+}
 
 function budgetedEvidence(relevant: AnswerInvestigation["observations"], all: AnswerInvestigation["observations"], budgetChars = REVIEW_EVIDENCE_BUDGET_CHARS): AnswerInvestigation["observations"] {
   const picked: AnswerInvestigation["observations"] = [];
@@ -180,6 +193,13 @@ export function unresolvedMessage(investigation: AnswerInvestigation): string {
   if (findings.length) {
     return ["Verified against the indexed source:", ...findings.map(f => `${f.text} [${f.entityIds.join("; ")}]`),
       "Still open:", ...investigation.missingEvidence.map(g => `• ${g}`), `Next: ${next}`].join("\n\n");
+  }
+  // A model/tool call failing partway through is not an evidence gap; say so plainly instead of implying the
+  // investigation looked and came up short, which invites second-guessing the evidence rather than retrying.
+  if (investigation.processFailure) {
+    return ["Unresolved: the investigation was interrupted by a model or tool failure, not by insufficient evidence.",
+      ...(investigation.inspectedIds.length ? [`Evidence inspected before the interruption: ${investigation.inspectedIds.slice(0, 12).join("; ")}.`] : []),
+      "What happened:", ...investigation.missingEvidence.map(g => `• ${g}`), `Next: ${next}`].join("\n\n");
   }
   return ["Unresolved: I cannot yet support a definitive answer to this question.",
     ...(investigation.inspectedIds.length ? [`Evidence inspected: ${investigation.inspectedIds.slice(0, 12).join("; ")}.`] : []),

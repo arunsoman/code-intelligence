@@ -67,7 +67,7 @@ test("changed source cannot be sliced with old symbol offsets or recorded as ins
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-const supported = { verdict: "SUPPORTED", relevance: true, coverage: true, evidence: true, certainty: true, consistency: true, requirements: [], gaps: [], nextAction: "continue" };
+const supported = { verifiedBy: ["obs-1"],  verdict: "SUPPORTED", relevance: true, coverage: true, evidence: true, certainty: true, consistency: true, requirements: [], gaps: [], nextAction: "continue" };
 test("reviewer format retry recovers a valid assessment without another writer pass", async () => {
   let calls = 0;
   const model: RouterModel = { name: "format-retry", choose: async () => null, converse: async (messages) => {

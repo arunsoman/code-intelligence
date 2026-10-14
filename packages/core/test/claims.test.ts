@@ -119,26 +119,21 @@ test("audit log is hash-chained; tampering is detected; verdicts and asks are re
   worker.close();
 });
 
-test("concept cards: capabilities, failure modes, invariants and async workflows, each grounded", async () => {
+test("concept claims: every concept carries a real claim grounded in its members' evidence", async () => {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
-  const r = await svc.extractConcepts(ctx(), { revision });
-  assert.ok(r.ok);
-  const cards = r.value.cards;
-  const kinds = new Set(cards.map((c) => c.kind));
-  for (const k of ["capability", "failure-mode", "invariant", "workflow"]) assert.ok(kinds.has(k as any), k);
-  const inv = cards.find((c) => c.kind === "invariant" && c.title.includes("balance"))!;
-  assert.equal(inv.members.length, 3);
-  assert.match(inv.summary, /outside a transaction/);
-  assert.ok(cards.some((c) => c.kind === "workflow" && c.title.includes("refund.requested")));
-  assert.ok(cards.some((c) => c.kind === "failure-mode" && c.title === "Failure: FraudRejectedError"));
+  // Concept cards (with their invariants/workflows) were retired; the concept projection rides the
+  // dual-axis hierarchy, whose build gives every concept a real claim instead of claimId "".
+  const cards = svc.store.concepts(revision);
+  assert.ok(cards.length > 0, "the built hierarchy yields concepts");
   for (const c of cards) {
     assert.ok(c.evidenceIds.length > 0 && svc.store.evidence(revision, c.evidenceIds[0]), "card cites stored evidence");
     const claim = svc.store.getClaim(c.claimId)!;
-    assert.ok(claim && claim.gates[0].status === "PASS" && claim.displayMode !== "HIDDEN");
-    assert.equal(c.statedConfidence.length > 0, true);
+    assert.ok(claim, "every concept carries its provenance claim");
+    assert.equal(claim.draft.claimClass, "concept");
+    assert.ok(claim.displayMode !== "HIDDEN", "a grounded concept claim is not hidden");
   }
-  // Cards feed retrieval: a question about "refund.requested" finds the workflow members.
+  // Cards feed retrieval: the concept listing matches the projection one for one.
   const listed = svc.listConcepts(ctx(), { revision });
   assert.ok(listed.ok && listed.value.length === cards.length);
   worker.close();

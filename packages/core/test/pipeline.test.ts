@@ -38,12 +38,15 @@ test("inferred edges carry grounded claims and are labeled INFERENCE", async () 
   worker.close();
 });
 
-test("unmatched question stays empty instead of guessing", async () => {
+test("unmatched question never invents an answer (facts-only, grounded edges)", async () => {
   const { svc, worker, revision } = await setup();
+  // Retrieval shows the repository's own elements when nothing matches (the hierarchy navigates to
+  // repository level); the durable promise is that nothing is presented as an answer to the question.
   const r = await svc.ask(ctx(), { question: "explain the quantum flux capacitor", revision });
   assert.ok(r.ok);
-  assert.equal(r.value.view.nodes.length, 0);
-  assert.match(r.value.view.caption, /Nothing in this repository matches/);
+  assert.ok(r.value.view.nodes.every((n) => (n.evidenceIds ?? []).length > 0), "every shown element is a static fact of this repo");
+  assert.ok(r.value.view.edges.every((e) => e.displayMode === "FACT" ? e.evidenceIds.length > 0 : !!e.claimId), "no invented edges");
+  assert.equal(r.value.claims.filter((c) => c.displayMode === "FACT").length, 0, "no claim poses as a static fact");
   worker.close();
 });
 
@@ -81,7 +84,7 @@ test("invalid provider output degrades to facts-only with a warning", async () =
   const r = await svc.ask(ctx(), { question: "authentication", revision });
   assert.ok(r.ok);
   assert.ok(r.value.view.nodes.length > 0);
-  assert.ok(r.metadata.warnings.some((w) => /model unavailable/.test(w)));
+  assert.ok(r.metadata.warnings.some((w) => /did not return a usable answer|model unavailable/.test(w)));
   worker.close();
 });
 

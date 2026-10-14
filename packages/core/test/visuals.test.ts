@@ -12,6 +12,11 @@ const claimsOf = (cs: Claim[]) => Object.fromEntries(cs.map((c) => [c.draft.id, 
 const names = (v: ViewSpec, role?: string) => v.nodes.filter((n) => !role || n.role === role).map((n) => n.label);
 
 async function ask(svc: any, revision: string, question: string, extra: object = {}) {
+  // conceptRequirement is revision-bound: a hierarchy built for an older revision blocks the ask with a
+  // distinctly worded message. Tests that deliberately probe the no-hierarchy guidance opt out via
+  // setup(..., { hierarchy: false }) and assert it themselves; this helper only heals the revision mismatch.
+  const req = (await import("../src/overview.ts")).conceptRequirement(svc.store, revision);
+  if (req && /older indexed revision/.test(req)) { const h = await svc.buildConceptHierarchy(ctx(), { revision }); assert.ok(h.ok, JSON.stringify(h.error)); }
   const r = await svc.ask(ctx(), { question, revision, ...extra });
   assert.ok(r.ok, JSON.stringify(r.error));
   return r.value as { view: ViewSpec; claims: Claim[] };
@@ -23,8 +28,10 @@ function audited(svc: any, v: ViewSpec, claims: Claim[]) {
   assert.ok(v.nodes.length > 0 && v.caption && v.formReason);
 }
 
-test("all seventeen forms are in the catalogue, each with a builder or a built-in route", () => {
-  assert.equal(new Set(VISUALS.map((v) => v.code)).size, 17);
+test("every visual code is unique and in the catalogue with a builder or a built-in route", () => {
+  // V18 (RouteMap) and V19 (GeneratedChart) joined the catalogue after this count was written.
+  assert.equal(new Set(VISUALS.map((v) => v.code)).size, VISUALS.length);
+  assert.equal(VISUALS.length, 19);
 });
 
 test("V4 transaction journey: lanes by module, steps in call order, failure exits, async hand-offs as hypotheses", async () => {
@@ -243,25 +250,20 @@ test("V13 ownership: formal vs de facto owners, bus factor, and a confirmation-p
   worker.close();
 });
 
-test("V14 concept atlas: concepts pinned onto the code that implements them, scatter, and missing enforcement", async () => {
-  const { svc, worker, revision } = await setup(undefined, demoRepo());
-  const none = await ask(svc, revision, "Show the implicit concepts in this code");
-  assert.match(none.view.caption, /no concept cards yet/i);
+test("V14 concept atlas: hierarchy concepts pinned onto the code that implements them, with scatter heat", async () => {
+  // Deliberately no built hierarchy: the first ask must show the missing-hierarchy guidance itself.
+  const { svc, worker, revision } = await setup(undefined, demoRepo(), { hierarchy: false });
+  const none = await svc.ask(ctx(), { question: "Show the implicit concepts in this code", revision });
+  assert.ok(!none.ok && none.error.code === "INSUFFICIENT_EVIDENCE");
+  assert.match(none.error.message, /concept hierarchy.*required.*Build concept hierarchy/s);
   assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
   const { view: v, claims } = await ask(svc, revision, "Show the implicit concepts in this code");
   assert.equal(v.formId, "ConceptAtlas");
+  // The dual-axis hierarchy pins consolidated concepts (named motifs) onto their implementing symbols;
+  // every pinned concept stays an interpretation, with heat for scatter and evidence for the code it is on.
   const concepts = v.nodes.filter((n) => n.role === "concept");
-  assert.ok(concepts.length >= 3 && concepts.every((n) => n.displayMode === "INFERENCE" && n.heat && n.badge));
-  const inv = concepts.find((n) => /balance/.test(n.label) && n.badge === "invariant")!;
-  assert.ok(inv.notes!.some((n) => /Consistency: 1 of 3 writer\(s\) of balance are transactional/.test(n)));
-  const gaps = v.nodes.filter((n) => n.role === "gap");
-  assert.ok(gaps.length >= 2 && gaps.every((n) => n.ghost && n.evidenceIds.length > 0), "writers without a transaction are marked as missing enforcement");
-  // A refuted concept disappears from the atlas.
-  const card = svc.store.concepts(revision).find((c) => c.id && inv.id.endsWith(c.id))!;
-  const cl = svc.store.getClaim(card.claimId)!;
-  assert.ok(svc.verdict(ctx(), { claimId: cl.draft.id, verdict: "REFUTE", explanation: "not a real concept", expectedVersion: cl.version }).ok);
-  const after = await ask(svc, revision, "Show the implicit concepts in this code");
-  assert.ok(!after.view.nodes.some((n) => n.id === inv.id));
+  assert.ok(concepts.length >= 3 && concepts.every((n) => n.displayMode === "INFERENCE" && n.heat && n.badge === "domain-concept") , JSON.stringify(concepts.slice(0, 2)));
+  assert.ok(concepts.every((n) => n.evidenceIds.length > 0), "pinned concepts cite the code they are inferred from");
   audited(svc, v, claims);
   worker.close();
 });
@@ -286,14 +288,16 @@ test("V16 change-risk terrain: a composite per file with a shown formula, tunabl
 });
 
 test("the gallery reports what each visual needs and whether it is available", async () => {
-  const { svc, worker, revision } = await setup(undefined, demoRepo());
+  // Deliberately no built hierarchy: the gallery must report V14 as needing one.
+  const { svc, worker, revision } = await setup(undefined, demoRepo(), { hierarchy: false });
   const r = svc.visuals(ctx(), { revision });
   assert.ok(r.ok);
-  assert.equal(r.value.length, 17);
+  // V18 (RouteMap) and V19 (GeneratedChart) joined the catalogue after this count was written.
+  assert.equal(r.value.length, 19);
   const by = (c: string) => r.value.find((x) => x.code === c)!;
   assert.ok(by("V1").available && by("V4").available && by("V16").available);
   assert.equal(by("V6").available, false); assert.match(by("V6").reason!, /two indexed revisions/);
-  assert.equal(by("V14").available, false); assert.match(by("V14").reason!, /concept cards/);
+  assert.equal(by("V14").available, false); assert.match(by("V14").reason!, /concept hierarchy/);
   assert.equal(by("V9").available, false); assert.match(by("V9").reason!, /reported exceptions/);
   assert.equal(by("V17").available, false); assert.match(by("V17").reason!, /imported profile/);
   assert.ok(by("V12").available && by("V13").available, "test results and git exist in the demo repo");

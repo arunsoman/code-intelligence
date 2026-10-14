@@ -85,25 +85,30 @@ export function answerConcepts(store: Store, revision: string) {
   const access = policyFor(store, rev.repoRoot);
   const entities = new Map(productionEntities(store.entities(revision)).map((e) => [e.entityId, e]));
   const hierarchy = store.semanticConcepts(revision).map((c) => ({ id: c.id as string, kind: c.kind as string, title: (c.label ?? c.kind) as string,
-    summary: c.soundness?.basis ?? "Structural concept", members: c.members as string[], source: `hierarchy:${c.namedBy ?? "unnamed"}`, basis: c.soundness?.tier ?? "speculative" }));
+    summary: c.soundness?.basis ?? "Structural concept", members: c.members as string[], source: `hierarchy:${c.namedBy ?? "unnamed"}`, basis: c.soundness?.tier ?? "speculative", claimId: (c as { claimId?: string }).claimId as string | undefined }));
   return hierarchy.filter((c) => c.members.length > 0 && c.members.every((id) => {
     const e = entities.get(id);
     return e && productionSource(e.file) && !access.denied(e.file);
-  }));
+  }) && !(c.claimId && store.getClaim(c.claimId)?.state === "REFUTED"));
 }
 
 export function conceptRequirement(store: Store, revision: string): string | undefined {
   const rev = store.revision(revision);
   if (!rev || answerConcepts(store, revision).length) return undefined;
-  // A built hierarchy can legitimately have no visible concepts after an access restriction.
-  // Let the access-filtered answer pipeline explain the absence rather than demand repeated rebuilds.
-  if (store.deniedPrefixes(rev.repoRoot).length && store.semanticConceptVersions(rev.repoRoot).some(v => v.revision === revision)) return undefined;
+  // A hierarchy built for this exact revision is done: it legitimately found nothing to organize here, or a
+  // later access restriction hid its concepts. Let the access-filtered answer pipeline explain the absence
+  // rather than demand repeated rebuilds.
+  if (store.semanticConceptVersions(rev.repoRoot).some((v) => v.revision === revision)) return undefined;
   const earlierHierarchy = store.semanticConceptVersions(rev.repoRoot).find((v) => v.revision !== revision && v.concepts > 0);
   return `${earlierHierarchy ? `The concept hierarchy was already generated for this repository, but for an older indexed revision (${earlierHierarchy.revision}).` : "The concept hierarchy is required before answering repository questions, and no usable concepts exist for this indexed revision."} Click “Build concept hierarchy” for the current revision, then ask again.`;
 }
 
 export const productionSource = (file: string) => /\.(?:[cm]?[jt]sx?|rs|java|go|py|nir)$/.test(file) &&
-  !/(^|\/)(tests?|__tests__|fixtures?|examples?|docs?|demo|benches|benchmarks|node_modules|target|dist|generated)(\/|$)|\.(test|spec)\./i.test(file);
+  // `src/main/java/...` is a build layout, not a naming convention: a java package segment that happens to read
+  // "demo" is a production namespace, not a demonstration directory. Its test twin (`src/test/java/...`) still
+  // falls to the conventional exclusion below.
+  (/src\/main\/java\//.test(file) || !/(^|\/)(tests?|__tests__|fixtures?|examples?|docs?|demo|benches|benchmarks|node_modules|target|dist|generated)(\/|$)/i.test(file)) &&
+  !/\.(test|spec)\./i.test(file);
 
 export function sourceModule(file: string): string {
   const parts = file.split("/");

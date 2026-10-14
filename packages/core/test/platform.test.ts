@@ -166,6 +166,8 @@ test("C31: reference-count garbage collection removes only revisions nothing ref
   // revs[1] is saved in an investigation; revs[2] has a human verdict; revs[0] and the middle one nothing; revs[3] is the newest.
   const saved = await svc.saveWorkspace(ctx("sv"), { name: "keep", expectedVersion: 0, state: { view: null, selection: [], events: [], messages: [], explanation: null, revision: revs[1] } } as any);
   store.db.prepare("update workspaces set revision = ?").run(revs[1]);
+  // The question needs this revision's own hierarchy (conceptRequirement is revision-bound).
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision: revs[2] })).ok);
   const claim = store.db.prepare("select id from claims where revision = ? limit 1").get(revs[2]) as any ?? (await svc.ask(ctx(), { question: "walk me through createPayment", revision: revs[2] }), store.db.prepare("select id from claims where revision = ? limit 1").get(revs[2]) as any);
   store.db.prepare("insert into verdicts values (?,?,?,?,?,?,?)").run("v1", claim.id, "u", "CONFIRM", "ok", new Date().toISOString(), "[]");
   void saved;
@@ -258,7 +260,7 @@ test("C32: dependency outages: a killed parser is replaced, a dead model degrade
   const { svc, worker, revision } = await setup(model);
   const down = await svc.ask(ctx(), { question: "show me how authentication works", revision });
   assert.ok(down.ok && down.value.view.nodes.length > 0, "still answers from facts");
-  assert.ok(down.metadata.warnings.some((w) => /model unavailable/.test(w)));
+  assert.ok(down.metadata.warnings.some((w) => /did not return a usable answer|model unavailable/i.test(w)));
   const h1 = await svc.health(ctx());
   assert.ok(h1.ok && h1.value.status === "degraded" && h1.value.checks.find((c) => c.name === "model")!.ok === false);
   model.down = false;
@@ -329,12 +331,17 @@ test("C32: load and cost gates: the measured system is inside its budget, and a 
   const ing = await svc.ingestRepository(ctx(), { repoPath: repo });
   assert.ok(ing.ok);
   const indexMs = Date.now() - t0;
+  // Answers need this revision's hierarchy (conceptRequirement); it is built here, and its cost stays part of the measured step.
+  const tH = Date.now();
+  const h = await svc.buildConceptHierarchy(ctx(), { revision: ing.value.id });
+  assert.ok(h.ok, JSON.stringify((h as { error?: { message?: string } }).error));
+  const indexMsTotal = indexMs + (Date.now() - tH);
   const askMs: number[] = [], tokens: number[] = [];
   for (const q of ["show me how authentication works", "what could cause a payment to fail", "who reads and writes balance", "where can balance race", "which policies are enforced"]) for (let i = 0; i < 4; i++) {
     const t = Date.now(); const r = await svc.ask(ctx(), { question: q, revision: ing.value.id }); askMs.push(Date.now() - t); assert.ok(r.ok);
     tokens.push(Math.ceil(JSON.stringify(r.value.view).length / 4));
   }
-  const g = checkGates({ indexMs, files: ing.value.fileCount, askMs, tokensPerAsk: tokens });
+  const g = checkGates({ indexMs: indexMsTotal, files: ing.value.fileCount, askMs, tokensPerAsk: tokens });
   assert.ok(g.ok, g.failures.join("; "));
   const slow = checkGates({ indexMs: 10_000, files: 4, askMs: [100, 9000, 100, 100], tokensPerAsk: [500_000] });
   assert.equal(slow.ok, false);

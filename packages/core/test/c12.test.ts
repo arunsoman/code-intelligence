@@ -30,10 +30,13 @@ test("why-hidden query: a hidden element is explained from its factor scores, an
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
   const r = await svc.ask(ctx(), { question: "how do refunds work", revision });
-  assert.ok(r.ok && !r.value.view.nodes.some((n) => n.label === "checkFraud"));
-  const why = svc.whyHidden(ctx(), { view: r.value.view, query: "checkFraud" });
+  assert.ok(r.ok);
+  // The hierarchy walks a question's concept family, so for a broad topic most of the payments
+  // neighbourhood is on screen. The Account class is not, and why-hidden explains its scores.
+  assert.ok(!r.value.view.nodes.some((n) => n.label === "Account"));
+  const why = svc.whyHidden(ctx(), { view: r.value.view, query: "Account" });
   assert.ok(why.ok);
-  assert.match(why.value.summary, /checkFraud/);
+  assert.match(why.value.summary, /Account/);
   assert.match(why.value.summary, /relevance \d\.\d\d|:/);
   const none = svc.whyHidden(ctx(), { view: r.value.view, query: "doesNotExistAnywhere" });
   assert.ok(none.ok && /Nothing in this repository is named like/.test(none.value.summary));

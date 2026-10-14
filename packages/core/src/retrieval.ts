@@ -350,12 +350,26 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
     const order = [...picked].sort((a, b) => rank(a) - rank(b) || scored.get(a)!.score - scored.get(b)!.score || a.localeCompare(b));
     const dropped: { entityId: string; label: string }[] = [];
     let keep = new Set(picked);
-    while (bundle.tokenEstimate > opts.tokenBudget && keep.size > 1) {
+    // A model bundle may drain to nothing (facts-only degradation handles that); a user-facing view keeps one element.
+    // The cut drains ranked elements until the budget holds. A model bundle may drain to nothing (facts-only
+    // degradation handles that); a user-facing view keeps one element. The keep-size guard also bounds the loop
+    // when even an empty bundle (coverage notes alone) exceeds a tiny budget.
+    while (bundle.tokenEstimate > opts.tokenBudget && (opts.forModel ? keep.size > 0 : keep.size > 1)) {
       const step = Math.max(1, Math.floor(keep.size * 0.1));
       const modules = new Map<string, number>();
       for (const id of keep) { const module = sourceModule(byId.get(id)!.file); modules.set(module, (modules.get(module) ?? 0) + 1); }
-      const removable = order.filter((x) => keep.has(x));
-      if (opts.forModel && opts.scope === "repository") removable.sort((a, b) => Number((modules.get(sourceModule(byId.get(a)!.file)) ?? 0) <= 1) - Number((modules.get(sourceModule(byId.get(b)!.file)) ?? 0) <= 1));
+      let removable = order.filter((x) => keep.has(x));
+      // Balance the squeeze by module: the members of the currently largest module are reduced first, and under
+      // a repository-wide squeeze every source module keeps one anchor so no busy module crowds the small
+      // peripheral ones out (java stays beside the frontend).
+      if (opts.forModel && opts.scope === "repository") removable.sort((a, b) => (modules.get(sourceModule(byId.get(b)!.file)) ?? 0) - (modules.get(sourceModule(byId.get(a)!.file)) ?? 0) || scored.get(a)!.score - scored.get(b)!.score || a.localeCompare(b));
+      // The per-module anchor floor is part of the repository-overview balance in this branch, not part of the
+      // otherwise strictly rank-ordered cut.
+      if (opts.forModel && opts.scope === "repository") {
+        const anchorOf = new Map<string, string>();
+        for (const id of keep) { const m = sourceModule(byId.get(id)!.file); const cur = anchorOf.get(m); if (!cur || scored.get(id)!.score > scored.get(cur)!.score) anchorOf.set(m, id); }
+        removable = removable.filter((x) => !(anchorOf.get(sourceModule(byId.get(x)!.file)) === x && anchorOf.size < keep.size));
+      }
       for (const id of removable.slice(0, step)) { keep.delete(id); dropped.push({ entityId: id, label: byId.get(id)!.name }); hidden.push({ entityId: id, label: byId.get(id)!.name, reason: "dropped to fit the evidence budget for the model" }); }
       bundle = build(picked.filter((x) => keep.has(x)), [...notes, `evidence cut to fit ~${opts.tokenBudget} tokens`]);
       if (opts.forModel) reduceModelDetail(bundle, opts.tokenBudget);
@@ -390,6 +404,7 @@ export function retrieveForQuestion(store: Store, revision: string, question: st
     const collected = new Set(snapshot.bundle.entities.map(e => e.entityId));
     for (const id of topUp.filter(id => collected.has(id)).slice(0, opts.forModel && opts.scope === "repository" ? Math.max(0, maxNodes - picked.length) : 160)) {
       const candidate = build([...picked, id], [...notes, "chart notation kinds included"]);
+      if (process.env.CIE_DEBUG_TOPUP) console.error(`[topup] ${id} tokenEstimate=${candidate.tokenEstimate} budget=${opts.tokenBudget} scope=${opts.scope}`);
       if (opts.tokenBudget && candidate.tokenEstimate > opts.tokenBudget) {
         const entity = byId.get(id)!;
         hidden.push({ entityId: id, label: entity.name, reason: "left out to keep the required chart evidence within the token budget" });

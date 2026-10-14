@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { OPEN } from "../src/access.ts";
 import { CHAT_TOOLS, checkArgs, toolByName } from "../src/chat-tools.ts";
 import type { AgentMessage, AgentReply, AgentToolSpec, RouterModel } from "../src/llm-router.ts";
+import { ModelDeadlineError } from "../src/model-deadline.ts";
 import { resolveMentions, within } from "../src/mentions.ts";
 import { chartCitesOverlap } from "../src/answer-visual.ts";
 import { policyFor } from "../src/access.ts";
@@ -16,7 +17,7 @@ function scripted(turns: ((messages: AgentMessage[], tools: AgentToolSpec[]) => 
   return {
     name: "scripted-agent", calls, choose: async () => null,
     converse: async (messages, tools) => {
-      if (tools[0]?.name === "review_answer") return call("review_answer", { verdict: "SUPPORTED", relevance: true, coverage: true, evidence: true, certainty: true, consistency: true, requirements: [], gaps: [], nextAction: "continue" });
+      if (tools[0]?.name === "review_answer") return call("review_answer", { verifiedBy: ["obs-1"],  verdict: "SUPPORTED", relevance: true, coverage: true, evidence: true, certainty: true, consistency: true, requirements: [], gaps: [], nextAction: "continue" });
       calls.push({ messages: [...messages], tools }); const t = turns[calls.length - 1] ?? turns.at(-1)!; return t(messages, tools); },
   };
 }
@@ -172,6 +173,31 @@ test("a model that stops mid-way gets a reply listing what was looked at, not an
     assert.match(r.value.message, /^Unresolved:/);
     assert.equal(r.value.validation?.status, "UNRESOLVED");
     assert.equal(r.metadata.completeness, "PARTIAL");
+  } finally { worker.close(); }
+});
+
+test("a reviewer that persistently times out ends the investigation as a process failure, not a rejected answer", async () => {
+  const { svc, worker, revision } = await setup();
+  try {
+    let turnCalls = 0, entityId = "";
+    const model: RouterModel = {
+      name: "flaky-reviewer", choose: async () => null,
+      converse: async (messages, tools) => {
+        // The reviewer's own call is a separate conversation identified by its tool set, not by turn order;
+        // it times out on every attempt, exactly as a slow model would against a large evidence set.
+        if (tools[0]?.name === "review_answer") throw new ModelDeadlineError();
+        turnCalls++;
+        if (turnCalls === 1) { entityId = request(messages).mentions[0].candidates[0].id; return call("read_code", { id: entityId }); }
+        return call("answer", { text: "AuthService signs users in.", cites: [entityId] });
+      },
+    };
+    svc.router = model;
+    const r = await svc.converse(ctx(), { text: "what is the job of AuthService?", revision });
+    assert.ok(r.ok && r.value.kind === "analysis");
+    assert.match(r.value.message, /^Unresolved:/);
+    assert.match(r.value.message, /interrupted by a model or tool failure, not by insufficient evidence/);
+    assert.equal(r.value.validation?.investigation?.processFailure, true);
+    assert.ok(r.metadata.warnings.some((w) => /investigation stopped because the model\/tool call itself failed/.test(w)));
   } finally { worker.close(); }
 });
 

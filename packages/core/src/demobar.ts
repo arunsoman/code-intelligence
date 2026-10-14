@@ -118,6 +118,8 @@ export async function runDemoBar(opts: { provider?: ModelProvider; dir?: string;
     authSvc.router = opts.router ?? null;
     const authRepo = join(ROOT, "fixtures/sample-repo");
     await authSvc.ingestRepository(ctx(), { repoPath: authRepo });
+    // Answers require this revision's own hierarchy (conceptRequirement), so build it for the auth fixture too.
+    await authSvc.buildConceptHierarchy(ctx(), {});
     if (provider.hosted) authSvc.setEgress(ctx(), { repoRoot: authRepo, allow: true });
 
     let q3View: ViewSpec | null = null;

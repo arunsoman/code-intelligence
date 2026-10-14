@@ -51,11 +51,14 @@ export interface EvidenceRef {
   location: { kind: "CodeLocation"; span: SourceSpan } | { kind: string; [k: string]: unknown };
   class: EvidenceClass; observedAt: string; accessScopeId: Id; state: EvidenceState;
 }
-export interface Entity { entityId: Id; kind: string; name: string; file: string; spans: SourceSpan[]; symbolHash?: string; shapeHash?: string }
+export interface Entity { entityId: Id; kind: string; name: string; file: string; spans: SourceSpan[]; symbolHash?: string; shapeHash?: string; irHash?: string; irDump?: string }
 
 /** A zero-LLM concept cluster the worker found this index (index.rs's `cluster_concepts`): entities that are the
- * same concept declared more than once, found from AST shape or shared framework role — see crates/worker/src/shape.rs. */
-export interface ConceptClusterRaw { clusterId: string; kind: "exact-shape" | "framework-role"; memberEntityIds: Id[]; heuristicName?: string }
+ * same concept declared more than once, found from AST shape or shared framework role — see crates/worker/src/shape.rs.
+ * A `":near-duplicate"` cluster additionally carries per-pair similarity and structural-diff evidence (ir.rs's
+ * `compare`) — copy-pasted logic under a different name. */
+export interface ConceptPairRaw { a: Id; b: Id; similarity: number; diff: string }
+export interface ConceptClusterRaw { clusterId: string; kind: "exact-shape" | "framework-role" | "near-duplicate"; memberEntityIds: Id[]; heuristicName?: string; pairs?: ConceptPairRaw[] }
 export interface Relationship {
   id: Id; from: Id; to: Id; kind: string; evidence: EvidenceRef[]; resolution: ResolutionKind; label?: string;
 }
@@ -1080,9 +1083,13 @@ export interface AnswerReview {
   nextAction: "continue" | "request_source" | "request_access" | "clarify" | "test" | "inspect_conflict";
   /** Set when the reviewer's raw verdict/checks/gaps disagreed with each other and were reconciled deterministically, instead of discarding the assessment. Diagnostic only. */
   reconciliation?: { originalVerdict: "SUPPORTED" | "REPAIRABLE" | "UNRESOLVED"; reason: string };
+  /** Set when this review itself is a stand-in for the reviewer's own process failure (timeout, transport error, or a persistently malformed response) rather than a genuine assessment of the draft. Lets a caller that exhausts its repair budget on one of these report "the review process failed" instead of "the answer was rejected". */
+  processFailure?: boolean;
 }
 export interface AnswerInvestigation {
   id: string; question: string; revision: string; supportedFindings?: AnswerReview["supportedFindings"]; missingEvidence: string[]; nextAction: AnswerReview["nextAction"];
+  /** Set when the investigation stopped because the model/tool call itself failed (timeout, connection failure), not because evidence was lacking. Changes only how the gap is worded to the user. */
+  processFailure?: boolean;
   inspectedIds: string[]; sourceHashes: Record<string, string>;
   sourceReads: Record<string, { total: number; contentHash: string; ranges: [number, number][] }>;
   observations: { name: string; arguments: Record<string, unknown>; content: string }[];
@@ -1258,9 +1265,13 @@ export interface ConceptHierarchyView {
 /** A zero-LLM structural concept cluster (`ConceptClusterRaw`, worker shape/framework-role clustering), resolved
  * with its members' names/kinds/files for display. Distinct from `SemanticConcept`/`ConceptHierarchyView` above
  * (code-idiom tags, one member each) — this is cross-file duplicate/role grouping, not idiom recognition. */
+/** Per-pair evidence of a `"near-duplicate"` cluster: similarity 0..1 (thousandths) and a short structural-diff
+ * summary naming the first differing IR node kinds and lengths ("int-div vs float-div; lengths 41 vs 40"). */
+export interface StructuralConceptPair { a: Id; b: Id; similarity: number; diff: string }
 export interface StructuralConceptCluster {
-  id: Id; kind: "exact-shape" | "framework-role"; name: string | null;
+  id: Id; kind: "exact-shape" | "framework-role" | "near-duplicate"; name: string | null;
   members: { entityId: Id; name: string; kind: string; file: string }[];
+  pairs?: StructuralConceptPair[];
 }
 export interface StructuralConceptsView { revision: RevisionId; clusters: StructuralConceptCluster[] }
 

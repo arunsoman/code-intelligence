@@ -144,9 +144,10 @@ test("low-confidence claims are never styled as facts: no estimate, and a distin
   assert.equal(c.confidence.mode, "NOT_ESTIMATED");
   assert.notEqual(c.displayMode, "FACT");
   worker.close();
-  const canvas = readFileSync(new URL("../../../apps/web/src/Canvas.tsx", import.meta.url), "utf8");
-  assert.match(canvas, /node\[display = 'HYPOTHESIS'\]", style: \{ "border-style": "dotted"/);
-  assert.match(canvas, /edge\[display = 'HYPOTHESIS'\]", style: \{ "line-style": "dotted"/);
+  // The canvas is G6 now; the dash pattern carries the mode (never colour alone): dotted hypothesis.
+  const canvas = readFileSync(new URL("../../../apps/web/src/g6-notation.ts", import.meta.url), "utf8");
+  assert.match(canvas, /displayMode === "HYPOTHESIS" \? \[1, 3\]/, "a hypothesis edge is dotted");
+  assert.match(canvas, /\[5, 4\]\s*:\s*\[\]/, "an inference stays dashed, distinct from the dotted hypothesis");
 });
 
 test("re-deriving a claim never erases a human verdict: a refuted claim keeps its state and verdicts when the same claim is gated again", async () => {

@@ -51,10 +51,19 @@ export function scrubBundle(b: EvidenceBundle): ScrubReport {
     if (hit) removed.push({ what: `relationship:${r.kind}`, kind: "endpoint-removed" });
     return !hit;
   });
+  // The investigation diagnostics repeat entity ids in the coverage rows: scrubbed entities vanish there too.
+  const investigation = b.investigation ? {
+    ...b.investigation,
+    binding: { ...b.investigation.binding, roots: b.investigation.binding.roots.filter((id) => !badEntities.has(id)), candidates: b.investigation.binding.candidates.filter((id) => !badEntities.has(id)) },
+    directCallCoverage: b.investigation.directCallCoverage?.filter((row) => !badEntities.has(row.entityId) && row.targetIds.every((id) => !badEntities.has(id))),
+    callObligations: b.investigation.callObligations?.filter((row) => !badEntities.has(row.entityId)),
+    gaps: b.investigation.gaps.filter((g) => !(g.entityId && badEntities.has(g.entityId))),
+  } : undefined;
+  if (investigation) removed.push({ what: "investigation diagnostics", kind: "endpoint-removed" });
   const keptEv = new Set([...relationships.flatMap((r) => r.evidence.map((e) => e.id)), ...facts.flatMap((f) => f.evidence.map((e) => e.id))]);
   return {
     removed, minimized,
-    bundle: { ...b, entities: b.entities.filter((e) => !badEntities.has(e.entityId)), facts, relationships, evidence: b.evidence.filter((e) => keptEv.has(e.id)) },
+    bundle: { ...b, entities: b.entities.filter((e) => !badEntities.has(e.entityId)), facts, relationships, investigation, evidence: b.evidence.filter((e) => keptEv.has(e.id)) },
   };
 }
 

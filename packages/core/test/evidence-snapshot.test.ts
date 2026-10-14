@@ -41,10 +41,12 @@ test('nested set expressions do not infer absence for missing entities', async (
 
 test('snapshot migration rolls back and reapplies without rolling back older irreversible migrations', async () => {
   const { Store }=await import('../src/store.ts');
-  const { rollback, migrate }=await import('../src/migrations.ts');
+  const { rollback, migrate, MIGRATIONS }=await import('../src/migrations.ts');
   const store=new Store(':memory:');
   try {
-    assert.deepEqual(rollback(store.db,49),[50]);
+    // Everything above 49 rolls back (all have down steps); later migrations keep extending this list,
+    // so derive it instead of hard-coding the versions known when this test was written.
+    assert.deepEqual(rollback(store.db, 49), MIGRATIONS.filter((m) => m.version > 49).map((m) => m.version).sort((a, b) => b - a));
     assert.ok(migrate(store.db).includes(50));
     const fk=store.db.prepare('pragma foreign_key_list(query_evidence_snapshots)').all() as {table:string;on_delete:string}[];
     assert.ok(fk.some(f=>f.table==='revisions'&&f.on_delete==='CASCADE'));

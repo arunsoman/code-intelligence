@@ -62,8 +62,8 @@ export function gc(store: Store, opts: { minAgeMs?: number; dryRun?: boolean; no
     if (ws) why.push(`${ws} saved investigation(s)`);
     const vd = n(store, "select count(*) n from verdicts v join claims c on c.id = v.claim_id where c.revision = ?", r.id);
     if (vd) why.push(`${vd} human verdict(s)`);
-    const cv = n(store, "select count(*) n from concept_versions where revision = ?", r.id);
-    if (cv) why.push(`${cv} concept snapshot(s)`);
+    // Concept snapshots left with migration 44 (model concept cards were removed; the structural concept
+    // hierarchy content-addresses its rows instead, and `structural_concept_revisions` cascades on the revision).
     if (now - Date.parse(r.created_at) < minAge) why.push("younger than the minimum age");
     if (why.length) kept[r.id] = why; else remove.push(r.id);
   }
@@ -76,7 +76,9 @@ function dropRevision(store: Store, id: string) {
   d.prepare("delete from subscriber_progress where event_id in (select event_id from outbox where json_extract(payload, '$.revision') = ?)").run(id);
   d.prepare("delete from outbox where json_extract(payload, '$.revision') = ?").run(id);
   d.prepare("delete from verdicts where claim_id in (select id from claims where revision = ?)").run(id);
-  for (const t of ["entities", "relationships", "facts", "evidence", "rev_files", "concepts", "claims", "context_events", "embeddings", "exports"]) d.prepare(`delete from ${t} where revision = ?`).run(id);
+  // Migration 44 removed the concepts/concept_versions tables (model concept cards); the concept hierarchy
+  // content-addresses its rows instead, so there is nothing per-revision left to delete there.
+  for (const t of ["entities", "relationships", "facts", "evidence", "rev_files", "claims", "context_events", "embeddings", "exports"]) d.prepare(`delete from ${t} where revision = ?`).run(id);
   d.prepare("delete from webhook_deliveries where revision = ? or payload like ?").run(id, `%${id}%`);
   d.prepare("delete from revisions where id = ?").run(id);
 }
@@ -137,7 +139,7 @@ export function deleteRepository(store: Store, repoRoot: string, actor = "local-
         store.db.prepare("delete from tasks where task_id = ?").run(t);
       }
     }
-    for (const t of ["concept_versions", "overrides", "repo_policy", "test_runs"]) store.db.prepare(`delete from ${t} where repo_root = ?`).run(repoRoot);
+    for (const t of ["overrides", "repo_policy", "test_runs"]) store.db.prepare(`delete from ${t} where repo_root = ?`).run(repoRoot);
     // F02: the pull-request analyses, their findings, decisions, publications, waivers and policy assignment are all
     // derived from this repository's sources; nothing about it outlives the delete. Baselines are content-cache rows:
     // a shared one whose other owner is gone simply re-analyses next time.
@@ -187,6 +189,22 @@ export function deleteRepository(store: Store, repoRoot: string, actor = "local-
         for (const t of ["hotspot_scores", "cochange_edges", "history_exclusions"]) store.db.prepare(`delete from ${t} where run_id = ?`).run(r.run_id);
       }
       for (const t of ["history_runs", "commit_events", "file_changes", "file_lineage", "history_contributor_names"]) store.db.prepare(`delete from ${t} where repository_id = ?`).run(id);
+    }
+    // Derived-table catch-all: the explicit lists above cannot keep up with later migrations (revision-keyed
+    // caches, hierarchy snapshots, the cross-repo-search corpus, and the repository registry entry itself all
+    // once leaked here). Everything that still keys on one of this repository's revisions, its registry id, or
+    // its root after those cleanups is derived from the code, and dies with it — the same doctrine the explicit
+    // entries implement. Content-addressed shared stores (blobs, artifacts) have no such column and are
+    // garbage-collected elsewhere; the audit log and the revocation record are deliberately not swept.
+    const sweep = q(store, "select name from sqlite_master where type = 'table' and name not like 'sqlite_%'").map((r) => r.name as string)
+      .filter((t) => !["audit", "repo_access", "schema_version", "revisions"].includes(t));
+    const colsOf = (t: string) => q(store, `pragma table_info(${t})`).map((c) => c.name as string);
+    for (const t of sweep) {
+      const cols = colsOf(t);
+      if (cols.includes("revision") && revIds.length) store.db.prepare(`delete from "${t}" where cast("revision" as text) in (${revIds.map(() => "?").join(",")})`).run(...revIds);
+      if (cols.includes("repository_id")) for (const id of f06Ids) store.db.prepare(`delete from "${t}" where cast("repository_id" as text) = ?`).run(id);
+      if (cols.includes("repo_root")) store.db.prepare(`delete from "${t}" where cast("repo_root" as text) = ?`).run(repoRoot);
+      if (t === "repositories" && cols.includes("root")) store.db.prepare("delete from repositories where cast(root as text) = ?").run(repoRoot);
     }
   });
   const redacted = store.redactAudit([repoRoot, ...revIds]);

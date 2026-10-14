@@ -669,9 +669,12 @@ export class Answering {
     return this.whyShown(ctx, { view: req.view, nodeId: node.id });
   }
   /** Classifies user input into one of the 34 closed intents. */
-  private async classifyIntent(ctx: CallContext, text: string, view: ViewSpec | null, selected: any[], sessionId?: string, requestedRevision?: string): Promise<{ intent: ChatIntent; label: string | null; because: string }> {
+  private async classifyIntent(ctx: CallContext, text: string, view: ViewSpec | null, selected: any[], sessionId?: string, requestedRevision?: string, pins?: string[]): Promise<{ intent: ChatIntent; label: string | null; because: string }> {
     const revision = requestedRevision ?? view?.revision ?? this.store.latestRevision()?.id;
     const session = this.svc.sessionManager.getSession(ctx, sessionId, revision);
+    // Pinned editor elements are referents too (same as `selected`): without counting them, "why are these
+    // connected?" from the editor's pinned chips would lose the "connected" label and fall to a generic map.
+    const referentCount = selected.length || (pins?.length ?? 0);
 
     // Current-view actions and pasted traces belong to the existing map interaction
     // route. Keep them out of the repository-query classifier.
@@ -681,7 +684,7 @@ export class Answering {
       return readText(this.svc.router, text, {
         hasView: !!view,
         viewForm: view?.formId,
-        selectionCount: selected.length,
+        selectionCount: referentCount,
         looksLikeTrace: looksLikeTrace(text),
       });
     }
@@ -691,7 +694,7 @@ export class Answering {
       return readText(this.svc.router, text, {
         hasView: !!view,
         viewForm: view?.formId,
-        selectionCount: selected.length,
+        selectionCount: referentCount,
         looksLikeTrace: looksLikeTrace(text)
       });
     }
@@ -946,7 +949,7 @@ export class Answering {
     } : undefined;
     const reading = chartRoute
       ? { intent: { type: "ask" as const, route: chartRoute }, label: "GeneratedChart", because: chartRoute.because }
-      : await this.classifyIntent(ctx, text, view, selected, req.sessionId, revision);
+      : await this.classifyIntent(ctx, text, view, selected, req.sessionId, revision, req.pins);
     const intent = reading.intent;
     diagnostic("conversation.route", { requestId: ctx.requestId, revision, question: text, explicitChartCode: chartCode, reading, selected: selected.map((n) => n.id), pins: req.pins, resolvedReferent });
 

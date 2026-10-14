@@ -18,7 +18,9 @@ test("project overview keeps Java visible beside a highly connected frontend, th
   }
   const { svc, worker, revision } = await setup(undefined, repo);
   const oldBudget = process.env.CIE_CHUNK_TOKEN_BUDGET;
-  process.env.CIE_CHUNK_TOKEN_BUDGET = "1000";
+  // Deliberately small — the view must sample the repository, not list it — but large enough that the
+  // module-balancing cut keeps every language visible inside it.
+  process.env.CIE_CHUNK_TOKEN_BUDGET = "3000";
   try {
     const seeds = overviewSeeds(svc.store, revision);
     const entities = svc.store.entitiesById(revision, seeds);

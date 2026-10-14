@@ -16,7 +16,8 @@ const tmp = () => mkdtempSync(join(tmpdir(), "pf-"));
 
 test("PF-041 scaffold: every operation has a unique key, an owner task and a typed NOT_FOUND stub that names it", async () => {
   assert.equal(new Set(OPS.map((o) => o.key)).size, OPS.length);
-  assert.ok(OPS.every((o) => /^C\d\d\/[A-Za-z]+$/.test(o.key) && /^[0-4]\.[A-Z0-9]$/.test(o.owner)), "keys look like C28/op and owners like 1.E");
+  // Owner ids began as a numbered tier scheme (1.E) and later migrations added word owners (product-wizard, release-scope).
+  assert.ok(OPS.every((o) => /^C\d\d\/[A-Za-z]+$/.test(o.key) && /^(?:[0-4]\.[A-Z0-9]|[a-z][a-z-]*[a-z])$/.test(o.owner)), "keys look like C28/op and owners look like 1.E or product-wizard");
   const ops = featureOps();
   assert.equal(Object.keys(ops).length, OPS.length);
   const r = await ops["C02/submitFeature"].run(ctx(), {});
@@ -55,15 +56,22 @@ test("through the real gateway: every feature operation is reachable as a typed 
 test("migration 33 creates the five record families, is reversible, and leaves older tables alone", () => {
   const store = new Store(":memory:"); const db = store.db; // the store creates the base tables and runs every migration
   const names = (db.prepare("select name from sqlite_master where type='table' and name like 'feature_%' order by name").all() as { name: string }[]).map((r) => r.name);
-  assert.deepEqual(names, ["feature_candidates", "feature_decisions", "feature_evaluations", "feature_events", "feature_evidence", "feature_fence", "feature_leases", "feature_records", "feature_relations"]);
+  // "feature_decision_approvals" was added on top of these families by the later C28 approvals migration;
+  // the deep-equal stays over the feature_* namespace as a whole.
+  assert.deepEqual(names, ["feature_candidates", "feature_decision_approvals", "feature_decisions", "feature_evaluations", "feature_events", "feature_evidence", "feature_fence", "feature_leases", "feature_records", "feature_relations"]);
   assert.equal(currentVersion(db), Math.max(...MIGRATIONS.map((m) => m.version)));
   db.prepare("insert into feature_records(request_id,repository_id,state,version,schema_version,json,created_by,created_at,updated_at) values ('r','repo','RECEIVED',0,1,'{}','u','t','t')").run();
   db.prepare("insert into feature_events(request_id,sequence,event_id,type,actor,schema_version,json,at) values ('r',1,'e1','FeatureSubmitted','u',1,'{}','t')").run();
   assert.throws(() => db.prepare("insert into feature_events(request_id,sequence,event_id,type,actor,schema_version,json,at) values ('r',2,'e1','x','u',1,'{}','t')").run(), /UNIQUE/, "event ids are unique");
   assert.throws(() => db.prepare("insert into feature_events(request_id,sequence,event_id,type,actor,schema_version,json,at) values ('r',1,'e2','x','u',1,'{}','t')").run(), /UNIQUE|PRIMARY/, "sequence is unique per request");
-  const undone = rollback(db, 32);
+  // Full-chain rollback past migration 44 is impossible by design (see twin-migrations); run the reversibility
+  // leg on the chain cut at 33, which still undoes migration 33 without ever crossing 44.
+  const undone = rollback(db, 32, MIGRATIONS.filter((m) => m.version <= 33));
   assert.ok(undone.includes(33));
-  assert.equal((db.prepare("select count(*) n from sqlite_master where name like 'feature_%'").get() as { n: number }).n, 0);
+  // Migration 33's own record families are gone; tables later migrations added to the same namespace
+  // (leases, fence, relations, evaluations, the C28 approvals table) legitimately remain, as do the F07 tasks.
+  const families = ["feature_candidates", "feature_candidates_binding", "feature_decisions", "feature_decisions_request", "feature_events", "feature_events_pending", "feature_evidence", "feature_records"];
+  assert.equal((db.prepare(`select count(*) n from sqlite_master where name in (${families.map(() => "?").join(",")})`).get(...families) as { n: number }).n, 0, "migration 33's record families are gone");
   assert.equal((db.prepare("select count(*) n from sqlite_master where name = 'tasks'").get() as { n: number }).n, 1, "F07 task tables survive");
 });
 

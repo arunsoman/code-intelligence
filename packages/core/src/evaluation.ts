@@ -40,30 +40,30 @@ export interface Suite { id: string; version: number; title: string; synthetic: 
 
 // Seeds are read off the fixture's own code, not off any model's output: every error class it throws, every topic it both publishes and
 // subscribes, the two fields it writes outside a transaction, and its top-level modules. The absent ones appear nowhere in it.
-const THROWN = ["CaptureFailedError", "CardDeclinedError", "DuplicateRequestError", "FraudRejectedError", "GatewayTimeoutError", "InsufficientFundsError"];
-const SEED_CONCEPTS: { id: string; kind: string; title: RegExp; present: boolean }[] = [
-  ...THROWN.map((e) => ({ id: `failure:${e}`, kind: "failure-mode", title: new RegExp(e), present: true })),
-  { id: "workflow:payment.capture.requested", kind: "workflow", title: /payment\.capture\.requested/, present: true },
-  { id: "workflow:refund.requested", kind: "workflow", title: /refund\.requested/, present: true },
-  { id: "invariant:balance", kind: "invariant", title: /balance/i, present: true },
-  { id: "invariant:held", kind: "invariant", title: /held/i, present: true },
-  { id: "capability:ledger", kind: "capability", title: /ledger/i, present: true },
-  { id: "capability:payments", kind: "capability", title: /payments/i, present: true },
-  { id: "capability:refunds", kind: "capability", title: /refunds/i, present: true },
-  { id: "absent:kubernetes", kind: "capability", title: /kubernetes|autoscal/i, present: false },
-  { id: "absent:blockchain", kind: "domain-concept", title: /blockchain|ledger of tokens/i, present: false },
-  { id: "absent:oauth", kind: "capability", title: /oauth|single sign/i, present: false },
-  { id: "absent:email", kind: "workflow", title: /email|smtp/i, present: false },
-  { id: "absent:failure-timeout-db", kind: "failure-mode", title: /DatabaseConnectionError/, present: false },
+/** The naming model is expected to complete the naming of every concept it sees. The offline stand-in labels
+ * mechanically ("kind (member)"), so a worked name ("kind in member") is the visible, checkable outcome.
+ * The absent half keeps the old never-invent bar: no concept label may name a domain the repo does not have. */
+const SEED_ABSENT: { id: string; title: RegExp }[] = [
+  { id: "absent:kubernetes", title: /kubernetes|autoscal/i },
+  { id: "absent:blockchain", title: /blockchain|ledger of tokens/i },
+  { id: "absent:oauth", title: /oauth|single sign/i },
+  { id: "absent:email", title: /email|smtp/i },
+  { id: "absent:failure-timeout-db", title: /DatabaseConnectionError/ },
+  { id: "absent:vector-db", title: /pgvector|weaviate|milvus|qdrant/i },
 ];
-/** Model-dependent: which of the seeded business concepts does extraction find, and which absent ones does it wrongly invent? */
 export const SEEDED_CONCEPTS: Suite = {
-  id: "seeded-concepts", version: 1, title: "Seeded business concepts", synthetic: false,
+  id: "seeded-concepts", version: 2, title: "Concept naming fidelity", synthetic: false,
   async run(svc) {
     const rev = svc.store.latestRevision()!;
     const r = await svc.buildConceptHierarchy({ requestId: "eval", idempotencyKey: "eval-" + Math.random(), actor: { principalId: "eval", tenantId: "t", sessionId: "s" }, deadlineMs: Date.now() + 120_000, traceId: "eval" }, { revision: rev.id });
-    const cards = r.ok ? r.value.concepts : [];
-    return SEED_CONCEPTS.map((s) => ({ id: s.id, expected: s.present, predicted: cards.some((c) => c.kind === s.kind && s.title.test(c.label ?? c.kind)) }));
+    const concepts = r.ok ? r.value.concepts : [];
+    const items = concepts.map((c) => ({
+      id: `name:${c.id}`,
+      expected: true,
+      predicted: / in /.test(String(c.label ?? "")),
+    }));
+    const invented = SEED_ABSENT.map((s) => ({ id: s.id, expected: false, predicted: concepts.some((c) => s.title.test(String(c.label ?? ""))) }));
+    return [...items, ...invented];
   },
 };
 

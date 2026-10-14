@@ -50,6 +50,8 @@ test("editor events reject malformed input and unindexed files are accepted with
 test("editor focus becomes referents: 'why are these connected?' works on pinned editor elements without a canvas selection", async () => {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
+  // Answers route through the concept hierarchy (see conceptRequirement); build it once for this revision.
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
   const pins = ["function:src/payments/payment-service.ts#charge", "function:src/payments/fraud.ts#checkFraud"];
   const r = await svc.converse(ctx(), { text: "why are these connected?", view: null, pins, revision });
   assert.ok(r.ok && r.value.kind === "explanation", JSON.stringify(r));
@@ -62,6 +64,7 @@ test("editor focus becomes referents: 'why are these connected?' works on pinned
 test("evidence carries an absolute path for open-in-editor links", async () => {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
   const asked = await svc.ask(ctx(), { question: "how does fraud checking work", revision });
   assert.ok(asked.ok);
   const n = asked.value.view.nodes.find((x) => x.label === "checkFraud")!;
@@ -79,7 +82,9 @@ import { traceFor } from "./helpers.ts";
 test("live exceptions: a running app reports to the inbox; repeats collapse; the report maps onto the repository", async () => {
   const repo = demoRepo();
   const { svc, worker, revision } = await setup(undefined, repo);
+  assert.ok((await svc.buildConceptHierarchy(ctx(), { revision })).ok);
   const srv = createServer(buildHandler(svc));
+  try {
   await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
   const url = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
   const trace = traceFor(repo);
@@ -106,7 +111,7 @@ test("live exceptions: a running app reports to the inbox; repeats collapse; the
   assert.ok(svc.dismissException(ctx(), { id: a.value.id }).ok);
   assert.equal((svc.listExceptions(ctx(), {}) as any).value.length, 2);
   assert.ok(!svc.dismissException(ctx(), { id: "exc:nope" }).ok);
-  srv.close(); worker.close();
+  } finally { srv.close(); worker.close(); }
 });
 
 test("an error object reported by the reporter keeps its class and message", async () => {

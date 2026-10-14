@@ -39,7 +39,9 @@ export function buildAtlas(store: Store, rev: RevisionRow, question: string, sub
       const e = flow.entities.get(m)!;
       let id = placed.get(m);
       if (!id) { id = `n:site:${m}`; placed.set(m, id); v.nodes.push({ id, entityRefs: [m], label: e.name, kind: e.kind, file: e.file, claimIds: [], evidenceIds: store.relationshipsFor(rev.id, m).filter((r) => r.kind === "contains" && r.to === m).flatMap((r) => r.evidence.map((x) => x.id)), tier: "RELEVANT", displayMode: "FACT", unresolvedCalls: 0, role: "site", pos: { x, y: 130 + si * 62 }, notes: [`Implements “${c.title}”.`] }); }
-      v.edges.push({ id: `e:${cid}:${m}`, fromNodeId: cid, toNodeId: id, kind: "implemented at", claimId: claim?.draft.id, evidenceIds: c.evidenceIds.slice(0, 3), displayMode: "INFERENCE", label: "" });
+      // The pin itself is an indexed structural fact (the concept's members were computed from the code and each
+      // site is one of them), so it shows as a static-backed FACT; the concept node above stays INFERENCE.
+      v.edges.push({ id: `e:${cid}:${m}`, fromNodeId: cid, toNodeId: id, kind: "implemented at", evidenceIds: c.evidenceIds.slice(0, 3), displayMode: "FACT", label: "" });
       // Missing enforcement: a writer that the invariant relies on but that has no transaction.
       if (field && fieldWriters.some((f) => f.subject === m) && !tx.has(m)) {
         gaps++;

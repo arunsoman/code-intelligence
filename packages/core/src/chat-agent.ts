@@ -1,6 +1,6 @@
 import { basename } from "node:path";
-import { converseWithin, ModelDeadlineError } from "./model-deadline.ts";
-import { reviewAnswer, unavailableReview, unresolvedMessage } from "./answer-validation.ts";
+import { converseResilient } from "./model-deadline.ts";
+import { reviewAnswer, reviewTimeEstimate, unavailableReview, unresolvedMessage } from "./answer-validation.ts";
 import { answerVisual, answerLimitations, boundAnswerContext, chartCitesOverlap } from "./answer-visual.ts";
 import { bundleFor } from "./retrieval.ts";
 import { compileView } from "./viewspec.ts";
@@ -16,7 +16,7 @@ import { claimsFromAnswer, verifyAndProve } from "./claim.ts";
 import type { AnswerInvestigation, AnswerReview, AnswerValidation, ApiResult, CallContext, ConverseResult } from "@cie/schema";
 import { policyFor } from "./access.ts";
 import { restoreContainedCoverage, analysis, CHAT_TOOLS, checkArgs, toolByName, type ToolEnv } from "./chat-tools.ts";
-import type { AgentMessage, AgentReply, AgentToolCall, RouterModel } from "./llm-router.ts";
+import type { AgentMessage, AgentToolCall, RouterModel } from "./llm-router.ts";
 import { resolveMentions } from "./mentions.ts";
 import type { Service } from "./service.ts";
 import type { RevisionRow } from "./store.ts";
@@ -98,10 +98,15 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
   }
   const cache = new Map<string, string>(), trace: string[] = [];
   for (const o of observations) cache.set(callKey({ name: o.name, arguments: o.arguments }), o.content);
-  let calls = 0, nudged = false, stopped = "", forceAnswer = false;
+  let calls = 0, nudged = false, stopped = "", forceAnswer = false, processFailure = false;
   const answerState: { final: { text: string; cites: string[] } | null } = { final: null };
   let repairAttempts = 0, review: AnswerReview = unavailableReview("No answer draft was completed.");
-  const reviewReserve = Math.min(35_000, Math.max(REVIEW_RESERVE_MS, Math.floor((ctx.deadlineMs - Date.now()) / 5)));
+  // A review reading one small file and one reading several multi-method classes don't belong under the same flat
+  // timer: the latter needs materially longer, so the reserve grows with how much evidence has actually accumulated
+  // instead of staying fixed at a window sized for a small investigation. Recomputed each turn below as evidence grows.
+  const evidenceChars = () => observations.reduce((n, o) => n + JSON.stringify(o).length, 0);
+  const reviewReserveFor = () => Math.max(Math.floor((ctx.deadlineMs - Date.now()) / 5), reviewTimeEstimate(evidenceChars(), REVIEW_RESERVE_MS));
+  let reviewReserve = reviewReserveFor();
   const assess = async (draft: { text: string; cites: string[] }, turn: number): Promise<boolean> => {
     const gaps: string[] = [];
     if (!observations.length) gaps.push("No tool evidence was inspected.");
@@ -147,6 +152,7 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
 
   for (let turn = 0; turn < MAX_TURNS + repairAttempts * 4 && !answerState.final; turn++) {
     const left = ctx.deadlineMs - Date.now();
+    reviewReserve = reviewReserveFor();
     const lastChance = turn === MAX_TURNS + repairAttempts * 4 - 1 || calls >= MAX_CALLS + repairAttempts * 8 || forceAnswer || left <= ANSWER_RESERVE_MS + reviewReserve;
     if (left <= 0) { stopped = "the request deadline was reached"; break; }
     if (lastChance) stopped = forceAnswer || left <= ANSWER_RESERVE_MS + reviewReserve ? "the answer and review reserve was reached" : "the investigation budget was reached";
@@ -158,27 +164,27 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
     if (pendingReads.length && !lastChance) messages.push({ role: "user", content: JSON.stringify({ priority: "Finish these unread source pages before broadening the search, unless they are unrelated to the question.", pendingReads }) });
     const turnStarted = performance.now();
     diagnostic("agent.turn.start", { requestId: ctx.requestId, turn, calls, lastChance, deadlineRemainingMs: left });
-    let reply: AgentReply | null;
-    try {
-      const callBudget = Math.max(1, left - (lastChance ? reviewReserve : ANSWER_RESERVE_MS + reviewReserve));
-      reply = await converseWithin(model, messages, lastChance ? specs.filter((s) => s.name === "answer") : specs, callBudget);
-    } catch (error) {
-      if (error instanceof ModelDeadlineError && !lastChance && ctx.deadlineMs - Date.now() > reviewReserve) {
+    const callBudget = Math.max(1, left - (lastChance ? reviewReserve : ANSWER_RESERVE_MS + reviewReserve));
+    // Retries a timeout or a transport failure (the adapter folds connection/abort/HTTP failures into a null reply,
+    // never a throw) within callBudget before giving up, instead of treating the first hiccup as a dead end: the
+    // same resilience reviewAnswer() already has for its own call, generalized here for this one.
+    const outcome = await converseResilient(model, messages, lastChance ? specs.filter((s) => s.name === "answer") : specs, Date.now() + callBudget);
+    diagnostic("agent.turn.complete", { requestId: ctx.requestId, turn, elapsedMs: performance.now() - turnStarted, toolCalls: outcome.ok ? outcome.reply.toolCalls.map((c) => ({ name: c.name, argumentKeys: Object.keys(c.arguments) })) : undefined, responseChars: outcome.ok ? outcome.reply.content.length : undefined, empty: !outcome.ok });
+    if (!outcome.ok) {
+      if (outcome.reason === "deadline" && !lastChance && ctx.deadlineMs - Date.now() > reviewReserve) {
         forceAnswer = true;
         env.warnings.push("The retrieval model call reached its time allowance; remaining time is reserved for an answer and review.");
         continue;
       }
-      stopped = Date.now() >= ctx.deadlineMs ? "the request deadline was reached" : "the chat model call failed";
+      // A transport failure (not merely slow) on the very first turn gets handed to the conversation's other
+      // handlers, exactly as an empty first turn always has — this is not an evidence verdict, just "try something else".
+      if (turn === 0 && outcome.reason === "transport" && Date.now() < ctx.deadlineMs && !lastChance) return null;
+      processFailure = true;
+      stopped = Date.now() >= ctx.deadlineMs ? "the request deadline was reached" : outcome.reason === "deadline" ? "the chat model repeatedly timed out" : `${model.name} stopped answering`;
       review = unavailableReview(stopped);
       break;
     }
-    diagnostic("agent.turn.complete", { requestId: ctx.requestId, turn, elapsedMs: performance.now() - turnStarted, toolCalls: reply?.toolCalls.map((c) => ({ name: c.name, argumentKeys: Object.keys(c.arguments) })), responseChars: reply?.content.length, empty: !reply });
-    if (!reply) {
-      if (turn === 0 && Date.now() < ctx.deadlineMs && !lastChance) return null;
-      stopped = Date.now() >= ctx.deadlineMs ? "the request deadline was reached" : `${model.name} stopped answering`;
-      review = unavailableReview(stopped);
-      break;
-    }
+    const reply = outcome.reply;
     if (!reply.toolCalls.length) {
       // Plain text is often the model thinking aloud; ask once for the answer tool before showing it as the reply.
       if (reply.content.trim() && !nudged && turn < MAX_TURNS - 1) { nudged = true; messages.push({ role: "assistant", content: reply.content }, { role: "user", content: "Reply to the user by calling the answer tool; plain text is not shown." }); continue; }
@@ -261,15 +267,22 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
     // (claim.ts) carries, from the one shared verifyAndProve pipeline — not re-implemented here.
     message = [message, proof].join("\n\n");
   }
+  // A REPAIRABLE review that is itself a stand-in for the reviewer's own timeout/transport failure, not a genuine
+  // rejection, reads the same as any other gap below unless it's told apart here: if the repair budget then runs out
+  // before another attempt, the investigation ends UNRESOLVED for a process reason, not an evidence one.
+  if (review.processFailure) processFailure = true;
   const validation: AnswerValidation = { question: req.text, status: answerState.final && review.verdict === "SUPPORTED" ? "SUPPORTED" : "UNRESOLVED", repairAttempts, review };
   if (validation.status === "UNRESOLVED") {
     const sourceReads = Object.fromEntries(env.sourceReads ?? []);
     const investigation: AnswerInvestigation = { id: ctx.requestId, question: req.text, revision: rev.id,
       supportedFindings: review.supportedFindings, missingEvidence: [...new Set([...review.gaps, ...warnings.filter(w => /Source incomplete|Investigation incomplete/.test(w))])].slice(0, 12), nextAction: review.nextAction,
+      ...(processFailure ? { processFailure } : {}),
       inspectedIds: [...new Set([...Object.keys(sourceReads), ...cited, ...env.seen.keys()])], sourceReads, sourceHashes: Object.fromEntries(svc.store.entitiesById(rev.id, [...env.seen.keys()]).flatMap(e => e.spans[0] ? [[e.entityId, sourceReads[e.entityId]?.contentHash ?? e.spans[0].contentHash]] : [])), observations };
     validation.investigation = investigation;
     message = unresolvedMessage(investigation);
-    warnings.push(investigation.supportedFindings?.length
+    warnings.push(processFailure
+      ? "The investigation stopped because the model/tool call itself failed, before a draft answer existed; retrying may succeed."
+      : investigation.supportedFindings?.length
       ? "The draft's own overall conclusion did not pass validation and is not shown; the verified findings above are independent of it."
       : "The answer did not pass validation; its unvalidated conclusion was withheld.");
   }
