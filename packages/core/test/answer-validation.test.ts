@@ -4,7 +4,7 @@ import { appendFileSync, readFileSync, mkdirSync, writeFileSync, unlinkSync, sym
 import { join } from "node:path";
 import type { AnswerReview } from "@cie/schema";
 import type { RouterModel, AgentMessage } from "../src/llm-router.ts";
-import { parseAnswerReview, reviewAnswer, REVIEW_PROMPT } from "../src/answer-validation.ts";
+import { parseAnswerReview, reviewAnswer, REVIEW_PROMPT, REVIEW_EVIDENCE_BUDGET_CHARS } from "../src/answer-validation.ts";
 import { ctx, setup, copyFixture } from "./helpers.ts";
 
 const supported: AnswerReview = { verdict: "SUPPORTED", relevance: true, coverage: true, evidence: true, certainty: true, consistency: true, requirements: ["Explain the login implementation"], gaps: [], verifiedBy: ["obs-1:src/auth/service.ts#AuthService.login"], nextAction: "continue" };
@@ -69,8 +69,124 @@ test("evidence over the review's context budget is trimmed to what's cited plus 
   } };
   const r = await reviewAnswer(model, "What does login do?", { text: "It does X.", cites: ["method:src/auth/service.ts#AuthService.login"] }, [...bulk, cited], Date.now() + 5000);
   assert.equal(r.verdict, "SUPPORTED");
-  assert.ok(seenEvidence.some((o: any) => o.content === cited.content), "the cited observation must survive trimming");
-  assert.ok(JSON.stringify(seenEvidence).length <= 180_000, "the sent evidence must respect the budget");
+  assert.ok(seenEvidence.some((o: any) => o.content === cited.content), "the cited observation must survive trimming, in full");
+  assert.ok(seenEvidence.every((o: any) => o.content === cited.content || o.content.length < 400), "uncited background observations must be sent as short summaries, not their full 10,000-character content");
+  assert.ok(JSON.stringify(seenEvidence).length <= REVIEW_EVIDENCE_BUDGET_CHARS, "the sent evidence must respect the budget");
+});
+
+test("a cited observation that cannot fit the review budget degrades to a labeled stub, never a silent drop", async () => {
+  const cited1 = { name: "read_code", arguments: { id: "method:src/auth/service.ts#AuthService.login" }, content: `the implementation [method:src/auth/service.ts#AuthService.login] does X ${"x".repeat(45_000)}` };
+  const cited2 = { name: "read_code", arguments: { id: "method:src/auth/token.ts#Token.refresh" }, content: `the other implementation [method:src/auth/token.ts#Token.refresh] does Y ${"y".repeat(20_000)}` };
+  let seenEvidence: any[] = [];
+  const model: RouterModel = { name: "review-test", choose: async () => null, converse: async (messages) => {
+    seenEvidence = JSON.parse(messages[1].content).observations;
+    return call("review_answer", { ...supported });
+  } };
+  await reviewAnswer(model, "What do login and refresh do?", { text: "They do X and Y.", cites: ["method:src/auth/service.ts#AuthService.login", "method:src/auth/token.ts#Token.refresh"] }, [cited1, cited2], Date.now() + 5000);
+  assert.ok(seenEvidence.some((o: any) => o.content === cited1.content), "the first cited observation still arrives in full");
+  const stub = seenEvidence.find((o: any) => o.content.includes("Token.refresh"));
+  assert.ok(stub, "the overflowing cited observation must leave a trace, not vanish");
+  assert.match(stub.content, /WAS inspected and is cited by the draft/, "the stub must say the omission was ours and the citation was real");
+  assert.ok(stub.content.length < 500, "the stub is a head, not the full text");
+  assert.ok(JSON.stringify(seenEvidence).length <= REVIEW_EVIDENCE_BUDGET_CHARS);
+});
+
+test("when even a cited stub cannot fit, an evidence_omitted note names the loss; background never squeezes the note out", async () => {
+  const huge = { name: "read_code", arguments: { id: "method:src/auth/service.ts#AuthService.login" }, content: `[method:src/auth/service.ts#AuthService.login] ${"x".repeat(59_750)}` };
+  const second = { name: "read_code", arguments: { id: "method:src/auth/token.ts#Token.refresh" }, content: `[method:src/auth/token.ts#Token.refresh] ${"y".repeat(20_000)}` };
+  const bulk = Array.from({ length: 12 }, (_, i) => ({ name: "read_code", arguments: { i }, content: "z".repeat(20_000) }));
+  let seenEvidence: any[] = [];
+  const model: RouterModel = { name: "review-test", choose: async () => null, converse: async (messages) => {
+    seenEvidence = JSON.parse(messages[1].content).observations;
+    return call("review_answer", { ...supported });
+  } };
+  await reviewAnswer(model, "What do login and refresh do?", { text: "They do X and Y.", cites: ["method:src/auth/service.ts#AuthService.login", "method:src/auth/token.ts#Token.refresh"] }, [huge, second, ...bulk], Date.now() + 5000);
+  const note = seenEvidence.find((o: any) => o.name === "evidence_omitted");
+  assert.ok(note, "an omitted cited observation with no stub must still be named");
+  assert.match(note.content, /does not mean the draft fabricated/);
+  assert.ok(!seenEvidence.some((o: any) => o.content.includes("Token.refresh") && o !== note), "the un-stubbable observation itself stays out");
+  assert.ok(seenEvidence.length <= 2, "background summaries cannot crowd out the cited evidence or the note");
+});
+
+test("the reviewer pulls a clipped cited observation in full instead of judging the stub", async () => {
+  const cited1 = { name: "read_code", arguments: { id: "method:src/auth/service.ts#AuthService.login" }, content: `the implementation [method:src/auth/service.ts#AuthService.login] does X ${"x".repeat(45_000)}` };
+  const cited2 = { name: "read_code", arguments: { id: "method:src/auth/token.ts#Token.refresh" }, content: `the other implementation [method:src/auth/token.ts#Token.refresh] does Y ${"y".repeat(20_000)}` };
+  let turns = 0, pulled = "";
+  const model: RouterModel = { name: "review-test", choose: async () => null, converse: async (messages) => {
+    turns++;
+    if (turns <= 2) return call("read_observation", turns === 1 ? { id: "omitted-1" } : { id: "omitted-1", offset: 12_000 });
+    pulled = messages.filter(m => m.role === "tool").map(m => m.content).join("\n");
+    return call("review_answer", { ...supported });
+  } };
+  const r = await reviewAnswer(model, "What do login and refresh do?", { text: "They do X and Y.", cites: ["method:src/auth/service.ts#AuthService.login", "method:src/auth/token.ts#Token.refresh"] }, [cited1, cited2], Date.now() + 5000);
+  assert.equal(r.verdict, "SUPPORTED");
+  assert.equal(turns, 3);
+  assert.ok(pulled.includes("continues at offset 12000"), "the first 12K slice advertises its continuation");
+  assert.ok(pulled.includes(cited2.content.slice(-50).slice(0, 40)), "the pulled text reaches the cited implementation's tail");
+  assert.ok(pulled.includes(JSON.stringify(cited2.arguments)), "the served pull names what the reference points at");
+});
+
+test("when even a cited stub cannot fit the reviewer still pulls the omitted text by its note reference", async () => {
+  const huge = { name: "read_code", arguments: { id: "method:src/auth/service.ts#AuthService.login" }, content: `[method:src/auth/service.ts#AuthService.login] ${"x".repeat(59_750)}` };
+  const second = { name: "read_code", arguments: { id: "method:src/auth/token.ts#Token.refresh" }, content: `[method:src/auth/token.ts#Token.refresh] ${"y".repeat(20_000)}` };
+  let turns = 0, payload = "", pulled = "";
+  const model: RouterModel = { name: "review-test", choose: async () => null, converse: async (messages) => {
+    turns++;
+    if (turns === 1) { payload = messages[1].content; return call("read_observation", { id: "omitted-1" }); }
+    pulled = messages.filter(m => m.role === "tool").map(m => m.content).join("\n");
+    return call("review_answer", { ...supported });
+  } };
+  const r = await reviewAnswer(model, "What do login and refresh do?", { text: "They do X and Y.", cites: ["method:src/auth/service.ts#AuthService.login", "method:src/auth/token.ts#Token.refresh"] }, [huge, second], Date.now() + 5000);
+  assert.equal(r.verdict, "SUPPORTED");
+  assert.match(payload, /evidence_omitted[\s\S]*omitted-1 = read_code/, "the note names the reference and the tool it points at");
+  assert.ok(pulled.includes(`[method:src/auth/token.ts#Token.refresh] ${"y".repeat(200)}`), "the omitted cited text is served from the pull registry");
+});
+
+test("a wrong pull reference tells the reviewer what actually exists, then the review proceeds", async () => {
+  const cited = { name: "read_code", arguments: { id: "method:src/auth/service.ts#AuthService.login" }, content: `[method:src/auth/service.ts#AuthService.login] ${"x".repeat(59_750)}` };
+  const second = { name: "read_code", arguments: { id: "method:src/auth/token.ts#Token.refresh" }, content: `[method:src/auth/token.ts#Token.refresh] does Y ${"y".repeat(20_000)}` };
+  let turns = 0, pulled = "";
+  const model: RouterModel = { name: "review-test", choose: async () => null, converse: async (messages) => {
+    turns++;
+    if (turns === 1) return call("read_observation", { id: "omitted-9" });
+    pulled = messages.filter(m => m.role === "tool").map(m => m.content).join("\n");
+    return call("review_answer", { ...supported });
+  } };
+  const r = await reviewAnswer(model, "What do login and refresh do?", { text: "They do X and Y.", cites: ["method:src/auth/service.ts#AuthService.login", "method:src/auth/token.ts#Token.refresh"] }, [cited, second], Date.now() + 5000);
+  assert.equal(r.verdict, "SUPPORTED");
+  assert.match(pulled, /No observation reference "omitted-9"/);
+  assert.match(pulled, /Available: omitted-1/);
+});
+
+test("evidence pulls are bounded in count and total characters, with the exhaustion said once", async () => {
+  const obs = Array.from({ length: 6 }, (_, i) => ({ name: "read_code", arguments: { id: `method:src/m${i}.ts#f${i}` }, content: `[method:src/m${i}.ts#f${i}] ${"z".repeat(20_000)}` }));
+  let turns = 0, pulled = "";
+  const model: RouterModel = { name: "review-test", choose: async () => null, converse: async (messages) => {
+    turns++;
+    if (turns < 5) return call("read_observation", { id: `omitted-${turns}` });
+    pulled = messages.filter(m => m.role === "tool").map(m => m.content).join("\n");
+    return call("review_answer", { ...supported });
+  } };
+  const r = await reviewAnswer(model, "What do these do?", { text: "They do things.", cites: obs.map(o => o.arguments.id as string) }, obs, Date.now() + 5000);
+  assert.equal(r.verdict, "SUPPORTED");
+  assert.equal(turns, 5, "two full pulls, one exhaustion notice, then the verdict on a fresh attempt");
+  assert.equal((pulled.match(/\[omitted-\d+\]/g) ?? []).length, 2, "only PULL_TOTAL worth of real text is served");
+  assert.match(pulled, /Pull budget exhausted/, "the reviewer is told why the pulls stopped");
+});
+
+test("a mixed pull+verdict turn is rejected once, then a clean review_answer is accepted", async () => {
+  const cited = { name: "read_code", arguments: { id: "method:src/m.ts#f" }, content: `[method:src/m.ts#f] ${"z".repeat(59_000)}` };
+  const second = { name: "read_code", arguments: { id: "method:src/n.ts#g" }, content: `[method:src/n.ts#g] ${"y".repeat(20_000)}` };
+  let turns = 0, systemWhenClean = "";
+  const model: RouterModel = { name: "review-test", choose: async () => null, converse: async (messages) => {
+    turns++;
+    if (turns === 1) return { content: "", toolCalls: [{ name: "read_observation", arguments: { id: "omitted-1" } }, { name: "review_answer", arguments: { ...supported } }] };
+    systemWhenClean = messages[0].content;
+    return call("review_answer", { ...supported });
+  } };
+  const r = await reviewAnswer(model, "What do these do?", { text: "They do things.", cites: ["method:src/m.ts#f", "method:src/n.ts#g"] }, [cited, second], Date.now() + 5000);
+  assert.equal(r.verdict, "SUPPORTED");
+  assert.match(systemWhenClean, /exactly once with no other tool calls/, "the mixed turn got the strictness hint before the clean retry");
 });
 
 test("irrelevant draft is repaired before the answer and chart are exposed", async () => {
