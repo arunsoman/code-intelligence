@@ -155,7 +155,7 @@ export function InsightsPanel({ revision: openedRevision, view, onClose, onAsk, 
         <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="i-content">
           {tab === "security" && <Security revision={revision} onAsk={onAsk} onCount={setSecCount} />}
           {tab === "config" && <Config revision={revision} />}
-          {tab === "identity" && <Identity revision={revision} />}
+          {tab === "identity" && <Identity revision={revision} onAsk={onAsk} />}
           {tab === "changes" && <Changes revision={revision} view={view} />}
           {tab === "runtime" && <Runtime revision={revision} />}
           {tab === "sources" && <Sources revision={revision} />}
@@ -571,12 +571,20 @@ function Config({ revision }: { revision: string }) {
 
 // ---------------------------------------------------------------- C08
 interface Proposal { id: string; kind: string; state: string; version: number; oldIds: string[]; newIds: string[]; evidence: string[]; strength: string }
-function Identity({ revision }: { revision: string }) {
+interface NearDupPair { a: string; b: string; similarity: number; diff: string }
+interface NearDupCluster { id: string; kind: string; name: string | null; members: { entityId: string; name: string; kind: string; file: string }[]; pairs?: NearDupPair[] }
+function Identity({ revision, onAsk }: { revision: string; onAsk?: (question: string) => void }) {
   const p = useCall<Proposal[]>(); const d = useCall<{ name: string; canon: { entityId: string }[] }[]>(); const v = useCall<Proposal>();
-  const load = useCallback(() => { void p.run("C08", "proposals", { revision }); void d.run("C08", "duplicateNames", { revision }); }, [revision]); // eslint-disable-line react-hooks/exhaustive-deps
+  // C08 owns identity/rename; near-duplicate logic detection belongs to C11's structural concepts, read here
+  // across the ownership split the backend already has (no merged backend, just one tab reading both).
+  const c = useCall<{ clusters: NearDupCluster[] }>();
+  const load = useCallback(() => { void p.run("C08", "proposals", { revision }); void d.run("C08", "duplicateNames", { revision }); void c.run("C11", "structuralConcepts", { revision }); }, [revision]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(load, [load]);
   const decide = async (x: Proposal, verdict: "CONFIRM" | "DISPUTE" | "REFUTE") => { await v.run("C08", "applyIdentityVerdict", { proposalId: x.id, verdict, expectedVersion: x.version }, true); load(); };
   const short = (id: string) => id.replace(/^[a-z]+:/, "");
+  const copies = useMemo(() => (c.data?.clusters ?? []).flatMap((cl) => (cl.pairs ?? []).map((pair) => ({ cl, pair }))), [c.data]);
+  const memberName = (cl: NearDupCluster, id: string) => cl.members.find((m) => m.entityId === id)?.name ?? id;
+  const memberFile = (cl: NearDupCluster, id: string) => cl.members.find((m) => m.entityId === id)?.file ?? "";
   // The name-collision list reaches four-digit scale (1,149 on the current test revision): windowed rows with a
   // search and a detail pane holding the full canonical entity list. The proposal cards stay inline: they are few
   // and their confirm/dispute/reject buttons are the point.
@@ -586,7 +594,7 @@ function Identity({ revision }: { revision: string }) {
   const pickedRow = (d.data ?? []).find((x) => x.name === picked) ?? null;
   return <>
     <p className="notice">A name alone never merges two things. An identical body that appears once on each side is a supported rename; splits, merges and ambiguous matches stay proposals until you decide, and any decision can be reversed.</p>
-    <Status error={p.error ?? v.error} busy={p.busy} />
+    <Status error={p.error ?? v.error ?? c.error} busy={p.busy} />
     <h3>Identity proposals <small className="muted">({p.data?.length ?? 0})</small></h3>
     {p.data?.length === 0 && <p className="muted">No renames, splits or merges were detected between indexed revisions.</p>}
     <ul className="cards">{(p.data ?? []).map((x) => (
@@ -620,6 +628,20 @@ function Identity({ revision }: { revision: string }) {
         <ul className="i-canon">{pickedRow.canon.map((c) => <li key={c.entityId}><code className="mono">{short(c.entityId)}</code> <button className="link" onClick={() => { void navigator.clipboard?.writeText(short(c.entityId)); }}>copy</button></li>)}</ul>
       </article>}
     </div>}
+    {copies.length > 0 && <>
+      <h3>Possible duplicate logic <small className="muted">({copies.length})</small></h3>
+      <p className="muted small">Functions whose lowered semantic IR shares most of its structure — copy-pasted logic under a different or locally-retouched name. Nothing is merged; the structural diff is the evidence to look at.</p>
+      <ul className="cards">{copies.map(({ cl, pair }) => {
+        const aName = memberName(cl, pair.a), bName = memberName(cl, pair.b);
+        const question = `Explain the possible duplicate logic of ${aName} (${memberFile(cl, pair.a)}) and ${bName} (${memberFile(cl, pair.b)}): ${Math.round(pair.similarity * 100)}% shared structure; ${pair.diff}. Are these true duplicates, one a rework of the other, or falsely similar?`;
+        return <li key={`${cl.id}:${pair.a}:${pair.b}`} className="card">
+          <div><Badge kind="hyp">near-duplicate</Badge><Badge kind="fact">{Math.round(pair.similarity * 100)}% shared</Badge></div>
+          <p><code>{aName}</code> <span className="muted">({memberFile(cl, pair.a)})</span> ≈ <code>{bName}</code> <span className="muted">({memberFile(cl, pair.b)})</span></p>
+          <p className="muted small" title={pair.diff}>Structural diff: {pair.diff}</p>
+          {onAsk && <button className="secondary small" title="Opens the conversation with this pair described" onClick={() => onAsk(question)}>Ask about this</button>}
+        </li>;
+      })}</ul>
+    </>}
   </>;
 }
 

@@ -34,7 +34,9 @@ export function g6EdgeNotation(e: RenderEdge) {
   const color = e.displayMode === "HYPOTHESIS" ? "#fb7185" : e.displayMode === "INFERENCE" ? "#a78bfa" : "#94a3b8";
   const hollow = "#111827";
   const base = { startArrow: false, endArrow: true, endArrowType: "triangle" as const, endArrowSize: 18, endArrowLineWidth: 1.5, startArrowSize: 14, stroke: color, endArrowStroke: color, startArrowStroke: color,
-    lineDash: e.displayMode !== "FACT" || e.kind?.includes("dependency") ? [5, 4] : [], startArrowFill: color, endArrowFill: color };
+    // The dash pattern carries the mode so the style never relies on colour alone: a hypothesis is dotted,
+    // an inference (or an unresolved dependency) dashed, a fact solid.
+    lineDash: e.displayMode === "HYPOTHESIS" ? [1, 3] : e.displayMode !== "FACT" || e.kind?.includes("dependency") ? [5, 4] : [], startArrowFill: color, endArrowFill: color };
   if (e.kind === "inheritance" || e.kind === "realization") return { ...base, endArrowFill: hollow, lineDash: e.kind === "realization" ? [6, 4] : base.lineDash };
   if (e.kind === "aggregation" || e.kind === "composition") return { ...base, startArrow: true, startArrowType: "diamond" as const, endArrow: false, startArrowFill: e.kind === "aggregation" ? hollow : color };
   if (e.kind === "dependency" || e.kind === "package-dependency") return { ...base, endArrowType: "simple" as const, endArrowFill: "none", lineDash: [6, 4] };
