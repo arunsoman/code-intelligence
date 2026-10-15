@@ -4,12 +4,14 @@ import { appendFileSync, readFileSync, mkdirSync, writeFileSync, unlinkSync, sym
 import { join } from "node:path";
 import type { AnswerReview } from "@cie/schema";
 import type { RouterModel, AgentMessage } from "../src/llm-router.ts";
-import { parseAnswerReview, reviewAnswer, REVIEW_PROMPT, REVIEW_EVIDENCE_BUDGET_CHARS } from "../src/answer-validation.ts";
+import { parseAnswerReview, reviewAnswer, REVIEW_PROMPT, REVIEW_EVIDENCE_BUDGET_CHARS, unresolvedMessage } from "../src/answer-validation.ts";
+import type { AnswerInvestigation } from "@cie/schema";
 import { ctx, setup, copyFixture } from "./helpers.ts";
 
 const supported: AnswerReview = { verdict: "SUPPORTED", relevance: true, coverage: true, evidence: true, certainty: true, consistency: true, requirements: ["Explain the login implementation"], gaps: [], verifiedBy: ["obs-1:src/auth/service.ts#AuthService.login"], nextAction: "continue" };
 const gap = (verdict: AnswerReview["verdict"] = "REPAIRABLE"): AnswerReview => ({ ...supported, verdict, relevance: false, coverage: false, certainty: false, gaps: ["The draft does not explain the requested login implementation."], nextAction: "continue" });
 const call = (name: string, args: Record<string, unknown>) => ({ content: "", toolCalls: [{ name, arguments: args }] });
+const probe = (over: Partial<AnswerInvestigation> = {}): AnswerInvestigation => ({ id: "inv-1", question: "Q", revision: "rev", missingEvidence: [], nextAction: "continue", inspectedIds: [], sourceHashes: {}, sourceReads: {}, observations: [], ...over });
 const target = (messages: AgentMessage[]) => JSON.parse(messages[1].content).mentions[0].candidates[0].id as string;
 async function boot(repo?: string) {
   const f = await setup(undefined, repo);
@@ -511,4 +513,38 @@ test("old saved file reads regain contained-method coverage on Continue without 
     assert.ok(resumed.ok && resumed.value.kind === "analysis");
     assert.equal(resumed.value.validation!.status, "SUPPORTED"); assert.equal(resumedWrites, 1);
   } finally { f.worker.close(); }
+});
+
+test("a process-failure message states the cause once and surfaces the unreviewed draft, not a bare UNRESOLVED", () => {
+  const draftText = "The indexer walks the tree once and hashes each file's bytes directly.".repeat(50);
+  const m = unresolvedMessage(probe({
+    processFailure: true, inspectedIds: ["file:index.rs#Indexer"],
+    missingEvidence: ["the chat model repeatedly timed out", "Source incomplete for index.rs: read_code offset 100983 remains unread."],
+    unverifiedDraft: draftText, nextAction: "continue",
+  }));
+  assert.ok(m.startsWith("Unresolved: the investigation was interrupted by a model or tool failure, not by insufficient evidence."));
+  assert.match(m, /What happened:\n\n• the chat model repeatedly timed out/);
+  assert.equal(m.split("the chat model repeatedly timed out").length - 1, 1, "the cause is stated once, never re-prefixed as an additional bullet");
+  assert.match(m, /Draft completed before the interruption \(not independently reviewed — treat as unverified\):/);
+  assert.match(m, /\n… \(truncated\)/);
+  assert.match(m, /Next: .*retrying the same session may succeed/);
+});
+
+test("a process failure without a draft still reports the inspected ground and skips empty sections", () => {
+  const m = unresolvedMessage(probe({
+    processFailure: true, inspectedIds: ["file:index.rs#", "constant:index.rs#CACHE_LIMIT"],
+    missingEvidence: [], nextAction: "continue",
+  }));
+  assert.match(m, /Evidence inspected before the interruption: .*CACHE_LIMIT/);
+  assert.doesNotMatch(m, /What happened:/);
+  assert.doesNotMatch(m, /Draft completed/);
+  assert.match(m, /retrying the same session may succeed/);
+});
+
+test("a genuine rejection keeps its wording: no draft shown, no retry hint, gaps as bullets", () => {
+  const m = unresolvedMessage(probe({ missingEvidence: ["The debit implementation is not available."], nextAction: "request_source" }));
+  assert.match(m, /Unresolved: I cannot yet support a definitive answer/);
+  assert.doesNotMatch(m, /Draft completed|retrying the same session may succeed/);
+  assert.match(m, /• The debit implementation is not available\./);
+  assert.match(m, /Next: /);
 });

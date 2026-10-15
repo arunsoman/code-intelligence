@@ -1090,6 +1090,8 @@ export interface AnswerInvestigation {
   id: string; question: string; revision: string; supportedFindings?: AnswerReview["supportedFindings"]; missingEvidence: string[]; nextAction: AnswerReview["nextAction"];
   /** Set when the investigation stopped because the model/tool call itself failed (timeout, connection failure), not because evidence was lacking. Changes only how the gap is worded to the user. */
   processFailure?: boolean;
+  /** Set when a draft was fully written but its review could not complete. Surfaced in the final message clearly labeled unreviewed — partial work beats an information-poor bare UNRESOLVED. */
+  unverifiedDraft?: string;
   inspectedIds: string[]; sourceHashes: Record<string, string>;
   sourceReads: Record<string, { total: number; contentHash: string; ranges: [number, number][] }>;
   observations: { name: string; arguments: Record<string, unknown>; content: string }[];

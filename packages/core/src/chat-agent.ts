@@ -325,20 +325,23 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
   if (validation.status === "UNRESOLVED") {
     const sourceReads = Object.fromEntries(env.sourceReads ?? []);
     const investigation: AnswerInvestigation = { id: ctx.requestId, question: req.text, revision: rev.id,
-      supportedFindings: review.supportedFindings, missingEvidence: [...new Set([...review.gaps, ...warnings.filter(w => /Source incomplete|Investigation incomplete/.test(w))])].slice(0, 12), nextAction: review.nextAction,
+      supportedFindings: review.supportedFindings,
+      // On a process failure the timeout sentence itself is not an evidence gap — the lead line and the review
+      // gap already carry it; folding it in here made one transcript repeat the cause up to five times.
+      missingEvidence: [...new Set([...review.gaps, ...warnings.filter(w => (processFailure ? /Source incomplete/.test(w) : /Source incomplete|Investigation incomplete/.test(w)))])].slice(0, 12), nextAction: review.nextAction,
       ...(processFailure ? { processFailure } : {}),
+      // A fully written draft whose review could not complete is real partial work: surface it labeled unreviewed.
+      ...(processFailure && answerState.final ? { unverifiedDraft: answerState.final.text } : {}),
       inspectedIds: [...new Set([...Object.keys(sourceReads), ...cited, ...env.seen.keys()])], sourceReads, sourceHashes: Object.fromEntries(svc.store.entitiesById(rev.id, [...env.seen.keys()]).flatMap(e => e.spans[0] ? [[e.entityId, sourceReads[e.entityId]?.contentHash ?? e.spans[0].contentHash]] : [])), observations };
     validation.investigation = investigation;
     message = unresolvedMessage(investigation);
-    warnings.push(processFailure
-      // True whether the failure was the writer's own turn (no draft was ever produced) or the independent
-      // reviewer's (a draft existed and its citations may even have verified, but the review itself could not
-      // complete) — this wording commits to neither, since claiming "before a draft existed" would be wrong
-      // in the second case.
-      ? "The investigation stopped because a model or tool call itself failed, not because of insufficient evidence; retrying may succeed."
-      : investigation.supportedFindings?.length
+    if (!processFailure) warnings.push(investigation.supportedFindings?.length
       ? "The draft's own overall conclusion did not pass validation and is not shown; the verified findings above are independent of it."
       : "The answer did not pass validation; its unvalidated conclusion was withheld.");
+    // Everything the final message already says verbatim (lead line, coverage bullets) is stated there once —
+    // not again as a Note. "The chat model did not complete an answer" survives, since only the message shows it.
+    const kept = warnings.filter(w => !message.includes(w));
+    warnings.splice(0, warnings.length, ...kept);
   }
   // Select the presentation after the answer exists. Answer prose guides presentation only;
   // verified entity ids seed retrieval and the ordinary evidence/claim gates still validate the chart.

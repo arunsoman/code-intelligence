@@ -268,8 +268,13 @@ test("a reviewer that persistently times out ends the investigation as a process
     assert.ok(r.ok && r.value.kind === "analysis");
     assert.match(r.value.message, /^Unresolved:/);
     assert.match(r.value.message, /interrupted by a model or tool failure, not by insufficient evidence/);
+    assert.match(r.value.message, /retrying the same session may succeed/);
+    // The draft was fully written before the reviewer died: shown once, labeled unreviewed, not repeated as Notes.
+    assert.match(r.value.message, /Draft completed before the interruption \(not independently reviewed — treat as unverified\):/);
     assert.equal(r.value.validation?.investigation?.processFailure, true);
-    assert.ok(r.metadata.warnings.some((w) => /investigation stopped because a model or tool call itself failed/.test(w)));
+    assert.equal(r.value.validation?.investigation?.unverifiedDraft?.indexOf("AuthService signs users in."), 0);
+    assert.ok(!r.metadata.warnings.some((w) => /model or tool call itself failed|repeatedly timed out/.test(w)), "the message states the process failure once; Notes must not repeat it");
+    assert.match(r.value.message, /AuthService signs users in\./);
   } finally { worker.close(); }
 });
 
@@ -291,8 +296,9 @@ for (const finishPages of [false, true]) test(`paged source ${finishPages ? "can
     ]);
     const r = await svc.converse(ctx(), { text: "inspect AuthService implementation", revision });
     assert.ok(r.ok && r.value.kind === "analysis");
-    assert.equal(r.metadata.warnings.some((w) => /Source incomplete/.test(w)), !finishPages);
-    if (!finishPages) assert.equal(r.metadata.completeness, "PARTIAL");
+    // The incomplete-source fact is stated exactly once: whatever the final message already carries cannot re-appear as a Note.
+    assert.equal(r.value.message.includes("remains unread") || r.metadata.warnings.some((w) => /Source incomplete/.test(w)), !finishPages);
+    if (!finishPages) { assert.equal(r.metadata.completeness, "PARTIAL"); assert.match(r.value.message, /remains unread/); }
   } finally { worker.close(); }
 });
 

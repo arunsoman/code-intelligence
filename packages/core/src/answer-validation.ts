@@ -317,9 +317,15 @@ export function unresolvedMessage(investigation: AnswerInvestigation): string {
   // A model/tool call failing partway through is not an evidence gap; say so plainly instead of implying the
   // investigation looked and came up short, which invites second-guessing the evidence rather than retrying.
   if (investigation.processFailure) {
+    // The failing turn still did real work: surface it — the draft (clearly labeled unreviewed) when one was
+    // written, the coverage warnings when not — instead of leaving a bare UNRESOLVED. Each fact is stated once
+    // here; the caller drops any Note that would repeat it.
+    const draft = investigation.unverifiedDraft?.trim();
     return ["Unresolved: the investigation was interrupted by a model or tool failure, not by insufficient evidence.",
       ...(investigation.inspectedIds.length ? [`Evidence inspected before the interruption: ${investigation.inspectedIds.slice(0, 12).join("; ")}.`] : []),
-      "What happened:", ...investigation.missingEvidence.map(g => `• ${g}`), `Next: ${next}`].join("\n\n");
+      ...(investigation.missingEvidence.length ? ["What happened:", ...investigation.missingEvidence.map(g => `• ${g}`)] : []),
+      ...(draft ? ["Draft completed before the interruption (not independently reviewed — treat as unverified):", draft.length > 2000 ? `${draft.slice(0, 2000)}\n… (truncated)` : draft] : []),
+      `Next: ${next} (the failure was in the model or tool call itself — retrying the same session may succeed)`].join("\n\n");
   }
   return ["Unresolved: I cannot yet support a definitive answer to this question.",
     ...(investigation.inspectedIds.length ? [`Evidence inspected: ${investigation.inspectedIds.slice(0, 12).join("; ")}.`] : []),
