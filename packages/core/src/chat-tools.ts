@@ -487,6 +487,73 @@ export const CHAT_TOOLS: ChatTool[] = [
     },
   },
   {
+    name: "duplicates",
+    description: "Scan the whole indexed system for duplicate code in ONE call — no anchor needed. Returns exact-shape clone groups (identical IR fingerprint, may be unrelated-by-name) and near-duplicate pairs with their diff summaries. Use for 'are there duplicates / find duplicate code' questions. For questions about one element use similar_of/similar_to instead.",
+    parameters: obj({ minPct: { type: "integer", description: "Optional near-duplicate threshold as a percent, 0..100 (default 85)" } }, []),
+    async run(env, { minPct }) {
+      const { cloneScan } = await import("./irfirst.ts");
+      const minSimilarity = Number.isInteger(Number(minPct)) ? Math.min(100, Math.max(0, Number(minPct))) / 100 : undefined;
+      const scan = cloneScan(env.svc.store, env.rev.id, { minSimilarity, maxGroups: 12, maxPairs: 16 });
+      const body: string[] = [];
+      let shown = 0;
+      const byId = new Map(env.svc.store.entitiesById(env.rev.id, scan.exactGroups.flatMap((g) => g.members.map((e) => e.entityId))).map((e) => [e.entityId, e]));
+      // A scan hit is an IR inspection (fingerprint and vectors are computed from the stored IR), and the top
+      // group's bodies are rendered so the model sees what it claims about; everything still passes the
+      // independent claim verifier, which re-checks each citation against the store and the live source.
+      for (const g of scan.exactGroups) for (const e of g.members) if (byId.has(e.entityId) && !env.access.denied(byId.get(e.entityId)!.file)) note(env, byId.get(e.entityId)!), (env.irReads ??= new Set()).add(e.entityId);
+      const rendered = new Set<string>();
+      if (scan.exactGroups.length) {
+        const top = scan.exactGroups[0].members.map((e) => byId.get(e.entityId)!).filter((e) => e && !env.access.denied(e.file)).slice(0, 4);
+        const { renderIrs } = await import("./irfirst.ts");
+        for (const [i, r] of renderIrs(top.map((e) => ({ entityId: e.entityId, name: e.name, file: e.file, irDump: e.irDump ?? "" }))).entries()) {
+          byId.get(r.entityId)!.irDump && rendered.add(r.entityId);
+          if (r.render) rendered.add(r.entityId), body.push(`IR of [${r.entityId}]:`, "```", r.render.split("\n").slice(1).join("\n"), "```");
+          if (i === 3) break;
+        }
+      }
+      for (const g of scan.exactGroups) {
+        const members = g.members.flatMap((e) => { const hit = byId.get(e.entityId); return hit && !env.access.denied(hit.file) ? [hit] : []; });
+        if (!members.length) continue;
+        shown += members.length;
+        body.push(`Identical IR (${members.length} copies):`, ...members.map((e) => `  [${e.entityId}] ${line(env, e)}`));
+      }
+      const pairFiles = new Map(env.svc.store.entitiesById(env.rev.id, scan.nearPairs.flatMap((p) => [p.a, p.b])).map((e) => [e.entityId, e]));
+      const pairs: string[] = [];
+      for (const p of scan.nearPairs) {
+        const a = pairFiles.get(p.a), b = pairFiles.get(p.b);
+        if (!a || !b || env.access.denied(a.file) || env.access.denied(b.file)) continue;
+        note(env, a); note(env, b);
+        (env.irReads ??= new Set()).add(a.entityId); (env.irReads ??= new Set()).add(b.entityId);
+        shown += 2;
+        pairs.push(`  ${Math.round(p.similarity * 100)}% [${a.entityId}] ↔ [${b.entityId}]${p.diff ? ` — ${p.diff}` : ""}`);
+      }
+      env.svc.store.audit(env.ctx.actor.principalId, "chat.clone_scan", env.rev.id, { groups: body.filter(Boolean).length, pairs: pairs.length, minSimilarity } as Record<string, unknown>);
+      if (!body.length && !pairs.length) return `No duplicate code found: the whole indexed revision was scanned (every element's IR fingerprint and every near-duplicate pair at ≥${Math.round((typeof minSimilarity === "number" ? minSimilarity : 0.85) * 100)}%). A scan finding absence — the answer is the scan itself, not a search that came up short.`;
+      return [`${shown} element(s) in duplicate candidates — exact-shape groups are identity modulo slot-normalized names; pairs are the concept stage's proved near-duplicates:`, ...body, ...(pairs.length ? ["Near-duplicates:", ...pairs] : [])].join("\n");
+    },
+  },
+  {
+    name: "similar_to",
+    description: "Find code structurally similar to a NAMED element, without needing its id first: a name (or fragment) is resolved, then the rename-stable structural neighborhood is listed. Same ground as similar_of with mention resolution built in.",
+    parameters: obj({ name: str("The element's name, id, or a close fragment, e.g. AuthService", { maxLength: 300 }), topK: { type: "integer", description: "How many results (1-50, default 8)" } }, ["name"]),
+    async run(env, { name, topK }) {
+      const anchor = entityFor(env, (name as string).trim());
+      if (!anchor) return `No accessible element is called or identified by "${name}". Try find_code.`;
+      note(env, anchor);
+      (env.irReads ??= new Set()).add(anchor.entityId);
+      const { similarOf } = await import("./irfirst.ts");
+      const hits = similarOf(env.svc.store, env.rev.id, anchor.entityId, Number.isInteger(Number(topK)) ? Number(topK) : 8).filter((x) => !env.access.denied(x.file));
+      if (!hits.length) return `[${anchor.entityId}] is resolved but has no structural neighbors in the index yet (vectors index functions/methods with stored IR).`;
+      for (const h of hits) {
+        const e = env.svc.store.entitiesById(env.rev.id, [h.entityId])[0];
+        if (e && !env.access.denied(e.file)) note(env, e), (env.irReads ??= new Set()).add(e.entityId);
+      }
+      env.svc.store.audit(env.ctx.actor.principalId, "chat.similar_to", env.rev.id, { anchor: anchor.entityId, hits: hits.length } as Record<string, unknown>);
+      const lines = hits.map((h) => `  ${Math.round(h.similarity * 100)}% [${h.entityId}] ${h.name} (${h.file})`);
+      return [`Resolved "${name}" to [${anchor.entityId}]. ${hits.length} structural neighbor(s) (similarity is approximate, not identity):`, ...lines].join("\n");
+    },
+  },
+  {
     name: "answer",
     description: "Finish: give the user the answer. Only state what tool results showed, and cite the ids of the elements you rely on.",
     parameters: { type: "object", properties: { text: str("The answer, in plain prose", { maxLength: 6000 }), cites: { type: "array", items: { type: "string" }, maxItems: 20, description: "Ids (in [brackets] in tool results) the answer relies on" } }, required: ["text", "cites"], additionalProperties: false },

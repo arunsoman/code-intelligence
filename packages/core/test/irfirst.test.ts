@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Store } from "../src/store.ts";
-import { conceptIrView, cosine, renderIrs, similarOf } from "../src/irfirst.ts";
+import { cloneScan, conceptIrView, cosine, renderIrs, similarOf } from "../src/irfirst.ts";
 import { makeRepo, putRevision } from "./concept-hierarchy-helpers.ts";
 
 const PAY = (name: string) => `
@@ -68,6 +68,30 @@ export function unrelater(items) {
   // No vector indexed at all → an honest empty list, not an error (data-only revisions).
   assert.equal(cosine(undefined, [1, 2]), 0);
   assert.equal(cosine([1, 2], []), 0);
+});
+
+test("cloneScan answers the anchorless duplicate question: twins surface as a pair or an exact group, dissimilar code never listed", () => {
+  const other = `
+export function unrelater(items) {
+  const out = [];
+  for (const item of items) { if (item.kind === "w") { out.push(item.value * 3); } }
+  return out.length;
+}`;
+  const store = storeWith({ "fixture.ts": PAY("pay") + PAY("twin").replaceAll("account", "cust").replaceAll("amount", "qty") + other });
+  const pay = entity(store, "pay");
+  const twin = entity(store, "twin");
+  const scan = cloneScan(store, "rev", { minSimilarity: 0.9, maxGroups: 20, maxPairs: 20 });
+  const inGroup = scan.exactGroups.some((g) => g.members.some((m) => m.entityId === pay.entityId) && g.members.some((m) => m.entityId === twin.entityId));
+  const inPair = scan.nearPairs.some((p) => (p.a === pay.entityId && p.b === twin.entityId) || (p.a === twin.entityId && p.b === pay.entityId));
+  assert.ok(inGroup || inPair, "the renamed twins surface from the scan (exact fingerprint or proved pair)");
+  assert.ok(!(inPair && !scan.nearPairs.find((p) => p.a === pay.entityId)?.diff), "a surfaced pair carries its diff summary");
+  for (const g of scan.exactGroups) assert.ok(g.members.length >= 2, `group of one is not a clone group: ${g.irHash}`);
+  const listed = new Set([...scan.exactGroups.flatMap((g) => g.members.map((m) => m.entityId)), ...scan.nearPairs.flatMap((p) => [p.a, p.b])]);
+  assert.ok(!listed.has("function:fixture.ts#unrelater"), "dissimilar code is never reported as a clone candidate");
+  // Bounds are honored; a min-similarity of 1 yields no pairs, while exact groups still stand.
+  assert.ok(cloneScan(store, "rev", { minSimilarity: 0.9, maxGroups: 1, maxPairs: 1 }).exactGroups.length <= 1);
+  assert.ok(cloneScan(store, "rev", { minSimilarity: 1.01 }).nearPairs.every((p) => p.similarity >= 1), "the scan clamps out-of-range thresholds; identity-level pairs survive a >=1 filter");
+  assert.ok(!store.irHashGroups("rev").some((g) => g.members.length < 2), "irHashGroups only lists real groups (two or more)");
 });
 
 test("the store serves vectors lean and the concept card carries member IRs", () => {

@@ -407,3 +407,45 @@ test("a chart with no overlap with what the answer cited is replaced by a minima
     assert.ok(primary.gaps.some(g => /didn't correspond to what the answer cited/.test(g)));
   } finally { worker.close(); }
 });
+
+test("a scan-shaped question is answered from the duplicates tool in one call, not from guessed anchors", async () => {
+  const repo = copyFixture();
+  appendFileSync(join(repo, "src/pay.ts"), `
+export function payA(account, amount) { let total = reserve(account, amount); if (total > limit) { return reject(account); } return total; }
+export function payB(client, value) { let total = reserve(client, value); if (total > limit) { return reject(client); } return total; }
+`);
+  const { svc, worker, revision } = await setup(undefined, repo);
+  try {
+    const ids: string[] = [];
+    svc.router = scripted([
+      () => call("duplicates", {}),
+      (m) => {
+        const result = m.filter((x) => x.role === "tool").at(-1)!.content;
+        for (const hit of result.matchAll(/\[([a-z]+:[^\]\s]+)\]/g)) if (!ids.includes(hit[1])) ids.push(hit[1]);
+        assert.ok(/payA|payB/.test(result), "the scan surfaced both renamed twins");
+        return call("answer", { text: "The system has an exact-shape duplicate pair.", cites: ids.slice(0, 2) });
+      },
+    ]);
+    const r = await svc.converse(ctx(), { text: "check if there are any duplicate code in the system", revision });
+    assert.ok(r.ok && r.value.kind === "analysis");
+    assert.equal(r.value.validation?.status, "SUPPORTED");
+    assert.equal(ids.length >= 2, true, "the twins were citable");
+  } finally { worker.close(); }
+});
+
+test("similar_to resolves an element by name without a prior find_code", async () => {
+  const { svc, worker, revision } = await setup();
+  try {
+    svc.router = scripted([
+      () => call("similar_to", { name: "AuthService" }),
+      (m) => {
+        const result = m.filter((x) => x.role === "tool").at(-1)!.content;
+        assert.match(result, /Resolved "AuthService" to \[class:src\/auth\/service\.ts#AuthService\]/);
+        return call("answer", { text: "Its neighbors are listed by structural similarity.", cites: ["class:src/auth/service.ts#AuthService"] });
+      },
+    ]);
+    const r = await svc.converse(ctx(), { text: "what code is similar to AuthService?", revision });
+    assert.ok(r.ok && r.value.kind === "analysis");
+    assert.equal(r.value.validation?.status, "SUPPORTED");
+  } finally { worker.close(); }
+});

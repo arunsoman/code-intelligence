@@ -78,6 +78,20 @@ export function similarOf(store: Store, revision: string, entityId: string, topK
   return out.slice(0, topK);
 }
 
+export interface CloneGroup { irHash: string; members: { entityId: string; kind: string; name: string; file: string }[]; }
+export interface ClonePair { a: string; b: string; similarity: number; diff: string; }
+export interface CloneScan { exactGroups: CloneGroup[]; nearPairs: ClonePair[]; }
+/** The corpus-wide duplicate scan (plan: anchorless recall answers come from the indexes, the LLM never
+ *  browses). Tier 1 — exact-shape clone groups by shared IR fingerprint. Tier 2 — the worker's proved
+ *  near-duplicate pairs with their diffs. No model, no sampling: the whole revision, every call. */
+export function cloneScan(store: Store, revision: string, opts: { minSimilarity?: number; maxGroups?: number; maxPairs?: number } = {}): CloneScan {
+  // Clamp rather than default on out-of-range values: an extreme threshold is a scan shape, not an error.
+  const minSimilarity = Number.isFinite(opts.minSimilarity) ? Math.min(1, Math.max(0, opts.minSimilarity as number)) : 0.85;
+  const maxGroups = typeof opts.maxGroups === "number" && opts.maxGroups >= 1 ? Math.min(Math.floor(opts.maxGroups), 50) : 20;
+  const maxPairs = typeof opts.maxPairs === "number" && opts.maxPairs >= 1 ? Math.min(Math.floor(opts.maxPairs), 100) : 20;
+  return { exactGroups: store.irHashGroups(revision, maxGroups), nearPairs: store.nearDupPairs(revision, minSimilarity, maxPairs) };
+}
+
 export interface ConceptIrView {
   conceptId: string;
   name: string | null;

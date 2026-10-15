@@ -36,7 +36,7 @@ import { chartCodeForQuestion, CHART_REGISTRY, SCHEMA_CHALLENGE, SCHEMA_EXPLANAT
 import { applyVerdict, gateClaim, modelText, wilson, withChallenge } from "./claims.ts";
 import { claimOf } from "./forms/common.ts";
 import { buildHierarchy, persistHierarchy, type NamingAdapter } from "./concept-hierarchy/index.ts";
-import { conceptIrView, renderIrs, similarOf } from "./irfirst.ts";
+import { cloneScan, conceptIrView, renderIrs, similarOf } from "./irfirst.ts";
 import { buildFailureGraph, buildInvariantGraph } from "./forms/causal.ts";
 import { short } from "./forms/common.ts";
 import { buildHypothesis } from "./forms/hypothesis.ts";
@@ -2289,6 +2289,47 @@ export class Service {
     const access = policyFor(this.store, rev.repoRoot);
     const similar = similarOf(this.store, rev.id, req.entityId, topK as number).filter((x) => !access.denied(x.file));
     return ok(ctx, { entityId: req.entityId, similar: topK === undefined ? similar : similar.slice(0, topK as number) }, { revision: rev.id });
+  }
+
+  /** IR-first (plan): the corpus-wide duplicate scan — exact-shape clone groups (shared IR fingerprint)
+   *  plus the worker's proved near-duplicate pairs, access-filtered. The anchorless recall path: one
+   *  deterministic call, no browsing. */
+  duplicates(ctx: CallContext, req: { revision?: string; minSimilarity?: unknown; maxGroups?: unknown; maxPairs?: unknown }): ApiResult<{ revision: string; exactGroups: { irHash: string; members: { entityId: string; name: string; file: string }[]; withheld: number }[]; nearPairs: { a: string; b: string; similarity: number; diff: string }[]; pairsWithheld: number }> {
+    if ((req.minSimilarity !== undefined && (typeof req.minSimilarity !== "number" || (req.minSimilarity as number) < 0 || (req.minSimilarity as number) > 1)) || (req.maxGroups !== undefined && (!Number.isInteger(req.maxGroups) || (req.maxGroups as number) < 1 || (req.maxGroups as number) > 50)) || (req.maxPairs !== undefined && (!Number.isInteger(req.maxPairs) || (req.maxPairs as number) < 1 || (req.maxPairs as number) > 100))) return fail(ctx, { code: "INVALID_SCHEMA", message: "minSimilarity must be 0..1; maxGroups 1..50; maxPairs 1..100", retryable: false });
+    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
+    const access = policyFor(this.store, rev.repoRoot);
+    const scan = cloneScan(this.store, rev.id, { minSimilarity: req.minSimilarity as number | undefined, maxGroups: req.maxGroups as number | undefined, maxPairs: req.maxPairs as number | undefined });
+    const exactGroups = scan.exactGroups.map((g) => {
+      const members = g.members.filter((e) => !access.denied(e.file));
+      return { irHash: g.irHash, members: members.map((e) => ({ entityId: e.entityId, name: e.name, file: e.file })), withheld: g.members.length - members.length };
+    }).filter((g) => g.members.length > 0);
+    const files = new Map(this.store.entitiesById(rev.id, scan.nearPairs.flatMap((p) => [p.a, p.b])).map((e) => [e.entityId, e.file]));
+    let pairsWithheld = 0;
+    const nearPairs = scan.nearPairs.filter((p) => {
+      const shown = !access.denied(files.get(p.a) ?? "?") && !access.denied(files.get(p.b) ?? "?");
+      if (!shown) pairsWithheld++;
+      return shown;
+    });
+    return ok(ctx, { revision: rev.id, exactGroups, nearPairs, pairsWithheld }, { revision: rev.id });
+  }
+
+  /** IR-first (plan): the anchorless similarity entry — resolve an element by name or id (what the model
+   *  naturally has from prose), then the rename-stable structural neighborhood. Same ground as
+   *  C11/similarOf with mention resolution built in. */
+  similarTo(ctx: CallContext, req: { revision?: string; name?: unknown; topK?: unknown }): ApiResult<{ entityId: string; similar: import("./irfirst.ts").Similar[]; candidates: { id: string; name: string }[] }> {
+    if (!req || typeof req.name !== "string" || !req.name.trim() || req.name.length > 300) return fail(ctx, { code: "INVALID_SCHEMA", message: "name must be a non-empty string", retryable: false });
+    const topK = req.topK === undefined ? 8 : req.topK;
+    if (!Number.isInteger(topK) || (topK as number) < 1 || (topK as number) > 50) return fail(ctx, { code: "INVALID_SCHEMA", message: "topK must be an integer in 1..50", retryable: false });
+    const rev = req.revision ? this.store.revision(req.revision) : this.store.latestRevision();
+    if (!rev) return fail(ctx, { code: "NOT_FOUND", message: "no indexed revision", retryable: false });
+    const access = policyFor(this.store, rev.repoRoot);
+    const mention = resolveMentions(this.store, rev.id, req.name as string, access).resolved[0]?.matches[0];
+    if (!mention) return ok(ctx, { entityId: "", similar: [], candidates: [] }, { revision: rev.id });
+    const anchor = this.store.entitiesById(rev.id, [mention.entityId])[0];
+    if (!anchor || access.denied(anchor.file)) return ok(ctx, { entityId: "", similar: [], candidates: [] }, { revision: rev.id });
+    const similar = similarOf(this.store, rev.id, anchor.entityId, topK as number).filter((x) => !access.denied(x.file));
+    return ok(ctx, { entityId: anchor.entityId, similar, candidates: [] }, { revision: rev.id });
   }
 
   /** IR-first (plan): a concept card — the concept's live members with each member's rendered IR,

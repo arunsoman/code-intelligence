@@ -275,8 +275,7 @@ export class Store {
   }
   /** Structural vectors only, entity metadata straight off the columns — never the whole JSON:
    *  the dumps inside it can dwarf the vectors by orders of magnitude. */
-  irVecs(rev: string): Map<string, { vec: number[]; kind: string; name: string; file: string }> {
-    const rows = this.db.prepare(
+  irVecs(rev: string): Map<string, { vec: number[]; kind: string; name: string; file: string }> {    const rows = this.db.prepare(
       "select entity_id, kind, name, file, json_extract(json, '$.irVec') as vec from entities where revision = ? and json like '%\"irVec\"%'",
     ).all(rev) as { entity_id: string; kind: string; name: string; file: string; vec: string | null }[];
     const out = new Map<string, { vec: number[]; kind: string; name: string; file: string }>();
@@ -288,6 +287,30 @@ export class Store {
       } catch { /* corrupt row: skip, not fail */ }
     }
     return out;
+  }
+  /** Exact-shape clone candidates: entities sharing an IR fingerprint, grouped at read time — the
+   *  anchorless duplicate-scan tier 1. Fingerprint = identity of the normalized IR, not a similarity. */
+  irHashGroups(rev: string, limit = 24): { irHash: string; members: { entityId: string; kind: string; name: string; file: string }[] }[] {
+    const rows = this.db.prepare(
+      "select json_extract(json, '$.irHash') as h, entity_id, kind, name, file from entities where revision = ? and json like '%\"irHash\"%' and json_extract(json, '$.irHash') is not null",
+    ).all(rev) as { h: string; entity_id: string; kind: string; name: string; file: string }[];
+    const groups = new Map<string, { entityId: string; kind: string; name: string; file: string }[]>();
+    for (const r of rows) {
+      const es = groups.get(r.h) ?? [];
+      es.push({ entityId: r.entity_id, kind: r.kind, name: r.name, file: r.file });
+      groups.set(r.h, es);
+    }
+    return [...groups.entries()].filter(([, es]) => es.length > 1)
+      .sort((a, b) => b[1].length - a[1].length || (a[0] < b[0] ? -1 : 1))
+      .slice(0, limit)
+      .map(([irHash, es]) => ({ irHash, members: es.slice().sort((x, y) => (x.file < y.file ? -1 : 1)) }));
+  }
+  /** Near-duplicate pairs the worker's concept stage already proved (with each pair's diff summary),
+   *  one join, bounded to the revision — the anchorless duplicate-scan tier 2. */
+  nearDupPairs(rev: string, minSimilarity = 0, limit = 40): { a: string; b: string; similarity: number; diff: string }[] {
+    return (this.db.prepare(
+      "select p.a as a, p.b as b, p.similarity as similarity, p.diff as diff from structural_concept_pairs p join structural_concept_revisions r on r.concept_id = p.concept_id where r.revision = ? and p.similarity >= ? order by p.similarity desc, p.a, p.b limit ?",
+    ).all(rev, minSimilarity, limit) as { a: string; b: string; similarity: number; diff: string }[]);
   }
   relationshipsFor(rev: string, entityId: string): Relationship[] {
     // Two index lookups, not `from_id = ? or to_id = ?`: SQLite plans that OR as a scan of every relationship in the revision, once per entity.
