@@ -87,13 +87,24 @@ pub fn validate(batch: &AnalysisBatch) -> Result<(), String> {
         }
         Ok(())
     }
-    unique(
-        batch
-            .entities
-            .iter()
-            .map(|e| (e.entity_id.clone(), serde_json::to_value(e).unwrap()))
-            .collect(),
-    )?;
+    // Most IDs occur once. Retain borrowed rows and serialize only when an ID
+    // repeats, so collision checks keep their exact semantic comparison.
+    fn unique_borrowed<'a, T: Serialize + 'a>(
+        rows: impl Iterator<Item = (&'a str, &'a T)>,
+    ) -> Result<(), String> {
+        let mut seen = HashMap::new();
+        for (id, value) in rows {
+            if let Some(previous) = seen.get(id) {
+                if serde_json::to_value(previous).unwrap() != serde_json::to_value(value).unwrap() {
+                    return Err("EVIDENCE_CORE_ID_COLLISION".into());
+                }
+            } else {
+                seen.insert(id, value);
+            }
+        }
+        Ok(())
+    }
+    unique_borrowed(batch.entities.iter().map(|e| (e.entity_id.as_str(), e)))?;
     let rows = batch
         .facts
         .iter()
@@ -117,11 +128,7 @@ pub fn validate(batch: &AnalysisBatch) -> Result<(), String> {
         .flat_map(|f| &f.evidence)
         .chain(batch.relationships.iter().flat_map(|r| &r.evidence))
         .collect();
-    unique(
-        evs.iter()
-            .map(|e| (e.id.clone(), serde_json::to_value(e).unwrap()))
-            .collect(),
-    )?;
+    unique_borrowed(evs.iter().map(|e| (e.id.as_str(), *e)))?;
     let root = std::path::Path::new(&batch.repo_root);
     let mut files = HashMap::new();
     for e in batch.entities.iter().filter(|e| e.kind == "file") {
@@ -191,7 +198,7 @@ pub fn emit(batch: &AnalysisBatch) -> Result<EvidenceCoreBatchV1, String> {
                 .map(|s| (e.file.as_str(), s.content_hash.as_str()))
         })
         .collect();
-    let fallback_input = identity("input", &json!(batch.manifest));
+    let mut fallback_input = None;
     let mut groups: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     for e in batch.entities.iter().filter(|e| e.kind == "file") {
         groups.entry(e.file.clone()).or_default();
@@ -236,7 +243,11 @@ pub fn emit(batch: &AnalysisBatch) -> Result<EvidenceCoreBatchV1, String> {
         let input = inputs
             .get(file.as_str())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| fallback_input.clone());
+            .unwrap_or_else(|| {
+                fallback_input
+                    .get_or_insert_with(|| identity("input", &json!(batch.manifest)))
+                    .clone()
+            });
         let output = identity("output", &json!([batch.manifest.get(&file), associations]));
         let run = identity(
             "run",
@@ -277,6 +288,22 @@ mod tests {
         let v = emit(&b).unwrap();
         assert_eq!(v.schema, SCHEMA);
         assert!(v.coverage.is_empty());
+    }
+    #[test]
+    fn borrowed_evidence_checks_accept_equal_and_reject_conflicting_ids() {
+        let mut b = AnalysisBatch::default();
+        let e = crate::model::EvidenceRef {
+            id: "same-evidence".into(), source_id: "history".into(),
+            location: json!({"kind":"History"}), class: "HISTORY",
+            observed_at: "epoch".into(), access_scope_id: "local".into(), state: "CURRENT",
+        };
+        b.facts.push(crate::model::Fact {
+            id: "f".into(), subject: "s".into(), predicate: "p".into(),
+            object: json!({}), resolution: "PARSED", evidence: vec![e.clone(),e],
+        });
+        validate(&b).unwrap();
+        b.facts[0].evidence[1].source_id = "other".into();
+        assert_eq!(validate(&b).unwrap_err(), "EVIDENCE_CORE_ID_COLLISION");
     }
     #[test]
     fn duplicate_fact_conflicts_are_rejected() {
