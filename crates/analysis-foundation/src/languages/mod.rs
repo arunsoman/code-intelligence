@@ -1,5 +1,7 @@
 //! Automatically discovered, capability-scoped source adapters. This does not replace
 //! the existing worker indexer. Unsupported semantics remain explicit opaque regions.
+mod expressions;
+
 use crate::semantic_ir::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -336,23 +338,7 @@ impl TreeAdapter {
             entry: "entry".into(),
             blocks: BTreeMap::new(),
         };
-        let mut covered = Covered::new();
-        let body_expression = body.and_then(|body| {
-            if matches!(body.kind(), "statement_block" | "block") {
-                let statements: Vec<_> = children(body)
-                    .into_iter()
-                    .filter(|n| !matches!(n.kind(), "comment" | "line_comment" | "block_comment"))
-                    .collect();
-                if statements.len() != 1 || statements[0].kind() != "return_statement" {
-                    return None;
-                }
-                children(statements[0]).first().copied()
-            } else if node.kind() == "arrow_function" {
-                Some(body)
-            } else {
-                None
-            }
-        });
+        let covered = Covered::new();
         // async/generator/getter/setter/native/decorated methods have additional semantics.
         // Only plain function declarations, Java methods without modifiers other than access/static,
         // and plain arrows can use the literal subset.
@@ -372,43 +358,30 @@ impl TreeAdapter {
             && annotation_supported
             && parameter_bindings_supported
         {
-            if let Some(expression) = body_expression {
-                if let Some((literal, ty)) =
-                    self.literal(raw(expression, source), expected.as_ref())
+            if let Some(body) = body {
+                if let Some((function, covered)) =
+                    self.straight_line(node, body, source, &f, expected.as_ref())
                 {
-                    if expected.as_ref().is_none_or(|t| t == &ty) {
-                        let result = ValueId::from("return-value");
-                        f.values.insert(result.clone(), ty.clone());
-                        f.return_type = ty;
-                        let action = Action::Constant {
-                            result: result.clone(),
-                            literal,
-                        };
-                        f.blocks.insert(
-                            "entry".into(),
-                            Block {
-                                source: owner,
-                                instructions: vec![Instruction {
-                                    id: "constant".into(),
-                                    source: span(expression),
-                                    exceptional: None,
-                                    action,
-                                }],
-                                terminator: Terminator::Return {
-                                    value: Some(result),
-                                },
-                            },
-                        );
-                        for n in [node, expression] {
-                            covered.insert((n.start_byte(), n.end_byte(), n.kind().into()));
-                        }
-                        return (f, covered, None);
-                    }
+                    let assumption = if matches!(self.profile, Profile::TypeScript)
+                        && !function.parameters.is_empty()
+                    {
+                        Some("TypeScript parameter annotations are model assumptions; runtime argument types are not validated".into())
+                    } else if function
+                        .values
+                        .values()
+                        .any(|ty| matches!(ty, Type::Opaque { .. }))
+                    {
+                        Some("unknown value types retained; only supported value-preserving operations modeled".into())
+                    } else {
+                        None
+                    };
+                    return (function, covered, assumption);
                 }
             }
         }
+
         let reason =
-            "function body/bindings outside literal-return subset; no absence of effects inferred"
+            "function body/bindings outside straight-line expression subset; no absence of effects inferred"
                 .to_owned();
         f.blocks.insert(
             "entry".into(),

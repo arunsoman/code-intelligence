@@ -1,0 +1,190 @@
+{
+  "documents": {
+    "source": {
+      "gaps": [
+        {
+          "reason": "module initialization, imports, class initialization and ambient bindings are outside this adapter's semantic scope",
+          "source": {
+            "document": "source",
+            "endByte": 67,
+            "startByte": 0
+          }
+        },
+        {
+          "reason": "TypeScript parameter annotations are model assumptions; runtime argument types are not validated",
+          "source": {
+            "document": "source",
+            "endByte": 66,
+            "startByte": 0
+          }
+        }
+      ],
+      "language": "typescript",
+      "loweringVersion": "typescript-expressions.v2",
+      "path": "value.ts",
+      "semanticsVersion": "ecmascript-expression-subset.v2",
+      "sha256": "cb4e2291036fc7d22bc0173280dc37906e7ceb3cc0125949fe72d568d57adb53"
+    }
+  },
+  "environmentDigest": "golden-env",
+  "functions": {
+    "value.ts@0:function_declaration": {
+      "blocks": {
+        "entry": {
+          "instructions": [
+            {
+              "action": {
+                "kind": "constant",
+                "literal": {
+                  "hex": "3ff0000000000000",
+                  "kind": "floatBits"
+                },
+                "result": "expression:0"
+              },
+              "exceptional": null,
+              "id": "instruction:0",
+              "source": {
+                "document": "source",
+                "endByte": 45,
+                "startByte": 44
+              }
+            },
+            {
+              "action": {
+                "kind": "binary",
+                "left": "parameter:0",
+                "operator": "add",
+                "result": "expression:1",
+                "right": "expression:0"
+              },
+              "exceptional": null,
+              "id": "instruction:1",
+              "source": {
+                "document": "source",
+                "endByte": 45,
+                "startByte": 42
+              }
+            },
+            {
+              "action": {
+                "kind": "constant",
+                "literal": {
+                  "hex": "4000000000000000",
+                  "kind": "floatBits"
+                },
+                "result": "expression:2"
+              },
+              "exceptional": null,
+              "id": "instruction:2",
+              "source": {
+                "document": "source",
+                "endByte": 52,
+                "startByte": 51
+              }
+            },
+            {
+              "action": {
+                "kind": "binary",
+                "left": "expression:1",
+                "operator": "multiply",
+                "result": "expression:3",
+                "right": "expression:2"
+              },
+              "exceptional": null,
+              "id": "instruction:3",
+              "source": {
+                "document": "source",
+                "endByte": 52,
+                "startByte": 49
+              }
+            },
+            {
+              "action": {
+                "kind": "copy",
+                "operand": "expression:3",
+                "result": "expression:4"
+              },
+              "exceptional": null,
+              "id": "instruction:4",
+              "source": {
+                "document": "source",
+                "endByte": 52,
+                "startByte": 47
+              }
+            },
+            {
+              "action": {
+                "kind": "unary",
+                "operand": "expression:4",
+                "operator": "negate",
+                "result": "expression:5"
+              },
+              "exceptional": null,
+              "id": "instruction:5",
+              "source": {
+                "document": "source",
+                "endByte": 63,
+                "startByte": 61
+              }
+            }
+          ],
+          "source": {
+            "document": "source",
+            "endByte": 66,
+            "startByte": 0
+          },
+          "terminator": {
+            "kind": "return",
+            "value": "expression:5"
+          }
+        }
+      },
+      "entry": "entry",
+      "parameters": [
+        "parameter:0"
+      ],
+      "returnType": {
+        "format": "Binary64",
+        "kind": "float"
+      },
+      "source": {
+        "document": "source",
+        "endByte": 66,
+        "startByte": 0
+      },
+      "values": {
+        "expression:0": {
+          "format": "Binary64",
+          "kind": "float"
+        },
+        "expression:1": {
+          "format": "Binary64",
+          "kind": "float"
+        },
+        "expression:2": {
+          "format": "Binary64",
+          "kind": "float"
+        },
+        "expression:3": {
+          "format": "Binary64",
+          "kind": "float"
+        },
+        "expression:4": {
+          "format": "Binary64",
+          "kind": "float"
+        },
+        "expression:5": {
+          "format": "Binary64",
+          "kind": "float"
+        },
+        "parameter:0": {
+          "format": "Binary64",
+          "kind": "float"
+        }
+      }
+    }
+  },
+  "producerVersion": "typescript-expressions.v2",
+  "revision": "golden-p03a",
+  "schema": "cie.semantic-ir.v1"
+}

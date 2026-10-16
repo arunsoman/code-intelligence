@@ -1,0 +1,219 @@
+{
+  "documents": {
+    "source": {
+      "gaps": [
+        {
+          "reason": "module initialization, imports, class initialization and ambient bindings are outside this adapter's semantic scope",
+          "source": {
+            "document": "source",
+            "endByte": 62,
+            "startByte": 0
+          }
+        }
+      ],
+      "language": "javascript",
+      "loweringVersion": "javascript-expressions.v2",
+      "path": "value.js",
+      "semanticsVersion": "ecmascript-expression-subset.v2",
+      "sha256": "d946bb9ae3f11a4dae1eee01fb6508cee27d9ab463861ff3a8cc98f9d3b8f69e"
+    }
+  },
+  "environmentDigest": "golden-env",
+  "functions": {
+    "value.js@0:function_declaration": {
+      "blocks": {
+        "entry": {
+          "instructions": [
+            {
+              "action": {
+                "kind": "constant",
+                "literal": {
+                  "hex": "4000000000000000",
+                  "kind": "floatBits"
+                },
+                "result": "expression:0"
+              },
+              "exceptional": null,
+              "id": "instruction:0",
+              "source": {
+                "document": "source",
+                "endByte": 28,
+                "startByte": 27
+              }
+            },
+            {
+              "action": {
+                "kind": "constant",
+                "literal": {
+                  "hex": "4008000000000000",
+                  "kind": "floatBits"
+                },
+                "result": "expression:1"
+              },
+              "exceptional": null,
+              "id": "instruction:1",
+              "source": {
+                "document": "source",
+                "endByte": 39,
+                "startByte": 38
+              }
+            },
+            {
+              "action": {
+                "kind": "constant",
+                "literal": {
+                  "hex": "4010000000000000",
+                  "kind": "floatBits"
+                },
+                "result": "expression:2"
+              },
+              "exceptional": null,
+              "id": "instruction:2",
+              "source": {
+                "document": "source",
+                "endByte": 41,
+                "startByte": 40
+              }
+            },
+            {
+              "action": {
+                "kind": "binary",
+                "left": "expression:1",
+                "operator": "multiply",
+                "result": "expression:3",
+                "right": "expression:2"
+              },
+              "exceptional": null,
+              "id": "instruction:3",
+              "source": {
+                "document": "source",
+                "endByte": 41,
+                "startByte": 38
+              }
+            },
+            {
+              "action": {
+                "kind": "binary",
+                "left": "expression:0",
+                "operator": "add",
+                "result": "expression:4",
+                "right": "expression:3"
+              },
+              "exceptional": null,
+              "id": "instruction:4",
+              "source": {
+                "document": "source",
+                "endByte": 41,
+                "startByte": 36
+              }
+            },
+            {
+              "action": {
+                "kind": "constant",
+                "literal": {
+                  "hex": "3ff0000000000000",
+                  "kind": "floatBits"
+                },
+                "result": "expression:5"
+              },
+              "exceptional": null,
+              "id": "instruction:5",
+              "source": {
+                "document": "source",
+                "endByte": 48,
+                "startByte": 47
+              }
+            },
+            {
+              "action": {
+                "kind": "binary",
+                "left": "expression:4",
+                "operator": "subtract",
+                "result": "expression:6",
+                "right": "expression:5"
+              },
+              "exceptional": null,
+              "id": "instruction:6",
+              "source": {
+                "document": "source",
+                "endByte": 48,
+                "startByte": 45
+              }
+            },
+            {
+              "action": {
+                "kind": "copy",
+                "operand": "expression:6",
+                "result": "expression:7"
+              },
+              "exceptional": null,
+              "id": "instruction:7",
+              "source": {
+                "document": "source",
+                "endByte": 48,
+                "startByte": 43
+              }
+            }
+          ],
+          "source": {
+            "document": "source",
+            "endByte": 61,
+            "startByte": 0
+          },
+          "terminator": {
+            "kind": "return",
+            "value": "expression:7"
+          }
+        }
+      },
+      "entry": "entry",
+      "parameters": [],
+      "returnType": {
+        "format": "Binary64",
+        "kind": "float"
+      },
+      "source": {
+        "document": "source",
+        "endByte": 61,
+        "startByte": 0
+      },
+      "values": {
+        "expression:0": {
+          "format": "Binary64",
+          "kind": "float"
+        },
+        "expression:1": {
+          "format": "Binary64",
+          "kind": "float"
+        },
+        "expression:2": {
+          "format": "Binary64",
+          "kind": "float"
+        },
+        "expression:3": {
+          "format": "Binary64",
+          "kind": "float"
+        },
+        "expression:4": {
+          "format": "Binary64",
+          "kind": "float"
+        },
+        "expression:5": {
+          "format": "Binary64",
+          "kind": "float"
+        },
+        "expression:6": {
+          "format": "Binary64",
+          "kind": "float"
+        },
+        "expression:7": {
+          "format": "Binary64",
+          "kind": "float"
+        }
+      }
+    }
+  },
+  "producerVersion": "javascript-expressions.v2",
+  "revision": "golden-p03a",
+  "schema": "cie.semantic-ir.v1"
+}

@@ -23,7 +23,8 @@ conformance pathway. This is not a retrospective audit of all CIE features.
 | P01 | Initial Rust operation-inventory foundation | Delivered as `cie-rust-analysis-foundation.patch`, base `4a748fd` | Local implementation; upstream merge not checked; standalone worker command only | 164 workspace tests passed, including 13 new tests; release build and crate Clippy passed |
 | P02 | Semantic IR schema and trust boundary, F019–F028 | Delivered as `cie-p02-semantic-ir.patch`, based on P01 / local baseline `3d13731` | Library only; no source adapter or application switch | 21 new semantic IR tests; 185 workspace tests passed; release build and crate Clippy passed |
 | P02a | Default Java/TS/JS adapters and automatic file discovery, F172–F180 | Delivered as `cie-default-language-adapters.patch`, after P02 / local base `48f1ba2` | Standalone library/worker; literal-return subset only | 200 workspace tests passed, source execution oracles and file-only discovery smoke passed |
-| P03–P19 | Planned below | Pending | Pending | Pending |
+| P03a | Straight-line expressions and source fidelity, F036 and F181–F185 | Delivered as `cie-p03a-expressions.patch`, after P02a / base `38158aa` | Library/standalone worker; wider P03 still pending | 213 workspace tests passed; source execution comparisons and golden vectors |
+| Remaining P03–P19 | Planned below | Pending | Pending | Pending |
 
 P01 code: `crates/analysis-foundation`; worker command: `analysisFoundation`.
 Evidence: `docs/testing/2026-10-16-rust-analysis-foundation.md`.
@@ -104,7 +105,7 @@ as a narrow partial implementation; the full task scopes below remain open.
 - [ ] F033 Keep nested functions separate and model supported lexical bindings.
 - [ ] F034 Emit explicit gaps for dynamic dispatch, reflection and unsupported features.
 - [ ] F035 Account for every encountered construct as lowered, opaque or excluded.
-- [ ] F036 Add golden source-to-IR fixtures with byte-accurate provenance.
+- [x] F036 Add golden source-to-IR fixtures with byte-accurate provenance (initial Java/TS/JS straight-line subset, P03a).
 - [ ] F037 Compare selected source executions with an independent IR execution oracle.
 - [ ] F038 Test nonpositive quantities, NaN, bypass mutation and unresolved overloads.
 
@@ -392,6 +393,23 @@ Contract and extension instructions: `docs/design/language-adapters.md`.
 No complete language semantics, source-level anomaly detection or answer routing
 is claimed. New grammar dependencies still need Cargo changes and semantic tests.
 
+## P03a — Straight-line expression slice: delivered
+
+F029 remains partial: selected forms are implemented, broader declaration/type/
+expression forms still require coverage. Calls, branches, loops and exceptions
+are not implemented by this slice. Separate task IDs make the delivered boundary
+visible without closing the whole P03 milestone.
+
+- [x] F181 Lower supported parameter references, initialized locals and simple local reassignment.
+- [x] F182 Lower selected unary, arithmetic and comparison expressions with typed operands.
+- [x] F183 Discard candidate lowering on unsupported statements so side effects cannot vanish.
+- [x] F184 Preserve explicit type assumptions and bump adapter/semantics versions for cache safety.
+- [x] F185 Compare selected expression IR execution with independent Java/Node source execution.
+
+Evidence: `docs/testing/2026-10-16-p03a-expressions.md`. Scope:
+`docs/design/straight-line-expressions.md`. F036 golden snapshots are delivered
+for this subset; no universal source-fidelity claim is made.
+
 ## Patch update template
 
 For each delivered patch append a ledger row with:
@@ -405,12 +423,13 @@ For each delivered patch append a ledger row with:
 
 ## Immediate next patch
 
-P03: expand default Java/TS/JS source adapters and translation-fidelity suite,
-F029–F038; Python can be added independently. P02 is
+P03b: add explicit call/binding lowering and normal/exceptional continuations
+within the remaining F029–F038 scope. Branches/loops and broader fidelity follow;
+Python can be added independently. P03a delivered straight-line expressions. P02 is
 implemented in `semantic_ir`; its source hashes, schema vectors and graph checks
 establish model consistency, not translation correctness. P03 must prove the
 first adapter's fidelity before P06 can claim source-level anomaly detection.
 
 P02 evidence: `docs/testing/2026-10-16-p02-semantic-ir.md`; schema contract:
-`docs/design/semantic-ir-v1.md`. Current checklist: 37 complete, 143 pending, 180 total;
+`docs/design/semantic-ir-v1.md`. Current checklist: 43 complete, 142 pending, 185 total;
 these counts are task accounting, not engineering-effort percentages.

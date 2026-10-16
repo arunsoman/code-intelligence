@@ -113,3 +113,10 @@ Next P03 extends these default adapters toward expressions, real calls, branchin
 and exception flow. Python becomes an additional adapter rather than a prerequisite
 for using Java/TS/JS. P09 still owns Java/Spring binding/transaction semantics;
 P17 still owns broader TS/JS asynchronous and dynamic semantics.
+
+## P03a capability extension
+
+The literal-only scope above records P02a. P03a extends each default adapter to
+supported straight-line locals, references and selected expressions. Adapter and
+semantics versions advance to expression v2. See `straight-line-expressions.md`
+for the current contract, exclusions and TypeScript runtime-type assumptions.
