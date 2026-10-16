@@ -2,6 +2,7 @@
 //! business outcomes. Producers must report omitted semantics as gaps.
 pub mod languages;
 pub mod semantic_ir;
+pub mod source_analysis;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
