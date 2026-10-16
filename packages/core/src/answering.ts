@@ -7,7 +7,7 @@ import { retrieveFromSnapshot } from "./retrieval.ts";
 import { ConversationActions, ConversationConflict } from "./conversation-actions.ts";
 import { boundAnswerContext } from "./answer-visual.ts";
 import { bindSelectedChart, responsePortfolio } from "./response-portfolio.ts";
-import type { AnswerInvestigation, AnswerValidationSummary, ResponseManifest } from "@cie/schema";
+import type { AnswerInvestigation, AnswerValidationSummary, ResponseManifest, RecoverableInvestigation } from "@cie/schema";
 import { diagnostic, bundleDiagnostics, withDiagnostics } from "./diagnostics.ts";
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
@@ -776,11 +776,24 @@ export class Answering {
   }
 
   /** Read the caller's persisted conversation turns for restoring the chat panel. */
-  conversation(ctx: CallContext, req: { sessionId: string }): ApiResult<{ sessionId: string; turns: { seq: number; role: "user" | "assistant"; text: string; at: string; validation?: AnswerValidationSummary }[] }> {
+  conversation(ctx: CallContext, req: { sessionId: string }): ApiResult<{ sessionId: string; recoverable?: RecoverableInvestigation; turns: { seq: number; role: "user" | "assistant"; text: string; at: string; validation?: AnswerValidationSummary }[] }> {
     const sessionId = typeof req.sessionId === "string" ? req.sessionId.trim() : "";
     if (!sessionId || sessionId.length > 120) return fail(ctx, { code: "INVALID_SCHEMA", message: "a valid sessionId is required", retryable: false });
     const session = this.svc.sessionManager.getSession(ctx, sessionId);
-    return ok(ctx, { sessionId, turns: session.turns.filter((turn) => turn.state === "complete").map(({ seq, role, text, at, validation }) => ({ seq, role, text, at, ...(validation ? { validation } : {}) })) });
+    const row = this.store.db.prepare(`select response_json,state,lease_until from conversation_actions where tenant_id=? and principal_id=? and session_id=? and state in ('pending','failed') and json_extract(response_json,'$.progress.id') is not null order by rowid desc limit 1`)
+      .get(ctx.actor.tenantId,ctx.actor.principalId,sessionId) as { response_json: string; state: string; lease_until: number } | undefined;
+    let recoverable: RecoverableInvestigation | undefined;
+    if(row){
+      const progress=(JSON.parse(row.response_json) as {progress:AnswerInvestigation}).progress,rev=this.store.revision(progress.revision);
+      if(rev){
+        const access=policyFor(this.store,rev.repoRoot),entities=this.store.entitiesById(rev.id,progress.inspectedIds);
+        if(entities.length&&entities.length===progress.inspectedIds.length&&entities.every(e=>!access.denied(e.file)&&e.spans.every(s=>!access.denied(s.sourceId)))){
+          const active=this.store.db.prepare("select max(lease_until) as ready from conversation_actions where tenant_id=? and principal_id=? and session_id=? and state='pending'").get(ctx.actor.tenantId,ctx.actor.principalId,sessionId) as {ready:number|null};
+          recoverable={id:progress.id,revision:progress.revision,readyAt:active.ready??0};
+        }
+      }
+    }
+    return ok(ctx, { sessionId, ...(recoverable?{recoverable}:{}), turns: session.turns.filter((turn) => turn.state === "complete").map(({ seq, role, text, at, validation }) => ({ seq, role, text, at, ...(validation ? { validation } : {}) })) });
   }
   /** Session-scoped entry point: persist the turn envelope before routing, then store its answer. */
   async converse(ctx: CallContext, req: { text: string; sessionId?: string; view?: ViewSpec | null; selection?: string[]; revision?: string; pins?: string[]; history?: { role: "user" | "assistant"; text: string }[] }): Promise<ApiResult<ConverseResult>> {
@@ -840,6 +853,8 @@ export class Answering {
     const result = await this.converseInternal(ctx, { ...req, sessionId }, recovered);
     if (!result.ok) { actions.abort(ctx,sessionId,actionId); this.svc.sessionManager.forget(ctx,sessionId); return result; }
     actions.finish(ctx,sessionId,actionId,result,() => {
+      const continued = /^continue investigation ([a-zA-Z0-9:_-]{1,120})$/i.exec(req.text.trim())?.[1];
+      if(continued)this.store.db.prepare("update conversation_actions set response_json=null where tenant_id=? and principal_id=? and session_id=? and state='failed' and json_extract(response_json,'$.progress.id')=?").run(ctx.actor.tenantId,ctx.actor.principalId,sessionId,continued);
       session.completePending();
       const answer = result.value.message;
       const chartCode = result.value.kind === "view" && typeof result.value.view.params?.chartId === "string" ? result.value.view.params.chartId : undefined;
@@ -908,9 +923,13 @@ export class Answering {
       const saved = this.store.db.prepare(`select response_json from conversation_actions where tenant_id=? and principal_id=? and session_id=? and state='complete' and json_extract(response_json,'$.value.validation.investigation.id')=? limit 1`)
         .get(ctx.actor.tenantId, ctx.actor.principalId, sessionId, resumeMatch?.[1] ?? "") as { response_json: string } | undefined;
       const checkpoint = recovered ?? (saved ? (JSON.parse(saved.response_json) as { value: { validation?: { investigation?: AnswerInvestigation } } }).value.validation?.investigation : undefined);
-      if (!checkpoint) return fail(ctx, { code: "NOT_FOUND", message: "This saved investigation is not available in this conversation.", retryable: false });
+      const interrupted = !checkpoint && resumeMatch ? this.store.db.prepare("select response_json from conversation_actions where tenant_id=? and principal_id=? and session_id=? and state='failed' and json_extract(response_json,'$.progress.id')=? limit 1").get(ctx.actor.tenantId,ctx.actor.principalId,sessionId,resumeMatch[1]) as {response_json:string}|undefined : undefined;
+      const availableCheckpoint = checkpoint ?? (interrupted ? (JSON.parse(interrupted.response_json) as {progress:AnswerInvestigation}).progress : undefined);
+      if (!availableCheckpoint) return fail(ctx, { code: "NOT_FOUND", message: "This saved investigation is not available in this conversation.", retryable: false });
       if (!indexed) return fail(ctx, { code: "STALE_REVISION", message: "The indexed revision changed; ask the original question again to collect fresh evidence.", retryable: false });
-      const { checkpoint: resumeCheckpoint, dropped } = remapCheckpointAcrossRevision(this.svc, checkpoint, indexed.id);
+      const checkpointRevision=this.store.revision(availableCheckpoint.revision);
+      if(!checkpointRevision||checkpointRevision.repoRoot!==indexed.repoRoot) return fail(ctx,{code:"STALE_REVISION",message:"The saved investigation belongs to a different or unavailable source. Open its repository before resuming.",retryable:false});
+      const { checkpoint: resumeCheckpoint, dropped } = remapCheckpointAcrossRevision(this.svc, availableCheckpoint, indexed.id);
       if (!resumeCheckpoint.inspectedIds.length) return fail(ctx, { code: "STALE_REVISION", message: "None of the previously inspected elements survived re-indexing; start a fresh investigation.", retryable: false });
       const access = policyFor(this.store, indexed.repoRoot);
       const entities = this.store.entitiesById(indexed.id, resumeCheckpoint.inspectedIds);

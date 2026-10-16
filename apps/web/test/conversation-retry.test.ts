@@ -22,6 +22,10 @@ test("chat exposes retry only when available and disables it while busy", async 
     assert.match(render({ retryAvailable: true }), /<button class="secondary small">Retry investigation<\/button>/);
     assert.match(render({ retryAvailable: true, busy: true }), /<button class="secondary small" disabled="">Retry investigation<\/button>/);
     assert.match(render({ retryAvailable: true, canAsk: false }), /<button class="secondary small" disabled="">Retry investigation<\/button>/);
+    const recoverable={id:"inv",revision:"r",readyAt:0};
+    assert.match(render({recoverable}),/<button class="secondary small">Resume interrupted investigation<\/button>/);
+    assert.match(render({recoverable:{...recoverable,readyAt:Date.now()+60000}}),/<button class="secondary small" disabled="">Resume interrupted investigation<\/button>/);
+    assert.doesNotMatch(render({recoverable,retryAvailable:true}),/Resume interrupted investigation/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

@@ -8,7 +8,7 @@ import { rendererForView } from "./plugins/renderers/index.ts";
 import { ResponseWorkspaceBar } from "./ResponseWorkspaceBar.tsx";
 import { useResponseWorkspace } from "./use-response-workspace.ts";
 import type { CanvasState } from "./response-workspace.ts";
-import type { EntityCode, ResponseManifest } from "@cie/schema";
+import type { EntityCode, ResponseManifest, RecoverableInvestigation } from "@cie/schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AnswerValidationSummary, ApiResult, AuditEvent, JobView, ChangesSince, Claim, ConverseResult, EditorContext, ExplainResult, MapOverlays, MatrixAxis, MatrixCell, ResolvedEvidence, RevisionInfo, SavedState, StatusInfo, StructuralConceptsView, VerdictKind, ViewNode, ViewSpec, WorkspaceOpen } from "@cie/schema";
 import { call } from "./api.ts";
@@ -104,10 +104,31 @@ export function App() {
   });
   const retryRequest = useRef<ConversationRequest | null>(null);
   const [retryAvailable, setRetryAvailable] = useState(false);
+  const [recoverable, setRecoverable] = useState<RecoverableInvestigation | undefined>();
   const retryScope = `${repoGeneration.current}:${chatSessionId}:${info?.revision?.id ?? ""}`;
   const currentRetryScope = useRef(retryScope); currentRetryScope.current = retryScope;
   useEffect(() => { retryRequest.current = null; setRetryAvailable(false); }, [retryScope]);
   const chatRestoreGeneration = useRef(0);
+  useEffect(() => {
+    setRecoverable(undefined);
+    if (!info?.revision?.id) return;
+    let active = true;
+    const generation = chatRestoreGeneration.current, revision = info.revision.id;
+    let timer: ReturnType<typeof setTimeout> | undefined, discovered = false;
+    const refreshRecovery = async () => {
+      const result = await call<{ recoverable?: RecoverableInvestigation; turns: { seq:number;role:"user"|"assistant";text:string;at:string;validation?:AnswerValidationSummary }[] }>("C15", "conversation", { sessionId: chatSessionId });
+      if (!active || generation !== chatRestoreGeneration.current) return;
+      if(result.ok){
+        const candidate=result.value.recoverable?.revision===revision?result.value.recoverable:undefined;
+        setRecoverable(candidate);
+        if(discovered&&!candidate)setMessages(result.value.turns.map(turn=>({id:`turn-${turn.seq}`,role:turn.role,text:turn.text,at:turn.at,validation:turn.validation})));
+        discovered=!!candidate;
+        if(candidate&&candidate.readyAt>Date.now())timer=setTimeout(()=>void refreshRecovery(),Math.min(5000,candidate.readyAt-Date.now()+50));
+      }else if(discovered)timer=setTimeout(()=>void refreshRecovery(),5000);
+    };
+    void refreshRecovery();
+    return () => { active = false; if(timer)clearTimeout(timer); };
+  }, [retryScope]);
   useEffect(() => { try { localStorage.setItem("cie-chat-session", chatSessionId); } catch { /* The active tab still keeps its session. */ } }, [chatSessionId]);
   useEffect(() => {
     let active = true;
@@ -200,7 +221,7 @@ export function App() {
     if (index===responseWorkspace.breadcrumbs.length-1) responseWorkspace.cancel();
     else responseWorkspace.jump(index);
   };
-  const resetResponse = () => { retryRequest.current = null; setRetryAvailable(false); responseGeneration.current++; responseWorkspace.reset(); canvasSnapshot.current = undefined; setCanvasRestore(undefined); };
+  const resetResponse = () => { retryRequest.current = null; setRetryAvailable(false); setRecoverable(undefined); responseGeneration.current++; responseWorkspace.reset(); canvasSnapshot.current = undefined; setCanvasRestore(undefined); };
   const sourceContext = useRef(""); sourceContext.current = `${view?.revision}:${view?.id}:${selection.join("|")}`;
   const exploreTarget = explorationTarget(view, selection, exploreEdge);
   const exploreChoices = exploreTarget ? explorationChoices(exploreTarget.kind, responseWorkspace.workspace?.manifest, view?.revision) : [];
@@ -530,6 +551,7 @@ export function App() {
     const attempt = retry ? retryRequest.current : new ConversationRequest({ text, sessionId: chatSessionId, view, selection, revision: info?.revision?.id, pins }, retryScope);
     if (!attempt || !attempt.matches(currentRetryScope.current)) return;
     retryRequest.current = attempt; setRetryAvailable(false);
+    setRecoverable(undefined);
     const responseToken = ++responseGeneration.current;
     responseWorkspace.cancel();
     chatRestoreGeneration.current++;
@@ -1122,7 +1144,7 @@ export function App() {
       </main>
 
       <aside id="workspace-right-panel" className="right" data-focus-open={focusPanel ? "true" : undefined} data-has-evidence={code || drawer ? "true" : "false"}>
-        <ChatPanel retryAvailable={retryAvailable && !!retryRequest.current?.matches(retryScope)} onRetry={() => void send(retryRequest.current?.text ?? "", true)} onOpenEvidence={(r,id)=>void openEvidenceSource(r,id)} onNewContext={() => { resetResponse(); setView(null); setSelection([]); setCellSel([]); setCode(null); setDrawer(null); setBusy(null); chatRestoreGeneration.current++; setChatSessionId(uuid()); setMessages([]); setError(null); setNotice("Started a new conversation context."); }} onShowResult={showChatResult} onContinueInvestigation={(id) => void send(`continue investigation ${id}`)} onShowAlt={(alt) => {
+        <ChatPanel recoverable={recoverable?.revision === info?.revision?.id ? recoverable : undefined} onRecover={(id) => void send(`continue investigation ${id}`)} retryAvailable={retryAvailable && !!retryRequest.current?.matches(retryScope)} onRetry={() => void send(retryRequest.current?.text ?? "", true)} onOpenEvidence={(r,id)=>void openEvidenceSource(r,id)} onNewContext={() => { resetResponse(); setView(null); setSelection([]); setCellSel([]); setCode(null); setDrawer(null); setBusy(null); chatRestoreGeneration.current++; setChatSessionId(uuid()); setMessages([]); setError(null); setNotice("Started a new conversation context."); }} onShowResult={showChatResult} onContinueInvestigation={(id) => void send(`continue investigation ${id}`)} onShowAlt={(alt) => {
           const current = responseWorkspace.current();
           if (alt.response && current?.manifest.responseId === alt.response.responseId) { void responseWorkspace.generate(alt.response.viewId); return; }
           void askForm(alt.prompt ?? alt.question, alt.form, alt.response?.subject, alt.kind, `Show as ${alt.name}`, alt.question, alt.chartCode, alt.response);

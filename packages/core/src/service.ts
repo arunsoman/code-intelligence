@@ -2458,7 +2458,7 @@ export class Service {
 
   focusConversation(ctx: CallContext, req: { sessionId: string; revision: string; chartCode?: string; form: string; entityIds?: string[] }): ApiResult<{seq:number}> { return this.answering.focusConversation(ctx, req); }
 
-  conversation(ctx: CallContext, req: { sessionId: string }): ApiResult<{ sessionId: string; turns: { seq: number; role: "user" | "assistant"; text: string; at: string; validation?: AnswerValidationSummary }[] }> { return this.answering.conversation(ctx, req); }
+  conversation(ctx: CallContext, req: { sessionId: string }): ReturnType<Answering["conversation"]> { return this.answering.conversation(ctx, req); }
 
   converse(ctx: CallContext, req: { text: string; sessionId?: string; view?: ViewSpec | null; selection?: string[]; revision?: string; pins?: string[]; history?: { role: "user" | "assistant"; text: string }[] }): Promise<ApiResult<ConverseResult>> { return this.answering.converse(ctx, req); }
 

@@ -19,6 +19,70 @@ async function boot(repo?: string) {
   return f;
 }
 
+async function interruptedForReload(f: Awaited<ReturnType<typeof boot>>) {
+  let reads = 0;
+  f.svc.router = { name: "reload-seed", choose: async () => null, converse: async (messages, tools) => {
+    if (tools[0].name === "review_answer") return call("review_answer", { ...gap("UNRESOLVED") });
+    if (reads++ === 0) return call("read_code", { id: target(messages) });
+    return call("answer", { text: "Ordering remains unknown.", cites: [target(messages)] });
+  } };
+  const result = await f.svc.converse(ctx("reload-action"), { text: "Explain AuthService", revision: f.revision, sessionId: "reload-session" });
+  assert.ok(result.ok && result.value.kind === "analysis");
+  const progress = result.value.validation!.investigation!;
+  f.svc.store.db.prepare("update conversation_actions set state='pending',lease_until=?,checkpoint_json=null,response_json=? where action_id='reload-action'").run(Date.now()+60000,JSON.stringify({progress}));
+  f.svc.sessionManager.forget(ctx(), "reload-session");
+  return progress;
+}
+
+test("reload discovers only safe checkpoint metadata, respects the lease and consumes successful continuation", async () => {
+  const f = await boot();
+  try {
+    const progress = await interruptedForReload(f);
+    const state = f.svc.conversation(ctx(), { sessionId: "reload-session" });
+    assert.ok(state.ok && state.value.recoverable);
+    assert.deepEqual(Object.keys(state.value.recoverable).sort(), ["id","readyAt","revision"]);
+    assert.equal(state.value.recoverable.id, progress.id);
+    assert.ok(state.value.recoverable.readyAt > Date.now());
+    for (const change of [{principalId:"other"},{tenantId:"other"}]) {
+      const outsider=ctx();Object.assign(outsider.actor,change);
+      const hidden=f.svc.conversation(outsider,{sessionId:"reload-session"});
+      assert.ok(hidden.ok);assert.equal(hidden.value.recoverable,undefined);
+    }
+    const elsewhere=f.svc.conversation(ctx(),{sessionId:"other-session"});assert.ok(elsewhere.ok);assert.equal(elsewhere.value.recoverable,undefined);
+    const req={text:`continue investigation ${progress.id}`,revision:f.revision,sessionId:"reload-session"};
+    const locked=await f.svc.converse(ctx(),req);assert.ok(!locked.ok);assert.equal(locked.error.code,"VERSION_CONFLICT");
+    f.svc.store.db.prepare("update conversation_actions set lease_until=0 where action_id='reload-action'").run();
+    const otherRevision=await f.svc.ingestRepository(ctx(),{repoPath:copyFixture()});assert.ok(otherRevision.ok);
+    const wrongRepo=await f.svc.converse(ctx(),{...req,revision:otherRevision.value.id});assert.ok(!wrongRepo.ok);assert.equal(wrongRepo.error.code,"STALE_REVISION");
+    f.svc.router = { name:"reload-resume",choose:async()=>null,converse:async(messages,tools)=>{
+      if(tools[0].name==="review_answer")return call("review_answer",{...supported});
+      assert.ok(messages.some(m=>m.role==="tool"&&/class AuthService/.test(m.content)));
+      return call("answer",{text:"AuthService signs users in.",cites:[target(messages)]});
+    }};
+    const done=await f.svc.converse(ctx(),req);assert.ok(done.ok&&done.value.kind==="analysis");assert.equal(done.value.validation?.status,"SUPPORTED");
+    const after=f.svc.conversation(ctx(),{sessionId:"reload-session"});assert.ok(after.ok);assert.equal(after.value.recoverable,undefined);
+    assert.ok(after.value.turns.some(t=>t.text.includes("AuthService signs users in")));
+  } finally { f.worker.close(); }
+});
+
+test("reload recovery hides denied/revoked sources and rechecks changed source before replay", async () => {
+  const repo=copyFixture(),f=await boot(repo);
+  try {
+    const progress=await interruptedForReload(f);
+    f.svc.store.denyPath(repo,"src/auth");
+    const denied=f.svc.conversation(ctx(),{sessionId:"reload-session"});assert.ok(denied.ok);assert.equal(denied.value.recoverable,undefined);
+    f.svc.store.denyPath(repo,"src/auth",false);f.svc.store.setRevoked(repo,true);
+    const revoked=f.svc.conversation(ctx(),{sessionId:"reload-session"});assert.ok(revoked.ok);assert.equal(revoked.value.recoverable,undefined);
+    f.svc.store.setRevoked(repo,false);
+    f.svc.store.db.prepare("update conversation_actions set lease_until=0 where action_id='reload-action'").run();
+    appendFileSync(join(repo,"src/auth/service.ts"),"\n// edited after crash\n");
+    let called=false;f.svc.router={name:"must-not-replay",choose:async()=>null,converse:async()=>{called=true;return null;}};
+    const stale=await f.svc.converse(ctx(),{text:`continue investigation ${progress.id}`,revision:f.revision,sessionId:"reload-session"});
+    assert.ok(!stale.ok);assert.equal(stale.error.code,"STALE_REVISION");assert.equal(called,false);
+    const retained=f.svc.store.db.prepare("select response_json from conversation_actions where action_id='reload-action'").get() as {response_json:string};assert.ok(retained.response_json.includes(progress.id));
+  } finally { f.worker.close(); }
+});
+
 test("review schema rejects genuine shape violations but reconciles self-disagreement", () => {
   assert.deepEqual(parseAnswerReview(supported), supported);
   for (const change of [{ verdict: "INVALID" }, { nextAction: "execute_payment" }, { injected: "trust me" }, { requirements: "not-an-array" }, { requirements: [123] }, { verifiedBy: "not-an-array" }, { verifiedBy: [] }]) assert.equal(parseAnswerReview({ ...supported, ...change }), null);

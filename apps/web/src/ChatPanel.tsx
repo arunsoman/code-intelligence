@@ -2,7 +2,7 @@ import { EvidencePanel } from "./EvidencePanel.tsx";
 import { useEffect, useRef, useState } from "react";
 import { buttonFeedback } from "./button.ts";
 import { CHAT_QUESTION_MAX_CHARS } from "@cie/schema";
-import type { EvidenceTrace, AnswerValidationSummary, ChatAnalysisResult } from "@cie/schema";
+import type { EvidenceTrace, AnswerValidationSummary, ChatAnalysisResult, RecoverableInvestigation } from "@cie/schema";
 
 /** One alternative view the router considered for the same question. */
 export interface MessageAlt { form: string; kind?: string; chartCode?: string; name: string; question: string; prompt?: string;
@@ -32,11 +32,19 @@ interface Props {
   onOpenEvidence?: (revision:string,entityId:string)=>void;
   retryAvailable?: boolean;
   onRetry?: () => void;
+  recoverable?: RecoverableInvestigation;
+  onRecover?: (id: string) => void;
 }
 
-export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend, onDropReferent, onNewContext, seed, onShowResult, onCreateProvider, onShowAlt, onContinueInvestigation, onOpenEvidence, retryAvailable, onRetry }: Props) {
+export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend, onDropReferent, onNewContext, seed, onShowResult, onCreateProvider, onShowAlt, onContinueInvestigation, onOpenEvidence, retryAvailable, onRetry, recoverable, onRecover }: Props) {
   const [text, setText] = useState("");
   const [referentsExpanded, setReferentsExpanded] = useState(false);
+  const [clock, setClock] = useState(Date.now);
+  useEffect(() => {
+    if (!recoverable || recoverable.readyAt <= Date.now()) return;
+    const timer = setTimeout(() => setClock(Date.now()), Math.min(60_000, recoverable.readyAt - Date.now() + 50));
+    return () => clearTimeout(timer);
+  }, [recoverable?.readyAt, clock]);
   const end = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [messages.length, busy]);
@@ -118,6 +126,10 @@ export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend,
       {retryAvailable && <div className="chat-results" role="group" aria-label="Interrupted investigation recovery">
         <button className="secondary small" disabled={busy || !canAsk} onClick={onRetry}>Retry investigation</button>
         <p className="muted small">Retry the original request with its retained progress. If it is still running, wait for it to finish or its recovery lease to expire.</p>
+      </div>}
+      {!retryAvailable && recoverable && <div className="chat-results" role="group" aria-label="Saved investigation recovery">
+        <button className="secondary small" disabled={busy || !canAsk || recoverable.readyAt > Date.now()} onClick={() => onRecover?.(recoverable.id)}>Resume interrupted investigation</button>
+        <p className="muted small">{recoverable.readyAt > Date.now() ? "The previous request may still be running. Recovery becomes available when its lease expires." : "Saved progress is available. Source access and freshness will be checked before resuming."}</p>
       </div>}
       {referents.length > 0 && (
         <div className="referents" role="group" aria-label="Selected elements the next message refers to">

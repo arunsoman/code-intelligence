@@ -1103,6 +1103,8 @@ export interface AnswerInvestigation {
   sourceReads: Record<string, { total: number; contentHash: string; ranges: [number, number][] }>;
   observations: { name: string; arguments: Record<string, unknown>; content: string }[];
 }
+/** Safe discovery metadata; never contains the checkpoint's question, source or tool results. */
+export interface RecoverableInvestigation { id: string; revision: string; readyAt: number }
 export type AnswerValidationSummary = Omit<AnswerValidation, "investigation"> & { investigation?: Pick<AnswerInvestigation, "id" | "question" | "revision" | "supportedFindings" | "missingEvidence" | "nextAction" | "recovery"> };
 export interface AnswerValidation { question: string; status: "SUPPORTED" | "UNRESOLVED"; repairAttempts: number; review: AnswerReview; investigation?: AnswerInvestigation }
 
