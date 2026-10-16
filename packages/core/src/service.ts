@@ -2257,7 +2257,10 @@ export class Service {
       const buf = readFileSync(actual);
       if(!Number.isSafeInteger(span.startByte)||!Number.isSafeInteger(span.endByteExclusive)||span.startByte<0||span.endByteExclusive<span.startByte||span.endByteExclusive>buf.length)return unavailable();
       const stale = createHash("sha256").update(buf).digest("hex") !== span.contentHash;
-      const full = buf.subarray(span.startByte, span.endByteExclusive).toString("utf8");
+      // File entities carry a zero-length span (@0-0) whose contentHash is the whole file's; treat that as "the whole
+      // file, bounded by the trims below", so opening a source row that names a file shows its head instead of nothing.
+      const wholeFile = span.startByte === 0 && span.endByteExclusive === 0;
+      const full = (wholeFile ? buf : buf.subarray(span.startByte, span.endByteExclusive)).toString("utf8");
       const lines = full.split("\n");
       const MAX_LINES = 160, MAX_CHARS = 16_000;
       let text = lines.slice(0, MAX_LINES).join("\n");
