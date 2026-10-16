@@ -1,11 +1,15 @@
 //! Conservative straight-line lowering. Unsupported statements invalidate the whole
 //! candidate body, so a later return cannot erase earlier effects.
 use super::*;
+#[path = "control_flow.rs"]
+mod control_flow;
 
+#[derive(Clone)]
 struct Binding {
     value: ValueId,
     mutable: bool,
 }
+#[derive(Clone)]
 struct Builder<'a> {
     adapter: &'a TreeAdapter,
     source: &'a str,
@@ -17,6 +21,10 @@ struct Builder<'a> {
     current: BlockId,
     sequence: usize,
     call_count: usize,
+    flow_count: usize,
+    closed: bool,
+    return_type: Option<Type>,
+    handler: Option<BlockId>,
 }
 
 impl TreeAdapter {
@@ -40,6 +48,10 @@ impl TreeAdapter {
             current: "entry".into(),
             sequence: 0,
             call_count: 0,
+            flow_count: 0,
+            closed: false,
+            return_type: expected.cloned(),
+            handler: None,
         };
         let params = node
             .child_by_field_name("parameters")
@@ -75,79 +87,19 @@ impl TreeAdapter {
                 }
             }
         }
-        let result = if !matches!(body.kind(), "statement_block" | "block") {
+        if !matches!(body.kind(), "statement_block" | "block") {
             if node.kind() != "arrow_function" {
                 return None;
             }
-            Some(builder.expression(body, expected, 0)?)
+            let value = builder.expression(body, expected, 0)?;
+            builder.return_value(Some(value))?;
         } else {
-            let statements: Vec<_> = children(body)
-                .into_iter()
-                .filter(|n| !matches!(n.kind(), "comment" | "line_comment" | "block_comment"))
-                .collect();
-            if statements.is_empty() || statements.len() > 4096 {
-                return None;
-            }
-            let mut result = None;
-            for (index, statement) in statements.iter().copied().enumerate() {
-                match statement.kind() {
-                    "local_variable_declaration"
-                    | "lexical_declaration"
-                    | "variable_declaration" => builder.declaration(statement)?,
-                    "expression_statement" => {
-                        let expression = *children(statement).first()?;
-                        if matches!(expression.kind(), "call_expression" | "method_invocation") {
-                            builder.invoke(expression, None, false, 0)?;
-                        } else {
-                            builder.assignment(expression)?;
-                        }
-                    }
-                    "return_statement" => {
-                        // Preserve trailing source semantics conservatively, including unreachable statements.
-                        if index + 1 != statements.len() {
-                            return None;
-                        }
-                        if let Some(expression) = children(statement).first() {
-                            result = Some(builder.expression(*expression, expected, 0)?);
-                        } else if expected.is_some_and(|t| t != &Type::Unit) {
-                            return None;
-                        }
-                    }
-                    _ => return None,
-                }
-                builder.mark(statement);
-            }
-            if statements.last()?.kind() != "return_statement" {
-                if expected.is_some_and(|ty| ty != &Type::Unit) {
-                    return None;
-                }
-                if !builder
-                    .function
-                    .blocks
-                    .values()
-                    .any(|b| matches!(b.terminator, Terminator::Invoke { .. }))
-                {
-                    return None;
-                }
-            }
-            result
-        };
-        let return_type = result
-            .as_ref()
-            .map(|v| builder.function.values[v].clone())
-            .unwrap_or(Type::Unit);
-        if expected.is_some_and(|t| t != &return_type) {
-            return None;
+            builder.statements(body, expected, 0)?;
         }
-        builder.function.return_type = return_type;
-        builder.function.blocks.insert(
-            builder.current.clone(),
-            Block {
-                source: span(node),
-                instructions: builder.instructions,
-                terminator: Terminator::Return { value: result },
-            },
-        );
+        if !builder.closed {
+            builder.return_value(None)?;
+        }
+        builder.function.return_type = builder.return_type.clone().unwrap_or(Type::Unit);
         builder
             .covered
             .insert((node.start_byte(), node.end_byte(), node.kind().into()));
@@ -204,7 +156,7 @@ impl Builder<'_> {
             self.instructions.push(Instruction {
                 id: InstructionId(format!("instruction:{}", self.sequence)),
                 source: evaluation_source,
-                exceptional: Some(ExceptionalExit::Propagate),
+                exceptional: Some(self.exceptional()),
                 action: Action::Opaque {
                     reason: "unmodeled callee/receiver lookup before arguments".into(),
                     inputs,
@@ -276,7 +228,7 @@ impl Builder<'_> {
                         binding,
                     },
                     normal: normal.clone(),
-                    exceptional: ExceptionalExit::Propagate,
+                    exceptional: self.exceptional(),
                 },
             },
         );

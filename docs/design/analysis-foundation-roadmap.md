@@ -25,11 +25,33 @@ conformance pathway. This is not a retrospective audit of all CIE features.
 | P02a | Default Java/TS/JS adapters and automatic file discovery, F172–F180 | Delivered as `cie-default-language-adapters.patch`, after P02 / local base `48f1ba2` | Standalone library/worker; literal-return subset only | 200 workspace tests passed, source execution oracles and file-only discovery smoke passed |
 | P03a | Straight-line expressions and source fidelity, F036 and F181–F185 | Delivered as `cie-p03a-expressions.patch`, after P02a / base `38158aa` | Library/standalone worker; wider P03 still pending | 213 workspace tests passed; source execution comparisons and golden vectors |
 | P03b | Explicit calls, bindings and continuations, F186–F190 | Delivered as `cie-p03b-calls.patch`, after P03a / base `3523023` | Library/standalone worker; other P03 work pending | 229 workspace tests; Java/Node source comparisons |
-| Remaining P03–P19 | Planned below | Pending | Pending | Pending |
+| Bundle 1 | Supported P03 control flow + shared P04 projections | `cie-source-analysis-bundle.patch`; alternative cumulative patch from P02a | Library/standalone worker only | 246 workspace tests; release build; strict crate Clippy |
+| Bundle 2 | P05 contracts + supported P06 behavioral checks + bounded P10 candidates | `cie-contracts-behavior-bundle.patch`, upstream base `f902662`; alternative incremental after Bundle 1 | Standalone `semanticCheck`; no application routing | 285 workspace tests; release build; strict crate Clippy; three release CLI examples |
 
 P01 code: `crates/analysis-foundation`; worker command: `analysisFoundation`.
 Evidence: `docs/testing/2026-10-16-rust-analysis-foundation.md`.
 Boundary: `docs/design/rust-analysis-foundation.md`.
+
+## Consolidated delivery plan
+
+The original P01–P19 headings are workstreams, not nineteen separate patch
+promises. Remaining work is grouped into five larger delivery bundles. Each
+bundle may contain internal commits, with one reviewable delivery patch.
+
+| Bundle | Workstreams | Status |
+| --- | --- | --- |
+| 1 — Source analysis | Supported P03 + P04 | Delivered supported slice; residual semantics/proofs listed below |
+| 2 — Defect detection | P05–P07 + P10 | Delivered bounded contract/checker slice; SMT and broader rule mining remain open |
+| 3 — Concepts and hierarchy | P11–P13 | Pending |
+| 4 — Incremental, languages and performance | P08 + P09 + P17 + P18 | Pending |
+| 5 — Product, recovery and rollout | P14–P16 + P19 | Pending |
+
+Bundle 1 delivers instruction CFGs, exception edges, dominators/postdominators,
+static value/control flow, conservative memory aliases, bounded slices, call SCCs
+and potential-effect summaries. See `source-analysis-bundle.md` for the supported
+language subset and API. Branch/loop merge values remain unknown. Full path
+conditions, must-effects, per-property assumptions and external model dependency
+tracking remain open. This is a usable foundation, not completion of all P03/P04.
 
 ## Operating principles
 
@@ -100,7 +122,7 @@ through the same file-discovered interface. Literal-return lowering already exis
 as a narrow partial implementation; the full task scopes below remain open.
 
 - [ ] F029 Lower declarations, parameters, constants, expressions and returns.
-- [ ] F030 Lower assignment, conditionals and supported loop forms.
+- [x] F030 Lower assignment, conditionals and supported loop forms (Bundle 1 subset; branch/loop merges explicitly approximate).
 - [ ] F031 Lower calls and distinguish resolved builtins from rebound names.
 - [ ] F032 Lower supported raise/try/except/finally semantics and early exits.
 - [ ] F033 Keep nested functions separate and model supported lexical bindings.
@@ -117,13 +139,13 @@ tests exercise exceptional behavior; unmodeled semantics cannot silently disappe
 
 Depends on P02/P03. Analysis representations remain separate projections.
 
-- [ ] F039 Derive CFG and dominator/post-dominator relations with exception handling.
-- [ ] F040 Derive def-use/value flow and explicit memory-alias approximations.
-- [ ] F041 Derive program-dependence and forward/backward slicing projections.
-- [ ] F042 Build call graph SCCs and versioned per-function summaries.
+- [x] F039 Derive CFG and dominator/post-dominator relations with exception handling.
+- [x] F040 Derive def-use/value flow and explicit memory-alias approximations.
+- [x] F041 Derive program-dependence and forward/backward slicing projections.
+- [x] F042 Build call graph SCCs and versioned per-function summaries.
 - [ ] F043 Preserve path conditions, return-value dependencies and exception outcomes.
 - [ ] F044 Separate potential effects from must-effects; define supported inference rules.
-- [ ] F045 Attach evidence and assumptions per effect/property, not only per summary.
+- [ ] F045 Attach evidence and assumptions per effect/property, not only per summary. Partial: per-effect evidence delivered; assumptions remain summary-level.
 - [ ] F046 Propagate unresolved target sets and external-model dependencies.
 - [ ] F047 Define reusable transfer-function/worklist interfaces for supported analyses.
 
@@ -134,14 +156,14 @@ unreachable-path limitations remain explicit; recursion produces bounded results
 
 Depends on P02; checking uses P04. Contracts are not inferred facts.
 
-- [ ] F048 Define preconditions, postconditions, effect and protocol obligations.
-- [ ] F049 Record authority: approved specification, explicit annotation, test or hypothesis.
-- [ ] F050 Preserve provenance/version and distinguish observed from normative behavior.
-- [ ] F051 Support repository contracts with schema validation and scope binding.
-- [ ] F052 Define conflicts, supersession and ambiguous binding behavior.
-- [ ] F053 Separate completion status from candidate/verified/violated/unknown conclusions.
-- [ ] F054 Store assumptions, analysis scope and counterexample evidence with conclusions.
-- [ ] F055 Keep labels outside immutable semantic identity and contract predicates.
+- [x] F048 Define preconditions, postconditions, effect and protocol obligations (typed finite-domain and ordered-effect subset, Bundle 2).
+- [x] F049 Record authority: approved specification, explicit annotation, test or hypothesis.
+- [x] F050 Preserve provenance/version and distinguish observed from normative behavior.
+- [x] F051 Support repository contracts with schema validation and scope binding.
+- [x] F052 Define conflicts, supersession and ambiguous binding behavior.
+- [x] F053 Separate completion status from candidate/verified/violated/unknown conclusions.
+- [x] F054 Store assumptions, analysis scope and counterexample evidence with conclusions.
+- [x] F055 Keep labels outside immutable semantic identity and contract predicates.
 
 Acceptance: an inferred naming expectation cannot certify a defect or override
 an explicit contract; timeout/unknown cannot be converted to success.
@@ -150,15 +172,15 @@ an explicit contract; timeout/unknown cannot be converted to success.
 
 Depends on P03–P05. Target authorization anomalies before broad concept mining.
 
-- [ ] F056 Detect print-only/empty implementations against explicit effect obligations.
-- [ ] F057 Detect unconditional success under a supported authorization contract.
-- [ ] F058 Accept legitimate delegation when its obligations can be established.
-- [ ] F059 Detect caller paths that ignore a supported failure result.
-- [ ] F060 Detect supported exception-to-success transformations.
-- [ ] F061 Detect branch paths that bypass required authorization.
-- [ ] F062 Report unavailable provider behavior as unknown rather than absent.
+- [x] F056 Detect print-only/empty implementations against explicit effect obligations (unresolved library/lookup behavior requires exact-site approved models).
+- [x] F057 Detect unconditional success under a supported authorization contract.
+- [x] F058 Accept legitimate delegation when its obligations can be established.
+- [x] F059 Detect caller paths that ignore a supported failure result.
+- [ ] F060 Detect supported exception-to-success transformations. Partial: checked IR transformations delivered; source catch fidelity remains incomplete.
+- [x] F061 Detect branch paths that bypass required authorization.
+- [x] F062 Report unavailable provider behavior as unknown rather than absent.
 - [ ] F063 Keep name/implementation mismatch as a separately marked suspicion.
-- [ ] F064 Add positive/negative fixtures and independently inspect counterexamples.
+- [x] F064 Add positive/negative fixtures and independently inspect counterexamples.
 
 Acceptance: demonstrate actual source → IR → summary → contract result with source
 links. Include at least one valid wrapper and one unknown external implementation.
@@ -217,11 +239,11 @@ transaction/provider behavior remains a gap. Banking semantics require contracts
 
 Depends on P04/P05/P07. Inference generates candidates for validation.
 
-- [ ] F091 Extract local guards, calculation expressions and state-transition predicates.
+- [ ] F091 Extract local guards, calculation expressions and state-transition predicates. Partial: bounded guards/calculations/call/return candidates delivered; state-transition predicates remain open.
 - [ ] F092 Infer supported API sequencing/resource-lifecycle candidate obligations.
 - [ ] F093 Detect contradictory checks and inconsistent error-handling patterns.
-- [ ] F094 Separate statistical support from logical verification status.
-- [ ] F095 Record training/observation scope and prevent absence-of-observation claims.
+- [ ] F094 Separate statistical support from logical verification status. Partial: candidates are explicitly unverified; statistical support is not computed.
+- [ ] F095 Record training/observation scope and prevent absence-of-observation claims. Partial: static IR observation scope is explicit; broader mining remains pending.
 - [ ] F096 Validate supported candidates; retain unverified candidates distinctly.
 - [ ] F097 Deduplicate equivalent supported predicates without merging different assumptions.
 - [ ] F098 Measure candidate precision and false positives against reviewed examples.
@@ -439,16 +461,31 @@ For each delivered patch append a ledger row with:
 5. Integration state: library-only, standalone, shadow, enabled or deployed.
 6. Next eligible patch and dependencies that still block it.
 
-## Immediate next patch
+## Bundle 2 acceptance and remaining scope
 
-P03c: explicit branch/control-flow lowering and supported exceptional statement
-fidelity within the remaining F029–F038 scope. P03a delivered expressions; P03b
-delivered explicit calls and propagated exits. Loops and catch/finally remain
-pending; Python can be added independently. P02 is
-implemented in `semantic_ir`; its source hashes, schema vectors and graph checks
-establish model consistency, not translation correctness. P03 must prove the
-first adapter's fidelity before P06 can claim source-level anomaly detection.
+Contracts are bound to exact revision/environment/function identities; labels do
+not change semantic digests. Approved specifications/annotations can produce
+scoped findings; observed tests/hypotheses remain candidates and cannot supersede
+or block normative contracts. Explicit domain checks find counterexamples and
+accept valid delegation. Missing providers/opaque joins/conflicts/budgets remain
+Unknown. Stored witnesses survive incomplete exploration.
 
-P02 evidence: `docs/testing/2026-10-16-p02-semantic-ir.md`; schema contract:
-`docs/design/semantic-ir-v1.md`. Current checklist: 48 complete, 142 pending, 190 total;
-these counts are task accounting, not engineering-effort percentages.
+P07 is NOT completed: no SMT solver, UNSAT proof, refinement or inductive invariant
+checking is delivered. P10 remains partial: guard/calculation/call/return records
+are static candidates, not learned rules. Full catch/finally source fidelity,
+name-only suspicions and source-level exception-to-success acceptance remain
+open. New IR exception checks do not close unsupported source semantics.
+
+Evidence: `docs/testing/2026-10-16-contracts-behavior-bundle.md`.
+Contract/API/model scope: `docs/design/contracts-behavior-bundle.md`.
+
+## Next delivery bundle
+
+Bundle 3: formal concepts, hierarchy and restricted naming (P11–P13). P03/P04,
+P07 and P10 residuals stay visible and must be addressed wherever a consumer
+requires stronger semantics. Five delivery groups remain; these are scope groups,
+not a claim that every research item is finished in the first supported slice.
+Product routing and rollout remain Bundle 5.
+
+Current checklist: 68 complete, 122 pending, 190 total. Counts are task accounting,
+not engineering-effort percentages.

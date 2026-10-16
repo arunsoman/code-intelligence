@@ -1,0 +1,48 @@
+{
+  "schema": "cie.behavior-contracts.v1",
+  "revision": "example-r1",
+  "environmentDigest": "example-env1",
+  "models": [],
+  "contracts": [
+    {
+      "id": "authorization-v1",
+      "key": "authorization-decision",
+      "label": "Authorize exactly the allowed requests",
+      "function": "Authorization.java@71:method_declaration",
+      "provenance": {
+        "authority": "approvedSpecification",
+        "reference": "example-spec:authorization-decision",
+        "version": "1"
+      },
+      "supersedes": [],
+      "domains": [
+        [
+          {
+            "kind": "bool",
+            "value": false
+          },
+          {
+            "kind": "bool",
+            "value": true
+          }
+        ]
+      ],
+      "precondition": null,
+      "obligations": [
+        {
+          "kind": "ensures",
+          "predicate": {
+            "kind": "equal",
+            "left": {
+              "kind": "return"
+            },
+            "right": {
+              "kind": "argument",
+              "index": 0
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

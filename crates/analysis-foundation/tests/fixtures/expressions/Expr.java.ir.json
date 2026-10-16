@@ -12,9 +12,9 @@
         }
       ],
       "language": "java",
-      "loweringVersion": "java-calls.v3",
+      "loweringVersion": "java-control.v4",
       "path": "Expr.java",
-      "semanticsVersion": "java-call-subset.v3",
+      "semanticsVersion": "java-control-subset.v4",
       "sha256": "77613a934e6c6738d00cc93ad84a76dc7930586fa6e6ed6f0964c4e6925cd7ae"
     }
   },
@@ -184,7 +184,7 @@
       }
     }
   },
-  "producerVersion": "java-calls.v3",
+  "producerVersion": "java-control.v4",
   "revision": "golden-p03a",
   "schema": "cie.semantic-ir.v1"
 }

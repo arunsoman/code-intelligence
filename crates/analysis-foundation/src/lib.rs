@@ -1,5 +1,6 @@
 //! Versioned analysis boundary. Effects describe represented operations, never successful
 //! business outcomes. Producers must report omitted semantics as gaps.
+pub mod behavior;
 pub mod languages;
 pub mod semantic_ir;
 pub mod source_analysis;

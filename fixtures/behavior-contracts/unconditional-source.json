@@ -1,0 +1,6 @@
+{
+  "path": "Authorization.java",
+  "source": "class A {static boolean authorize(boolean allowed){return true;}}",
+  "revision": "example-r1",
+  "environmentDigest": "example-env1"
+}
