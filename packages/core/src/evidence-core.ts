@@ -1,7 +1,7 @@
 import { EvidenceCoreBatchSchema, type AnalysisBatch, type EvidenceCoreBatchV1, type Fact, type Relationship } from "@cie/schema";
 import { canonicalize, canonDigest, type Canon } from "@cie/canon";
 import type { DatabaseSync } from "node:sqlite";
-export const EVIDENCE_CORE_PRODUCER_VERSION = "3";
+export const EVIDENCE_CORE_PRODUCER_VERSION = "4";
 export function evidenceCoreLimits() {
   const read=(key:string,fallback:number,max:number)=>{const raw=process.env[key]??String(fallback);if(!/^[1-9][0-9]*$/.test(raw)||!Number.isSafeInteger(Number(raw))||Number(raw)>max)throw new Error(`EVIDENCE_CORE_CONFIG: invalid budget ${key}`);return Number(raw);};
   return {rows:read("CIE_EVIDENCE_CORE_MAX_ROWS",100000,1000000),bytes:read("CIE_EVIDENCE_CORE_MAX_BYTES",16*1024*1024,512*1024*1024),chunkBytes:read("CIE_EVIDENCE_CORE_CHUNK_BYTES",8*1024*1024,32*1024*1024),chunkRows:read("CIE_EVIDENCE_CORE_CHUNK_ROWS",16384,100000),streamRows:read("CIE_EVIDENCE_CORE_STREAM_MAX_ROWS",1000000,4000000),streamBytes:read("CIE_EVIDENCE_CORE_STREAM_MAX_BYTES",256*1024*1024,512*1024*1024)};

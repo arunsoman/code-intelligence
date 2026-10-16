@@ -14,8 +14,8 @@ function fixture(): AnalysisBatch {
   const ev = {id:"ev1",sourceId:"src/a.ts",location:{kind:"CodeLocation" as const,span},class:"STATIC_PARSED" as const,observedAt:"1970-01-01T00:00:00Z",accessScopeId:"local",state:"CURRENT" as const};
   const b: AnalysisBatch = {revision:"r1",gitHead:null,repoRoot:"/repo",analyzerVersion:"v1",entities:[{entityId:"file:src/a.ts",kind:"file",name:"a.ts",file:"src/a.ts",spans:[span]}],facts:[{id:"fact1",subject:"file:src/a.ts",predicate:"parsed",object:{kind:"literal"},resolution:"PARSED",evidence:[ev]}],relationships:[],diagnostics:[],manifest:{"src/a.ts":"manifest"}};
   const scope = {kind:"FILE" as const,file:"src/a.ts"}, association = {subjectKind:"FACT" as const,subjectId:"fact1",evidenceId:"ev1",role:"SUPPORTS" as const};
-  const output = evidenceCoreIdentity("output",["manifest",[association]]), run = evidenceCoreIdentity("run",["cie.rust.static","3","v1",scope,"hash",output]);
-  b.evidenceCore = {schema:"cie.evidence-core.batch.v1",producerRuns:[{id:run,producerId:"cie.rust.static",producerVersion:"3",analyzerVersion:"v1",revision:"r1",scope,status:"PARTIAL",inputDigest:"hash",outputDigest:output}],links:[{...association,producerRunId:run}],coverage:[{id:evidenceCoreIdentity("coverage",[run,"static.observations"]),producerRunId:run,revision:"r1",scope,domain:"static.observations",status:"PARTIAL",exclusions:["reflection","dynamic dispatch","external dependencies","async delivery","generated or excluded sources"],unresolved:["No closed-world completeness claim; parser diagnostics remain authoritative"]}]};
+  const output = evidenceCoreIdentity("output",["manifest",[association]]), run = evidenceCoreIdentity("run",["cie.rust.static","4","v1",scope,"hash",output]);
+  b.evidenceCore = {schema:"cie.evidence-core.batch.v1",producerRuns:[{id:run,producerId:"cie.rust.static",producerVersion:"4",analyzerVersion:"v1",revision:"r1",scope,status:"PARTIAL",inputDigest:"hash",outputDigest:output}],links:[{...association,producerRunId:run}],coverage:[{id:evidenceCoreIdentity("coverage",[run,"static.observations"]),producerRunId:run,revision:"r1",scope,domain:"static.observations",status:"PARTIAL",exclusions:["reflection","dynamic dispatch","external dependencies","async delivery","generated or excluded sources"],unresolved:["No closed-world completeness claim; parser diagnostics remain authoritative"]}]};
   return b;
 }
 function mode(t: { after: (f:()=>void)=>void }, value="on", strict="1") { const saved = {...process.env}; process.env.CIE_EVIDENCE_CORE_MODE=value; process.env.CIE_EVIDENCE_CORE_STRICT=strict; t.after(()=> { for (const key of ["CIE_EVIDENCE_CORE_MODE","CIE_EVIDENCE_CORE_STRICT","CIE_EVIDENCE_CORE_COVERAGE_GATES"]) { if(saved[key]===undefined)delete process.env[key];else process.env[key]=saved[key]; } }); }
@@ -63,7 +63,7 @@ test("real worker metadata roundtrips and fences older bases without changing le
   const oldStore=new Store(":memory:");t.after(()=>oldStore.db.close());oldStore.putBatch(legacy);
   process.env.CIE_EVIDENCE_CORE_MODE="on";process.env.CIE_EVIDENCE_CORE_STRICT="1";
   const worker=new WorkerClient();t.after(()=>worker.close());const enabledStart=performance.now();const batch=await worker.index(root);const enabledMs=performance.now()-enabledStart;
-  assert.ok(batch.evidenceCore);assert.equal(batch.revision,legacy.revision+"-ec3");
+  assert.ok(batch.evidenceCore);assert.equal(batch.revision,legacy.revision+"-ec4");
   const rebind=(rows:unknown)=>JSON.parse(JSON.stringify(rows).replaceAll(legacy.revision,batch.revision));
   assert.deepEqual(batch.entities,rebind(legacy.entities));assert.deepEqual(batch.facts,rebind(legacy.facts));assert.deepEqual(batch.relationships,rebind(legacy.relationships));
   const store=new Store(":memory:");t.after(()=>store.db.close());store.putBatch(batch);
@@ -140,7 +140,7 @@ test("nested field reads retain both observations and the first legacy ID",async
   const old=legacy.facts.find(f=>f.predicate==="reads"&&f.subject.endsWith("#read"))!;
   assert.ok(reads.some(f=>f.id===old.id&&JSON.stringify(f.object)===JSON.stringify(old.object)));
   assert.equal(new Set(reads.map(f=>f.id)).size,2);
-  assert.equal(store.evidenceCoreBaseVersion(batch.revision),"3");
+  assert.equal(store.evidenceCoreBaseVersion(batch.revision),"4");
   const oldBase={revision:batch.revision,analyzerVersion:batch.analyzerVersion,digests:batch.manifest!,evidenceCoreVersion:"2"};
   assert.equal((await worker.index(root,120000,undefined,oldBase)).mode,"full");
 });
@@ -154,7 +154,7 @@ test("bulk metadata insertion retains persisted owner and evidence binding check
 
 test("repository input manifests encode empty owner keys and bind persisted digests",t=>{
   mode(t);const scope={kind:"REPOSITORY" as const},manifest={"":"root"};
-  const input=evidenceCoreManifestInput(manifest),output=evidenceCoreIdentity("output",["root",[]]),id=evidenceCoreIdentity("run",["cie.rust.static","3","v1",scope,input,output]);
-  const b:AnalysisBatch={revision:"root-r1",repoRoot:"/repo",gitHead:null,analyzerVersion:"v1",entities:[],facts:[],relationships:[],diagnostics:[],manifest,evidenceCore:{schema:"cie.evidence-core.batch.v1",producerRuns:[{id,producerId:"cie.rust.static",producerVersion:"3",analyzerVersion:"v1",revision:"root-r1",scope,status:"PARTIAL",inputDigest:input,outputDigest:output}],links:[],coverage:[{...fixture().evidenceCore!.coverage[0],id:evidenceCoreIdentity("coverage",[id,"static.observations"]),producerRunId:id,revision:"root-r1",scope}]}};
-  const store=new Store(":memory:");try{store.putBatch(b);assert.equal(store.evidenceCoreBaseVersion(b.revision),"3");store.db.prepare("update rev_files set digest='moved' where revision=?").run(b.revision);assert.throws(()=>store.putBatch(b),/EVIDENCE_CORE_PERSISTED_BINDING/);}finally{store.db.close();}
+  const input=evidenceCoreManifestInput(manifest),output=evidenceCoreIdentity("output",["root",[]]),id=evidenceCoreIdentity("run",["cie.rust.static","4","v1",scope,input,output]);
+  const b:AnalysisBatch={revision:"root-r1",repoRoot:"/repo",gitHead:null,analyzerVersion:"v1",entities:[],facts:[],relationships:[],diagnostics:[],manifest,evidenceCore:{schema:"cie.evidence-core.batch.v1",producerRuns:[{id,producerId:"cie.rust.static",producerVersion:"4",analyzerVersion:"v1",revision:"root-r1",scope,status:"PARTIAL",inputDigest:input,outputDigest:output}],links:[],coverage:[{...fixture().evidenceCore!.coverage[0],id:evidenceCoreIdentity("coverage",[id,"static.observations"]),producerRunId:id,revision:"root-r1",scope}]}};
+  const store=new Store(":memory:");try{store.putBatch(b);assert.equal(store.evidenceCoreBaseVersion(b.revision),"4");store.db.prepare("update rev_files set digest='moved' where revision=?").run(b.revision);assert.throws(()=>store.putBatch(b),/EVIDENCE_CORE_PERSISTED_BINDING/);}finally{store.db.close();}
 });

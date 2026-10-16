@@ -29,7 +29,7 @@ test("stream and inline persist exactly equal metadata, including after worker c
   const root=setup(t),inline=await index(root),a=new Store(":memory:"),b=new Store(":memory:");t.after(()=>{a.db.close();b.db.close();});a.putBatch(inline);
   process.env.CIE_EVIDENCE_CORE_TRANSPORT="stream";const stream=await index(root),path=coreStreamPath(stream)!;
   assert.equal(stream.evidenceCore,undefined);assert.ok(existsSync(path));b.putBatch(stream);assert.ok(!existsSync(path));
-  assert.deepEqual(rows(a,inline.revision),rows(b,stream.revision));assert.equal(graphDigest(a,inline.revision).digest,graphDigest(b,stream.revision).digest);assert.equal(b.evidenceCoreBaseVersion(stream.revision),"3");
+  assert.deepEqual(rows(a,inline.revision),rows(b,stream.revision));assert.equal(graphDigest(a,inline.revision).digest,graphDigest(b,stream.revision).digest);assert.equal(b.evidenceCoreBaseVersion(stream.revision),"4");
   b.denyPath(root,"a.ts");assert.deepEqual(b.evidenceCoreCoverage(stream.revision,"static.observations","a.ts"),[]);b.setRevoked(root,true);assert.equal(b.evidenceCoreBaseVersion(stream.revision),undefined);
 });
 test("scoped stream validation retains cross-file evidence source checks",async t=>{
@@ -66,7 +66,7 @@ test("scoped stream validation retains cross-file evidence source checks",async 
 });
 test("stream deltas equal clean full indexing and unchanged emits no stream",async t=>{
   const root=setup(t);process.env.CIE_EVIDENCE_CORE_TRANSPORT="stream";const worker=new WorkerClient(),store=new Store(":memory:"),clean=new Store(":memory:");t.after(()=>{worker.close();store.db.close();clean.db.close();});
-  const first=await worker.index(root);store.putBatch(first);const base={revision:first.revision,analyzerVersion:first.analyzerVersion,digests:first.manifest!,evidenceCoreVersion:"3"};
+  const first=await worker.index(root);store.putBatch(first);const base={revision:first.revision,analyzerVersion:first.analyzerVersion,digests:first.manifest!,evidenceCoreVersion:"4"};
   const unchanged=await worker.index(root,120000,undefined,base);assert.equal(unchanged.mode,"unchanged");assert.equal(coreStreamPath(unchanged),undefined);
   writeFileSync(join(root,"a.ts"),'export function first(){return 9;}\n');const delta=await worker.index(root,120000,undefined,base);assert.equal(delta.mode,"delta");store.putDelta(delta);
   const full=await worker.index(root);clean.putBatch(full);assert.deepEqual(rows(store,delta.revision),rows(clean,full.revision));assert.equal(graphDigest(store,delta.revision).digest,graphDigest(clean,full.revision).digest);
@@ -88,8 +88,8 @@ test("optional invalid stream drops all metadata while resource exhaustion stays
 });
 test("stream delta SQL failure rolls back copied metadata and preserves base",async t=>{
   const root=setup(t);process.env.CIE_EVIDENCE_CORE_TRANSPORT="stream";const worker=new WorkerClient(),store=new Store(":memory:");t.after(()=>{worker.close();store.db.close();});const first=await worker.index(root);store.putBatch(first);
-  writeFileSync(join(root,"a.ts"),'export function first(){return 11;}\n');const delta=await worker.index(root,120000,undefined,{revision:first.revision,analyzerVersion:first.analyzerVersion,digests:first.manifest!,evidenceCoreVersion:"3"});
-  store.db.exec("create trigger fail_stream before insert on evidence_core_coverage begin select raise(abort,'stream insertion failed');end;");assert.throws(()=>store.putDelta(delta),/stream insertion failed/);assert.equal(store.revision(delta.revision),null);assert.equal(store.evidenceCoreBaseVersion(first.revision),"3");
+  writeFileSync(join(root,"a.ts"),'export function first(){return 11;}\n');const delta=await worker.index(root,120000,undefined,{revision:first.revision,analyzerVersion:first.analyzerVersion,digests:first.manifest!,evidenceCoreVersion:"4"});
+  store.db.exec("create trigger fail_stream before insert on evidence_core_coverage begin select raise(abort,'stream insertion failed');end;");assert.throws(()=>store.putDelta(delta),/stream insertion failed/);assert.equal(store.revision(delta.revision),null);assert.equal(store.evidenceCoreBaseVersion(first.revision),"4");
 });
 test("budget and transport flags reject invalid values in both runtimes",async t=>{
   const root=setup(t);
@@ -117,7 +117,7 @@ test("cancelling a worker removes incomplete stream files without publishing a r
 test("combined copied and incoming stream metadata must fit the revision budget",async t=>{
   const root=setup(t);process.env.CIE_EVIDENCE_CORE_TRANSPORT="stream";const worker=new WorkerClient(),store=new Store(":memory:");t.after(()=>{worker.close();store.db.close();});const first=await worker.index(root);store.putBatch(first);
   const count=(store.db.prepare("select count(*) n from evidence_core_links").get() as {n:number}).n;
-  writeFileSync(join(root,"a.ts"),'export function first(){return 17;}\n');const delta=await worker.index(root,120000,undefined,{revision:first.revision,analyzerVersion:first.analyzerVersion,digests:first.manifest!,evidenceCoreVersion:"3"});
+  writeFileSync(join(root,"a.ts"),'export function first(){return 17;}\n');const delta=await worker.index(root,120000,undefined,{revision:first.revision,analyzerVersion:first.analyzerVersion,digests:first.manifest!,evidenceCoreVersion:"4"});
   process.env.CIE_EVIDENCE_CORE_STREAM_MAX_ROWS=String(count-1);
   assert.throws(()=>store.putDelta(delta),/EVIDENCE_CORE_RESOURCE_LIMIT/);assert.equal(store.revision(delta.revision),null);assert.ok(store.revision(first.revision));
 });
@@ -148,9 +148,9 @@ test("inline and stream revisions can alternate as compatible delta bases",async
 });
 
 test("repository-scoped chunks validate empty owner manifests atomically",t=>{
-  const root=setup(t),revision="root-stream",scope={kind:"REPOSITORY" as const},manifest={"":"root"},input=evidenceCoreManifestInput(manifest),output=evidenceCoreIdentity("output",["root",[]]),id=evidenceCoreIdentity("run",["cie.rust.static","3","v1",scope,input,output]);
-  const core={schema:"cie.evidence-core.batch.v1",producerRuns:[{id,producerId:"cie.rust.static",producerVersion:"3",analyzerVersion:"v1",revision,scope,status:"PARTIAL",inputDigest:input,outputDigest:output}],links:[],coverage:[{id:evidenceCoreIdentity("coverage",[id,"static.observations"]),producerRunId:id,revision,scope,domain:"static.observations",status:"PARTIAL",exclusions:["reflection","dynamic dispatch","external dependencies","async delivery","generated or excluded sources"],unresolved:["No closed-world completeness claim; parser diagnostics remain authoritative"]}]};
+  const root=setup(t),revision="root-stream",scope={kind:"REPOSITORY" as const},manifest={"":"root"},input=evidenceCoreManifestInput(manifest),output=evidenceCoreIdentity("output",["root",[]]),id=evidenceCoreIdentity("run",["cie.rust.static","4","v1",scope,input,output]);
+  const core={schema:"cie.evidence-core.batch.v1",producerRuns:[{id,producerId:"cie.rust.static",producerVersion:"4",analyzerVersion:"v1",revision,scope,status:"PARTIAL",inputDigest:input,outputDigest:output}],links:[],coverage:[{id:evidenceCoreIdentity("coverage",[id,"static.observations"]),producerRunId:id,revision,scope,domain:"static.observations",status:"PARTIAL",exclusions:["reflection","dynamic dispatch","external dependencies","async delivery","generated or excluded sources"],unresolved:["No closed-world completeness claim; parser diagnostics remain authoritative"]}]};
   const path=join(root,"root-metadata.jsonl");writeFileSync(path,[{kind:"header",schema:"cie.evidence-core.stream.v1",revision},{kind:"chunk",sequence:0,scope:"",core},{kind:"footer",chunks:1,sha256:""}].map(r=>JSON.stringify(r)).join("\n")+"\n");rewrite(path,r=>r);
   const batch:import("@cie/schema").AnalysisBatch={revision,repoRoot:root,gitHead:null,analyzerVersion:"v1",entities:[],facts:[],relationships:[],diagnostics:[],manifest};attachCoreStream(batch,path);
-  const store=new Store(":memory:");try{store.putBatch(batch);assert.equal(store.evidenceCoreBaseVersion(revision),"3");assert.ok(!existsSync(path));}finally{store.db.close();}
+  const store=new Store(":memory:");try{store.putBatch(batch);assert.equal(store.evidenceCoreBaseVersion(revision),"4");assert.ok(!existsSync(path));}finally{store.db.close();}
 });

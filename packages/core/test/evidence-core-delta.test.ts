@@ -25,7 +25,7 @@ function metadata(store:Store,revision:string) {
   return ["evidence_core_producer_runs","evidence_core_links","evidence_core_coverage"].map(table=>store.db.prepare(`select * from ${table} where revision=? order by 2,3`).all(revision));
 }
 test("native delta copies unchanged scoped metadata and equals clean full metadata",async t=>{
-  const {root,worker,store,batch,base}=await boot(t);assert.equal(base.evidenceCoreVersion,"3");
+  const {root,worker,store,batch,base}=await boot(t);assert.equal(base.evidenceCoreVersion,"4");
   const same=await worker.index(root,120000,undefined,base);assert.equal(same.mode,"unchanged");assert.equal(same.evidenceCore,undefined);
   writeFileSync(join(root,"a.ts"),"export function first(){return 10;}\n");
   const delta=await worker.index(root,120000,undefined,base);assert.equal(delta.mode,"delta");assert.deepEqual(delta.changedFiles,["a.ts"]);assert.ok(delta.entities.every(e=>e.file!=="b.ts"));
@@ -51,7 +51,7 @@ test("failed delta sidecar insertion rolls back copied rows and leaves its base 
   const {root,worker,store,batch,base}=await boot(t);writeFileSync(join(root,"a.ts"),"export function first(){return 20;}\n");const delta=await worker.index(root,120000,undefined,base);
   assert.throws(()=>store.putDelta({...delta,changedFiles:[]}),DeltaBaseError);
   store.db.exec("create trigger fail_delta before insert on evidence_core_coverage begin select raise(abort,'delta injected failure');end;");
-  assert.throws(()=>store.putDelta(delta),/delta injected failure/);assert.equal(store.revision(delta.revision),null);assert.ok(store.revision(batch.revision));assert.equal(store.evidenceCoreBaseVersion(batch.revision),"3");
+  assert.throws(()=>store.putDelta(delta),/delta injected failure/);assert.equal(store.revision(delta.revision),null);assert.ok(store.revision(batch.revision));assert.equal(store.evidenceCoreBaseVersion(batch.revision),"4");
 });
 test("chained unresolved calls preserve the legacy observation and retain the previously collided observation",async t=>{
   const {root,worker,store}=await boot(t);writeFileSync(join(root,"chain.ts"),"export function run(res:any){res.status(401).end();}\n");
@@ -84,7 +84,7 @@ test("combined delta metadata byte limit rolls back the entire revision",async t
   store.db.exec(`create trigger expand_metadata after insert on evidence_core_coverage begin update evidence_core_coverage set json=json_set(json,'$.padding',hex(zeroblob(9000000))) where revision=new.revision and id=new.id;end;`);
   assert.throws(()=>store.putDelta(delta),/EVIDENCE_CORE_RESOURCE_LIMIT/);
   assert.equal(store.revision(delta.revision),null);
-  assert.equal(store.evidenceCoreBaseVersion(batch.revision),"3");
+  assert.equal(store.evidenceCoreBaseVersion(batch.revision),"4");
 });
 
 test("missing changed-scope coverage rolls back a strict delta",async t=>{
@@ -92,14 +92,14 @@ test("missing changed-scope coverage rolls back a strict delta",async t=>{
   writeFileSync(join(root,"a.ts"),'export function first(){return 123;}\n');
   const delta=await worker.index(root,120000,undefined,base);delta.evidenceCore!.coverage=[];
   assert.throws(()=>store.putDelta(delta),/EVIDENCE_CORE_INVALID/);
-  assert.equal(store.revision(delta.revision),null);assert.equal(store.evidenceCoreBaseVersion(batch.revision),"3");
+  assert.equal(store.revision(delta.revision),null);assert.equal(store.evidenceCoreBaseVersion(batch.revision),"4");
 });
 test("invalid stored coverage state or malformed run cannot authorize reuse",async t=>{
   const {store,batch}=await boot(t);
   store.db.prepare("update evidence_core_coverage set status='UNKNOWN' where revision=?").run(batch.revision);
   assert.equal(store.evidenceCoreBaseVersion(batch.revision),undefined);
   store.db.prepare("update evidence_core_coverage set status='PARTIAL' where revision=?").run(batch.revision);
-  assert.equal(store.evidenceCoreBaseVersion(batch.revision),"3");
+  assert.equal(store.evidenceCoreBaseVersion(batch.revision),"4");
   store.db.prepare("update evidence_core_producer_runs set json='invalid' where revision=?").run(batch.revision);
   assert.equal(store.evidenceCoreBaseVersion(batch.revision),undefined);
 });

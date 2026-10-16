@@ -2727,7 +2727,10 @@ fn resolve_framework_metadata<E, S>(
                         let parent_key = format!("{}:controller:{}", rec.rel, parent);
                         if let Some(parent_id) = framework_entity_id.get(&parent_key).cloned() {
                             batch.relationships.push(Relationship {
-                                id: format!("rel:exposes_route:{}->{}", parent_id, subject),
+                                id: format!(
+                                    "rel:exposes_route:{}->{}:{}",
+                                    parent_id, subject, m.start
+                                ),
                                 from: parent_id,
                                 to: subject,
                                 kind: "exposes_route".into(),
@@ -2774,7 +2777,12 @@ fn resolve_framework_metadata<E, S>(
                     });
                     if let Some(dep_id) = dependency {
                         batch.relationships.push(Relationship {
-                            id: format!("rel:injects:{}->{}", subject, dep_id),
+                            id: format!(
+                                "rel:injects:{}->{}:{}",
+                                subject,
+                                dep_id,
+                                m.start
+                            ),
                             from: subject,
                             to: dep_id,
                             kind: "injects".into(),
@@ -2907,7 +2915,10 @@ fn resolve_framework_metadata<E, S>(
                         let parent_key = format!("{}:gateway_route:{}", rec.rel, parent);
                         if let Some(parent_id) = framework_entity_id.get(&parent_key).cloned() {
                             batch.relationships.push(Relationship {
-                                id: format!("rel:uses_filter:{}->{}", parent_id, subject),
+                                id: format!(
+                                    "rel:uses_filter:{}->{}:{}",
+                                    parent_id, subject, m.start
+                                ),
                                 from: parent_id,
                                 to: subject,
                                 kind: "uses_filter".into(),

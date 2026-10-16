@@ -18,13 +18,13 @@ test("producer trails, legacy citations, freshness and access are independently 
   const rev=svc.store.revision(revision)!,bundle=bundleFor(svc.store,revision,[entity.entityId]),resolve=(ev:any)=>svc.resolveEvidence(rev,ev);
   const trace=traceBundle(svc.store,bundle,resolve);
   assert.equal(trace.coverage,"PARTIAL");assert.equal(trace.provenance,"AVAILABLE");assert.ok(trace.items.length);
-  assert.ok(trace.items.some(i=>i.sources.some(s=>s.producer?.id==="cie.rust.static"&&s.producer.version==="3")));
+  assert.ok(trace.items.some(i=>i.sources.some(s=>s.producer?.id==="cie.rust.static"&&s.producer.version==="4")));
   assert.ok(trace.limitations.some(l=>l.includes("reflection")));
   const fact=bundle.facts.find(f=>f.evidence.some(e=>e.location.kind==="CodeLocation"))!;
   const limited=traceBundle(svc.store,{...bundle,relationships:[],facts:Array.from({length:100},(_,i)=>({...fact,id:`derived:${i}`}))},resolve);
   assert.equal(limited.items.length,40);assert.ok(limited.truncated);
   const env={svc,rev,ctx:ctx(),access:policyFor(svc.store,root),seen:new Map(),results:[],warnings:[]} as ToolEnv;
-  const text=await toolByName.get("evidence_of")!.run!(env,{entity:entity.entityId});assert.match(text,/Coverage: PARTIAL/);assert.match(text,/cie.rust.static v3/);
+  const text=await toolByName.get("evidence_of")!.run!(env,{entity:entity.entityId});assert.match(text,/Coverage: PARTIAL/);assert.match(text,/cie.rust.static v4/);
   assert.equal(env.sourceReads?.size??0,0);assert.equal(env.irReads?.size??0,0,"provenance does not count as reading a body");
   const snapshot=collectSnapshot("How does login work?",bundle);svc.store.saveEvidenceSnapshot(snapshot);
   const view:ViewSpec={id:"v",version:1,revision,taskId:"t",formId:"SemanticMap",caption:"",question:snapshot.question,level:0,nodes:[],edges:[],groups:[],legend:[],gaps:[],cameraPolicy:{behavior:"PRESERVE"},evidenceProjection:{snapshotId:snapshot.id,omittedEntityIds:[],omittedRelationshipIds:[],omittedFactIds:[]}};

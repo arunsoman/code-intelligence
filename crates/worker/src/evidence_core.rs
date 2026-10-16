@@ -88,7 +88,7 @@ pub fn validate(batch: &AnalysisBatch) -> Result<(), String> {
         for (id, value) in rows {
             if let Some(previous) = seen.get(id) {
                 if *previous != value {
-                    return Err("EVIDENCE_CORE_ID_COLLISION".into());
+                    return Err(format!("EVIDENCE_CORE_ID_COLLISION: {id}"));
                 }
             } else {
                 seen.insert(id, value);
@@ -135,7 +135,7 @@ pub fn validate(batch: &AnalysisBatch) -> Result<(), String> {
             }
             std::collections::hash_map::Entry::Occupied(entry) => {
                 if !entry.get().same_payload(&observation) {
-                    return Err("EVIDENCE_CORE_ID_COLLISION".into());
+                    return Err(format!("EVIDENCE_CORE_ID_COLLISION: {id}"));
                 }
             }
         }
@@ -156,7 +156,10 @@ pub fn validate(batch: &AnalysisBatch) -> Result<(), String> {
                 .canonicalize()
                 .map_err(|_| "EVIDENCE_CORE_MISSING_SOURCE")?;
             if !path.starts_with(root) {
-                return Err("EVIDENCE_CORE_BAD_SPAN".into());
+                return Err(format!(
+                "EVIDENCE_CORE_BAD_SPAN: file entity {file} resolves outside the indexed root",
+                file = e.file
+            ));
             }
             let len = std::fs::metadata(path)
                 .map_err(|_| "EVIDENCE_CORE_MISSING_SOURCE")?
@@ -182,10 +185,16 @@ pub fn validate(batch: &AnalysisBatch) -> Result<(), String> {
                 || files.get(source).map(|f| (Some(f.0), Some(f.1)))
                     != Some((s["contentHash"].as_str(), s["revision"].as_str()))
             {
-                return Err("EVIDENCE_CORE_BAD_SPAN".into());
+                return Err(format!(
+                    "EVIDENCE_CORE_BAD_SPAN: evidence {} cites {source} without a matching file entity",
+                    e.id
+                ));
             }
             if end > files.get(source).unwrap().2 {
-                return Err("EVIDENCE_CORE_BAD_SPAN".into());
+                return Err(format!(
+                    "EVIDENCE_CORE_BAD_SPAN: evidence {} span {start}..{end} exceeds the length of {source}",
+                    e.id
+                ));
             }
         }
     }
@@ -443,7 +452,7 @@ mod tests {
         });
         validate(&b).unwrap();
         b.facts[0].evidence[1].source_id = "other".into();
-        assert_eq!(validate(&b).unwrap_err(), "EVIDENCE_CORE_ID_COLLISION");
+        assert!(validate(&b).unwrap_err().starts_with("EVIDENCE_CORE_ID_COLLISION"));
     }
     #[test]
     fn duplicate_fact_conflicts_are_rejected() {
@@ -460,7 +469,7 @@ mod tests {
         let mut other = f;
         other.predicate = "b".into();
         b.facts.push(other);
-        assert_eq!(validate(&b).unwrap_err(), "EVIDENCE_CORE_ID_COLLISION");
+        assert!(validate(&b).unwrap_err().starts_with("EVIDENCE_CORE_ID_COLLISION"));
     }
     #[test]
     fn observation_projections_preserve_all_payload_fields_and_shared_ids() {
@@ -486,7 +495,7 @@ mod tests {
             let mut other = fact.clone();
             mutate(&mut other);
             batch.facts[1] = other;
-            assert_eq!(validate(&batch).unwrap_err(), "EVIDENCE_CORE_ID_COLLISION");
+            assert!(validate(&batch).unwrap_err().starts_with("EVIDENCE_CORE_ID_COLLISION"));
         }
         batch.facts.clear();
         let rel = Relationship {
@@ -511,11 +520,11 @@ mod tests {
             let mut other = rel.clone();
             mutate(&mut other);
             batch.relationships[1] = other;
-            assert_eq!(validate(&batch).unwrap_err(), "EVIDENCE_CORE_ID_COLLISION");
+            assert!(validate(&batch).unwrap_err().starts_with("EVIDENCE_CORE_ID_COLLISION"));
         }
         batch.relationships = vec![rel];
         batch.facts = vec![fact];
-        assert_eq!(validate(&batch).unwrap_err(), "EVIDENCE_CORE_ID_COLLISION");
+        assert!(validate(&batch).unwrap_err().starts_with("EVIDENCE_CORE_ID_COLLISION"));
     }
     #[test]
     fn entity_metadata_collisions_still_match_the_wire_comparison() {
@@ -564,7 +573,7 @@ mod tests {
                 serde_json::to_value(&other).unwrap()
             );
             batch.entities[1] = other;
-            assert_eq!(validate(&batch).unwrap_err(), "EVIDENCE_CORE_ID_COLLISION");
+            assert!(validate(&batch).unwrap_err().starts_with("EVIDENCE_CORE_ID_COLLISION"));
         }
     }
     #[test]
@@ -605,7 +614,7 @@ mod tests {
                 serde_json::to_value(&other).unwrap()
             );
             batch.facts[0].evidence[1] = other;
-            assert_eq!(validate(&batch).unwrap_err(), "EVIDENCE_CORE_ID_COLLISION");
+            assert!(validate(&batch).unwrap_err().starts_with("EVIDENCE_CORE_ID_COLLISION"));
         }
     }
 }

@@ -98,9 +98,10 @@ mod tests {
         let mut other = fact.clone();
         other.object = json!({"value":2});
         batch.facts = vec![fact, other];
-        assert_eq!(
-            normalize(&mut batch).unwrap_err(),
-            "EVIDENCE_CORE_ID_COLLISION"
+        assert!(
+            normalize(&mut batch)
+                .unwrap_err()
+                .starts_with("EVIDENCE_CORE_ID_COLLISION")
         );
     }
     #[test]
