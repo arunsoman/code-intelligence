@@ -820,11 +820,13 @@ export class Answering {
     if(ctx.deadlineMs <= Date.now()) return fail(ctx,{code:"DEADLINE_EXCEEDED",message:"This turn expired before it started.",retryable:true});
     const actions = new ConversationActions(this.store);
     let actionId: string;
+    let recovered: AnswerInvestigation | undefined;
     try {
       const revision = this.store.revision(req.revision ?? req.view?.revision ?? this.store.latestRevision()?.id ?? "");
       const action = actions.begin(ctx,sessionId,{req,access:{revision:revision?.id??null,denied:revision?this.store.deniedPrefixes(revision.repoRoot):[]}});
       if (action.replay) return action.replay as ApiResult<ConverseResult>;
       actionId=action.actionId;
+      recovered=action.progress;
     } catch(error) {
       if(error instanceof ConversationConflict) return fail(ctx,{code:"VERSION_CONFLICT",message:error.message,retryable:error.retryable});
       throw error;
@@ -835,7 +837,7 @@ export class Answering {
     const session = this.svc.sessionManager.getSession(ctx, sessionId, req.revision ?? req.view?.revision);
     const normalized = (req.text ?? "").trim();
     if (normalized && normalized.length <= 100_000) session.appendTurn("user", normalized, undefined, "pending");
-    const result = await this.converseInternal(ctx, { ...req, sessionId });
+    const result = await this.converseInternal(ctx, { ...req, sessionId }, recovered);
     if (!result.ok) { actions.abort(ctx,sessionId,actionId); this.svc.sessionManager.forget(ctx,sessionId); return result; }
     actions.finish(ctx,sessionId,actionId,result,() => {
       session.completePending();
@@ -862,7 +864,7 @@ export class Answering {
   }
 
   /** One text box: new question, trace → investigation, steering, "why …", or resume. Selection chips are referents. */
-  private async converseInternal(ctx: CallContext, req: { text: string; sessionId?: string; view?: ViewSpec | null; selection?: string[]; revision?: string; pins?: string[]; history?: { role: "user" | "assistant"; text: string }[] }): Promise<ApiResult<ConverseResult>> {
+  private async converseInternal(ctx: CallContext, req: { text: string; sessionId?: string; view?: ViewSpec | null; selection?: string[]; revision?: string; pins?: string[]; history?: { role: "user" | "assistant"; text: string }[] }, recovered?: AnswerInvestigation): Promise<ApiResult<ConverseResult>> {
     const text = (req.text ?? "").trim();
     if (!text) return fail(ctx, { code: "INVALID_SCHEMA", message: "say something", retryable: false });
     if (text.length > 100_000) return fail(ctx, { code: "INVALID_SCHEMA", message: "message is too long", retryable: false });
@@ -901,11 +903,11 @@ export class Answering {
       }
     }
     const resumeMatch = /^continue investigation ([a-zA-Z0-9:_-]{1,120})$/i.exec(text);
-    if (resumeMatch) {
+    if (resumeMatch || recovered) {
       const sessionId = req.sessionId?.trim() || ctx.actor.sessionId || ctx.idempotencyKey || ctx.requestId;
       const saved = this.store.db.prepare(`select response_json from conversation_actions where tenant_id=? and principal_id=? and session_id=? and state='complete' and json_extract(response_json,'$.value.validation.investigation.id')=? limit 1`)
-        .get(ctx.actor.tenantId, ctx.actor.principalId, sessionId, resumeMatch[1]) as { response_json: string } | undefined;
-      const checkpoint = saved ? (JSON.parse(saved.response_json) as { value: { validation?: { investigation?: AnswerInvestigation } } }).value.validation?.investigation : undefined;
+        .get(ctx.actor.tenantId, ctx.actor.principalId, sessionId, resumeMatch?.[1] ?? "") as { response_json: string } | undefined;
+      const checkpoint = recovered ?? (saved ? (JSON.parse(saved.response_json) as { value: { validation?: { investigation?: AnswerInvestigation } } }).value.validation?.investigation : undefined);
       if (!checkpoint) return fail(ctx, { code: "NOT_FOUND", message: "This saved investigation is not available in this conversation.", retryable: false });
       if (!indexed) return fail(ctx, { code: "STALE_REVISION", message: "The indexed revision changed; ask the original question again to collect fresh evidence.", retryable: false });
       const { checkpoint: resumeCheckpoint, dropped } = remapCheckpointAcrossRevision(this.svc, checkpoint, indexed.id);
@@ -924,7 +926,7 @@ export class Answering {
         } catch { return fail(ctx, { code: "STALE_REVISION", message: "Inspected source changed; re-index and ask the original question again.", retryable: false }); }
       }
       if (!this.svc.router?.converse) return fail(ctx, { code: "INSUFFICIENT_EVIDENCE", message: "A tool-calling model is required to continue this investigation.", retryable: true });
-      const answered = await runChatAgent(this.svc, ctx, indexed, this.svc.router, { text: resumeCheckpoint.question, history: [], resume: resumeCheckpoint, pins: req.pins });
+      const answered = await runChatAgent(this.svc, ctx, indexed, this.svc.router, { text: resumeCheckpoint.question, history: [], resume: resumeCheckpoint, pins: req.pins, sessionId: req.sessionId });
       if (answered?.ok && dropped) return { ...answered, metadata: { ...answered.metadata, warnings: [...answered.metadata.warnings, `${dropped} previously inspected element(s) did not survive re-indexing and were dropped from this resumed investigation.`] } };
       return answered ?? fail(ctx, { code: "INSUFFICIENT_EVIDENCE", message: "The model could not continue this investigation.", retryable: true });
     }
@@ -1001,7 +1003,7 @@ export class Answering {
       const truncated = text.length > CHAT_QUESTION_MAX_CHARS;
       const truncationWarning = `The question was truncated to the first ${CHAT_QUESTION_MAX_CHARS} characters before being answered.`;
       if (this.svc.router.converse) {
-        const answered = await runChatAgent(this.svc, ctx, rev, this.svc.router, { text: text.slice(0, CHAT_QUESTION_MAX_CHARS), history, subject, pins: req.pins });
+        const answered = await runChatAgent(this.svc, ctx, rev, this.svc.router, { text: text.slice(0, CHAT_QUESTION_MAX_CHARS), history, subject, pins: req.pins, sessionId: req.sessionId });
         if (answered) return truncated && answered.ok ? { ...answered, metadata: { ...answered.metadata, warnings: [...answered.metadata.warnings, truncationWarning] } } : answered;
       } else if (this.svc.router?.plan) {
         try {

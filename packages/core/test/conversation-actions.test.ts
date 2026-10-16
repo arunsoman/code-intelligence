@@ -4,6 +4,32 @@ import { Store } from "../src/store.ts";
 import { ConversationActions, ConversationConflict, TURN_FINALIZATION_GRACE_MS } from "../src/conversation-actions.ts";
 import { ChatSessionManager } from "../src/chat-session.ts";
 import { ctx } from "./helpers.ts";
+import type { AnswerInvestigation } from "@cie/schema";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+test("tool progress survives reopening SQLite and expired owners cannot overwrite a replacement", () => {
+ const dir=mkdtempSync(join(tmpdir(),"cie-recovery-")), path=join(dir,"store.db");
+ let store=new Store(path);
+ try {
+  const actions=new ConversationActions(store), owner=ctx("recover-tool"), payload={text:"inspect charge"};
+  actions.begin(owner,"chat",payload);
+  const progress:AnswerInvestigation={id:owner.requestId,question:"inspect charge",revision:"r",nextAction:"continue",missingEvidence:["provider unread"],inspectedIds:["method:debit"],sourceReads:{},sourceHashes:{},observations:[{name:"ir_of",arguments:{id:"method:debit"},content:"debit implementation"}]};
+  assert.equal(actions.checkpoint(owner,"chat",progress),true);
+  store.db.close();store=new Store(path);
+  store.db.prepare("update conversation_actions set lease_until=0").run();
+  const restored=new ConversationActions(store), retry=ctx("recover-tool");
+  const acquired=restored.begin(retry,"chat",payload);
+  assert.deepEqual(acquired.progress,progress);
+  assert.equal(restored.checkpoint(owner,"chat",{...progress,question:"late overwrite"}),false);
+  const other=ctx("recover-tool");other.actor.principalId="other";
+  assert.equal(restored.checkpoint(other,"chat",progress),false);
+  assert.equal(restored.checkpoint(retry,"chat",progress),true);
+  restored.finish(retry,"chat",acquired.actionId,{answer:"done"},()=>{});
+  assert.deepEqual(restored.begin(ctx("recover-tool"),"chat",payload).replay,{answer:"done"});
+ } finally { store.db.close();rmSync(dir,{recursive:true,force:true}); }
+});
 
 test("completed turn replays exactly once and rejects action-key reuse", () => {
  const store=new Store(":memory:"), actions=new ConversationActions(store), owner=ctx("action");

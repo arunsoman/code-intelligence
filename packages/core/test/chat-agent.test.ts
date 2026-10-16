@@ -24,6 +24,44 @@ function scripted(turns: ((messages: AgentMessage[], tools: AgentToolSpec[]) => 
 const call = (name: string, args: Record<string, unknown>, content = ""): AgentReply => ({ content, toolCalls: [{ name, arguments: args }] });
 const request = (m: AgentMessage[]) => JSON.parse(m[1].content) as { mentions: { name: string; match: string; candidates: { id: string; name: string }[] }[]; unresolved: string[] };
 
+test("a transient read failure can retry instead of being cached as permanent evidence", async () => {
+  const { svc, worker, revision } = await setup();
+  const tool = toolByName.get("read_code")!, original = tool.run!;
+  let reads = 0;
+  try {
+    tool.run = async (...args) => { if (++reads === 1) throw new Error("injected temporary read failure"); return original(...args); };
+    const id = "class:src/auth/service.ts#AuthService";
+    svc.router = scripted([
+      () => call("read_code", { id }),
+      m => { assert.match(m.at(-1)!.content, /Failed: injected temporary/); return call("read_code", { id }); },
+      m => { assert.match(m.at(-1)!.content, /class AuthService/); return call("answer", { text: "AuthService implements authentication.", cites: [id] }); },
+    ]);
+    const r = await svc.converse(ctx(), { text: "Explain AuthService", revision });
+    assert.ok(r.ok && r.value.kind === "analysis");
+    assert.equal(r.value.validation?.status, "SUPPORTED");
+    assert.equal(reads, 2);
+  } finally { tool.run = original; worker.close(); }
+});
+
+test("persistent read failure is bounded to two executions and produces an actionable unresolved result", async () => {
+  const { svc, worker, revision } = await setup();
+  const tool = toolByName.get("read_code")!, original = tool.run!;
+  let reads = 0;
+  try {
+    tool.run = async () => { reads++; throw new Error("injected persistent read failure"); };
+    const id = "class:src/auth/service.ts#AuthService";
+    svc.router = scripted([
+      () => call("read_code", { id }), () => call("read_code", { id }), () => call("read_code", { id }),
+      m => { assert.match(m.at(-1)!.content, /failed twice/); return call("answer", { text: "Cannot inspect the implementation.", cites: [id] }); },
+    ]);
+    const r = await svc.converse(ctx(), { text: "Explain AuthService", revision });
+    assert.ok(r.ok && r.value.kind === "analysis");
+    assert.equal(reads, 2);
+    assert.equal(r.value.validation?.status, "UNRESOLVED");
+    assert.ok(r.value.validation?.investigation?.recovery);
+  } finally { tool.run = original; worker.close(); }
+});
+
 test("mentions resolve code-shaped names exactly, then by a small edit distance, and never from an ordinary word", async () => {
   const { svc, worker, revision } = await setup();
   try {

@@ -1093,6 +1093,7 @@ export interface AnswerReview {
   processFailure?: boolean;
 }
 export interface AnswerInvestigation {
+  recovery?: { version: "recovery.v1"; actions: { kind: "READ_SOURCE"; id: string; offset: number }[]; remainingSourceReads: number; reason: string; retryable: boolean; retainedObservations: number };
   id: string; question: string; revision: string; supportedFindings?: AnswerReview["supportedFindings"]; missingEvidence: string[]; nextAction: AnswerReview["nextAction"];
   /** Set when the investigation stopped because the model/tool call itself failed (timeout, connection failure), not because evidence was lacking. Changes only how the gap is worded to the user. */
   processFailure?: boolean;
@@ -1102,7 +1103,7 @@ export interface AnswerInvestigation {
   sourceReads: Record<string, { total: number; contentHash: string; ranges: [number, number][] }>;
   observations: { name: string; arguments: Record<string, unknown>; content: string }[];
 }
-export type AnswerValidationSummary = Omit<AnswerValidation, "investigation"> & { investigation?: Pick<AnswerInvestigation, "id" | "question" | "revision" | "supportedFindings" | "missingEvidence" | "nextAction"> };
+export type AnswerValidationSummary = Omit<AnswerValidation, "investigation"> & { investigation?: Pick<AnswerInvestigation, "id" | "question" | "revision" | "supportedFindings" | "missingEvidence" | "nextAction" | "recovery"> };
 export interface AnswerValidation { question: string; status: "SUPPORTED" | "UNRESOLVED"; repairAttempts: number; review: AnswerReview; investigation?: AnswerInvestigation }
 
 // ---- CIE v2 stage 3 (shadow mode): an AnswerClaim re-describes an already-finished answer as a checkable graph

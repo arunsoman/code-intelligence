@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { CallContext } from "@cie/schema";
+import type { AnswerInvestigation, CallContext } from "@cie/schema";
 import type { Store } from "./store.ts";
 
 const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, canonical(v)])) : value;
@@ -12,7 +12,7 @@ export class ConversationConflict extends Error { readonly retryable: boolean; c
 export class ConversationActions {
   private store: Store;
   constructor(store: Store) { this.store = store; }
-  begin(ctx: CallContext, sessionId: string, payload: unknown): { replay?: unknown; owner: string; actionId: string } {
+  begin(ctx: CallContext, sessionId: string, payload: unknown): { replay?: unknown; progress?: AnswerInvestigation; owner: string; actionId: string } {
     const scope = [ctx.actor.tenantId, ctx.actor.principalId, sessionId];
     const actionId = ctx.idempotencyKey || ctx.requestId;
     const hash = createHash("sha256").update(JSON.stringify(canonical(payload))).digest("hex");
@@ -25,10 +25,11 @@ export class ConversationActions {
       if (pending) this.restore(scope, pending);
       const checkpoint = this.store.db.prepare("select * from chat_sessions where tenant_id=? and actor_principal=? and session_id=?").get(...scope);
       const owner = ctx.requestId;
-      this.store.db.prepare(`insert into conversation_actions values(?,?,?,?,?,?,'pending',?,1,?,null)
-        on conflict(tenant_id,principal_id,session_id,action_id) do update set owner=excluded.owner,state='pending',lease_until=excluded.lease_until,attempt=conversation_actions.attempt+1,checkpoint_json=excluded.checkpoint_json,response_json=null`)
-        .run(...scope, actionId, hash, owner, ctx.deadlineMs + TURN_FINALIZATION_GRACE_MS, checkpoint ? JSON.stringify(checkpoint) : null);
-      return { owner, actionId };
+      this.store.db.prepare(`insert into conversation_actions values(?,?,?,?,?,?,'pending',?,1,?,?)
+        on conflict(tenant_id,principal_id,session_id,action_id) do update set owner=excluded.owner,state='pending',lease_until=excluded.lease_until,attempt=conversation_actions.attempt+1,checkpoint_json=excluded.checkpoint_json,response_json=excluded.response_json`)
+        .run(...scope, actionId, hash, owner, ctx.deadlineMs + TURN_FINALIZATION_GRACE_MS, checkpoint ? JSON.stringify(checkpoint) : null, prior?.response_json ?? null);
+      const progress = prior?.response_json ? (JSON.parse(prior.response_json) as { progress?: AnswerInvestigation }).progress : undefined;
+      return { owner, actionId, ...(progress ? { progress } : {}) };
     });
   }
   private restore(scope: string[], action: Action) {
@@ -43,6 +44,12 @@ export class ConversationActions {
   owns(ctx: CallContext, sessionId: string, actionId: string): boolean {
     return !!this.store.db.prepare("select 1 from conversation_actions where tenant_id=? and principal_id=? and session_id=? and action_id=? and owner=? and state='pending' and lease_until>?")
       .get(ctx.actor.tenantId,ctx.actor.principalId,sessionId,actionId,ctx.requestId,Date.now());
+  }
+  /** Atomic lease-guarded progress write. A replaced/expired owner cannot publish more work. */
+  checkpoint(ctx: CallContext, sessionId: string, investigation: AnswerInvestigation): boolean {
+    return Number(this.store.db.prepare(`update conversation_actions set response_json=?
+      where tenant_id=? and principal_id=? and session_id=? and action_id=? and owner=? and state='pending' and lease_until>?`)
+      .run(JSON.stringify({ progress: investigation }), ctx.actor.tenantId, ctx.actor.principalId, sessionId, ctx.idempotencyKey || ctx.requestId, ctx.requestId, Date.now()).changes) === 1;
   }
   finish(ctx: CallContext, sessionId: string, actionId: string, result: unknown, commit: () => void) {
     this.store.tx(() => {

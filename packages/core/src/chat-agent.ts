@@ -1,4 +1,6 @@
 import { traceEntities } from "./evidence-trace.ts";
+import { pendingSourceReads, recoveryPlan, reusableObservation } from "./investigation-recovery.ts";
+import { ConversationActions } from "./conversation-actions.ts";
 import { basename } from "node:path";
 import { converseResilient } from "./model-deadline.ts";
 import { reviewAnswer, reviewTimeEstimate, unavailableReview, unresolvedMessage } from "./answer-validation.ts";
@@ -29,7 +31,7 @@ const ANSWER_RESERVE_MS = 12_000,
   // never drops below regardless of evidence size. Tunable so slow relays get a reserve they can actually finish in.
   REVIEW_RESERVE_MS = Number(process.env.CIE_REVIEW_RESERVE_FLOOR_MS) || 12_000;
 
-export interface AgentRequest { text: string; history: { role: "user" | "assistant"; text: string }[]; subject?: string; pins?: string[]; resume?: AnswerInvestigation }
+export interface AgentRequest { text: string; history: { role: "user" | "assistant"; text: string }[]; subject?: string; pins?: string[]; resume?: AnswerInvestigation; sessionId?: string }
 
 /** Resolve an explicitly named component folder before the LLM chooses tools, so repository-wide overview sampling cannot hide it. */
 function namedComponentFolder(svc: Service, rev: RevisionRow, text: string, access: ReturnType<typeof policyFor>): string | undefined {
@@ -53,6 +55,8 @@ function systemPrompt(): string {
     "Rules:",
     "- For questions about provenance or coverage, use evidence_of on a relevant element. It shows indexed support, not an implementation read; use ir_of/read_code for behavioral claims.",
     "- Source citations and analyzer provenance describe static observations. Partial coverage cannot establish exhaustive absence or runtime execution; answer review remains separate.",
+    "- For a charged-but-unfulfilled payment, trace debit/commit, provider request and status mapping, pending/failed recovery eligibility, refund transaction boundaries, and retry/idempotency. Separate observed code, conditional failure scenarios and demonstrated execution. Name the exact unresolved edge; never claim a runtime reproduction from static evidence.",
+    "- Missing producer metadata alone is not missing implementation evidence. Use evidence_of to explain coverage, not as a substitute for code reads. A useful partial answer retains supported findings and identifies the source, access, contract or isolated test needed to finish.",
     "- Everything you state must come from a tool result in this conversation. Never rely on what you assume the code does.",
     "- Bodies are IR-first, source-on-demand: ir_of renders an element's semantic IR — its calls, guards, loops and assignments, with literal values blanked. It is the default read for what a function or method does, and it is valid evidence to cite. Escalate to read_code only when the answer depends on literal values (strings, numbers, config constants), exact types, comments or line-level detail; then say in the answer which claims rest on the IR alone.",
     "- For 'is this the same as', 'where else does this logic live', 'how many implementations' questions, call similar_of on one representative (it finds structurally nearest symbols across renames and languages) and concept_of for the family card when a concept id appears.",
@@ -128,16 +132,27 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
     }) },
   ];
   const observations: AnswerInvestigation["observations"] = [...(req.resume?.observations ?? [])];
+  const saveProgress = () => {
+    if (!req.sessionId || !observations.length) return;
+    const sourceReads = Object.fromEntries(env.sourceReads ?? []);
+    const progress: AnswerInvestigation = { id: ctx.requestId, question: req.text, revision: rev.id, nextAction: "continue", processFailure: true,
+      missingEvidence: ["The previous request stopped before finalization. Continue from retained tool observations."],
+      inspectedIds: [...env.seen.keys()], sourceReads,
+      sourceHashes: Object.fromEntries(svc.store.entitiesById(rev.id, [...env.seen.keys()]).flatMap(e => e.spans[0] ? [[e.entityId, sourceReads[e.entityId]?.contentHash ?? e.spans[0].contentHash]] : [])), observations };
+    progress.recovery = recoveryPlan(progress);
+    new ConversationActions(svc.store).checkpoint(ctx, req.sessionId, progress);
+  };
   if (req.resume) {
     env.sourceReads = new Map(Object.entries(req.resume.sourceReads));
-    env.irReads = new Set(req.resume.observations.filter(o => o.name === "ir_of" && typeof o.arguments?.id === "string").map(o => o.arguments.id as string));
+    env.irReads = new Set(req.resume.observations.filter(o => o.name === "ir_of" && reusableObservation(o.content) && typeof o.arguments?.id === "string").map(o => o.arguments.id as string));
     for (const e of svc.store.entitiesById(rev.id, req.resume.inspectedIds)) if (!access.denied(e.file)) env.seen.set(e.entityId, { name: e.name, file: e.file });
     restoreContainedCoverage(env);
     for (const o of observations) messages.push({ role: "assistant", content: "", toolCalls: [{ name: o.name, arguments: o.arguments }] }, { role: "tool", toolName: o.name, content: o.content });
     messages.push({ role: "user", content: JSON.stringify({ resume: true, missingEvidence: req.resume.missingEvidence, nextAction: req.resume.nextAction, instruction: "Continue the original question with this fresh budget. Address the identified gaps; do not repeat completed reads unless a remaining source offset is needed." }) });
   }
   const cache = new Map<string, string>(), trace: string[] = [];
-  for (const o of observations) cache.set(callKey({ name: o.name, arguments: o.arguments }), o.content);
+  for (const o of observations) if (reusableObservation(o.content)) cache.set(callKey({ name: o.name, arguments: o.arguments }), o.content);
+  const failedAttempts = new Map<string, number>();
   let calls = 0, nudged = false, stopped = "", forceAnswer = false, processFailure = false;
   const answerState: { final: { text: string; cites: string[] } | null } = { final: null };
   let repairAttempts = 0, review: AnswerReview = unavailableReview("No answer draft was completed.");
@@ -192,12 +207,14 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
   };
   const component = namedComponentFolder(svc, rev, req.text, access);
   const moduleTool = toolByName.get("read_module");
-  if (component && moduleTool?.run) {
+  if (!req.resume && component && moduleTool?.run) {
     const toolCall = { name: "read_module", arguments: { module: component } };
     const observation = await moduleTool.run(env, toolCall.arguments);
     messages.push({ role: "assistant", content: "", toolCalls: [toolCall] }, { role: "tool", toolName: toolCall.name, content: observation.slice(0, MAX_OBSERVATION) });
-    cache.set(callKey(toolCall), observation);
+    if (reusableObservation(observation)) cache.set(callKey(toolCall), observation);
+    else failedAttempts.set(callKey(toolCall), 1);
     observations.push({ ...toolCall, content: observation.slice(0, MAX_OBSERVATION) });
+    saveProgress();
     trace.push(`${brief(toolCall)} → ${observation.split("\n")[0]}`);
     calls++;
     svc.store.audit(ctx.actor.principalId, "chat.tool", rev.id, { tool: toolCall.name, status: "complete" });
@@ -210,10 +227,7 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
     if (left <= 0) { stopped = "the request deadline was reached"; break; }
     if (lastChance) stopped = forceAnswer || left <= ANSWER_RESERVE_MS + reviewReserve ? "the answer and review reserve was reached" : "the investigation budget was reached";
     if (lastChance && turn > 0) messages.push({ role: "user", content: "The investigation budget or deadline is reached. Call answer now; explicitly identify unread implementations and incomplete source pages. Do not claim an execution order or absence of compensation without source evidence." });
-    const pendingReads = [...(env.sourceReads ?? [])].flatMap(([id, read]) => {
-      let covered = 0; for (const [start, end] of read.ranges) { if (start > covered) break; covered = Math.max(covered, end); }
-      return covered < read.total ? [{ id, offset: covered }] : [];
-    }).slice(0, 3);
+    const pendingReads = pendingSourceReads(Object.fromEntries(env.sourceReads ?? [])).slice(0, 3);
     if (pendingReads.length && !lastChance) messages.push({ role: "user", content: JSON.stringify({ priority: "Finish these unread source pages before broadening the search, unless they are unrelated to the question.", pendingReads }) });
     const turnStarted = performance.now();
     compactWriterHistory(messages);
@@ -261,13 +275,16 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
       if (problem) observation = `Refused: ${problem}.`;
       else if (!tool!.run) observation = "This tool cannot be combined with others; it was ignored.";
       else if (cache.has(callKey(call))) observation = `Same call as before; its result is unchanged:\n${cache.get(callKey(call))}`;
+      else if ((failedAttempts.get(callKey(call)) ?? 0) >= 2) observation = "Not run: this call failed twice in this request. Change the target or report the specific blocker.";
       else if (calls >= MAX_CALLS + repairAttempts * 8) observation = "Not run: the tool budget is used up.";
       else {
         calls++;
         try { observation = await tool!.run(env, call.arguments); } catch (e) { observation = `Failed: ${(e as Error).message}`; }
         if (observation.length > MAX_OBSERVATION) observation = `${observation.slice(0, MAX_OBSERVATION)}\n… (cut)`;
-        cache.set(callKey(call), observation);
+        if (reusableObservation(observation)) cache.set(callKey(call), observation);
+        else failedAttempts.set(callKey(call), (failedAttempts.get(callKey(call)) ?? 0) + 1);
         observations.push({ name: call.name, arguments: call.arguments, content: observation });
+        saveProgress();
         svc.store.audit(ctx.actor.principalId, "chat.tool", rev.id, { tool: call.name, status: observation.startsWith("Failed") ? "failed" : "complete" });
       }
       diagnostic("agent.tool.complete", { requestId: ctx.requestId, turn, tool: call.name, argumentKeys: Object.keys(call.arguments), problem, observationChars: observation.length, failed: observation.startsWith("Failed"), cached: wasCached, elapsedMs: performance.now() - toolStarted });
@@ -337,6 +354,7 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
       // A fully written draft whose review could not complete is real partial work: surface it labeled unreviewed.
       ...(processFailure && answerState.final ? { unverifiedDraft: answerState.final.text } : {}),
       inspectedIds: [...new Set([...Object.keys(sourceReads), ...cited, ...env.seen.keys()])], sourceReads, sourceHashes: Object.fromEntries(svc.store.entitiesById(rev.id, [...env.seen.keys()]).flatMap(e => e.spans[0] ? [[e.entityId, sourceReads[e.entityId]?.contentHash ?? e.spans[0].contentHash]] : [])), observations };
+    investigation.recovery = recoveryPlan(investigation);
     validation.investigation = investigation;
     message = unresolvedMessage(investigation);
     if (!processFailure) warnings.push(investigation.supportedFindings?.length

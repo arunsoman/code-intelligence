@@ -70,6 +70,11 @@ export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend,
             {m.validation && <div className="chat-results" role="group" aria-label="Answer validation">
               <span className="muted small">{m.validation.status === "SUPPORTED" ? "Answer review passed" : "Unresolved investigation"}</span>
               {m.validation.investigation?.nextAction === "continue" && <button className="secondary small" disabled={busy} onClick={() => onContinueInvestigation?.(m.validation!.investigation!.id)}>Continue investigation</button>}
+              {m.validation.investigation?.recovery && <details className="thinking"><summary>Recovery plan</summary>
+                <p>{m.validation.investigation.recovery.reason}</p>
+                <p className="muted small">{m.validation.investigation.recovery.retainedObservations} reusable observation(s) retained; {m.validation.investigation.recovery.remainingSourceReads} source read(s) unfinished.</p>
+                <ul>{m.validation.investigation.recovery.actions.map(action => <li key={action.id}>Read <code>{action.id}</code> from character offset {action.offset}.</li>)}</ul>
+              </details>}
               <details className="thinking"><summary>Answer review</summary>
                 <p className="muted small">{m.validation.review.requirements.join("; ")}</p>
                 <p className="muted small">{m.validation.review.gaps.join("; ")}</p>

@@ -281,6 +281,36 @@ test("saved investigation resumes with evidence, rejects other actors and change
   } finally { f.worker.close(); }
 });
 
+test("retrying an interrupted action resumes its durable tool progress without repeating source reads", async () => {
+  const f = await boot();
+  try {
+    let writes = 0;
+    f.svc.router = { name: "checkpoint-seed", choose: async () => null, converse: async (messages, tools) => {
+      if (tools[0].name === "review_answer") return call("review_answer", { ...gap("UNRESOLVED") });
+      if (writes++ === 0) return call("read_code", { id: target(messages) });
+      const row = f.svc.store.db.prepare("select response_json from conversation_actions where action_id=?").get("durable-action") as { response_json: string };
+      assert.ok(JSON.parse(row.response_json).progress.observations.some((o: { name: string }) => o.name === "read_code"), "tool progress is saved before final answer/review");
+      return call("answer", { text: "Inspected implementation.", cites: [target(messages)] });
+    } };
+    const req = { text: "Explain AuthService", revision: f.revision, sessionId: "durable-progress" };
+    const first = await f.svc.converse(ctx("durable-action"), req);
+    assert.ok(first.ok && first.value.kind === "analysis");
+    const progress = first.value.validation!.investigation!;
+    // Simulate persisted progress followed by process loss before finalization.
+    f.svc.store.db.prepare("update conversation_actions set state='pending',lease_until=0,checkpoint_json=null,response_json=? where action_id=?").run(JSON.stringify({ progress }), "durable-action");
+    f.svc.sessionManager.forget(ctx(), "durable-progress");
+    f.svc.router = { name: "checkpoint-resume", choose: async () => null, converse: async (messages, tools) => {
+      if (tools[0].name === "review_answer") return call("review_answer", { ...supported });
+      assert.ok(messages.some(m => m.role === "tool" && /class AuthService/.test(m.content)));
+      assert.ok(messages.some(m => m.role === "user" && m.content.includes('"resume":true')));
+      return call("answer", { text: "AuthService signs users in.", cites: [target(messages)] });
+    } };
+    const resumed = await f.svc.converse(ctx("durable-action"), req);
+    assert.ok(resumed.ok && resumed.value.kind === "analysis");
+    assert.equal(resumed.value.validation?.status, "SUPPORTED");
+  } finally { f.worker.close(); }
+});
+
 test("saved investigation resumes across a re-index after a rename, via the carried-forward canonical identity", async () => {
   const repo = copyFixture(), f = await boot(repo);
   try {
