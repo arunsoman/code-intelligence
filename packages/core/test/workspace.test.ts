@@ -43,6 +43,7 @@ test("save → reopen restores state; changed source marks evidence stale", asyn
   const { svc, worker, revision } = await setup(undefined, repo);
   const asked = await svc.ask(ctx(), { question: "authentication", revision });
   assert.ok(asked.ok);
+  asked.value.view.evidenceTrace = { version: "evidence-trace.v1", revision, coverage: "PARTIAL", provenance: "UNAVAILABLE", truncated: false, items: [], limitations: ["untrusted cached metadata"] };
   const sel = asked.value.view.nodes.slice(0, 2).map((n) => n.entityRefs[0]);
   const ex = await svc.explain(ctx(), { revision, entityIds: sel });
   assert.ok(ex.ok);
@@ -53,6 +54,8 @@ test("save → reopen restores state; changed source marks evidence stale", asyn
   assert.ok(fresh.ok);
   assert.equal(fresh.value.name, "Auth Understanding");
   assert.equal(fresh.value.state.view?.id, asked.value.view.id);
+  assert.ok(fresh.value.state.view?.evidenceTrace);
+  assert.ok(!JSON.stringify(fresh.value.state.view.evidenceTrace).includes("untrusted cached metadata"));
   assert.deepEqual(fresh.value.staleEvidence, []);
 
   appendFileSync(join(repo, "src/auth/token.ts"), "\n// edited after save\n");

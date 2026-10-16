@@ -1,3 +1,5 @@
+import type { EvidenceTrace } from "./evidence-trace.ts";
+export type { EvidenceTrace } from "./evidence-trace.ts";
 export * from "./evidence-core.ts";
 import type { EvidenceCoreBatchV1 } from "./evidence-core.ts";
 import type { EvidenceProjection, CanonicalFinding } from "./evidence-snapshot.ts";
@@ -232,6 +234,7 @@ export interface ViewRoute {
   alternatives: { form: FormId; kind?: "failure" | "invariant"; name: string }[];
 }
 export interface ViewSpec {
+  evidenceTrace?: EvidenceTrace;
   compoundQuery?: import("./evidence-snapshot.ts").CompoundQueryResult;
   evidenceProjection?: EvidenceProjection;
   evidenceCoverage?: import("./evidence-snapshot.ts").EvidenceSnapshot["coverage"];
@@ -1127,7 +1130,7 @@ export interface AnswerClaimVerification { claimId: Id; status: AnswerClaimStatu
  * warnings on ConverseResult). `converse`'s hard rejection ceiling is separate and far higher (100,000 chars, answering.ts). */
 export const CHAT_QUESTION_MAX_CHARS = 6000;
 
-export type ConverseResult =
+export type ConverseResult = (
   // `thinking`: the old-style, pre-answer text (why this form, the caption) — kept for the trace, not meant as the reply.
   // `message` is the composed answer; with no grounded answer available, `message` falls back to that same text and
   // `thinking` is omitted rather than duplicated.
@@ -1136,7 +1139,7 @@ export type ConverseResult =
   | { kind: "explanation"; explanation: ExplainResult; message: string }
   | { kind: "resume"; workspaceId: Id; message: string }
   | { kind: "zoom"; direction: "in" | "out" | "overview"; message: string }
-  | { kind: "message"; message: string };
+  | { kind: "message"; message: string }) & { evidenceTrace?: EvidenceTrace };
 export interface TestSummaryInfo {
   found: string[]; coverageFiles: number; coverageLinePercent: number | null;
   tests: { passed: number; failed: number; skipped: number }; failing: { name: string; file?: string; message?: string }[]; generatedAt: string; staleness: string[];

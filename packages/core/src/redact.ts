@@ -9,6 +9,8 @@ const TOKEN = /[A-Za-z_][A-Za-z0-9_]*/g;
 export const GENERIC_GAP = "Some notes about code you do not have access to were left out.";
 
 export function redactBuilt<T extends { view: ViewSpec; claims: Claim[] }>(store: Store, rev: RevisionRow, built: T): T & { redacted: number } {
+  // Presentation caches are never an authority, even when no paths are denied.
+  delete built.view.evidenceTrace;
   const acc = policyFor(store, rev.repoRoot);
   if (!acc.prefixes.length) return Object.assign(built, { redacted: 0 });
   const ents = store.entities(rev.id);

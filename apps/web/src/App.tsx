@@ -1,3 +1,4 @@
+import { EvidencePanel } from "./EvidencePanel.tsx";
 import { CompoundQueryPanel } from "./CompoundQueryPanel.tsx";
 import { tableEvidenceElements } from "./table-cell.ts";
 import { ExplorationPanel } from "./ExplorationPanel.tsx";
@@ -213,6 +214,16 @@ export function App() {
     if (r.value.state !== "CURRENT" && r.value.state !== "STALE") { setNotice(`Source is ${r.value.state.toLowerCase()}.`); return; }
     if (canvasFocus) setFocusPanel(true);
     setCode({ title: r.value.name, file: r.value.file, startLine: r.value.startLine, snippet: r.value.text });
+  };
+
+  const openEvidenceSource = async (revision:string,entityId:string) => {
+    const context=sourceContext.current,token=responseGeneration.current;
+    const r=await call<EntityCode>("C11","conceptCode",{revision,entityId});
+    if(context!==sourceContext.current||token!==responseGeneration.current)return;
+    if(!r.ok){setError(failMsg(r));return;}
+    if(r.value.state!=="CURRENT"){setNotice("This evidence source changed or is unavailable. Re-index before inspecting it.");return;}
+    if(canvasFocus)setFocusPanel(true);
+    setCode({title:r.value.name,file:r.value.file,startLine:r.value.startLine,snippet:r.value.text});
   };
 
   const closeAllDialogs = useCallback(() => {
@@ -531,7 +542,7 @@ export function App() {
           if (v.manifest) responseWorkspace.begin(v.manifest, shown.flatMap((r) => r.view ? [{ view: r.view, claims: r.claims }] : []));
           else if (last?.view) adoptView(last.view, last.claims, false);
           const summary = [v.message, ...v.results.flatMap((result) => result.view ? [result.title, result.view.caption, ...result.view.nodes.slice(0, 30).map((node) => `${node.label}: ${(node.notes ?? []).join(" ")}`)] : [result.title, result.message])].join("\n");
-          appendChartMessage(text, summary, { text: v.message, at: now(), results: v.results, validation: v.validation, ...(v.thinking ? { thinking: v.thinking } : {}) });
+          appendChartMessage(text, summary, { text: v.message, at: now(), results: v.results, validation: v.validation, evidenceTrace:v.evidenceTrace, ...(v.thinking ? { thinking: v.thinking } : {}) });
           log("ASK", text.slice(0, 80));
           break;
         }
@@ -539,7 +550,7 @@ export function App() {
           if (v.manifest) responseWorkspace.begin(v.manifest, [{ view: v.view, claims: v.claims }]);
           else adoptView(v.view, v.claims, !!view && view.id === v.view.id);
           const summary = [v.message, v.view.caption, ...v.view.nodes.slice(0, 40).map((node) => `${node.label}: ${(node.notes ?? []).join(" ")}`), ...v.view.edges.slice(0, 40).map((edge) => `${edge.fromNodeId} ${edge.label ?? edge.kind} ${edge.toNodeId}`)].join("\n");
-          appendChartMessage(v.view.question, summary, { text: v.message, at: now(), ...(v.thinking ? { thinking: v.thinking } : {}), ...(v.view.formId === "SemanticMap" ? { providerWizard: true } : {}) }, v.view.route?.alternatives);
+          appendChartMessage(v.view.question, summary, { text: v.message, at: now(), evidenceTrace:v.evidenceTrace??v.view.evidenceTrace, ...(v.thinking ? { thinking: v.thinking } : {}), ...(v.view.formId === "SemanticMap" ? { providerWizard: true } : {}) }, v.view.route?.alternatives);
           log("ASK", text.slice(0, 80)); break;
         }
         case "explanation": mergeClaims(v.explanation.claims); setDrawer({ kind: "explain", data: v.explanation }); say("assistant", v.message); log("EXPLAIN", text.slice(0, 80)); break;
@@ -1078,6 +1089,7 @@ export function App() {
             elements={rendered.table ? tableEvidenceElements(rendered.table) : view?.matrix && drawMode === "matrix" ? eff.view.matrix!.cells : view?.terrain ? eff.view.nodes.filter((n) => n.tier !== "HIDDEN") : [...rendered.nodes, ...rendered.edges]}
             scope={rendered.table ? "table cells" : view?.matrix && drawMode === "matrix" ? "matrix cells" : view?.terrain ? "view nodes" : "drawn nodes and edges"}
             stale={rendered.table ? rendered.table.rows.flatMap(row=>rendered.nodes.find(n=>n.id===row.nodeId)?.stale ? row.cells.filter(c=>c.status!=="unknown") : []).length : view?.matrix && drawMode === "matrix" ? eff.view.matrix!.cells.filter((c) => eff.stale.has(cellKey(c))).length : view?.terrain ? eff.view.nodes.filter((n) => eff.stale.has(n.id) || changedIds.has(n.id)).length : [...rendered.nodes, ...rendered.edges].filter((n) => n.stale).length} />}
+          {view?.evidenceTrace && <EvidencePanel trace={view.evidenceTrace} onOpen={(r,id)=>void openEvidenceSource(r,id)} />}
           {view?.evidenceInvestigation && <p role="status" aria-label="Investigation coverage">
             {view.evidenceInvestigation.outcome === "supported" ? "Source trace available" : view.evidenceInvestigation.outcome === "partial" ? "Partial source trace" : view.evidenceInvestigation.outcome === "ambiguous" ? "Subject needs clarification" : "Subject not resolved"}
             {" · "}{view.evidenceInvestigation.binding.roots.length} bound subject(s)
@@ -1098,7 +1110,7 @@ export function App() {
       </main>
 
       <aside id="workspace-right-panel" className="right" data-focus-open={focusPanel ? "true" : undefined} data-has-evidence={code || drawer ? "true" : "false"}>
-        <ChatPanel onNewContext={() => { resetResponse(); setView(null); setSelection([]); setCellSel([]); setCode(null); setDrawer(null); setBusy(null); chatRestoreGeneration.current++; setChatSessionId(uuid()); setMessages([]); setError(null); setNotice("Started a new conversation context."); }} onShowResult={showChatResult} onContinueInvestigation={(id) => void send(`continue investigation ${id}`)} onShowAlt={(alt) => {
+        <ChatPanel onOpenEvidence={(r,id)=>void openEvidenceSource(r,id)} onNewContext={() => { resetResponse(); setView(null); setSelection([]); setCellSel([]); setCode(null); setDrawer(null); setBusy(null); chatRestoreGeneration.current++; setChatSessionId(uuid()); setMessages([]); setError(null); setNotice("Started a new conversation context."); }} onShowResult={showChatResult} onContinueInvestigation={(id) => void send(`continue investigation ${id}`)} onShowAlt={(alt) => {
           const current = responseWorkspace.current();
           if (alt.response && current?.manifest.responseId === alt.response.responseId) { void responseWorkspace.generate(alt.response.viewId); return; }
           void askForm(alt.prompt ?? alt.question, alt.form, alt.response?.subject, alt.kind, `Show as ${alt.name}`, alt.question, alt.chartCode, alt.response);

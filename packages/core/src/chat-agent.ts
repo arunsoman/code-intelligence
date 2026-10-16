@@ -1,3 +1,4 @@
+import { traceEntities } from "./evidence-trace.ts";
 import { basename } from "node:path";
 import { converseResilient } from "./model-deadline.ts";
 import { reviewAnswer, reviewTimeEstimate, unavailableReview, unresolvedMessage } from "./answer-validation.ts";
@@ -50,6 +51,8 @@ function systemPrompt(): string {
   return [
     "You answer a developer's questions about one indexed codebase by calling read-only tools, then calling `answer`.",
     "Rules:",
+    "- For questions about provenance or coverage, use evidence_of on a relevant element. It shows indexed support, not an implementation read; use ir_of/read_code for behavioral claims.",
+    "- Source citations and analyzer provenance describe static observations. Partial coverage cannot establish exhaustive absence or runtime execution; answer review remains separate.",
     "- Everything you state must come from a tool result in this conversation. Never rely on what you assume the code does.",
     "- Bodies are IR-first, source-on-demand: ir_of renders an element's semantic IR — its calls, guards, loops and assignments, with literal values blanked. It is the default read for what a function or method does, and it is valid evidence to cite. Escalate to read_code only when the answer depends on literal values (strings, numbers, config constants), exact types, comments or line-level detail; then say in the answer which claims rest on the IR alone.",
     "- For 'is this the same as', 'where else does this logic live', 'how many implementations' questions, call similar_of on one representative (it finds structurally nearest symbols across renames and languages) and concept_of for the family card when a concept id appears.",
@@ -379,7 +382,7 @@ export async function runChatAgent(svc: Service, ctx: CallContext, rev: Revision
   if (primaryIndex > 0) env.results.unshift(env.results.splice(primaryIndex, 1)[0]);
   return {
     ok: true,
-    value: { kind: "analysis", validation, results: env.results, message, ...(trace.length ? { thinking: [`${model.name} called:`, ...trace.map((t, i) => `${i + 1}. ${t}`)].join("\n") } : {}) },
+    value: { kind: "analysis", evidenceTrace:traceEntities(svc.store,rev.id,cited.length?cited:[...env.seen.keys()],ev=>svc.resolveEvidence(rev,ev)), validation, results: env.results, message, ...(trace.length ? { thinking: [`${model.name} called:`, ...trace.map((t, i) => `${i + 1}. ${t}`)].join("\n") } : {}) },
     metadata: { requestId: ctx.requestId, revision: rev.id, completeness: validation.status === "SUPPORTED" && answerState.final && !stopped && !unreadSource && !env.results.some((r) => r.view?.gaps.length) ? "COMPLETE" : "PARTIAL", warnings: [...new Set(warnings)] },
   };
 }

@@ -953,3 +953,8 @@ main { overflow: auto; }
 .re-probe-result { border-top: 1px dashed var(--line); padding-top: 8px; display: grid; gap: 6px; }
 .re-probe-claims { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 13px; }
 @media (prefers-reduced-motion: reduce) { .re-drop, .re-tabs [role="tab"] { transition: none; } }
+
+.evidence-panel { margin: .6rem 0; padding: .6rem; border: 1px solid var(--line, #64748b); border-radius: .4rem; overflow-wrap: anywhere; }
+.evidence-panel summary { cursor: pointer; }
+.evidence-panel[open] { max-height: 28rem; overflow: auto; }
+.evidence-panel li { margin: .3rem 0; }

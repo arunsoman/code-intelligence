@@ -1,3 +1,4 @@
+import { traceEntities, viewEvidence } from "./evidence-trace.ts";
 // Free-text answering: ask/investigate/converse and the chart/explain machinery behind them.
 import { summarizeValidation } from "./answer-validation.ts";
 import { parseCompoundQuestion, planCompoundQuestion, evaluateCompoundQuestion, compoundAnswer } from "./compound-query.ts";
@@ -134,6 +135,8 @@ export class Answering {
         if(issue)return fail(ctx,{code:issue==="access"?"FORBIDDEN":"STALE_REVISION",message:"Source or access changed while this chart was generated. Re-index and ask again.",retryable:false});
       }
       result.value.view = bindSelectedChart(result.value.view, req.chartCode);
+      const traceRevision=this.store.revision(result.value.view.revision);
+      if(traceRevision)viewEvidence(this.store,result.value.view,ev=>this.svc.resolveEvidence(traceRevision,ev));
       result.value.view.params = { ...result.value.view.params, scope: req.scope ?? (req.overview ? "repository" : "subject"), ...(req.subject ? { subject: req.subject } : {}) };
       return { ...result, value: { ...result.value, manifest: this.manifestFor([result.value.view], req.question.trim(), { scope: req.scope ?? (req.overview ? "repository" : "subject"), subject: req.subject, seeds: req.seeds }, req.answerContext) } };
     });
@@ -788,6 +791,15 @@ export class Answering {
         const result = await this.converseSession(ctx, req);
         if (result.ok && (result.value.kind === "view" || result.value.kind === "analysis")) {
           const views = result.value.kind === "view" ? [result.value.view] : result.value.results.flatMap((r) => r.view ? [r.view] : []);
+          const evidenceRev=this.store.revision(result.metadata.revision??views[0]?.revision??"");
+          if(evidenceRev){
+            for(const view of views){const ownRev=this.store.revision(view.revision);if(ownRev)viewEvidence(this.store,view,ev=>this.svc.resolveEvidence(ownRev,ev));else delete view.evidenceTrace;}
+            const inspected=result.value.evidenceTrace?.items.flatMap(i=>i.entityIds)??views.flatMap(v=>v.nodes.flatMap(n=>n.entityRefs));
+            result.value.evidenceTrace=traceEntities(this.store,evidenceRev.id,inspected,ev=>this.svc.resolveEvidence(evidenceRev,ev));
+          } else {
+            delete result.value.evidenceTrace;
+            for (const view of views) delete view.evidenceTrace;
+          }
           if (views.length) {
             const seeds = views.flatMap(v => typeof v.params?.answerEntityRefs === "string" ? v.params.answerEntityRefs.split("\n").filter(Boolean) : []);
             result.value.manifest = this.manifestFor(views, result.value.kind === "analysis" ? result.value.validation?.question ?? req.text : req.text, seeds.length ? { scope: "subject", seeds } : undefined, result.value.message);

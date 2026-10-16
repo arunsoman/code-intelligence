@@ -63,6 +63,7 @@ test("concurrent edits: a stale version is a conflict that says what changed, ed
 test("denied recipient: sharing cannot give anyone source access, a partly-denied recipient sees a cut-down copy, and edits about code they cannot read are refused", async () => {
   const w = await world();
   const { collab, ws, view, root } = w;
+  view.evidenceTrace = { version: "evidence-trace.v1", revision: w.revision, coverage: "PARTIAL", provenance: "UNAVAILABLE", truncated: false, items: [], limitations: ["private cached source path"] };
   assert.ok(ap(collab, "alice", ws, { kind: "SET_VIEW", view }, 0).ok);
   assert.ok(ap(collab, "alice", ws, { kind: "PIN", entityId: "function:src/ledger/ledger.ts#adjustBalance", on: true }, 1).ok);
   assert.ok(ap(collab, "alice", ws, { kind: "NOTE", entityId: "function:src/ledger/ledger.ts#adjustBalance", text: "not transactional" }, 2).ok);
@@ -76,6 +77,8 @@ test("denied recipient: sharing cannot give anyone source access, a partly-denie
   assert.ok(collab.share("alice", { workspaceId: ws, principalId: "bob", role: "editor" }).ok);
   const bob = collab.read("bob", ws) as any;
   assert.ok(bob.ok);
+  assert.equal(bob.workspace.state.view.evidenceTrace, undefined);
+  assert.ok(!JSON.stringify(bob).includes("private cached source path"));
   assert.ok(bob.workspace.state.view.nodes.length > 0 && bob.workspace.state.view.nodes.every((n: any) => !n.file.startsWith("src/ledger")));
   assert.ok(bob.workspace.state.view.edges.every((e: any) => bob.workspace.state.view.nodes.some((n: any) => n.id === e.fromNodeId)));
   assert.deepEqual(bob.workspace.state.pins, []); assert.deepEqual(bob.workspace.state.notes, {});

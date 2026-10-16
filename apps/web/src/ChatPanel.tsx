@@ -1,7 +1,8 @@
+import { EvidencePanel } from "./EvidencePanel.tsx";
 import { useEffect, useRef, useState } from "react";
 import { buttonFeedback } from "./button.ts";
 import { CHAT_QUESTION_MAX_CHARS } from "@cie/schema";
-import type { AnswerValidationSummary, ChatAnalysisResult } from "@cie/schema";
+import type { EvidenceTrace, AnswerValidationSummary, ChatAnalysisResult } from "@cie/schema";
 
 /** One alternative view the router considered for the same question. */
 export interface MessageAlt { form: string; kind?: string; chartCode?: string; name: string; question: string; prompt?: string;
@@ -9,6 +10,7 @@ export interface MessageAlt { form: string; kind?: string; chartCode?: string; n
 }
 
 export interface Message {
+  evidenceTrace?: EvidenceTrace;
   id?: string; role: "user" | "assistant"; text: string; at: string; error?: boolean; results?: ChatAnalysisResult[]; validation?: AnswerValidationSummary;
   /** Other chart forms the router considered equally valid for the same question. */
   alternatives?: MessageAlt[];
@@ -27,9 +29,10 @@ interface Props {
   /** Show the same question rendered as a different chart form. */
   onShowAlt?: (alt: MessageAlt) => void;
   onContinueInvestigation?: (id: string) => void;
+  onOpenEvidence?: (revision:string,entityId:string)=>void;
 }
 
-export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend, onDropReferent, onNewContext, seed, onShowResult, onCreateProvider, onShowAlt, onContinueInvestigation }: Props) {
+export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend, onDropReferent, onNewContext, seed, onShowResult, onCreateProvider, onShowAlt, onContinueInvestigation, onOpenEvidence }: Props) {
   const [text, setText] = useState("");
   const [referentsExpanded, setReferentsExpanded] = useState(false);
   const end = useRef<HTMLDivElement>(null);
@@ -52,6 +55,7 @@ export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend,
           <div key={i} className={`msg ${m.role} ${m.error ? "err" : ""}`}>
             <span className="who">{m.role === "user" ? "You" : "Assistant"}</span>
             <p>{m.text}</p>
+            {m.evidenceTrace && <EvidencePanel trace={m.evidenceTrace} onOpen={onOpenEvidence} />}
             {m.thinking && (
               <details className="thinking">
                 <summary>How this was found</summary>

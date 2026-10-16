@@ -4,6 +4,7 @@ import type { ApiResult, CallContext, Claim, SavedState } from "@cie/schema";
 import type { CommitReceipt } from "./journal.ts";
 import { actor, fail, ok } from "./service.ts";
 import type { Service } from "./service.ts";
+import { viewEvidence } from "./evidence-trace.ts";
 
 export class SavedWorkspaces {
   declare readonly svc: Service;
@@ -35,6 +36,12 @@ export class SavedWorkspaces {
     if (owner && this.store.isRevoked(owner.repoRoot)) return fail(ctx, { code: "FORBIDDEN", message: "access to the source this was saved against was withdrawn", retryable: false });
     const state: SavedState = JSON.parse(row.json);
     const rev = row.revision ? this.store.revision(row.revision) : null;
+    // Stored presentation metadata is never authority after source/access changes.
+    if (state.view) {
+      delete state.view.evidenceTrace;
+      if (rev && state.view.revision === rev.id) viewEvidence(this.store, state.view, ev => this.svc.resolveEvidence(rev, ev));
+    }
+    for (const message of state.messages ?? []) delete (message as typeof message & { evidenceTrace?: unknown }).evidenceTrace;
     const ids = new Set<string>();
     for (const n of state.view?.nodes ?? []) n.evidenceIds.forEach((i) => ids.add(i));
     for (const e of state.view?.edges ?? []) e.evidenceIds.forEach((i) => ids.add(i));

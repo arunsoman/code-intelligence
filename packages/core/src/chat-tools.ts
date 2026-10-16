@@ -3,6 +3,7 @@
 // tool is one entry here, not another rule in a prompt and another branch in a validator. Every tool reports what it saw in
 // a short text the model reads next, and the ids of the code elements in it — the only ids an answer may cite.
 import { createHash } from "node:crypto";
+import {traceEntities} from "./evidence-trace.ts";
 import { readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { CallContext, ChatAnalysisResult, Entity } from "@cie/schema";
@@ -551,6 +552,18 @@ export const CHAT_TOOLS: ChatTool[] = [
       env.svc.store.audit(env.ctx.actor.principalId, "chat.similar_to", env.rev.id, { anchor: anchor.entityId, hits: hits.length } as Record<string, unknown>);
       const lines = hits.map((h) => `  ${Math.round(h.similarity * 100)}% [${h.entityId}] ${h.name} (${h.file})`);
       return [`Resolved "${name}" to [${anchor.entityId}]. ${hits.length} structural neighbor(s) (similarity is approximate, not identity):`, ...lines].join("\n");
+    },
+  },
+  {
+    name: "evidence_of",
+    description: "Inspect indexed source links, analyzer provenance and partial coverage for one element. This does not read its implementation or prove runtime behavior; use ir_of/read_code for behavior.",
+    parameters: obj({entity:str("Element id or name")},["entity"]),
+    run: async (env,{entity}) => {
+      const e=entityFor(env,String(entity));if(!e)return "No accessible indexed element matches that name.";
+      note(env,e);
+      const trace=traceEntities(env.svc.store,env.rev.id,[e.entityId],ev=>env.svc.resolveEvidence(env.rev,ev));
+      return [`Indexed evidence for [${e.entityId}]. Coverage: PARTIAL. Analyzer provenance: ${trace.provenance}.`,
+        ...trace.limitations,...trace.items.flatMap(i=>i.sources.map(source=>`${i.label}: ${source.file} bytes ${source.startByte}-${source.endByteExclusive}${source.producer?` (${source.producer.id} v${source.producer.version})`:" (producer not recorded)"}`))].join("\n");
     },
   },
   {

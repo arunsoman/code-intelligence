@@ -102,6 +102,8 @@ export class Collab {
       const keep = new Set<string>();
       const nodes = w.state.view.nodes.filter((n) => { const d = acc.denied(n.file); if (d) withheld++; else keep.add(n.id); return !d; });
       const view: ViewSpec = { ...w.state.view, nodes, edges: w.state.view.edges.filter((e) => keep.has(e.fromNodeId) && keep.has(e.toNodeId)), groups: w.state.view.groups.map((g) => ({ ...g, childNodeIds: g.childNodeIds.filter((c) => keep.has(c)) })), hidden: [] };
+      // Producer/source metadata cached by another principal is not an authorized projection.
+      delete view.evidenceTrace;
       // The projected findings assert things about named code: any finding resting on code the reader
       // cannot see is dropped with them, counted in the withheld tally.
       if (w.state.view.findings?.length) {

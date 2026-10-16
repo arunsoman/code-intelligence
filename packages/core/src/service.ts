@@ -2246,10 +2246,16 @@ export class Service {
     const unavailable = (): ApiResult<EntityCode> => ok(ctx, { ...base, file: e.file, startLine: 0, endLine: 0, text: "", truncated: false, state: "UNAVAILABLE" as const }, { revision: rev.id });
     const span = e.spans[0];
     if (!span) return unavailable();
+    const sourceAccess=policyFor(this.store,rev.repoRoot);
+    if(sourceAccess.denied(span.sourceId))return ok(ctx,{...base,file:"(not shown)",startLine:0,endLine:0,text:"",truncated:false,state:"WITHHELD" as const},{revision:rev.id});
     const path = resolve(rev.repoRoot, span.sourceId), rel = relative(rev.repoRoot, path);
     if (rel.startsWith("..") || isAbsolute(rel) || !existsSync(path)) return unavailable();
     try {
-      const buf = readFileSync(path);
+      const actual=realpathSync(path),actualRelative=relative(realpathSync(rev.repoRoot),actual).replaceAll("\\","/");
+      if(actualRelative===".."||actualRelative.startsWith("../")||isAbsolute(actualRelative))return unavailable();
+      if(sourceAccess.denied(actualRelative))return ok(ctx,{...base,file:"(not shown)",startLine:0,endLine:0,text:"",truncated:false,state:"WITHHELD" as const},{revision:rev.id});
+      const buf = readFileSync(actual);
+      if(!Number.isSafeInteger(span.startByte)||!Number.isSafeInteger(span.endByteExclusive)||span.startByte<0||span.endByteExclusive<span.startByte||span.endByteExclusive>buf.length)return unavailable();
       const stale = createHash("sha256").update(buf).digest("hex") !== span.contentHash;
       const full = buf.subarray(span.startByte, span.endByteExclusive).toString("utf8");
       const lines = full.split("\n");
@@ -2393,7 +2399,13 @@ export class Service {
     const rel = relative(rev.repoRoot, path);
     if (rel.startsWith("..") || isAbsolute(rel)) return { ...base, state: "UNAVAILABLE" };
     let buf: Buffer;
-    try { buf = readFileSync(path); } catch { return { ...base, state: "UNAVAILABLE" }; }
+    try {
+      const actual=realpathSync(path),actualRelative=relative(realpathSync(rev.repoRoot),actual).replaceAll("\\","/");
+      if(actualRelative===".."||actualRelative.startsWith("../")||isAbsolute(actualRelative))return {...base,state:"UNAVAILABLE"};
+      if(acc.denied(actualRelative))return {id:ev.id,class:ev.class,file:"(not shown)",startByte:0,endByte:0,startLine:0,endLine:0,snippet:"",state:"ACCESS_REVOKED"};
+      buf = readFileSync(actual);
+    } catch { return { ...base, state: "UNAVAILABLE" }; }
+    if(!Number.isSafeInteger(span.startByte)||!Number.isSafeInteger(span.endByteExclusive)||span.startByte<0||span.endByteExclusive<span.startByte||span.endByteExclusive>buf.length)return {...base,state:"UNAVAILABLE"};
     const stale = createHash("sha256").update(buf).digest("hex") !== span.contentHash;
     // Offsets are bytes; slice on the byte buffer, then compute lines from the prefix.
     const startLine = buf.subarray(0, span.startByte).toString("utf8").split("\n").length;
