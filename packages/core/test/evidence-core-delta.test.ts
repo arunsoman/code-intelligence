@@ -71,3 +71,15 @@ test("incomplete support links cannot authorize delta reuse",async t=>{
   store.db.prepare("delete from evidence_core_links where rowid=(select rowid from evidence_core_links where revision=? limit 1)").run(batch.revision);
   assert.equal(store.evidenceCoreBaseVersion(batch.revision),undefined);
 });
+
+test("combined delta metadata byte limit rolls back the entire revision",async t=>{
+  const {root,worker,store,batch,base}=await boot(t);
+  writeFileSync(join(root,"a.ts"),'export function first(){return 999;}\n');
+  const delta=await worker.index(root,120000,undefined,base);
+  // Fault injection expands persisted metadata after validation, exercising the
+  // whole-revision guard rather than the incoming JSON-size guard.
+  store.db.exec(`create trigger expand_metadata after insert on evidence_core_coverage begin update evidence_core_coverage set json=json_set(json,'$.padding',hex(zeroblob(9000000))) where revision=new.revision and id=new.id;end;`);
+  assert.throws(()=>store.putDelta(delta),/EVIDENCE_CORE_RESOURCE_LIMIT/);
+  assert.equal(store.revision(delta.revision),null);
+  assert.equal(store.evidenceCoreBaseVersion(batch.revision),"2");
+});

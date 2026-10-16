@@ -1,4 +1,4 @@
-import { validatedCore, insertCore, copyCoreDelta, evidenceCoreConfig, EVIDENCE_CORE_PRODUCER_VERSION } from "./evidence-core.ts";
+import { validatedCore, insertCore, enforceCoreRevisionLimits, copyCoreDelta, evidenceCoreConfig, EVIDENCE_CORE_PRODUCER_VERSION } from "./evidence-core.ts";
 import { policyFor } from "./access.ts";
 import type { CoverageRecordV1, EvidenceLinkV1, ProducerRunV1 } from "@cie/schema";
 import type { EvidenceSnapshot } from "@cie/schema";
@@ -208,11 +208,11 @@ export class Store {
     const row: RevisionRow = { id: b.revision, repoRoot: b.repoRoot, gitHead: b.gitHead, createdAt: new Date().toISOString(), analyzerVersion: b.analyzerVersion, diagnostics: b.diagnostics, fileCount: files };
     this.tx(() => {
       const exists = this.db.prepare("select 1 from revisions where id = ?").get(b.revision);
-      if (exists) { insertCore(this.db, b.revision, core); return; } // content-addressed revision: identical content already indexed
+      if (exists) { insertCore(this.db, b.revision, core); if(core) enforceCoreRevisionLimits(this.db,b.revision); return; } // content-addressed revision: identical content already indexed
       this.db.prepare("insert into revisions values (?,?,?,?,?,?,?)").run(row.id, row.repoRoot, row.gitHead, row.createdAt, row.analyzerVersion, JSON.stringify(row.diagnostics), files);
       this.insertRows(b.revision, b, this.ownerOf(b));
       this.insertManifest(b.revision, b.manifest);
-      insertCore(this.db, b.revision, core);
+      insertCore(this.db, b.revision, core); if(core) enforceCoreRevisionLimits(this.db,b.revision);
       this.insertConceptClusters(b.revision, b.conceptClusters);
     });
     clearHistoryCache(b.repoRoot); // a newly indexed revision means the repository may have advanced
@@ -259,6 +259,7 @@ export class Store {
         // Resolve evidence sources from the resulting revision, not just changed-file entities.
         const core = validatedCore({...b, entities:this.entities(nu)});
         insertCore(d,nu,core,false);
+        enforceCoreRevisionLimits(d,nu);
         d.prepare("update revisions set diagnostics=? where id=?").run(JSON.stringify(b.diagnostics),nu);
       }
       const files = (d.prepare("select count(*) n from entities where revision = ? and kind = 'file'").get(nu) as { n: number }).n;

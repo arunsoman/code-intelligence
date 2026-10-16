@@ -11,6 +11,11 @@ export function evidenceCoreIdentity(kind: string, value: Canon): string {
   const name = `cie.evidence-core.${kind}`;
   return `${name}@1:${canonDigest(name,"1",canonicalize(value))}`;
 }
+/** Cache canonical sort keys per operation, never across mutable batches. */
+function sortAssociations<T extends Canon>(rows: T[]): T[] {
+  return rows.map(value => ({value,key:Buffer.from(canonicalize(value))}))
+    .sort((a,b)=>Buffer.compare(a.key,b.key)).map(row=>row.value);
+}
 /** Sidecar validation is independent of model output. No sidecar can authorize source access. */
 export function validatedCore(batch: AnalysisBatch): EvidenceCoreBatchV1 | undefined {
   const config = evidenceCoreConfig();
@@ -60,9 +65,9 @@ export function validatedCore(batch: AnalysisBatch): EvidenceCoreBatchV1 | undef
     for (const run of runs.values()) {
       const associations = associationsByRun.get(run.id) ?? [];
       // Bytewise order, independent of host locale.
-      associations.sort((a,b) => Buffer.compare(Buffer.from(canonicalize(a)),Buffer.from(canonicalize(b))));
+      const sorted = sortAssociations(associations);
       const file = run.scope.kind === "FILE" ? run.scope.file : "";
-      if (run.outputDigest !== evidenceCoreIdentity("output", [batch.manifest?.[file] ?? null,associations])) throw new Error("output binding");
+      if (run.outputDigest !== evidenceCoreIdentity("output", [batch.manifest?.[file] ?? null,sorted])) throw new Error("output binding");
     }
     return core;
   } catch {
@@ -82,8 +87,8 @@ export function insertCore(db: DatabaseSync, revision: string, core: EvidenceCor
     const file=r.scope.kind === "FILE" ? r.scope.file : "";
     const digest=(manifestQuery.get(revision,file) as {digest:string}|undefined)?.digest??null;
     const associations=grouped.get(r.id)??[];
-    associations.sort((a,b)=>Buffer.compare(Buffer.from(canonicalize(a)),Buffer.from(canonicalize(b))));
-    if(r.outputDigest!==evidenceCoreIdentity("output",[digest,associations]))throw new Error("EVIDENCE_CORE_PERSISTED_BINDING");
+    const sorted = sortAssociations(associations);
+    if(r.outputDigest!==evidenceCoreIdentity("output",[digest,sorted]))throw new Error("EVIDENCE_CORE_PERSISTED_BINDING");
     if(r.scope.kind === "REPOSITORY") {
       const manifest=Object.fromEntries((db.prepare("select file,digest from rev_files where revision=?").all(revision) as {file:string;digest:string}[]).map(row=>[row.file,row.digest]));
       if(r.inputDigest!==evidenceCoreIdentity("input",manifest))throw new Error("EVIDENCE_CORE_PERSISTED_BINDING");
@@ -125,4 +130,15 @@ export function copyCoreDelta(db: DatabaseSync, old: string, revision: string): 
   const expected=db.prepare(`select count(*) n from evidence_core_links l join evidence_core_producer_runs p on p.revision=? and p.id=l.producer_run_id where l.revision=?`).get(revision,old) as {n:number};
   const actual=db.prepare("select count(*) n from evidence_core_links where revision=?").get(revision) as {n:number};
   if(expected.n!==actual.n)throw new Error("EVIDENCE_CORE_DELTA_ORPHAN");
+}
+
+/** Bound the whole revision, including provenance copied from its base. */
+export function enforceCoreRevisionLimits(db: DatabaseSync, revision: string): void {
+  let bytes = 0;
+  for (const table of ["evidence_core_producer_runs","evidence_core_coverage","evidence_core_links"]) {
+    const row = db.prepare(`select count(*) n, coalesce(sum(length(cast(${table === "evidence_core_links" ? "json_array(subject_kind,subject_id,evidence_id,producer_run_id,role)" : "json"} as blob))),0) bytes from ${table} where revision=?`).get(revision) as {n:number;bytes:number};
+    if(row.n > 100000) throw new Error("EVIDENCE_CORE_RESOURCE_LIMIT: revision row cap");
+    bytes += row.bytes;
+  }
+  if(bytes > 16 * 1024 * 1024) throw new Error("EVIDENCE_CORE_RESOURCE_LIMIT: revision byte cap");
 }
