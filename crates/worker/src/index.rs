@@ -3829,7 +3829,10 @@ mod delta_tests {
     }
     fn base_of(b: &AnalysisBatch) -> BaseRef {
         BaseRef {
-            evidence_core_version: None,
+            // Mirror what a real full run produced: under evidence-core mode the base carries
+            // this producer version (or the worker refuses to reuse it and re-indexes from scratch).
+            evidence_core_version: crate::evidence_core::enabled().unwrap_or(false)
+                .then(|| crate::producer_registry::PRODUCER_VERSION.to_string()),
             revision: b.revision.clone(),
             analyzer_version: b.analyzer_version.clone(),
             digests: b
