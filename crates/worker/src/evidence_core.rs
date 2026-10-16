@@ -57,7 +57,7 @@ pub struct CoverageRecordV1 {
 pub fn enabled() -> Result<bool, String> {
     match std::env::var("CIE_EVIDENCE_CORE_MODE")
         .as_deref()
-        .unwrap_or("off")
+        .unwrap_or("on")
     {
         "off" => Ok(false),
         "shadow" | "on" => Ok(true),

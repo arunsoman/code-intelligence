@@ -7,7 +7,7 @@ export function evidenceCoreLimits() {
   return {rows:read("CIE_EVIDENCE_CORE_MAX_ROWS",100000,1000000),bytes:read("CIE_EVIDENCE_CORE_MAX_BYTES",16*1024*1024,512*1024*1024),chunkBytes:read("CIE_EVIDENCE_CORE_CHUNK_BYTES",8*1024*1024,32*1024*1024),chunkRows:read("CIE_EVIDENCE_CORE_CHUNK_ROWS",16384,100000)};
 }
 export function evidenceCoreConfig() {
-  const mode = process.env.CIE_EVIDENCE_CORE_MODE ?? "off", strict = process.env.CIE_EVIDENCE_CORE_STRICT ?? "0", gates = process.env.CIE_EVIDENCE_CORE_COVERAGE_GATES ?? "0";
+  const mode = process.env.CIE_EVIDENCE_CORE_MODE ?? "on", strict = process.env.CIE_EVIDENCE_CORE_STRICT ?? "0", gates = process.env.CIE_EVIDENCE_CORE_COVERAGE_GATES ?? "0";
   if (!["off","shadow","on"].includes(mode) || !["0","1"].includes(strict) || gates !== "0") throw new Error("EVIDENCE_CORE_CONFIG: invalid flags or coverage gates not implemented");
   const transport=process.env.CIE_EVIDENCE_CORE_TRANSPORT??"inline";
   if(!["inline","stream"].includes(transport))throw new Error("EVIDENCE_CORE_CONFIG: invalid transport");
