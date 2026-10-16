@@ -596,6 +596,28 @@ fn main() {
         .map(|a| a.to_string_lossy().to_string())
         .collect();
     if !argv.is_empty() {
+        if argv[0] == "semanticLanguages" || argv[0] == "semanticLower" {
+            let result = (|| -> Result<Value, String> {
+                let registry = analysis_foundation::languages::Registry::builtins()?;
+                if argv[0] == "semanticLanguages" {
+                    if argv.len() != 1 { return Err("semanticLanguages takes no arguments".into()); }
+                    return serde_json::to_value(registry.metadata()).map_err(|e| e.to_string());
+                }
+                if argv.len() != 2 { return Err("semanticLower requires one request JSON file".into()); }
+                let request: analysis_foundation::languages::Request = serde_json::from_slice(
+                    &std::fs::read(&argv[1]).map_err(|e| e.to_string())?
+                ).map_err(|e| e.to_string())?;
+                serde_json::to_value(registry.lower(&request)?).map_err(|e| e.to_string())
+            })();
+            match result {
+                Ok(result) => println!("{result}"),
+                Err(message) => {
+                    println!("{}", json!({"error":{"code":"SEMANTIC_ADAPTER_ERROR","message":message}}));
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
         if argv[0] == "analysisFoundation" {
             let result = (|| -> Result<_, String> {
                 if argv.len() != 2 { return Err("analysisFoundation requires exactly one snapshot JSON file".into()); }

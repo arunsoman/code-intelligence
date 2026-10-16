@@ -22,6 +22,7 @@ conformance pathway. This is not a retrospective audit of all CIE features.
 | --- | --- | --- | --- | --- |
 | P01 | Initial Rust operation-inventory foundation | Delivered as `cie-rust-analysis-foundation.patch`, base `4a748fd` | Local implementation; upstream merge not checked; standalone worker command only | 164 workspace tests passed, including 13 new tests; release build and crate Clippy passed |
 | P02 | Semantic IR schema and trust boundary, F019–F028 | Delivered as `cie-p02-semantic-ir.patch`, based on P01 / local baseline `3d13731` | Library only; no source adapter or application switch | 21 new semantic IR tests; 185 workspace tests passed; release build and crate Clippy passed |
+| P02a | Default Java/TS/JS adapters and automatic file discovery, F172–F180 | Delivered as `cie-default-language-adapters.patch`, after P02 / local base `48f1ba2` | Standalone library/worker; literal-return subset only | 200 workspace tests passed, source execution oracles and file-only discovery smoke passed |
 | P03–P19 | Planned below | Pending | Pending | Pending |
 
 P01 code: `crates/analysis-foundation`; worker command: `analysisFoundation`.
@@ -39,10 +40,12 @@ Missing code is unknown, not pure behavior. Potential effects are not guaranteed
 effects. A call is not evidence of successful execution or a committed outcome.
 LLM labels cannot change facts, membership, contracts or proof status.
 
-The initial language sequence is proposed: Python for the illustrative anomaly
-suite, then Java/Spring for the wallet case, then TypeScript/JavaScript, Rust and
-Go. Existing language support is not evidence that the new semantic adapters are
-complete. Each language gets an explicit construct/capability matrix.
+Java, TypeScript and JavaScript are registered by default in the new semantic
+pathway (P02a), with literal-return lowering and explicit opaque regions. P03
+expands those adapters; Python is an additional adapter rather than a prerequisite.
+Existing broad indexing support does not imply complete new semantic coverage.
+Each language keeps a construct/capability matrix; Java/Spring and dynamic/async
+TS/JS semantics remain P09/P17 work.
 
 ## P01 — Initial reusable Rust boundary: delivered
 
@@ -90,7 +93,9 @@ environment changes the relevant digest; ordered semantics survive round trips.
 
 ## P03 — First source adapter and translation-fidelity suite
 
-Depends on P02. Initial narrow Python subset, with unsupported constructs visible.
+Depends on P02/P02a. Expand the default Java/TS/JS adapters first; add Python
+through the same file-discovered interface. Literal-return lowering already exists
+as a narrow partial implementation; the full task scopes below remain open.
 
 - [ ] F029 Lower declarations, parameters, constants, expressions and returns.
 - [ ] F030 Lower assignment, conditionals and supported loop forms.
@@ -367,6 +372,26 @@ Depends on the capabilities selected for release; broader research can remain ga
 Acceptance: no “complete extraction” claim without a defined construct universe
 and measured accounting; no “verified” claim without its model and assumptions.
 
+## P02a — Default languages and file-discovered extension: delivered
+
+These additional tasks record the default-language requirement added after P02.
+They do not close the broader adapter milestones prematurely.
+
+- [x] F172 Define a reusable adapter trait and conflict-checked extension registry.
+- [x] F173 Discover adapter source files automatically at Cargo build time.
+- [x] F174 Register Java by default using its actual parser grammar.
+- [x] F175 Register TypeScript and TSX by default with correct grammar selection.
+- [x] F176 Register JavaScript and JSX by default using the JavaScript grammar.
+- [x] F177 Lower the declared literal-return subset and preserve unsupported regions as gaps.
+- [x] F178 Compare selected Java/TS/JS literal results with independent Java/Node execution.
+- [x] F179 Expose adapter metadata and real-source lowering through worker commands.
+- [x] F180 Exercise file-only registration by adding/removing a probe adapter during a build.
+
+Acceptance evidence: `docs/testing/2026-10-16-default-language-adapters.md`.
+Contract and extension instructions: `docs/design/language-adapters.md`.
+No complete language semantics, source-level anomaly detection or answer routing
+is claimed. New grammar dependencies still need Cargo changes and semantic tests.
+
 ## Patch update template
 
 For each delivered patch append a ledger row with:
@@ -380,11 +405,12 @@ For each delivered patch append a ledger row with:
 
 ## Immediate next patch
 
-P03: first source adapter and translation-fidelity suite, F029–F038. P02 is
+P03: expand default Java/TS/JS source adapters and translation-fidelity suite,
+F029–F038; Python can be added independently. P02 is
 implemented in `semantic_ir`; its source hashes, schema vectors and graph checks
 establish model consistency, not translation correctness. P03 must prove the
 first adapter's fidelity before P06 can claim source-level anomaly detection.
 
 P02 evidence: `docs/testing/2026-10-16-p02-semantic-ir.md`; schema contract:
-`docs/design/semantic-ir-v1.md`. Current checklist: 28 complete, 143 pending;
+`docs/design/semantic-ir-v1.md`. Current checklist: 37 complete, 143 pending, 180 total;
 these counts are task accounting, not engineering-effort percentages.
