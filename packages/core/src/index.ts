@@ -39,3 +39,5 @@ export {
   saveValidationCertificate, saveExperimentPlan, saveTwinReport, saveRaceFinding, saveLockedPrediction, saveTwinStore, loadTwinStore,
 } from "./twin-persistence.ts";
 export { analyzeWaits, computeExclusiveCosts, reconstructCriticalPath } from "./defect-performance.ts";
+export { validateRecovery, RECOVERY_CASES } from "./recovery-validation.ts";
+export type { RecoveryAdapter, RecoverySession, RecoveryCase, RecoveryFault, RecoverySnapshot, RecoveryCaseResult, RecoveryValidationReport } from "./recovery-validation.ts";
