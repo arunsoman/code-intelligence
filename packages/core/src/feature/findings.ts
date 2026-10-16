@@ -62,7 +62,7 @@ export function applyBlocking(fs: SqliteFeatureStore, requestId: Id, actor: Id):
     const tasks = cur.tasks.map((t) => (blocked.has(t.id) ? (t.state === "READY" || t.state === "RUNNING" || t.state === "BLOCKED" ? { ...t, state: "BLOCKED" as const } : t) : (t.state === "BLOCKED" ? { ...t, state: "READY" as const } : t)));
     const wanted = openFindings({ ...cur, findings }).filter((f) => f.status === "CONFIRMED" || f.impact === "HIGH");
     const keep = cur.blockers.filter((b) => b.kind !== "FINDING" || wanted.some((f) => f.id === b.id));
-    const added = wanted.filter((f) => !keep.some((b) => b.id === f.id)).map((f) => ({ id: f.id, kind: "FINDING" as const, requirementIds: f.requirementIds, text: f.explanation.slice(0, 300), scope: f.scope }));
+    const added = wanted.filter((f) => !keep.some((b) => b.id === f.id)).map((f) => ({ id: f.id, kind: "FINDING" as const, requirementIds: f.requirementIds, text: f.explanation.slice(0, 300), scope: f.scope, ...(f.options.length ? { options: f.options } : {}) }));
     const blockers = [...keep, ...added];
     const same = JSON.stringify([tasks, blockers, findings]) === JSON.stringify([cur.tasks, cur.blockers, cur.findings ?? []]);
     const result = { blocked: tasks.filter((t) => t.state === "BLOCKED").map((t) => t.id), independent: tasks.filter((t) => t.state !== "BLOCKED" && t.state !== "COMPLETE" && t.state !== "CANCELLED").map((t) => t.id) };

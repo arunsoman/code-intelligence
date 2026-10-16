@@ -91,6 +91,20 @@ export function contextFor(request: FeatureRecord, max = 12, maxBytes = 24_000, 
   return out;
 }
 
+/** A greenfield request plans no edits to existing files and matches few, or irrelevant, files by keyword, so
+ * the generator would otherwise see nothing but the prompt (and correctly refuse to invent CREATE_FILE paths
+ * blind) or a handful of files with no bearing on the task (and has been observed rambling through its whole
+ * output budget trying to make sense of them instead of answering). Ground it in the repository's real layout
+ * (paths only, never content) so new files land beside existing conventions, in addition to whatever real
+ * context callers already found. */
+export function repositoryTreeListing(request: FeatureRecord, store?: Store): ContextArtifact | undefined {
+  const policy = store ? policyFor(store, request.repositoryId) : { denied: () => false };
+  const paths = walkFiles(request.repositoryId, (p) => SRC.test(p), 5000).filter((p) => !policy.denied(p)).sort();
+  if (!paths.length) return undefined;
+  const text = paths.slice(0, 3000).join("\n");
+  return { ref: { artifactId: "tree:repository", version: "1", locator: "#repository-file-listing", contentHash: rawHash(text) }, text };
+}
+
 /** Production generator: the model adapter's full pipeline (requirements, contract, edit plan), then exact edits from what it quoted. */
 export function adapterEdits(d: Pick<PipelineDeps, "fs" | "adapter" | "auth">, actor: Id, authorityPolicyHash: string): PipelineDeps["generateEdits"] {
   return async ({ request, context }) => {
@@ -225,6 +239,11 @@ export async function runFeaturePipeline(d: PipelineDeps, actor: Id, i: Pipeline
 
     // ---- generate edits and build the candidate
     const context = contextFor(req(), 12, 24000, d.store);
+    // Matched files can be few and keyword-irrelevant (a greenfield feature's only "related" hits are whatever
+    // pre-existing tests share a word with the prompt); the tree grounds placement either way, so it is added
+    // whether or not contextFor() found anything, not only when it found nothing.
+    const tree = repositoryTreeListing(req(), d.store);
+    if (tree) context.push(tree);
     let gen: Awaited<ReturnType<PipelineDeps["generateEdits"]>>;
     try { gen = await d.generateEdits({ request: req(), context }); } catch (e) { if (e instanceof FeatureError) { add(t, "GENERATE", "STOPPED", e.message); return finish("FAILED", e.message); } throw e; }
     add(t, "GENERATE", "DONE", `${gen.edits.length} edit(s) from ${gen.invocationIds.length} model call(s); ${context.length} file(s) shown`);

@@ -4,6 +4,7 @@ import { call } from "./api.ts";
 import { Loading } from "./Skeleton.tsx";
 import { buttonFeedback } from "./button.ts";
 import { useClickGuard } from "./use-click-guard.ts";
+import { trapTabKey, useDialogFocus } from "./useDialogA11y.ts";
 import { GLOSSARY, GROUP_H, KIND_INFO, KIND_LABEL, LEVEL_INFO, ROW, RULE_HINT, SEVERITIES, STATUS_INFO, type Row, type TriageStatus,
   filterFindings, flatten, groupByFile, groupByFile as groupsOf, locationOf, offsetOf, relative, rowLabel, sevClass, severityCounts, statusOf, truncateMiddle, windowOf } from "./defect-list.ts";
 
@@ -56,6 +57,7 @@ export function DefectPanel({ revision, onClose }: { revision: string; onClose: 
   const [narrow, setNarrow] = useState(() => window.matchMedia("(max-width: 900px)").matches);
 
   const listRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
   const savedScroll = useRef(0);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2500); };
 
@@ -101,12 +103,8 @@ export function DefectPanel({ revision, onClose }: { revision: string; onClose: 
     return () => { mq.removeEventListener("change", on); window.removeEventListener("resize", measure); };
   }, []);
 
-  // lock page scroll behind the dialog (UX-13)
-  useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = prev; };
-  }, []);
+  // lock page scroll behind the dialog, focus it on open, and restore focus to the trigger on close (UX-13, UX-02)
+  useDialogFocus(dialogRef);
 
   // job polling (detect) with progress (UX-06/15)
   useEffect(() => {
@@ -294,15 +292,15 @@ export function DefectPanel({ revision, onClose }: { revision: string; onClose: 
 
   return (
     <div className="modal-backdrop">
-      <section className={`modal defect dialog${narrow ? " narrow" : ""}`} role="dialog" aria-modal="true" aria-label="Defects and performance findings" tabIndex={-1}
-        onKeyDown={(e) => { if (e.key === "Escape") close(); }}
+      <section ref={dialogRef} className={`modal defect dialog${narrow ? " narrow" : ""}`} role="dialog" aria-modal="true" aria-label="Defects and performance findings" tabIndex={-1}
+        onKeyDown={(e) => { if (e.key === "Escape") { close(); return; } if (dialogRef.current) trapTabKey(dialogRef.current, e); }}
         style={{ width: `min(${width}px, 96vw)`, height: "min(92vh, 940px)" }}>
 
         {/* fixed header */}
         <header className="d-header">
           <div className="d-title-row">
             <h2 className="d-title">Defects &amp; performance</h2>
-            <button className="d-close" onClick={close} aria-label="Close Defects &amp; performance" title="Close (Esc)">✕</button>
+            <button className="d-close icon-close" onClick={close} aria-label="Close Defects &amp; performance" title="Close (Esc)">✕</button>
           </div>
           <div className="d-meta" role="status">
             <span title={meta?.repoRoot ?? revision}>{meta ? `${meta.repoRoot?.split("/").pop() ?? "?"} · ${(meta.gitHead ?? "").slice(0, 8) || "no git head"} · indexed ${relative(meta.createdAt)} · ${meta.files} files` : `revision ${truncateMiddle(revision, 26)}`}</span>

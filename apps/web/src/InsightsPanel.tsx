@@ -5,6 +5,7 @@ import { buttonFeedback } from "./button.ts";
 import { Loading } from "./Skeleton.tsx";
 import "./team.css";
 import { cumulative, plural, relative, truncateMiddle, windowByOffsets, windowOf } from "./defect-list.ts";
+import { trapTabKey, useDialogFocus } from "./useDialogA11y.ts";
 
 type Tab = "security" | "config" | "identity" | "changes" | "runtime" | "sources" | "team" | "evaluation";
 const TABS: { id: Tab; label: string }[] = [
@@ -89,12 +90,12 @@ export function InsightsPanel({ revision: openedRevision, view, onClose, onAsk, 
   // Same fixed-pane drawer the defect panel uses: fixed header + tabs, only the tab content scrolls.
   // The width preference is shared with the defect drawer (one drawer, one width habit).
   const persistWidth = (w: number) => { setWidth(w); try { localStorage.setItem("defect-panel-width", JSON.stringify(w)); } catch { /* ok */ } };
+  const dialogRef = useRef<HTMLElement>(null);
+  useDialogFocus(dialogRef);
   useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
     let live = true;
     void call<{ repoRoot: string; gitHead: string | null; createdAt: string; files: number }>("C13", "revisionStats", { revision }).then((r) => { if (live && r.ok) setMeta(r.value); });
-    return () => { live = false; document.body.style.overflow = prev; };
+    return () => { live = false; };
   }, [revision]);
   // Re-index the same repository without leaving the drawer; the drawer stays on its own revision until you reopen it.
   useEffect(() => {
@@ -125,19 +126,21 @@ export function InsightsPanel({ revision: openedRevision, view, onClose, onAsk, 
     if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && (e.target as HTMLElement).getAttribute("role") === "tab") {
       const i = TABS.findIndex((t) => t.id === tab), n = (i + (e.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length;
       setTab(TABS[n].id); requestAnimationFrame(() => document.getElementById(`tab-${TABS[n].id}`)?.focus());
+      return;
     }
+    if (dialogRef.current) trapTabKey(dialogRef.current, e);
   };
   const reindexFb = buttonFeedback({ className: "secondary small", busy: reindex.phase === "busy", skeleton: reindex.phase === "busy" });
   return (
     <div className="modal-backdrop">
-      <section className="modal insights dialog" role="dialog" aria-modal="true" aria-label="Insights" tabIndex={-1} onKeyDown={onKey}
+      <section ref={dialogRef} className="modal insights dialog" role="dialog" aria-modal="true" aria-label="Insights" tabIndex={-1} onKeyDown={onKey}
         style={maximized ? { width: "96vw", height: "96vh" } : { width: `min(${width}px, 96vw)`, height: "min(92vh, 940px)" }}>
         <header className="d-header">
           <div className="d-title-row">
             <h2 className="d-title">Insights</h2>
             <div className="d-title-actions">
               <button className="secondary small" aria-pressed={maximized} onClick={() => setMaximized((m) => !m)} title="Make the panel taller and wider, or return it to the saved size">{maximized ? "⤡ Restore" : "⤢ Maximize"}</button>
-              <button autoFocus className="d-close icon-close" onClick={onClose} aria-label="Close Insights" title="Close (Esc)">✕</button>
+              <button className="d-close icon-close" onClick={onClose} aria-label="Close Insights" title="Close (Esc)">✕</button>
             </div>
           </div>
           <div className="d-meta">

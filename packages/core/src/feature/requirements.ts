@@ -19,7 +19,11 @@ import type { SqliteFeatureStore } from "./store.ts";
 import type { Store } from "../store.ts";
 import type { Assumption, FeatureContract, FeatureContractDraft, FeatureRecord, Id, Outcome, Requirement, RequirementFinding, SourceRef } from "./types.ts";
 
-export const GROUNDING_THRESHOLD = 0.5;
+// An integer percentage (0..100), not the 0..1 ratio `grounding()` returns: the stored contract round-trips through
+// the strict canon parser (model.ts's jsonValue, used to build EDIT_PLAN's input) when a build or repair is proposed,
+// and that parser rejects any non-integer number (PF bug: a 0.98-style float on Requirement.grounding broke every
+// build attempt downstream of a real contract, instantly and silently, well after the contract was first created).
+export const GROUNDING_THRESHOLD = 50;
 const STOP = new Set(["that", "this", "with", "from", "have", "will", "shall", "must", "should", "when", "then", "than", "into", "their", "there", "which", "while", "each", "every", "only", "also", "been", "being", "were", "your", "they", "them", "does", "would", "could", "about", "such", "other", "these", "those", "user", "users", "system", "feature"]);
 const words = (t: string): string[] => (t.toLowerCase().match(/[a-z][a-z0-9]{3,}/g) ?? []).filter((w) => !STOP.has(w)).map((w) => w.replace(/(ing|ed|es|s)$/, ""));
 
@@ -68,8 +72,8 @@ export function checkDraft(contract: Pick<FeatureContract, "requirements" | "acc
     const { key, status, scope, ...rest } = f; findings.push({ ...rest, id: findingId(f.rule, key, ...f.requirementIds), status: status ?? "POTENTIAL", blockingTaskIds: [], sourceRefs, detector: "DETERMINISTIC", scope: scope ?? scopeOfKind(f.kind) });
   };
   for (const r of contract.requirements) {
-    const g = grounding(r.text, sourceOf(r)); r.grounding = Number(g.toFixed(2));
-    if (g < GROUNDING_THRESHOLD) { ungrounded.push(r.id); add({ kind: "GAP", requirementIds: [r.id], explanation: `${r.id} is not supported by the source it cites: only ${Math.round(g * 100)}% of its content words appear there, so it stays a proposed assumption until a person confirms it.`, rule: "ungrounded", key: "g", impact: "HIGH", witness: `"${r.text.slice(0, 120)}"`,
+    const g = grounding(r.text, sourceOf(r)); r.grounding = Math.round(g * 100);
+    if (r.grounding < GROUNDING_THRESHOLD) { ungrounded.push(r.id); add({ kind: "GAP", requirementIds: [r.id], explanation: `${r.id} is not supported by the source it cites: only ${r.grounding}% of its content words appear there, so it stays a proposed assumption until a person confirms it.`, rule: "ungrounded", key: "g", impact: "HIGH", witness: `"${r.text.slice(0, 120)}"`,
       options: [opt("confirm", "Confirm this requirement (records who accepted it)", "business"), opt("drop", "Remove this requirement from the contract", "business")] }, [r.source]); }
     const texts: [string, string][] = [[r.id, r.text], ...contract.acceptance.filter((a) => a.requirementIds.includes(r.id)).map((a) => [a.id, `${a.scenario}. ${a.expectedOutcome}`] as [string, string])];
     for (const v of VAGUE_TERMS) {

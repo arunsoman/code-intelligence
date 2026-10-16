@@ -488,6 +488,26 @@ export function generationRoutesFor(model: string | null | undefined, baseUrl?: 
   return model ? [new OllamaGenerationRouter({ model, baseUrl })] : [];
 }
 
+/** A hosted model's tool call can nest a schema-array/object field as its own JSON-encoded string instead of
+ * embedding it natively (observed: a 41055-char `edits` string where the schema says `edits` is an array), so a
+ * value that matches the schema's own shape is trusted, and only a mismatched string field is re-parsed — never a
+ * string the schema actually expects as a string. */
+function coerceToSchema(value: unknown, schema: unknown): unknown {
+  if (!schema || typeof schema !== "object") return value;
+  const s = schema as { type?: string; properties?: Record<string, unknown>; items?: unknown };
+  if (typeof value === "string" && (s.type === "array" || s.type === "object")) {
+    const parsed = salvageJson(value);
+    return parsed === undefined ? value : coerceToSchema(parsed, schema);
+  }
+  if (s.type === "object" && value && typeof value === "object" && !Array.isArray(value) && s.properties) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = Object.hasOwn(s.properties, k) ? coerceToSchema(v, s.properties[k]) : v;
+    return out;
+  }
+  if (s.type === "array" && Array.isArray(value) && s.items) return value.map((v) => coerceToSchema(v, s.items));
+  return value;
+}
+
 export class OllamaGenerationRouter implements GenerationRouter {
   readonly provider = "ollama";
   readonly model: string;
@@ -500,15 +520,33 @@ export class OllamaGenerationRouter implements GenerationRouter {
     this.hosted = /[:-]cloud$/i.test(this.model);
   }
   async generate(req: GenerationRequest): Promise<GenerationResponse> {
-    const requestBody = JSON.stringify({ model: this.model, stream: false, think: false, format: req.schema,
-      options: { temperature: 0, num_predict: req.maxOutputTokens, num_ctx: req.maxInputTokens + req.maxOutputTokens },
-      messages: [{ role: "system", content: req.system }, { role: "user", content: req.user }] });
+    // As `choose()` above: hosted models ignore `format`/`think:false` and reason in prose first (PF bug:
+    // observed burning the entire output budget narrating before ever reaching JSON). They do respect a
+    // tool call, which also skips the preamble, so hosted generation goes through a synthetic tool instead.
+    // The reminder also has to land at the end of `user`, not only in `system`: with a large payload (many KB
+    // of source text) a hosted model observed narrating through its entire output budget in `message.content`
+    // and never calling the tool at all, at which point the relay fills `tool_calls[0]` with a template stub
+    // (name "function-name", args "arg-key-1"/"arg-key-2") instead of leaving it empty — caught below.
+    const noNarration = "Answer by calling the submit_result tool with the complete result. Do not explain your reasoning or restate the input; call the tool as your first token.";
+    const payload = this.hosted
+      ? { model: this.model, stream: false, think: false,
+          options: { temperature: 0, num_predict: req.maxOutputTokens, num_ctx: req.maxInputTokens + req.maxOutputTokens },
+          tools: [{ type: "function", function: { name: "submit_result", description: "Submit the complete result matching the required schema. Call this exactly once, with no other text.", parameters: req.schema } }],
+          messages: [{ role: "system", content: `${req.system}\n${noNarration}` }, { role: "user", content: `${req.user}\n\n${noNarration}` }] }
+      : { model: this.model, stream: false, think: false, format: req.schema,
+          options: { temperature: 0, num_predict: req.maxOutputTokens, num_ctx: req.maxInputTokens + req.maxOutputTokens },
+          messages: [{ role: "system", content: req.system }, { role: "user", content: req.user }] };
+    const requestBody = JSON.stringify(payload);
     logLlmTraffic("generation.generate", "request", requestBody);
     const res = await fetch(`${this.endpoint}/api/chat`, {
       method: "POST", redirect: "error", signal: req.signal, headers: { "content-type": "application/json" },
       body: requestBody,
     });
-    if (!res.ok || !res.body) { await res.body?.cancel(); throw new Error("generation provider unavailable"); }
+    if (!res.ok || !res.body) {
+      const errorBody = res.body ? await res.text().catch(() => "") : "";
+      logLlmTraffic("generation.generate", "response", `HTTP ${res.status} ${res.statusText}\n${errorBody}`);
+      throw new Error(`generation provider unavailable: HTTP ${res.status} ${res.statusText}${errorBody ? ` — ${errorBody.slice(0, 500)}` : ""}`);
+    }
     const reader = res.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
     try {
       for (;;) {
@@ -522,10 +560,26 @@ export class OllamaGenerationRouter implements GenerationRouter {
     const rawResponse = Buffer.concat(chunks).toString("utf8");
     logLlmTraffic("generation.generate", "response", rawResponse);
     const body = JSON.parse(rawResponse) as {
-      message?: { content?: string }; prompt_eval_count?: number; eval_count?: number;
+      message?: { content?: string; tool_calls?: { function?: { name?: string; arguments?: unknown } }[] }; prompt_eval_count?: number; eval_count?: number;
     };
-    if (typeof body.message?.content !== "string" || Buffer.byteLength(body.message.content) > req.maxOutputBytes) throw new Error("invalid generation response");
+    let text: string;
+    if (this.hosted) {
+      const call = body.message?.tool_calls?.[0]?.function;
+      // The relay substitutes a template stub ("function-name" / "arg-key-1") when the model never actually
+      // called the tool; that is not a submit_result call under a different disguise, so reject it by name
+      // rather than let its templated keys fail schema validation two layers up with a confusing error.
+      if (call?.name !== "submit_result") throw new Error(`invalid generation response: no submit_result tool call (got ${JSON.stringify(call?.name)})`);
+      const args = call.arguments;
+      let parsed = typeof args === "string" ? salvageJson(args) : args;
+      if (!parsed || typeof parsed !== "object") throw new Error("invalid generation response: no submit_result tool call");
+      parsed = coerceToSchema(parsed, req.schema);
+      text = JSON.stringify(parsed);
+    } else {
+      if (typeof body.message?.content !== "string") throw new Error("invalid generation response");
+      text = body.message.content;
+    }
+    if (Buffer.byteLength(text) > req.maxOutputBytes) throw new Error("invalid generation response");
     // Ollama's model tag is not a resolved revision. Do not relabel it as one.
-    return { text: body.message.content, inputTokens: body.prompt_eval_count, outputTokens: body.eval_count };
+    return { text, inputTokens: body.prompt_eval_count, outputTokens: body.eval_count };
   }
 }

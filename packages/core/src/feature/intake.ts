@@ -22,7 +22,7 @@ const MODES: readonly OutcomeMode[] = ["PLAN", "BUILD_PREVIEW", "CREATE_DRAFT_PR
 const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f‪-‮⁦-⁩]/g;
 
 /** Directory names left out of the content root (build output, VCS internals and this tool's own state, which changes on every operation). Source and configuration are never excluded; the authority policy is hashed separately into the contract. */
-export const CONTENT_ROOT_EXCLUDE = [".git", "node_modules", "dist", "target", "coverage", ".cache", ".cie"] as const;
+export const CONTENT_ROOT_EXCLUDE = [".git", "node_modules", "dist", "target", "coverage", ".cache", ".cie", ".tmp"] as const;
 
 const blobCache = new Map<string, { hash: string; size: number; mtimeMs: number }>();
 /** Snapshot of the repository as it is now: indexed revision, git head and a pf-canon-v1 content root (hashes cached by path/size/mtime, plan S9).
@@ -123,6 +123,11 @@ export function discoverFeatureContext(d: IntakeDeps, actor: Id, i: DiscoverInpu
   if (current.contentRootHash !== i.snapshot.contentRootHash) return { status: "STALE", evidenceIds: [], diagnostics: ["the repository changed since this snapshot was taken; take a new snapshot and run discovery again"] };
   const cfg = cfgOf(d, rec.repositoryId);
   let cur = rec;
+  // A base change can be noticed from well past discovery (mid build, mid validation, even after review) —
+  // the backward edges to CONTRACTING exist in the state machine for exactly this ("a changed base invalidates
+  // later work", lifecycle.ts). Step back through CONTRACTING first so re-discovery is reachable from there
+  // rather than leaving the request permanently stuck once it has moved past it.
+  if (cur.state === "IMPLEMENTING" || cur.state === "VALIDATING" || cur.state === "REVIEW_READY") cur = transition(d.fs, cur.requestId, cur.version, "CONTRACTING", actor, "the repository base changed; returning to re-discover before re-planning");
   if (cur.state === "RECEIVED" || cur.state === "CONTRACTING") cur = transition(d.fs, cur.requestId, cur.version, "DISCOVERING", actor, "discovery started");
   else if (cur.state !== "DISCOVERING") throw new FeatureError("ILLEGAL_TRANSITION", `discovery cannot run while the request is ${cur.state}`);
   const assessment = discover({ store: d.store, repoRoot: rec.repositoryId, snapshot: current, supportedStacks: cfg.supportedStacks, requestText: rec.promptRef.text ?? rec.promptRef.redactedPreview, budget: { files: i.retrievalBudget.files, tokens: i.retrievalBudget.tokens } });

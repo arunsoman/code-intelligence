@@ -13,7 +13,7 @@ import { passesThroughLink } from "./tree.ts";
 import { snapshotOf } from "./intake.ts";
 import { transition } from "./lifecycle.ts";
 import type { ContextArtifact, PlannedEdit } from "./model.ts";
-import { contextFor, validationPlanFor } from "./pipeline.ts";
+import { contextFor, repositoryTreeListing, validationPlanFor } from "./pipeline.ts";
 import { applyDeclarations } from "./declarations.ts";
 import type { SqliteFeatureStore } from "./store.ts";
 import type { AuthorityConfig } from "./authority.ts";
@@ -104,7 +104,11 @@ export async function buildAndRepair(d: BuildDeps, actor: string, input: { reque
   rec = req();
   let candidate = input.candidateHash ? d.fs.getCandidateByBinding(input.candidateHash) ?? undefined : undefined;
   if (input.candidateHash && (!candidate || candidate.requestId !== rec.requestId || candidate.status !== "MATERIALIZED" || rec.workspace.candidateHash !== candidate.bindingHash)) throw new FeatureError("STALE_REVISION", "Repair must start from the current candidate");
-  if (!input.candidateHash && rec.workspace.candidateHash) throw new FeatureError("STALE_REVISION", "A candidate already exists; repair it instead");
+  // A workspace pointer left over from a now-STALE candidate (refreshStaleness() above may have just made it so)
+  // is not a candidate that repair could ever target again — only a MATERIALIZED one is. Refusing a fresh build
+  // against that dead pointer would leave the request permanently stuck: not repairable (stale) and not
+  // restartable (a pointer "exists"). Block a fresh build only while the existing candidate is still usable.
+  if (!input.candidateHash && rec.workspace.candidateHash && d.fs.getCandidateByBinding(rec.workspace.candidateHash)?.status === "MATERIALIZED") throw new FeatureError("STALE_REVISION", "A candidate already exists; repair it instead");
   const report = input.reportId ? rec.workbench?.reports.find((r) => r.id === input.reportId) : undefined;
   if (input.reportId && (!report || report.report.candidateHash !== candidate?.bindingHash || report.report.exitCode === 0)) throw new FeatureError("STALE_REVISION", "Select a failing report for the current candidate");
   if ((rec.workbench?.runs.length ?? 0) >= 32) throw new FeatureError("RESOURCE_LIMIT", "This request reached its 32-run limit");
@@ -133,6 +137,7 @@ export async function buildAndRepair(d: BuildDeps, actor: string, input: { reque
       if (text == null || Buffer.byteLength(text) > 24000 || bytes + Buffer.byteLength(text) > 40000 || out.length >= 16) continue;
       bytes += Buffer.byteLength(text); out.push({ ref: { artifactId: `file:${path}`, locator: path, version: "1", contentHash: rawHash(text) }, text });
     }
+    const tree = repositoryTreeListing(r, d.store); if (tree) out.push(tree);
     return out;
   };
   const generate = async (feedback?: unknown) => {

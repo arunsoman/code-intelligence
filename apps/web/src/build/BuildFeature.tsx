@@ -11,8 +11,9 @@ import { ChangeReview, ClarifyReview, PlanReview } from "./ReviewStages.tsx";
 import { DeliverReview, ValidateReview } from "./DeliverStages.tsx";
 
 /**
- * "Build feature" (Prompt-to-feature §43, task 1.H). A modal wizard shell over a persistent per-request
- * workspace: six stages, a status banner that follows every stage, §30.2 progress groups, and separate
+ * "Build feature" (Prompt-to-feature §43, task 1.H). A full-page wizard shell (build.css makes the Modal it
+ * renders in fill the viewport) over a persistent per-request workspace: six stages, a status banner that
+ * follows every stage, §30.2 progress groups, and separate
  * effectful actions. Everything it shows comes from the server; before the server has answered it is empty.
  * Navigation never runs anything, and no stage claims "verified" — that wording belongs to the
  * eligibility function (computeEligibility).
@@ -113,6 +114,7 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
   };
 
   const copy = (text: string) => { try { void navigator.clipboard?.writeText(text); } catch { /* clipboard unavailable */ } };
+  const startNewFeature = () => { try { if (api) localStorage.removeItem(KEY(api.repositoryId)); } catch {} setRequestId(null); intakeAction.current = undefined; commit(blankWorkspace()); setNote(null); };
   const latestByQuestion = new Map<string, number>();
   ws.decisions.forEach((d, i) => latestByQuestion.set(d.questionId, i));
   const Ref = ({ id }: { id: string }) => {
@@ -131,7 +133,7 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
     <li className={`bf-card ${c.tone}`}>
       <div className="bf-head"><span className="chip">{c.chip}</span><span className="bf-name">{c.task.label}</span></div>
       <div className="bf-head">{c.task.requirementIds.map((r) => <Ref key={r} id={r} />)}</div>
-      {c.tone === "run" && <div className="bf-bar" role="progressbar" aria-label={`${c.task.label} in progress`}><i /></div>}
+      <div className="bf-bar" role="progressbar" aria-label={`${c.task.label}: ${c.tone}`} {...(c.tone === "run" ? {} : { "aria-valuenow": c.tone === "done" ? 100 : 0, "aria-valuemin": 0, "aria-valuemax": 100 })}><i /></div>
       {c.detail && <p className="bf-detail">{c.detail}</p>}
       {c.task.nextAction && c.action?.kind !== "ANSWER" && <p className="bf-next"><strong>Next:</strong> {c.task.nextAction}</p>}
       {c.action && (
@@ -144,12 +146,12 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
   );
 
   return (
-    <Modal title="Build feature" onClose={onClose} className="bf-dialog"
+    <Modal title="Build feature" onClose={onClose} className="full bf-dialog"
       actions={<>
         <button className="secondary" disabled={at === 0} onClick={() => move(STAGES[at - 1].id)}>← {at > 0 ? STAGES[at - 1].label : "Back"}</button>
         <span className="bf-grow" />
         <button className="secondary" onClick={() => void refresh().catch(() => setNote("Could not refresh the saved request."))}>Refresh saved state</button>
-        {requestId && <button className="secondary" disabled={analysing} onClick={() => { try { if (api) localStorage.removeItem(KEY(api.repositoryId)); } catch {} setRequestId(null); intakeAction.current = undefined; commit(blankWorkspace()); setNote(null); }}>New feature</button>}
+        {requestId && <button className="secondary" disabled={analysing} onClick={startNewFeature}>New feature</button>}
         <button className={primary.kind === "ANALYSE" ? undefined : "secondary"} disabled={primaryDisabled} title={primary.kind === "ANALYSE" ? primary.disabledReason ?? undefined : undefined} onClick={runPrimary}>{analysing ? "Analysing…" : primary.label}</button>
       </>}>
       <div className="bf-top">
@@ -230,7 +232,17 @@ export function BuildFeature({ onClose, store, api, releaseId, initialRequestId 
             {ws.review && remote && ws.stage === "CHANGES" && <ChangeReview review={ws.review} requestId={remote.requestId} candidateHash={ws.candidate?.hash} call={remote.call} />}
             {ws.stage === "DESCRIBE" && (
               <div className="bf-stack">
-                {requestId && <p className="muted">This is the saved feature request. Use New feature to describe a different change.</p>}
+                {/* requestId (outer) is pre-seeded from localStorage/the Release Board before the server has
+                    answered, and analyse() keys off it too (so a submit while it's set never re-submits — it
+                    just navigates to CLARIFY). So the textarea must not look editable in that window: that
+                    silently discards anything typed once the fetch resolves or analyse() is clicked. Disabling
+                    on requestId alone (not ws.requestId) previously left it dead-and-empty with no explanation
+                    while still loading, or permanently, if the remembered request never resolves — so the two
+                    states (loading vs. loaded) now get distinct, honest copy instead of one unexplained one. */}
+                {!!requestId && ws.requestId !== requestId && <p className="muted" role="status">Loading your saved feature request…</p>}
+                {!!requestId && ws.requestId === requestId && (
+                  <p className="muted">This is the saved feature request. <button type="button" className="secondary small" onClick={startNewFeature}>Start a new feature</button> to describe a different change.</p>
+                )}
                 <label className="bf-field">What feature is missing?
                   <textarea disabled={!!requestId} placeholder="Describe who needs the feature, what they should be able to do, and an example of the expected result." className="bf-textarea" rows={Math.min(8, Math.max(3, ws.prompt.split("\n").length + Math.ceil(ws.prompt.length / 90)))} value={ws.prompt} onChange={(e) => commit({ ...ws, prompt: e.target.value, workspaceVersion: ws.workspaceVersion + 1 })} />
                 </label>

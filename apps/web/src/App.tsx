@@ -992,7 +992,7 @@ export function App() {
                 {view?.route && view.route.source !== "chosen" && (
                   <div className={`readas small ${view.route.confidence}`} role="group" aria-label="How your question was read">
                     <span><strong>I read this as: {view.route.name}.</strong> {view.route.confidence === "low" ? "I wasn't sure. " : ""}<span className="muted">{view.route.because}</span></span>
-                    {view.route.confidence === "low" && view.route.alternatives.length === 0 && <button className="secondary small" onClick={() => setGalleryOpen(true)}>Choose a view…</button>}
+                    {view.route.confidence === "low" && view.route.alternatives.length === 0 && <button className="secondary small" onClick={() => openDialog(() => setGalleryOpen(true))}>Choose a view…</button>}
                     {view.route.alternatives.length > 0 && <span className="alts"><span className="muted">Or show it as</span>{view.route.alternatives.map((a) => <button key={a.form + (a.kind ?? "")} className="secondary small" onClick={() => void askForm(view.question, a.form, undefined, a.kind)}>{a.name}</button>)}</span>}
                   </div>
                 )}

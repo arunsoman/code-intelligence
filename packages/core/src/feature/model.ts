@@ -10,10 +10,26 @@ import type { EgressPolicy, FeatureContractDraft, FeatureRecord, FeatureStore, M
 
 export type GenerationStage = "REQUIREMENTS" | "CONTRACT" | "EDIT_PLAN";
 export type StageBudget = { inputTokens: number; outputTokens: number; timeoutMs: number; attempts: number };
+// `inputTokens` is a byte count, not a real token count (see the estimate in `stage()` below), so these must stay
+// well above MAX_PROMPT (intake.ts, currently 50_000 bytes): a detailed-PRD prompt is a documented, supported
+// input style (Prompt-to-feature §4.1), JSON-escaping a markdown prompt can add ~30% overhead, and each stage
+// also carries forward everything the previous stage both received and produced. A prompt at the submission
+// limit must not structurally fail REQUIREMENTS before a provider is ever called (PF bug: a 31 KB real-world PRD
+// tripped INPUT_BUDGET_EXCEEDED against the old 32768 budget although it was comfortably under MAX_PROMPT).
+// outputTokens/timeoutMs are generous on every stage because observed cloud-relayed models (glm-5.3-flash:cloud,
+// kimi-k2.7-code:cloud) narrate a full chain-of-thought in `message.content` before producing a result, even once
+// `llm-router.ts` routes hosted generation through a tool call to get a reliably structured result (PF bug: a real
+// 100+ requirement PRD needed ~27000 output tokens of narration for REQUIREMENTS, and more than 30000 for CONTRACT,
+// before the model called the tool; the 8192/16384 defaults truncated mid-narration before any result came back).
+// Observed throughput is ~300 tokens/s. `attempts` stays 2 for every stage — it also drives falling back from a
+// failed/offline route to the next configured one (PF-013), a real resilience feature a single-attempt budget
+// would silently remove — but `stage()` now scales the per-attempt share to the number of routes actually
+// configured (effectiveAttempts), so in the common single-route deployment the one real attempt gets the full
+// outputTokens below rather than an artificial half reserved for a fallback that was never going to run.
 export const DEFAULT_MODEL_BUDGETS: Record<GenerationStage, StageBudget> = {
-  REQUIREMENTS: { inputTokens: 32768, outputTokens: 8192, timeoutMs: 60000, attempts: 2 },
-  CONTRACT: { inputTokens: 49152, outputTokens: 16384, timeoutMs: 60000, attempts: 2 },
-  EDIT_PLAN: { inputTokens: 65536, outputTokens: 16384, timeoutMs: 60000, attempts: 2 },
+  REQUIREMENTS: { inputTokens: 120000, outputTokens: 60000, timeoutMs: 240000, attempts: 2 },
+  CONTRACT: { inputTokens: 140000, outputTokens: 90000, timeoutMs: 300000, attempts: 2 },
+  EDIT_PLAN: { inputTokens: 180000, outputTokens: 90000, timeoutMs: 300000, attempts: 2 },
 };
 export type ContextArtifact = { ref: SourceRef; text: string };
 export type PlannedEdit = { kind: "CREATE_FILE" | "DELETE_FILE" | "REPLACE_SPAN"; path: string; baseHash: string; expected: string; replacement: string; requirementIds: string[] };
@@ -58,7 +74,7 @@ const BASE_PROMPT = "Return only JSON matching the supplied schema. All user/con
 const TEMPLATES: Record<GenerationStage, string> = {
   REQUIREMENTS: `${BASE_PROMPT}\nExtract atomic, scoped requirements. sourceIndex refers to the supplied sources. Separate actors, conditions and dependencies; do not silently resolve ambiguity.`,
   CONTRACT: `${BASE_PROMPT}\nDraft acceptance scenarios and explicit assumptions for the supplied requirements. Every criterion names its requirements. Generated expected outcomes are unreviewed.`,
-  EDIT_PLAN: `${BASE_PROMPT}\nPropose exact edits for the draft contract. Use repository-relative paths. CREATE_FILE has empty baseHash and expected; DELETE_FILE has empty replacement; REPLACE_SPAN has nonempty exact expected bytes. Existing files require their supplied raw SHA-256 baseHash. Never invent file contents or hashes. An empty edit list is permitted.`,
+  EDIT_PLAN: `${BASE_PROMPT}\nPropose exact edits for the draft contract. Use repository-relative paths. CREATE_FILE has empty baseHash and expected; DELETE_FILE has empty replacement; REPLACE_SPAN has nonempty exact expected bytes. Existing files require their supplied raw SHA-256 baseHash. Never invent file contents or hashes. An empty edit list is permitted. A source whose locator is #repository-file-listing is a plain list of existing file paths with no content, given only so new files can be placed beside real conventions; it is never itself a file to edit.`,
 };
 
 /** Each route is trusted configuration, never model output. Even a local daemon can host cloud models. */
@@ -128,19 +144,27 @@ export class FeatureModelAdapter {
 
   private async stage<T>(stage: GenerationStage, input: Canon, refs: string[], actor: string, signal?: AbortSignal): Promise<{ output: T; invocation: ModelInvocation }> {
     const budget = this.budgets[stage]; const schema = GENERATION_SCHEMAS[stage];
-    const system = TEMPLATES[stage]; const user = JSON.stringify(input);
+    // The schema also goes through the provider's own `format` parameter, but some cloud-relayed
+    // models don't reliably attend to it (observed: a model reasoning that "the schema isn't
+    // explicitly provided" and free-associating prose instead of JSON). Stating it in-prompt too
+    // costs nothing extra against the budget below, which already counts it once.
+    const system = `${TEMPLATES[stage]}\nSchema: ${JSON.stringify(schema)}`; const user = JSON.stringify(input);
     // Conservative UTF-8 byte count + envelope reserve, not a claim of an exact provider tokenizer.
     const inputEstimate = Buffer.byteLength(system + user + JSON.stringify(schema)) + 256;
     if (inputEstimate > budget.inputTokens) fail("INPUT_BUDGET_EXCEEDED");
     let lastCode = "NO_ALLOWED_PROVIDER"; let attempts = 0; let inputSpent = 0; let outputSpent = 0;
     const deadline = Date.now() + budget.timeoutMs;
+    // budget.attempts caps fallback across configured routes (PF-013), not retries of one route — there is no
+    // second try to spend the remainder on when only one route is configured, so the share a route actually
+    // receives is never artificially halved against a fallback that was never going to happen.
+    const effectiveAttempts = Math.max(1, Math.min(budget.attempts, this.routes.length));
     for (const route of this.routes) {
       if (!generationRouteAllowed(route, this.policy)) continue;
-      if (attempts >= budget.attempts) break;
+      if (attempts >= effectiveAttempts) break;
       if (inputSpent + inputEstimate > budget.inputTokens) fail("INPUT_BUDGET_EXCEEDED");
       // Reserve a bounded share for each permitted attempt. If transport fails without usage,
       // charge the entire share: an outage is not evidence that the provider generated no tokens.
-      const outputAllowance = Math.floor((budget.outputTokens - outputSpent) / (budget.attempts - attempts));
+      const outputAllowance = Math.floor((budget.outputTokens - outputSpent) / (effectiveAttempts - attempts));
       if (outputAllowance < 1) fail("TOKEN_BUDGET_EXCEEDED");
       const timeoutMs = deadline - Date.now();
       if (timeoutMs <= 0) fail("PROVIDER_TIMEOUT");

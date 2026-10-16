@@ -56,6 +56,14 @@
 .bf-bar > i { display: block; height: 100%; width: 35%; background: var(--accent); animation: bf-slide 1.6s ease-in-out infinite; }
 @keyframes bf-slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
 @media (prefers-reduced-motion: reduce) { .bf-bar > i { animation: none; width: 100%; opacity: .5; } }
+/* Every task card carries this bar (not just the running one): done is full and solid, ready is an empty
+   track (next up, not started), blocked tints the track instead of filling it (stalled, not progressing),
+   and failed is a full static warn-colored fill (ran, did not pass). Only "run" keeps the sliding animation. */
+.bf-card.done .bf-bar > i { width: 100%; background: var(--ok); animation: none; }
+.bf-card.ready .bf-bar > i { width: 0; animation: none; }
+.bf-card.blocked .bf-bar { background: color-mix(in srgb, var(--warn) 25%, var(--line)); }
+.bf-card.blocked .bf-bar > i { width: 0; animation: none; }
+.bf-card.failed .bf-bar > i { width: 100%; background: var(--warn); animation: none; }
 .bf-none { color: var(--muted); font-size: 12px; margin: 0 0 4px; }
 .bf-foot { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); }
 .bf-foot .bf-grow { flex: 1; }
@@ -95,7 +103,8 @@ button[aria-disabled="true"] { opacity: .6; cursor: not-allowed; }
 .bf-workbench textarea { width: 100%; box-sizing: border-box; }
 .bf-workbench details[open] > summary { margin-bottom: 12px; }
 
-.modal.bf-dialog { width: min(96vw, 1280px); max-width: 1280px; }
+/* Sizing (width/height/border-radius) comes from the shared .modal.full utility (styles.css): Build feature
+   is a destination users work in for a long session, not a quick lookup, so it takes the whole page. */
 .bf-dialog > .modal-body { padding: 0; min-height: 0; display: flex; flex-direction: column; }
 .bf-dialog > .modal-actions { flex-wrap: wrap; gap: 8px; flex-shrink: 0; }
 .bf-dialog > .modal-body > .bf-top { max-height: 32vh; }

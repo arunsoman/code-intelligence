@@ -25,19 +25,38 @@ export function ClarifyReview({ review, version, requestId, call, refresh, notif
     } catch { notify("Could not save the answer. Reload to check its recorded state before retrying."); }
     finally { setBusy(null); }
   };
-  return <div>
+  return <div className="bf-stack">
     <OverlapReview review={review} />
-    <p>Answers retain their actor and version. Policy and access questions require the recorded authority.</p>
-    {review.questions.map((q) => <fieldset key={q.id}><legend>{q.id}: {q.text}</legend><p>{q.whyNeeded}</p><p>Requirements: {q.requirementIds.join(", ") || "request scope"} · Authority: {q.scope}</p>
-      {q.choices.map((choice) => <button className="secondary" key={choice} onClick={() => setAnswers((a) => ({ ...a, [q.id]: choice }))}>{choice}</button>)}
-      <label>Answer {q.id}<input className="input" value={answers[q.id] ?? ""} onChange={(e) => setAnswers((a) => ({ ...a, [q.id]: e.target.value }))} /></label>
-      <button disabled={busy !== null || !answers[q.id]?.trim()} onClick={() => void answer(q.id)}>Record answer</button>
-    </fieldset>)}
-    {!review.questions.length && <p>No unanswered questions recorded.</p>}
-    <h4>Recorded decisions</h4>{current.map((d) => <details key={d.id}><summary>{d.questionId ?? d.id}: {d.answer} — {d.actorId}</summary><p>Contract v{d.contractVersion} · {d.authorityBindingId ?? "requester business authority"}</p>
-      <label>Revise {d.questionId ?? d.id}<input className="input" value={answers[d.questionId ?? d.id] ?? ""} onChange={(e) => setAnswers((a) => ({ ...a, [d.questionId ?? d.id]: e.target.value }))} /></label>
-      <button disabled={busy !== null || !answers[d.questionId ?? d.id]?.trim()} onClick={() => void answer(d.questionId ?? d.id, d.id)}>Record new version</button>
-    </details>)}
+    <p className="muted small">Answers retain their actor and version. Policy and access questions require the recorded authority.</p>
+    {review.questions.map((q, i) => <div key={q.id} className="bf-item" role="group" aria-label={`Question ${q.id}`}>
+      <span className="chip warn">{q.id} · question {i + 1} of {review.questions.length} · needs your answer</span>
+      <strong>{q.text}</strong>
+      <span className="muted small">{q.whyNeeded}</span>
+      <span className="muted small">Requirements: {q.requirementIds.join(", ") || "request scope"} · Authority: {q.scope}</span>
+      {q.choices.length > 0 && <>
+        <span className="muted small">Choose one:</span>
+        <div className="bf-btns">
+          {q.choices.map((choice) => <button type="button" className={`secondary small${answers[q.id] === choice ? " on" : ""}`} key={choice} aria-pressed={answers[q.id] === choice} onClick={() => setAnswers((a) => ({ ...a, [q.id]: choice }))}>{choice}</button>)}
+        </div>
+      </>}
+      <label className="bf-field">{q.choices.length > 0 ? "Or type a different answer" : `Answer ${q.id}`}
+        <input className="bf-input" aria-label={`Answer to ${q.id}: ${q.text}`} value={answers[q.id] ?? ""} onChange={(e) => setAnswers((a) => ({ ...a, [q.id]: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter" && answers[q.id]?.trim()) void answer(q.id); }} />
+      </label>
+      <div className="bf-btns"><button className="secondary small" disabled={busy !== null || !answers[q.id]?.trim()} onClick={() => void answer(q.id)}>Record answer</button></div>
+    </div>)}
+    {!review.questions.length && <p className="muted">No unanswered questions recorded.</p>}
+    {current.length > 0 && <h4 style={{ margin: "4px 0 0", fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: ".05em" }}>Recorded decisions</h4>}
+    <ul className="bf-list">{current.map((d) => <li key={d.id} className="bf-item">
+      <span>{d.questionId ?? d.id}: <strong>{d.answer}</strong> <span className="chip muted">{d.actorId}</span></span>
+      <span className="muted small">Contract v{d.contractVersion} · {d.authorityBindingId ?? "requester business authority"}</span>
+      <details>
+        <summary className="muted small" style={{ cursor: "pointer" }}>Change this answer (creates a new contract version)</summary>
+        <div className="bf-btns" style={{ marginTop: 6 }}>
+          <input className="bf-input" aria-label={`Revise answer to ${d.questionId ?? d.id}`} placeholder="New answer" value={answers[d.questionId ?? d.id] ?? ""} onChange={(e) => setAnswers((a) => ({ ...a, [d.questionId ?? d.id]: e.target.value }))} />
+          <button className="secondary small" disabled={busy !== null || !answers[d.questionId ?? d.id]?.trim()} onClick={() => void answer(d.questionId ?? d.id, d.id)}>Record new version</button>
+        </div>
+      </details>
+    </li>)}</ul>
   </div>;
 }
 export function OverlapReview({ review }: { review: FeatureReview }) {

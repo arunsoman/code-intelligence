@@ -54,7 +54,11 @@ export function FeatureWorkbench({ ws, repositoryId, call, refresh, notify }: { 
   const start = async (operation: "prepareFeaturePlan" | "buildFeatureCandidate", selectedReport?: string) => {
     setBusy(true);
     try {
-      const r = await call<{ jobId: string }>(operation === "prepareFeaturePlan" ? "C02" : "C28", operation, { requestId: ws.requestId, ...(operation === "buildFeatureCandidate" ? { candidateHash: ws.candidate?.hash, maxRepairs: 3, wallMs: 600000, syntheticTestData: synthetic, ...(selectedReport ? { reportId: selectedReport } : {}) } : {}) }, uid());
+      // A STALE (or PLANNED/SUPERSEDED) candidate can never be repaired again — only a MATERIALIZED one can.
+      // Sending its hash anyway asks the server to repair a candidate that no longer qualifies, which it
+      // refuses outright; omit it instead so this starts a fresh build against the current repository.
+      const candidateHash = ws.candidate?.status === "MATERIALIZED" ? ws.candidate.hash : undefined;
+      const r = await call<{ jobId: string }>(operation === "prepareFeaturePlan" ? "C02" : "C28", operation, { requestId: ws.requestId, ...(operation === "buildFeatureCandidate" ? { candidateHash, maxRepairs: 3, wallMs: 600000, syntheticTestData: synthetic, ...(selectedReport ? { reportId: selectedReport } : {}) } : {}) }, uid());
       if (!r.ok) { notify(r.error.message); return; } rememberBuildJob(ws.requestId, r.value.jobId); setJob(undefined); setJobId(r.value.jobId);
     } catch { notify("Could not start work. Reload to check saved progress before retrying."); } finally { setBusy(false); }
   };
@@ -88,18 +92,26 @@ export function FeatureWorkbench({ ws, repositoryId, call, refresh, notify }: { 
   const blocked = busy || active;
   const currentReports = state.reports.filter((r) => r.report.candidateHash === ws.candidate?.hash && r.report.exitCode !== 0);
   const latest = state.runs.at(-1);
+  const tasksDone = ws.tasks.filter((t) => t.state === "COMPLETE").length;
+  const tasksTotal = ws.tasks.length;
   return <section className="bf-workbench" aria-label="Feature build and repair">
     {setup && <details className="bf-environment" open={!setup.ready && ws.stage === "DESCRIBE"}><summary>Environment · {setup.ready ? "ready for supported checks" : "needs attention"}</summary>
       <p>Automatic generation and checks currently target TypeScript/Node/npm. Mixed stacks need their own validation adapters.</p>
       <ul className="bf-list">{setup.items.filter((i) => i.id !== "GITHUB").map((i) => <li key={i.id}><strong>{i.id.toLowerCase()} · {i.state.toLowerCase()}</strong><p>{i.detail}{i.fix ? ` · ${i.fix}` : ""}</p></li>)}</ul>
     </details>}
-    {job && <div role="status" aria-live="polite" className="bf-banner"><strong>{job.state.toLowerCase()} · {job.phase}</strong><p>{job.message}</p>{active && <button className="secondary" onClick={() => void cancel().catch(() => notify("Could not request cancellation."))}>Stop work</button>}</div>}
+    {job && <div role="status" aria-live="polite" className="bf-banner"><strong>{job.state.toLowerCase()} · {job.phase}</strong><p>{job.message}</p>{active && <><div className="bf-bar" role="progressbar" aria-label={`${job.phase} in progress`}><i /></div><button className="secondary" onClick={() => void cancel().catch(() => notify("Could not request cancellation."))}>Stop work</button></>}</div>}
+    {busy && !job && <div className="bf-bar" role="progressbar" aria-label="Starting"><i /></div>}
     {latest && <p className="muted">Last checkpoint: {latest.detail} · {latest.repairs}/{latest.maxRepairs} repairs{latest.interrupted ? " · interrupted; resume with the saved candidate" : ""}</p>}
     {(ws.stage === "PLAN" || ws.stage === "VALIDATE") && <label><input type="checkbox" checked={synthetic} onChange={(e) => setSynthetic(e.target.checked)} /> I confirm these checks use synthetic test fixtures. Without a recorded data declaration, execution stays blocked.</label>}
     {ws.requestId && (ws.stage === "CLARIFY" || ws.stage === "PLAN") && <div className="row">
       <button className="secondary" disabled={blocked} onClick={() => void start("prepareFeaturePlan")}>{ws.review?.requirements.length ? "Update plan after answers" : "Analyse requirements"}</button>
       {ws.stage === "PLAN" && !!ws.review?.criteria.some((c) => c.oracleOrigin === "GENERATED_UNREVIEWED") && <button disabled={blocked} onClick={() => void confirm()}>Confirm expected outcomes</button>}
-      {ws.stage === "PLAN" && !!ws.review?.criteria.length && !ws.review.criteria.some((c) => c.oracleOrigin === "GENERATED_UNREVIEWED") && <button disabled={blocked || !!ws.blockers.length || ws.outcomeMode === "PLAN_ONLY"} onClick={() => void start("buildFeatureCandidate")}>Build and test feature</button>}
+      {ws.stage === "PLAN" && !!ws.review?.criteria.length && !ws.review.criteria.some((c) => c.oracleOrigin === "GENERATED_UNREVIEWED") && (
+        <span className="bf-field" style={{ display: "inline-grid", gap: 2 }}>
+          <button disabled={blocked || !!ws.blockers.length || ws.outcomeMode === "PLAN_ONLY"} onClick={() => void start("buildFeatureCandidate")}>Build and test feature{tasksTotal > 0 ? ` (${tasksDone}/${tasksTotal} tasks done)` : ""}</button>
+          {tasksTotal > 0 && <div className="bf-bar" role="progressbar" aria-label={`${tasksDone} of ${tasksTotal} tasks done`} aria-valuenow={tasksDone} aria-valuemin={0} aria-valuemax={tasksTotal}><i style={{ width: `${Math.round((tasksDone / tasksTotal) * 100)}%`, animation: "none", background: "var(--ok)" }} /></div>}
+        </span>
+      )}
     </div>}
     {ws.stage === "VALIDATE" && ws.candidate && <>
       <p>Run checks in an isolated copy and repair candidate failures up to three times. Baseline and environment failures stop for review. Tests and expected outcomes stay protected.</p>

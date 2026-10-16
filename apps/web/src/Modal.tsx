@@ -1,4 +1,5 @@
-import { useEffect, useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { trapTabKey, useDialogFocus } from "./useDialogA11y.ts";
 
 /**
  * Shared modal shell.
@@ -22,53 +23,16 @@ type ModalProps = {
   dismissible?: boolean;
 };
 
-const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
 export function Modal({ title, onClose, children, className = "", actions, initialFocusRef, dismissible = true }: ModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<Element | null>(null);
-
-  useEffect(() => {
-    triggerRef.current = document.activeElement;
-    document.body.style.overflow = "hidden";
-    const modal = modalRef.current;
-    if (!modal) return;
-
-    // Focus the requested element, or the first focusable element, or the modal itself.
-    const target = initialFocusRef?.current ?? (modal.querySelector(FOCUSABLE) as HTMLElement | null);
-    (target ?? modal).focus({ preventScroll: true });
-
-    return () => {
-      document.body.style.overflow = "";
-      if (triggerRef.current instanceof HTMLElement) {
-        triggerRef.current.focus({ preventScroll: true });
-      }
-    };
-  }, [initialFocusRef]);
+  useDialogFocus(modalRef, initialFocusRef);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
       if (dismissible) { e.preventDefault(); onClose(); }
       return;
     }
-    if (e.key !== "Tab") return;
-
-    const modal = modalRef.current;
-    if (!modal) return;
-    const focusables = Array.from(modal.querySelectorAll(FOCUSABLE)).filter(isVisible) as HTMLElement[];
-    if (focusables.length === 0) return;
-
-    const first = focusables[0];
-    const last = focusables[focusables.length - 1];
-    const active = document.activeElement;
-
-    if (e.shiftKey && active === first) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && active === last) {
-      e.preventDefault();
-      first.focus();
-    }
+    if (modalRef.current) trapTabKey(modalRef.current, e);
   };
 
   const onBackdropClick = (e: MouseEvent<HTMLDivElement>) => {
@@ -107,9 +71,4 @@ export function Modal({ title, onClose, children, className = "", actions, initi
       </div>
     </div>
   );
-}
-
-function isVisible(el: Element): boolean {
-  const style = window.getComputedStyle(el);
-  return style.display !== "none" && style.visibility !== "hidden";
 }

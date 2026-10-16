@@ -15,9 +15,11 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import ts from "typescript";
 
-/** Directory names never copied, hashed or walked: build output, VCS internals, caches. */
-export const SKIP_DIRS = new Set(["node_modules", ".git", "target", "coverage", "dist", ".cie", ".next", "build", "out", ".turbo", ".cache"]);
-export const SKIP_RE = /^(node_modules|\.git|target|coverage|dist|\.cie|\.next|build|out|\.turbo|\.cache)$/;
+/** Directory names never copied, hashed or walked: build output, VCS internals, caches, and this tool's own scratch
+ * state, which can hold special files (sockets, pipes) a plain file copy cannot handle (PF bug: a leftover Chrome
+ * e2e test socket in .tmp made every candidate build fail with "special file ... cannot be copied"). */
+export const SKIP_DIRS = new Set(["node_modules", ".git", "target", "coverage", "dist", ".cie", ".tmp", ".next", "build", "out", ".turbo", ".cache"]);
+export const SKIP_RE = /^(node_modules|\.git|target|coverage|dist|\.cie|\.tmp|\.next|build|out|\.turbo|\.cache)$/;
 
 export const sha256 = (b: string | Buffer): string => createHash("sha256").update(b).digest("hex");
 

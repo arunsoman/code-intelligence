@@ -43,7 +43,7 @@ function featureReviewBase(fs: FeatureStore, request: FeatureRecord, candidate: 
   const plan = candidate ? request.validationPlan ?? defaultValidationPlan(request, candidate) : undefined;
   const decisions = fs.listDecisions(request.requestId);
   return { prompt: request.promptRef.text ?? request.promptRef.redactedPreview, requirements: request.contract?.requirements ?? [], criteria: request.contract?.acceptance ?? [], decisions,
-    questions: request.blockers.map((b) => ({ id: b.id, text: b.text, requirementIds: b.requirementIds, scope: b.scope ?? "business", choices: [], whyNeeded: `Blocks ${b.requirementIds.join(", ") || "request progress"}; ${b.scope ?? "business"} authority is required.` })),
+    questions: request.blockers.map((b) => ({ id: b.id, text: b.text, requirementIds: b.requirementIds, scope: b.scope ?? "business", choices: (b.options ?? []).map((o) => o.description), whyNeeded: `Blocks ${b.requirementIds.join(", ") || "request progress"}; ${b.scope ?? "business"} authority is required.` })),
     tasks, overlap: request.contract?.overlap, files: allowed,
     fileCounts: Object.fromEntries(["ADDED", "MODIFIED", "DELETED", "RENAMED", "REUSED", "AFFECTED_UNCHANGED", "PLANNED"].map((k) => [k, allowed.filter((f) => f.kind === k).length])),
     results: evidence.flatMap((e) => e.results), ...(candidate && plan ? { validationPlanHash: validationPlanHash(plan), decision: computeEligibility({ request, candidate, plan, evidence, decisions, unevaluatedModels: unevaluatedModels(fs as { getEvaluation?: never }, request, candidate), externalGaps: declarationGaps(fs, request) }) } : {}),

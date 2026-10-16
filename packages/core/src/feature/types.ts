@@ -34,7 +34,7 @@ export type Requirement = {
   id: Id; source: SourceRef; text: string; origin: RequirementOrigin; type: RequirementType;
   actorIds: Id[]; action?: string; resourceScope?: string; conditions: string[]; authorityBindingId?: Id;
   dependsOn: Id[]; acceptanceIds: Id[]; status: "ACTIVE" | "SUPERSEDED" | "PROPOSED";
-  /** 2.I: how well the text is supported by the source it cites (0..1), computed by code; below the grounding threshold the requirement stays a PROPOSED assumption. */ grounding?: number;
+  /** 2.I: how well the text is supported by the source it cites, as an integer percentage (0..100, not a 0..1 ratio: it must stay canon-safe for strict JSON round-trips), computed by code; below the grounding threshold the requirement stays a PROPOSED assumption. */ grounding?: number;
 };
 /** Plan S6: where the expected result came from. A criterion backed only by GENERATED_UNREVIEWED cannot be verified. */
 export type OracleOrigin = "USER_EXAMPLE" | "POLICY" | "EXISTING_TEST" | "REVIEWED_FIXTURE" | "GENERATED_UNREVIEWED";
@@ -109,7 +109,7 @@ export type FeatureRecord = {
   schemaVersion: 1; requestId: Id; repositoryId: Id; mode: OutcomeMode; state: RequestState; tier?: Tier;
   promptRef: { artifactId: Id; contentHash: Hash; redactedPreview: string; /** The full prompt, kept for the owner only; the issue projection uses `redactedPreview`. */ text?: string };
   inputRefs: SourceRef[]; source: Snapshot; contractVersion: number; contract?: FeatureContract;
-  tasks: FeatureTask[]; blockers: { id: Id; kind: "QUESTION" | "FINDING" | "DEPENDENCY" | "TRACKING"; requirementIds: Id[]; text: string; /** Authority scope needed to resolve it (default "business"). */ scope?: string; /** 2.I: answering these question ids first unblocks this child question (§7.2). */ dependsOn?: Id[] }[];
+  tasks: FeatureTask[]; blockers: { id: Id; kind: "QUESTION" | "FINDING" | "DEPENDENCY" | "TRACKING"; requirementIds: Id[]; text: string; /** Authority scope needed to resolve it (default "business"). */ scope?: string; /** 2.I: answering these question ids first unblocks this child question (§7.2). */ dependsOn?: Id[]; /** The finding's predefined resolutions, when it is a FINDING with a closed answer set (e.g. accept/change); absent for free-text-only blockers. */ options?: ResolutionOption[] }[];
   issue: IssueBinding; workspace: FeatureWorkspace; version: number; createdBy: Id; createdAt: Timestamp; updatedAt: Timestamp;
   /** 2.I: findings raised against the current contract (§8), deterministic first, model-proposed second. */ findings?: RequirementFinding[];
   /** 2.I: the stored overlap/reuse assessment (§37), set by compareRequestedBehaviour. */ overlap?: OverlapAssessment;
