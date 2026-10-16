@@ -32,6 +32,18 @@ export function validatedCore(batch: AnalysisBatch): EvidenceCoreBatchV1 | undef
     const associationsByRun = new Map<string, {subjectKind: "FACT" | "RELATIONSHIP";subjectId:string;evidenceId:string;role:"SUPPORTS" | "CONTEXT" | "CONTRADICTS"}[]>();
     const runs = new Map(core.producerRuns.map(r => [r.id,r]));
     if (runs.size !== core.producerRuns.length || new Set(core.coverage.map(c => c.id)).size !== core.coverage.length) throw new Error("duplicate identities");
+    // A producer must account for every emitted scope, including evidence-free
+    // files. Delta sidecars account only for changed, surviving manifest scopes.
+    const requiredScopes = new Set(Object.keys(batch.manifest ?? Object.fromEntries(files)).filter(file =>
+      batch.mode !== "delta" || (batch.changedFiles ?? []).includes(file)));
+    const seenScopes = new Set<string>();
+    for (const run of runs.values()) {
+      const scopeKey = run.scope.kind === "FILE" ? run.scope.file : "";
+      if (!requiredScopes.has(scopeKey) || seenScopes.has(scopeKey) || run.status !== "PARTIAL") throw new Error("scope membership");
+      seenScopes.add(scopeKey);
+    }
+    if (seenScopes.size !== requiredScopes.size) throw new Error("missing producer scope");
+    const coveredRuns = new Set<string>();
     for (const run of runs.values()) {
       if (run.revision !== batch.revision || run.analyzerVersion !== batch.analyzerVersion || run.producerId !== "cie.rust.static" || run.producerVersion !== EVIDENCE_CORE_PRODUCER_VERSION) throw new Error("producer binding");
       if (run.id !== evidenceCoreIdentity("run", [run.producerId,run.producerVersion,run.analyzerVersion,run.scope,run.inputDigest,run.outputDigest])) throw new Error("producer identity");
@@ -40,10 +52,13 @@ export function validatedCore(batch: AnalysisBatch): EvidenceCoreBatchV1 | undef
       if (file && !files.get(file)?.spans.some(s => s.contentHash === run.inputDigest && s.revision === batch.revision)) throw new Error("input binding");
     }
     for (const coverage of core.coverage) {
+      if (coveredRuns.has(coverage.producerRunId)) throw new Error("duplicate coverage scope");
+      coveredRuns.add(coverage.producerRunId);
       const run = runs.get(coverage.producerRunId);
       if (!run || coverage.revision !== batch.revision || JSON.stringify(coverage.scope) !== JSON.stringify(run.scope) || coverage.status === "COMPLETE" || coverage.domain !== "static.observations" || coverage.analyzedEntityIds !== undefined || coverage.exclusions.join("|") !== "reflection|dynamic dispatch|external dependencies|async delivery|generated or excluded sources" || coverage.unresolved.join("|") !== "No closed-world completeness claim; parser diagnostics remain authoritative") throw new Error("coverage binding");
       if (coverage.id !== evidenceCoreIdentity("coverage",[run.id,coverage.domain])) throw new Error("coverage identity");
     }
+    if (coveredRuns.size !== runs.size) throw new Error("missing coverage scope");
     const expected = new Set<string>();
     for (const [kind, rows] of [["FACT",batch.facts],["RELATIONSHIP",batch.relationships]] as const) for (const row of rows) for (const ev of row.evidence) expected.add(JSON.stringify([kind,row.id,ev.id]));
     const actual = new Set<string>();

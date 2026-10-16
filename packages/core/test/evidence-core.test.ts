@@ -96,3 +96,24 @@ test("metadata cannot overwrite a held revision with a different persisted manif
   assert.throws(()=>store.putBatch(fixture()),/PERSISTED_BINDING/);
   assert.equal((store.db.prepare("select count(*) n from evidence_core_links").get() as {n:number}).n,0);
 });
+
+test("strict metadata requires every scope and one coverage record per run",t=>{
+  mode(t);const store=new Store(":memory:");t.after(()=>store.db.close());
+  const noCoverage=fixture();noCoverage.evidenceCore!.coverage=[];
+  assert.throws(()=>store.putBatch(noCoverage),/EVIDENCE_CORE_INVALID/);assert.equal(store.revision("r1"),null);
+  const silentFile=fixture();silentFile.manifest!["src/empty.ts"]="empty";
+  silentFile.entities.push({entityId:"file:src/empty.ts",kind:"file",name:"empty.ts",file:"src/empty.ts",spans:[{...silentFile.entities[0].spans[0],sourceId:"src/empty.ts",contentHash:"empty"}]});
+  assert.throws(()=>store.putBatch(silentFile),/EVIDENCE_CORE_INVALID/);assert.equal(store.revision("r1"),null);
+  const repo=fixture();repo.manifest![""]="repository";
+  assert.throws(()=>store.putBatch(repo),/EVIDENCE_CORE_INVALID/);
+  const failed=fixture();failed.evidenceCore!.producerRuns[0].status="FAILED";
+  assert.throws(()=>store.putBatch(failed),/EVIDENCE_CORE_INVALID/);
+});
+test("optional incomplete scope metadata is discarded while legacy facts remain",t=>{
+  mode(t,"on","0");const store=new Store(":memory:");t.after(()=>store.db.close());
+  const batch=fixture();batch.evidenceCore!.coverage=[];store.putBatch(batch);
+  assert.equal(store.factsFor("r1","file:src/a.ts").length,1);
+  assert.equal(store.evidenceCoreBaseVersion("r1"),undefined);
+  assert.deepEqual(store.evidenceCoreProducerRuns("r1","src/a.ts"),[]);
+  assert.ok(store.revision("r1")!.diagnostics.some(d=>d.code==="EVIDENCE_CORE_REJECTED"));
+});

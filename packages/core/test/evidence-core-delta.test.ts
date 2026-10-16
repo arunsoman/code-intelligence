@@ -83,3 +83,20 @@ test("combined delta metadata byte limit rolls back the entire revision",async t
   assert.equal(store.revision(delta.revision),null);
   assert.equal(store.evidenceCoreBaseVersion(batch.revision),"2");
 });
+
+test("missing changed-scope coverage rolls back a strict delta",async t=>{
+  const {root,worker,store,batch,base}=await boot(t);
+  writeFileSync(join(root,"a.ts"),'export function first(){return 123;}\n');
+  const delta=await worker.index(root,120000,undefined,base);delta.evidenceCore!.coverage=[];
+  assert.throws(()=>store.putDelta(delta),/EVIDENCE_CORE_INVALID/);
+  assert.equal(store.revision(delta.revision),null);assert.equal(store.evidenceCoreBaseVersion(batch.revision),"2");
+});
+test("invalid stored coverage state or malformed run cannot authorize reuse",async t=>{
+  const {store,batch}=await boot(t);
+  store.db.prepare("update evidence_core_coverage set status='UNKNOWN' where revision=?").run(batch.revision);
+  assert.equal(store.evidenceCoreBaseVersion(batch.revision),undefined);
+  store.db.prepare("update evidence_core_coverage set status='PARTIAL' where revision=?").run(batch.revision);
+  assert.equal(store.evidenceCoreBaseVersion(batch.revision),"2");
+  store.db.prepare("update evidence_core_producer_runs set json='invalid' where revision=?").run(batch.revision);
+  assert.equal(store.evidenceCoreBaseVersion(batch.revision),undefined);
+});

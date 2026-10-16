@@ -174,13 +174,20 @@ export class Store {
     const rev=this.revision(revision);if(!rev || evidenceCoreConfig().mode === "off")return undefined;
     const rows=this.db.prepare("select json from evidence_core_producer_runs where revision=?").all(revision) as {json:string}[];
     if(!rows.length)return undefined;
-    const runs=rows.map(r=>JSON.parse(r.json) as ProducerRunV1);
+    let runs: ProducerRunV1[];
+    try { runs=rows.map(r=>JSON.parse(r.json) as ProducerRunV1); }
+    catch { return undefined; }
+    if(runs.some(r=>!r || !r.scope || !["FILE","REPOSITORY"].includes(r.scope.kind) || r.status!=="PARTIAL"))return undefined;
     if(runs.some(r=>r.revision!==revision || r.producerVersion!==EVIDENCE_CORE_PRODUCER_VERSION || r.producerId!=="cie.rust.static" || r.analyzerVersion!==rev.analyzerVersion))return undefined;
     const files=new Set(runs.filter(r=>r.scope.kind === "FILE").map(r=>r.scope.kind === "FILE" ? r.scope.file : ""));
-    if(this.revisionFiles(revision)[""] && !runs.some(r=>r.scope.kind === "REPOSITORY"))return undefined;
+    const manifest=this.revisionFiles(revision);
+    const scopes=runs.map(r=>r.scope.kind === "FILE" ? r.scope.file : "");
+    if(new Set(scopes).size!==runs.length || scopes.length!==Object.keys(manifest).length || scopes.some(f=>!Object.hasOwn(manifest,f)))return undefined;
+    if(manifest[""] && !runs.some(r=>r.scope.kind === "REPOSITORY"))return undefined;
     if(Object.keys(this.revisionFiles(revision)).filter(f=>f!=="").some(f=>!files.has(f)))return undefined;
     const covered=new Set((this.db.prepare("select producer_run_id from evidence_core_coverage where revision=?").all(revision) as {producer_run_id:string}[]).map(c=>c.producer_run_id));
-    if(runs.some(r=>!covered.has(r.id)))return undefined;
+    if(covered.size!==runs.length || runs.some(r=>!covered.has(r.id)))return undefined;
+    if((this.db.prepare("select count(*) n from evidence_core_coverage where revision=? and (status!='PARTIAL' or domain!='static.observations')").get(revision) as {n:number}).n)return undefined;
     const expected=(this.db.prepare("select coalesce(sum(json_array_length(ev)),0) n from facts where revision=?").get(revision) as {n:number}).n+(this.db.prepare("select coalesce(sum(json_array_length(ev)),0) n from relationships where revision=?").get(revision) as {n:number}).n;
     const actual=(this.db.prepare("select count(*) n from evidence_core_links where revision=?").get(revision) as {n:number}).n;
     if(actual!==expected)return undefined;
