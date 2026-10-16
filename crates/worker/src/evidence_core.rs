@@ -72,21 +72,6 @@ pub fn identity(kind: &str, value: &Value) -> String {
 }
 /// Reject incompatible IDs before the legacy deduper can silently retain the first row.
 pub fn validate(batch: &AnalysisBatch) -> Result<(), String> {
-    fn unique(rows: Vec<(String, Value)>) -> Result<(), String> {
-        let mut seen = HashMap::new();
-        for (id, value) in rows {
-            match seen.entry(id) {
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(value);
-                }
-                std::collections::hash_map::Entry::Occupied(entry) if entry.get() != &value => {
-                    return Err("EVIDENCE_CORE_ID_COLLISION".into())
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
     // Most IDs occur once. Retain borrowed rows and serialize only when an ID
     // repeats, so collision checks keep their exact semantic comparison.
     fn unique_borrowed<'a, T: Serialize + 'a>(
@@ -105,23 +90,30 @@ pub fn validate(batch: &AnalysisBatch) -> Result<(), String> {
         Ok(())
     }
     unique_borrowed(batch.entities.iter().map(|e| (e.entity_id.as_str(), e)))?;
-    let rows = batch
-        .facts
-        .iter()
-        .map(|f| {
-            (
-                f.id.clone(),
-                json!([f.subject, f.predicate, f.object, f.resolution]),
-            )
-        })
-        .chain(batch.relationships.iter().map(|r| {
-            (
-                r.id.clone(),
-                json!([r.from, r.to, r.kind, r.resolution, r.label]),
-            )
-        }))
-        .collect();
-    unique(rows)?;
+    enum Observation<'a> {
+        Fact(&'a crate::model::Fact),
+        Relationship(&'a crate::model::Relationship),
+    }
+    impl Observation<'_> {
+        fn payload(&self) -> Value {
+            match self {
+                Self::Fact(f) => json!([f.subject, f.predicate, f.object, f.resolution]),
+                Self::Relationship(r) => json!([r.from, r.to, r.kind, r.resolution, r.label]),
+            }
+        }
+    }
+    let mut seen = HashMap::new();
+    for (id, observation) in batch.facts.iter().map(|f| (f.id.as_str(), Observation::Fact(f)))
+        .chain(batch.relationships.iter().map(|r| (r.id.as_str(), Observation::Relationship(r)))) {
+        match seen.entry(id) {
+            std::collections::hash_map::Entry::Vacant(entry) => { entry.insert(observation); }
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                if entry.get().payload() != observation.payload() {
+                    return Err("EVIDENCE_CORE_ID_COLLISION".into());
+                }
+            }
+        }
+    }
     let evs: Vec<_> = batch
         .facts
         .iter()

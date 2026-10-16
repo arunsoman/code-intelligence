@@ -6,6 +6,9 @@ pub fn normalize(batch: &mut AnalysisBatch) -> Result<(), String> {
     // Other conflicting IDs remain hard errors; do not repair arbitrary collisions.
     let mut seen = std::collections::HashMap::new();
     for fact in &mut batch.facts {
+        if !fact.id.starts_with("fact:unresolved-call:") && !fact.id.starts_with("fact:defect:") {
+            continue;
+        }
         let payload = serde_json::to_vec(&serde_json::json!([
             fact.subject,
             fact.predicate,

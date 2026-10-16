@@ -1,0 +1,165 @@
+{
+  "exactOutputParity": true,
+  "samples": [
+    {
+      "files": 60,
+      "functions": 480,
+      "repeat": 0,
+      "variant": "baseline",
+      "indexMs": 55.03595899999999,
+      "metadataBytes": 399739
+    },
+    {
+      "files": 60,
+      "functions": 480,
+      "repeat": 0,
+      "variant": "current",
+      "indexMs": 48.11371599999998,
+      "metadataBytes": 399739
+    },
+    {
+      "files": 60,
+      "functions": 480,
+      "repeat": 1,
+      "variant": "current",
+      "indexMs": 51.615824,
+      "metadataBytes": 399739
+    },
+    {
+      "files": 60,
+      "functions": 480,
+      "repeat": 1,
+      "variant": "baseline",
+      "indexMs": 54.514170999999976,
+      "metadataBytes": 399739
+    },
+    {
+      "files": 60,
+      "functions": 480,
+      "repeat": 2,
+      "variant": "baseline",
+      "indexMs": 58.56294499999996,
+      "metadataBytes": 399739
+    },
+    {
+      "files": 60,
+      "functions": 480,
+      "repeat": 2,
+      "variant": "current",
+      "indexMs": 54.035068000000024,
+      "metadataBytes": 399739
+    },
+    {
+      "files": 60,
+      "functions": 480,
+      "repeat": 3,
+      "variant": "current",
+      "indexMs": 47.23700500000001,
+      "metadataBytes": 399739
+    },
+    {
+      "files": 60,
+      "functions": 480,
+      "repeat": 3,
+      "variant": "baseline",
+      "indexMs": 54.08607400000005,
+      "metadataBytes": 399739
+    },
+    {
+      "files": 60,
+      "functions": 480,
+      "repeat": 4,
+      "variant": "baseline",
+      "indexMs": 55.83546200000001,
+      "metadataBytes": 399739
+    },
+    {
+      "files": 60,
+      "functions": 480,
+      "repeat": 4,
+      "variant": "current",
+      "indexMs": 51.04740099999992,
+      "metadataBytes": 399739
+    },
+    {
+      "files": 600,
+      "functions": 4800,
+      "repeat": 0,
+      "variant": "baseline",
+      "indexMs": 609.2065499999999,
+      "metadataBytes": 4021459
+    },
+    {
+      "files": 600,
+      "functions": 4800,
+      "repeat": 0,
+      "variant": "current",
+      "indexMs": 529.1510850000002,
+      "metadataBytes": 4021459
+    },
+    {
+      "files": 600,
+      "functions": 4800,
+      "repeat": 1,
+      "variant": "current",
+      "indexMs": 552.3619840000001,
+      "metadataBytes": 4021459
+    },
+    {
+      "files": 600,
+      "functions": 4800,
+      "repeat": 1,
+      "variant": "baseline",
+      "indexMs": 530.3584999999998,
+      "metadataBytes": 4021459
+    },
+    {
+      "files": 600,
+      "functions": 4800,
+      "repeat": 2,
+      "variant": "baseline",
+      "indexMs": 580.3294850000002,
+      "metadataBytes": 4021459
+    },
+    {
+      "files": 600,
+      "functions": 4800,
+      "repeat": 2,
+      "variant": "current",
+      "indexMs": 604.2760899999998,
+      "metadataBytes": 4021459
+    },
+    {
+      "files": 600,
+      "functions": 4800,
+      "repeat": 3,
+      "variant": "current",
+      "indexMs": 656.8710000000001,
+      "metadataBytes": 4021459
+    },
+    {
+      "files": 600,
+      "functions": 4800,
+      "repeat": 3,
+      "variant": "baseline",
+      "indexMs": 611.5350840000001,
+      "metadataBytes": 4021459
+    },
+    {
+      "files": 600,
+      "functions": 4800,
+      "repeat": 4,
+      "variant": "baseline",
+      "indexMs": 561.2733360000002,
+      "metadataBytes": 4021459
+    },
+    {
+      "files": 600,
+      "functions": 4800,
+      "repeat": 4,
+      "variant": "current",
+      "indexMs": 515.4337340000002,
+      "metadataBytes": 4021459
+    }
+  ]
+}
