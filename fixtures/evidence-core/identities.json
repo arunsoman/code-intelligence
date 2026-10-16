@@ -1,0 +1,21 @@
+[
+  {
+    "kind": "fixture",
+    "payload": {
+      "b": 2,
+      "a": 1
+    },
+    "id": "cie.evidence-core.fixture@1:e87d2f9cd3d11d10d34d68d663eaf064aab16f546815684fc35406933ea22385"
+  },
+  {
+    "kind": "fixture",
+    "payload": [
+      "π",
+      {
+        "path": "src/refund.ts",
+        "n": 0
+      }
+    ],
+    "id": "cie.evidence-core.fixture@1:2be12dc947d4bc0505c4251026d20c85d65e4ded0c1f05fe79fa3349a9ee8dc4"
+  }
+]

@@ -9,6 +9,14 @@ export class MigrationError extends Error {
 }
 
 export const MIGRATIONS: Migration[] = [
+  { version: 54, name: "evidence-core-sidecars", up: db => db.exec(`
+    create table evidence_core_producer_runs(revision text not null references revisions(id) on delete cascade, id text not null, producer_id text not null, file text, json text not null, primary key(revision,id));
+    create index evidence_core_run_scope on evidence_core_producer_runs(revision,producer_id,file);
+    create table evidence_core_links(revision text not null references revisions(id) on delete cascade, subject_kind text not null, subject_id text not null, evidence_id text not null, producer_run_id text not null, role text not null, primary key(revision,subject_kind,subject_id,evidence_id,producer_run_id,role), foreign key(revision,producer_run_id) references evidence_core_producer_runs(revision,id) on delete cascade);
+    create index evidence_core_link_evidence on evidence_core_links(revision,evidence_id);
+    create table evidence_core_coverage(revision text not null references revisions(id) on delete cascade, id text not null, producer_run_id text not null, domain text not null, file text, status text not null check(status in ('COMPLETE','PARTIAL','UNKNOWN','NOT_APPLICABLE')), json text not null, primary key(revision,id), foreign key(revision,producer_run_id) references evidence_core_producer_runs(revision,id) on delete cascade);
+    create index evidence_core_coverage_scope on evidence_core_coverage(revision,domain,file,status);
+  `), down: db => db.exec("drop table evidence_core_coverage; drop table evidence_core_links; drop table evidence_core_producer_runs;") },
   { version: 50, name: "query-evidence-snapshots",
     up: db => db.exec(`create table query_evidence_snapshots(id text primary key, revision text not null references revisions(id) on delete cascade, json text not null);`),
     down: db => db.exec("drop table query_evidence_snapshots;"),

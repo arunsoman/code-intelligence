@@ -1,3 +1,5 @@
+export * from "./evidence-core.ts";
+import type { EvidenceCoreBatchV1 } from "./evidence-core.ts";
 import type { EvidenceProjection, CanonicalFinding } from "./evidence-snapshot.ts";
 import type { TableSpec } from "./table.ts";
 export { TableSpecSchema, type TableSpec } from "./table.ts";
@@ -68,6 +70,7 @@ export interface Fact {
 }
 export interface Diagnostic { code: string; message: string; relatedEntityIds: Id[]; retryable: boolean }
 export interface AnalysisBatch {
+  evidenceCore?: EvidenceCoreBatchV1;
   revision: RevisionId; gitHead: string | null; repoRoot: string;
   entities: Entity[]; facts: Fact[]; relationships: Relationship[];
   diagnostics: Diagnostic[]; analyzerVersion: string;

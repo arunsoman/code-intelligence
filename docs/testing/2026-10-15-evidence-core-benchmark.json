@@ -1,0 +1,98 @@
+{
+  "corpus": {
+    "files": 60,
+    "functions": 480
+  },
+  "samples": [
+    {
+      "mode": "off",
+      "indexMs": 30.10134099999999,
+      "persistMs": 23.110450999999955,
+      "sampledWorkerRssMb": null,
+      "dbBytes": 4382720,
+      "metadataBytes": 4,
+      "lookupP95Ms": 0.046649999999999636
+    },
+    {
+      "mode": "on",
+      "indexMs": 45.75331299999999,
+      "persistMs": 94.230704,
+      "sampledWorkerRssMb": null,
+      "dbBytes": 5156864,
+      "metadataBytes": 407599,
+      "lookupP95Ms": 0.10772200000002385
+    },
+    {
+      "mode": "off",
+      "indexMs": 25.944557999999972,
+      "persistMs": 17.69703800000002,
+      "sampledWorkerRssMb": null,
+      "dbBytes": 4382720,
+      "metadataBytes": 4,
+      "lookupP95Ms": 0.024155999999948108
+    },
+    {
+      "mode": "on",
+      "indexMs": 47.20556899999997,
+      "persistMs": 76.42922799999997,
+      "sampledWorkerRssMb": 99.234375,
+      "dbBytes": 5156864,
+      "metadataBytes": 407599,
+      "lookupP95Ms": 0.04976499999997941
+    },
+    {
+      "mode": "off",
+      "indexMs": 22.491745000000037,
+      "persistMs": 20.382036000000085,
+      "sampledWorkerRssMb": null,
+      "dbBytes": 4382720,
+      "metadataBytes": 4,
+      "lookupP95Ms": 0.10169399999995221
+    },
+    {
+      "mode": "on",
+      "indexMs": 52.71074300000009,
+      "persistMs": 72.71268599999996,
+      "sampledWorkerRssMb": null,
+      "dbBytes": 5156864,
+      "metadataBytes": 407599,
+      "lookupP95Ms": 0.09757799999999861
+    },
+    {
+      "mode": "off",
+      "indexMs": 27.323267999999985,
+      "persistMs": 23.209726000000046,
+      "sampledWorkerRssMb": null,
+      "dbBytes": 4382720,
+      "metadataBytes": 4,
+      "lookupP95Ms": 0.07412199999998847
+    },
+    {
+      "mode": "on",
+      "indexMs": 54.59565799999996,
+      "persistMs": 62.453524000000016,
+      "sampledWorkerRssMb": null,
+      "dbBytes": 5156864,
+      "metadataBytes": 407599,
+      "lookupP95Ms": 0.06955500000003667
+    },
+    {
+      "mode": "off",
+      "indexMs": 29.18474100000003,
+      "persistMs": 19.8407729999999,
+      "sampledWorkerRssMb": null,
+      "dbBytes": 4382720,
+      "metadataBytes": 4,
+      "lookupP95Ms": 0.048754000000144515
+    },
+    {
+      "mode": "on",
+      "indexMs": 47.85338700000011,
+      "persistMs": 71.72960499999999,
+      "sampledWorkerRssMb": null,
+      "dbBytes": 5156864,
+      "metadataBytes": 407599,
+      "lookupP95Ms": 0.11934100000007675
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+import { z } from "zod";
+const id = z.string().min(1).max(1024);
+const file = id.refine(p => !p.startsWith("/") && !p.includes("\\") && !p.split("/").some(s => s === ".." || s === "." || !s), "expected normalized relative file path");
+const scope = z.discriminatedUnion("kind", [z.object({ kind: z.literal("FILE"), file }).strict(), z.object({ kind: z.literal("REPOSITORY") }).strict()]);
+export const ProducerRunSchema = z.object({ id, producerId: id, producerVersion: id, analyzerVersion: id, revision: id, scope, status: z.enum(["COMPLETE","PARTIAL","FAILED","NOT_APPLICABLE"]), inputDigest: id, outputDigest: id }).strict();
+export const EvidenceLinkSchema = z.object({ subjectKind: z.enum(["FACT","RELATIONSHIP"]), subjectId: id, evidenceId: id, producerRunId: id, role: z.enum(["SUPPORTS","CONTRADICTS","CONTEXT"]) }).strict();
+export const CoverageRecordSchema = z.object({ id, producerRunId: id, revision: id, domain: id, scope, status: z.enum(["COMPLETE","PARTIAL","UNKNOWN","NOT_APPLICABLE"]), exclusions: z.array(id).max(128), unresolved: z.array(id).max(128), analyzedEntityIds: z.array(id).max(100000).optional() }).strict();
+export const DerivationRecordSchema = z.object({ id, ruleId: id, ruleVersion: id, outputFactId: id, inputFactIds: z.array(id).min(1).max(100000), coverageIds: z.array(id).max(100000) }).strict();
+export const EvidenceDiagnosticSchema = z.object({ code: id, message: z.string().max(2000), subjectIds: z.array(id).max(1000), severity: z.enum(["INFO","WARNING","ERROR"]) }).strict();
+export const EvidenceCoreBatchSchema = z.object({ schema: z.literal("cie.evidence-core.batch.v1"), producerRuns: z.array(ProducerRunSchema).max(100000), links: z.array(EvidenceLinkSchema).max(100000), coverage: z.array(CoverageRecordSchema).max(100000), derivations: z.array(DerivationRecordSchema).max(100000).optional(), diagnostics: z.array(EvidenceDiagnosticSchema).max(1000).optional() }).strict();
+export type EvidenceCoreBatchV1 = z.infer<typeof EvidenceCoreBatchSchema>;
+export type ProducerRunV1 = z.infer<typeof ProducerRunSchema>;
+export type EvidenceLinkV1 = z.infer<typeof EvidenceLinkSchema>;
+export type CoverageRecordV1 = z.infer<typeof CoverageRecordSchema>;
+export type DerivationRecordV1 = z.infer<typeof DerivationRecordSchema>;
+export type EvidenceDiagnosticV1 = z.infer<typeof EvidenceDiagnosticSchema>;

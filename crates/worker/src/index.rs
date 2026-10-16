@@ -1181,6 +1181,9 @@ pub fn index_repo(
     changes: Option<&ChangeSet>,
     base: Option<&BaseRef>,
 ) -> Result<AnalysisBatch, String> {
+    let evidence_core = crate::evidence_core::enabled()?;
+    // Until delta certificates are implemented, enabled indexing recomputes the full batch.
+    let base = if evidence_core { None } else { base };
     let t_all = std::time::Instant::now();
     if !root.is_dir() {
         return Err(format!("not a directory: {}", root.display()));
@@ -1751,8 +1754,24 @@ pub fn index_repo(
     cluster_concepts(&mut batch, &ir_seqs);
     timing("concept clustering", t_concepts);
     let t_shard = std::time::Instant::now();
-    merge_duplicate_rows(&mut batch);
+    if evidence_core {
+        crate::fact_normalize::normalize(&mut batch)?;
+    } else {
+        merge_duplicate_rows(&mut batch);
+    }
     shard(&mut batch, base);
+    if evidence_core {
+        let unbound = batch.facts.iter().flat_map(|f| &f.evidence)
+            .chain(batch.relationships.iter().flat_map(|r| &r.evidence))
+            .any(|e| e.location["kind"] == "CodeLocation"
+                && e.location["span"]["revision"] != batch.revision);
+        if unbound { return Err("EVIDENCE_CORE_REVISION".into()); }
+        let core = crate::evidence_core::emit(&batch)?;
+        if serde_json::to_vec(&core).map_err(|e| e.to_string())?.len() > 16 * 1024 * 1024 {
+            return Err("EVIDENCE_CORE_LIMIT: metadata exceeds 16 MiB; index not committed".into());
+        }
+        batch.evidence_core = Some(core);
+    }
     timing("shard digests + delta", t_shard);
     timing("total index_repo", t_all);
     Ok(batch)
@@ -1966,7 +1985,7 @@ fn cluster_concepts(batch: &mut AnalysisBatch, ir_seqs: &HashMap<String, Vec<u16
 /// Rows with the same id are one row: the same edge seen from two call sites, or the same fact emitted twice.
 /// Their evidence is merged, deduplicated by content-addressed evidence id; the store keeps only the first
 /// row it is given for an id, so any evidence dropped here would be lost from views and claim cards.
-fn merge_duplicate_rows(batch: &mut AnalysisBatch) {
+pub(crate) fn merge_duplicate_rows(batch: &mut AnalysisBatch) {
     fn merge_evidence(into: &mut Vec<EvidenceRef>, extra: Vec<EvidenceRef>) {
         for ev in extra {
             if !into.iter().any(|e| e.id == ev.id) {

@@ -1,3 +1,6 @@
+import { validatedCore, insertCore, evidenceCoreConfig } from "./evidence-core.ts";
+import { policyFor } from "./access.ts";
+import type { CoverageRecordV1, EvidenceLinkV1, ProducerRunV1 } from "@cie/schema";
 import type { EvidenceSnapshot } from "@cie/schema";
 // SQLite persistence (C31 slice) on node:sqlite. All reads are revision-bound.
 import { failpoint } from "./failpoint.ts";
@@ -165,15 +168,34 @@ export class Store {
     return Object.fromEntries((this.db.prepare("select file, digest from rev_files where revision = ?").all(revision) as { file: string; digest: string }[]).map((r) => [r.file, r.digest]));
   }
 
+  /** Additive, access-filtered metadata. Legacy revisions naturally return unknown (empty). */
+  evidenceCoreProducerRuns(revision: string, file: string): ProducerRunV1[] {
+    const rev = this.revision(revision); if (!rev || evidenceCoreConfig().mode !== "on" || policyFor(this,rev.repoRoot).denied(file)) return [];
+    return (this.db.prepare("select json from evidence_core_producer_runs where revision=? and file=?").all(revision,file) as {json:string}[]).map(r => JSON.parse(r.json));
+  }
+  evidenceCoreCoverage(revision: string, domain: string, file: string): CoverageRecordV1[] {
+    const rev = this.revision(revision); if (!rev || evidenceCoreConfig().mode !== "on" || policyFor(this, rev.repoRoot).denied(file)) return [];
+    return (this.db.prepare("select json from evidence_core_coverage where revision=? and domain=? and file=?").all(revision,domain,file) as {json:string}[]).map(r => JSON.parse(r.json));
+  }
+  evidenceCoreLinks(revision: string, subjectKind: "FACT" | "RELATIONSHIP", subjectId: string): EvidenceLinkV1[] {
+    const rev = this.revision(revision); if (!rev || evidenceCoreConfig().mode !== "on") return [];
+    const table = subjectKind === "FACT" ? "facts" : "relationships";
+    const owner = this.db.prepare(`select file from ${table} where revision=? and id=?`).get(revision,subjectId) as {file:string} | undefined;
+    if (!owner || !owner.file || policyFor(this,rev.repoRoot).denied(owner.file)) return [];
+    return (this.db.prepare("select subject_kind, subject_id, evidence_id, producer_run_id, role from evidence_core_links where revision=? and subject_kind=? and subject_id=?").all(revision,subjectKind,subjectId) as any[]).filter(r => { const e = this.evidence(revision,r.evidence_id); return e && !policyFor(this,rev.repoRoot).denied(e.sourceId); }).map(r => ({ subjectKind:r.subject_kind,subjectId:r.subject_id,evidenceId:r.evidence_id,producerRunId:r.producer_run_id,role:r.role }));
+  }
+
   putBatch(b: AnalysisBatch): RevisionRow {
+    const core = validatedCore(b);
     const files = b.entities.filter((e) => e.kind === "file").length;
     const row: RevisionRow = { id: b.revision, repoRoot: b.repoRoot, gitHead: b.gitHead, createdAt: new Date().toISOString(), analyzerVersion: b.analyzerVersion, diagnostics: b.diagnostics, fileCount: files };
     this.tx(() => {
       const exists = this.db.prepare("select 1 from revisions where id = ?").get(b.revision);
-      if (exists) return; // content-addressed revision: identical content already indexed
+      if (exists) { insertCore(this.db, b.revision, core); return; } // content-addressed revision: identical content already indexed
       this.db.prepare("insert into revisions values (?,?,?,?,?,?,?)").run(row.id, row.repoRoot, row.gitHead, row.createdAt, row.analyzerVersion, JSON.stringify(row.diagnostics), files);
       this.insertRows(b.revision, b, this.ownerOf(b));
       this.insertManifest(b.revision, b.manifest);
+      insertCore(this.db, b.revision, core);
       this.insertConceptClusters(b.revision, b.conceptClusters);
     });
     clearHistoryCache(b.repoRoot); // a newly indexed revision means the repository may have advanced
@@ -186,6 +208,7 @@ export class Store {
    * Throws DeltaBaseError when the base is not usable, and the caller indexes in full instead; nothing is written in that case.
    */
   putDelta(b: AnalysisBatch): RevisionRow {
+    if (evidenceCoreConfig().mode !== "off") throw new DeltaBaseError("evidence-core requires full indexing; delta certificates are not enabled");
     const base = b.baseRevision ? this.revision(b.baseRevision, true) : null;
     if (!base || base.repoRoot !== b.repoRoot) throw new DeltaBaseError("the base revision is not held for this repository");
     const baseFiles = this.revisionFiles(base.id);

@@ -5,6 +5,9 @@ mod frameworks;
 mod index;
 mod artifact;
 mod evidence;
+mod evidence_core;
+mod fact_normalize;
+mod producer_registry;
 mod ir;
 mod irpdg;
 mod irrender;
@@ -165,6 +168,8 @@ fn handle(req: &Value) -> Value {
                     .pointer("/params/base")
                     .and_then(|v| serde_json::from_value(v.clone()).ok());
                 match index::index_repo(Path::new(p), changes.as_ref(), base.as_ref()) {
+                    Err(e) if e.starts_with("EVIDENCE_CORE_LIMIT") => Err(("RESOURCE_LIMIT", e)),
+                    Err(e) if e.starts_with("EVIDENCE_CORE_") || e.starts_with("invalid CIE_EVIDENCE_CORE") => Err(("INVALID_SCHEMA", e)),
                     Err(e) => Err(("NOT_FOUND", e)),
                     // The batch is streamed straight to a handle file: no intermediate JSON value and no second copy in a byte
                     // buffer, which together cost several times the batch itself at the peak.

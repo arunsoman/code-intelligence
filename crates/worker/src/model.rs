@@ -120,6 +120,8 @@ pub struct Diagnostic {
 #[derive(Serialize, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalysisBatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_core: Option<crate::evidence_core::EvidenceCoreBatchV1>,
     pub revision: String,
     pub git_head: Option<String>,
     pub repo_root: String,
