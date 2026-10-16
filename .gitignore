@@ -30,3 +30,5 @@ tools/eval/golden-set/baseline-report.json
 tools/eval/golden-set/mined-*.json
 tools/eval/shahy-onboarding/run-answerable-bg.py
 tools/eval/shahy-onboarding/run-answerable.py
+tools/eval/shahy-onboarding/answerable-qa-log.md
+tools/eval/shahy-onboarding/assemble-log.py

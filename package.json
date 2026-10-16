@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "build:worker": "cargo build --release",
+    "build": "npm run typecheck",
     "test": "npm run plugins:check && cargo test && node --test packages/core/test/*.test.ts packages/model/test/*.test.ts apps/web/test/*.test.ts extensions/vscode/test/*.test.ts packages/reporter/test/*.test.ts && node --test --test-concurrency=1 apps/web/test/e2e/*.test.ts",
     "typecheck": "npm run plugins:check && tsc -p tsconfig.json --noEmit && tsc -p apps/web/tsconfig.json --noEmit",
     "web:build": "npm run plugins:check && npm -w apps/web run build",
