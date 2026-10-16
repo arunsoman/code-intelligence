@@ -1,6 +1,7 @@
+import {attachCoreStream} from "../../packages/core/src/evidence-core-stream.ts";
 // Sequential profiling; no model. Run after a release build, without competing tests.
 import {execFileSync} from "node:child_process";
-import {mkdtempSync,writeFileSync,readFileSync,rmSync,unlinkSync} from "node:fs";
+import {mkdtempSync,writeFileSync,readFileSync,rmSync,unlinkSync,statSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {resolve,join} from "node:path";
 import {Store} from "../../packages/core/src/store.ts";
@@ -18,10 +19,12 @@ try {
     const at=performance.now();let batch;
     try{batch=JSON.parse(readFileSync(response.handle,"utf8"));}finally{unlinkSync(response.handle);}
     const handleReadParseMs=performance.now()-at;
-    const validationAt=performance.now();validatedCore(batch);const standaloneValidationMs=performance.now()-validationAt;
+    if(response.evidenceCoreHandle)attachCoreStream(batch,response.evidenceCoreHandle);
+    const metadataBytes=response.evidenceCoreHandle?statSync(response.evidenceCoreHandle).size:Buffer.byteLength(JSON.stringify(batch.evidenceCore??null));
+    const validationAt=performance.now();if(!response.evidenceCoreHandle)validatedCore(batch);const standaloneValidationMs=performance.now()-validationAt;
     const store=new Store(":memory:");let persistMs:number;
     try{const at=performance.now();store.putBatch(batch);persistMs=performance.now()-at;}finally{store.db.close();}
-    samples.push({corpus,repeat,mode,...metrics,handleReadParseMs,standaloneValidationMs,persistMs,files:batch.entities.filter((e:{kind:string})=>e.kind==="file").length,metadataBytes:Buffer.byteLength(JSON.stringify(batch.evidenceCore??null))});
+    samples.push({corpus,repeat,mode,...metrics,handleReadParseMs,standaloneValidationMs,persistMs,files:batch.entities.filter((e:{kind:string})=>e.kind==="file").length,metadataBytes,transport:response.evidenceCoreHandle?"stream":"inline"});
   }
   console.log(JSON.stringify({schema:"cie.index-profile.v1",samples},null,2));
 } finally {rmSync(root,{recursive:true,force:true});}

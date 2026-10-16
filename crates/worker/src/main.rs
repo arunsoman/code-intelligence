@@ -6,6 +6,7 @@ mod index;
 mod artifact;
 mod evidence;
 mod evidence_core;
+mod evidence_stream;
 mod fact_normalize;
 mod producer_registry;
 mod ir;
@@ -179,6 +180,13 @@ fn handle(req: &Value) -> Value {
                             std::process::id(),
                             id
                         ));
+                        let core_path=path.with_extension("core.jsonl");
+                        let stream=crate::evidence_core::enabled().unwrap_or(false) && crate::evidence_stream::streaming().unwrap_or(false) && b.mode!="unchanged";
+                        if stream {
+                            let t_stream=std::time::Instant::now();
+                            if let Err(e)=crate::evidence_stream::write(&b,&core_path){return json!({"id":id,"ok":false,"error":{"code":if e.starts_with("EVIDENCE_CORE_LIMIT"){"RESOURCE_LIMIT"}else{"STORAGE_FAILURE"},"message":e,"retryable":false}});}
+                            index::timing("provenance stream + flush",t_stream);
+                        }
                         let t_write = std::time::Instant::now();
                         let written = std::fs::File::create(&path)
                             .map(std::io::BufWriter::new)
@@ -193,9 +201,10 @@ fn handle(req: &Value) -> Value {
                         index::timing("handle serialization + flush", t_write);
                         match written {
                             Ok(()) => {
+                                if stream {return json!({"id":id,"ok":true,"handle":path.to_string_lossy(),"evidenceCoreHandle":core_path.to_string_lossy()});}
                                 return json!({"id": id, "ok": true, "handle": path.to_string_lossy()});
                             }
-                            Err(e) => Err(("STORAGE_FAILURE", e)),
+                            Err(e) => {let _=std::fs::remove_file(&path);let _=std::fs::remove_file(&core_path);Err(("STORAGE_FAILURE", e))},
                         }
                     }
                 }

@@ -17,5 +17,19 @@
       }
     ],
     "id": "cie.evidence-core.fixture@1:2be12dc947d4bc0505c4251026d20c85d65e4ded0c1f05fe79fa3349a9ee8dc4"
+  },
+  {
+    "kind": "manifest-input",
+    "payload": [
+      [
+        "",
+        "root"
+      ],
+      [
+        "a.ts",
+        "sha"
+      ]
+    ],
+    "id": "cie.evidence-core.manifest-input@1:5b5fdc3b9b173acf59a664ac82591e575201e31b48c3075bc448fc08bd3a0619"
   }
 ]

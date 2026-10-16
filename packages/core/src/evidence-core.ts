@@ -2,14 +2,24 @@ import { EvidenceCoreBatchSchema, type AnalysisBatch, type EvidenceCoreBatchV1, 
 import { canonicalize, canonDigest, type Canon } from "@cie/canon";
 import type { DatabaseSync } from "node:sqlite";
 export const EVIDENCE_CORE_PRODUCER_VERSION = "3";
+export function evidenceCoreLimits() {
+  const read=(key:string,fallback:number,max:number)=>{const raw=process.env[key]??String(fallback);if(!/^[1-9][0-9]*$/.test(raw)||!Number.isSafeInteger(Number(raw))||Number(raw)>max)throw new Error(`EVIDENCE_CORE_CONFIG: invalid budget ${key}`);return Number(raw);};
+  return {rows:read("CIE_EVIDENCE_CORE_MAX_ROWS",100000,1000000),bytes:read("CIE_EVIDENCE_CORE_MAX_BYTES",16*1024*1024,512*1024*1024),chunkBytes:read("CIE_EVIDENCE_CORE_CHUNK_BYTES",8*1024*1024,32*1024*1024),chunkRows:read("CIE_EVIDENCE_CORE_CHUNK_ROWS",16384,100000)};
+}
 export function evidenceCoreConfig() {
   const mode = process.env.CIE_EVIDENCE_CORE_MODE ?? "off", strict = process.env.CIE_EVIDENCE_CORE_STRICT ?? "0", gates = process.env.CIE_EVIDENCE_CORE_COVERAGE_GATES ?? "0";
   if (!["off","shadow","on"].includes(mode) || !["0","1"].includes(strict) || gates !== "0") throw new Error("EVIDENCE_CORE_CONFIG: invalid flags or coverage gates not implemented");
-  return { mode, strict: strict === "1" };
+  const transport=process.env.CIE_EVIDENCE_CORE_TRANSPORT??"inline";
+  if(!["inline","stream"].includes(transport))throw new Error("EVIDENCE_CORE_CONFIG: invalid transport");
+  return { mode, strict: strict === "1", transport, limits:evidenceCoreLimits() };
 }
 export function evidenceCoreIdentity(kind: string, value: Canon): string {
   const name = `cie.evidence-core.${kind}`;
   return `${name}@1:${canonDigest(name,"1",canonicalize(value))}`;
+}
+/** Entry tuples encode the repository's empty owner key without violating canon's schema-key rules. */
+export function evidenceCoreManifestInput(manifest:Record<string,string>):string {
+  return evidenceCoreIdentity("manifest-input",Object.entries(manifest).sort((a,b)=>Buffer.compare(Buffer.from(a[0]),Buffer.from(b[0]))));
 }
 /** Cache canonical sort keys per operation, never across mutable batches. */
 function sortAssociations<T extends Canon>(rows: T[]): T[] {
@@ -22,8 +32,9 @@ export function validatedCore(batch: AnalysisBatch): EvidenceCoreBatchV1 | undef
   if (config.mode === "off") return undefined;
   if (!batch.evidenceCore) { if (config.strict) throw new Error("EVIDENCE_CORE_REQUIRED"); return undefined; }
   try {
-    if (Buffer.byteLength(JSON.stringify(batch.evidenceCore)) > 16 * 1024 * 1024) throw new Error("metadata cap");
+    if (Buffer.byteLength(JSON.stringify(batch.evidenceCore)) > config.limits.bytes) throw new Error("metadata cap");
     const core = EvidenceCoreBatchSchema.parse(batch.evidenceCore);
+    if ([core.producerRuns,core.links,core.coverage,core.derivations??[]].some(rows=>rows.length>config.limits.rows))throw new Error("metadata row cap");
     if (core.derivations?.length) throw new Error("derivation rules not registered");
     const entityById = new Map(batch.entities.map(e => [e.entityId,e]));
     const files = new Map(batch.entities.filter(e => e.kind === "file").map(e => [e.file,e]));
@@ -48,7 +59,7 @@ export function validatedCore(batch: AnalysisBatch): EvidenceCoreBatchV1 | undef
       if (run.revision !== batch.revision || run.analyzerVersion !== batch.analyzerVersion || run.producerId !== "cie.rust.static" || run.producerVersion !== EVIDENCE_CORE_PRODUCER_VERSION) throw new Error("producer binding");
       if (run.id !== evidenceCoreIdentity("run", [run.producerId,run.producerVersion,run.analyzerVersion,run.scope,run.inputDigest,run.outputDigest])) throw new Error("producer identity");
       const file = run.scope.kind === "FILE" ? run.scope.file : undefined;
-      if (!file && run.scope.kind === "REPOSITORY" && run.inputDigest !== evidenceCoreIdentity("input",batch.manifest ?? {})) throw new Error("repository input binding");
+      if (!file && run.scope.kind === "REPOSITORY" && run.inputDigest !== evidenceCoreManifestInput(batch.manifest ?? {})) throw new Error("repository input binding");
       if (file && !files.get(file)?.spans.some(s => s.contentHash === run.inputDigest && s.revision === batch.revision)) throw new Error("input binding");
     }
     for (const coverage of core.coverage) {
@@ -93,7 +104,6 @@ export function validatedCore(batch: AnalysisBatch): EvidenceCoreBatchV1 | undef
 }
 export function insertCore(db: DatabaseSync, revision: string, core: EvidenceCoreBatchV1 | undefined, replace = true): void {
   if (!core) return;
-  const runById = new Map(core.producerRuns.map(r => [r.id,r]));
   const grouped = new Map<string, {subjectKind:string;subjectId:string;evidenceId:string;role:string}[]>();
   for (const {producerRunId,...association} of core.links) { const rows=grouped.get(producerRunId)??[];rows.push(association);grouped.set(producerRunId,rows); }
   const manifestQuery=db.prepare("select digest from rev_files where revision=? and file=?");
@@ -106,7 +116,7 @@ export function insertCore(db: DatabaseSync, revision: string, core: EvidenceCor
     if(r.outputDigest!==evidenceCoreIdentity("output",[digest,sorted]))throw new Error("EVIDENCE_CORE_PERSISTED_BINDING");
     if(r.scope.kind === "REPOSITORY") {
       const manifest=Object.fromEntries((db.prepare("select file,digest from rev_files where revision=?").all(revision) as {file:string;digest:string}[]).map(row=>[row.file,row.digest]));
-      if(r.inputDigest!==evidenceCoreIdentity("input",manifest))throw new Error("EVIDENCE_CORE_PERSISTED_BINDING");
+      if(r.inputDigest!==evidenceCoreManifestInput(manifest))throw new Error("EVIDENCE_CORE_PERSISTED_BINDING");
     }
     if(r.scope.kind === "FILE") {
       const row=fileQuery.get(revision,file) as {json:string}|undefined;
@@ -114,26 +124,22 @@ export function insertCore(db: DatabaseSync, revision: string, core: EvidenceCor
     }
   }
   if (replace) db.prepare("delete from evidence_core_producer_runs where revision=?").run(revision);
-  const run = db.prepare("insert into evidence_core_producer_runs values(?,?,?,?,?)"), link = db.prepare("insert into evidence_core_links values(?,?,?,?,?,?)"), coverage = db.prepare("insert into evidence_core_coverage values(?,?,?,?,?,?,?)");
+  const run = db.prepare("insert into evidence_core_producer_runs values(?,?,?,?,?)"), coverage = db.prepare("insert into evidence_core_coverage values(?,?,?,?,?,?,?)");
   for (const r of core.producerRuns) run.run(revision,r.id,r.producerId,r.scope.kind === "FILE" ? r.scope.file : null,JSON.stringify(r));
-  const rowQueries = { FACT:db.prepare("select ev,file from facts where revision=? and id=?"), RELATIONSHIP:db.prepare("select ev,file from relationships where revision=? and id=?") };
-  const evidenceQuery = db.prepare("select 1 from evidence where revision=? and id=?");
-  const rowCache = new Map<string, Set<string>>(), evidenceCache = new Set<string>();
-  for (const l of core.links) {
-    const key = `${l.subjectKind}:${l.subjectId}`;
-    if (!rowCache.has(key)) {
-      const stored = rowQueries[l.subjectKind].get(revision,l.subjectId) as {ev:string;file:string} | undefined;
-      const scope=runById.get(l.producerRunId)!.scope;
-      if (!stored || (scope.kind === "FILE" ? scope.file !== stored.file : stored.file !== "")) throw new Error("EVIDENCE_CORE_PERSISTED_BINDING");
-      rowCache.set(key,new Set(JSON.parse(stored.ev)));
-    }
-    if (!evidenceCache.has(l.evidenceId)) {
-      if (!evidenceQuery.get(revision,l.evidenceId)) throw new Error("EVIDENCE_CORE_PERSISTED_BINDING");
-      evidenceCache.add(l.evidenceId);
-    }
-    if (!rowCache.get(key)!.has(l.evidenceId)) throw new Error("EVIDENCE_CORE_PERSISTED_BINDING");
-    link.run(revision,l.subjectKind,l.subjectId,l.evidenceId,l.producerRunId,l.role);
+  // Validate persisted bindings in SQLite in bounded groups, retaining the same
+  // owner, evidence-existence and embedded-evidence checks without per-link RPCs.
+  const linksJson=JSON.stringify(core.links);
+  for(const [kind,table]of [["FACT","facts"],["RELATIONSHIP","relationships"]]) {
+    const bad=db.prepare(`select 1 from json_each(?) j
+      left join ${table} r on r.revision=? and r.id=json_extract(j.value,'$.subjectId')
+      left join evidence e on e.revision=? and e.id=json_extract(j.value,'$.evidenceId')
+      left join evidence_core_producer_runs p on p.revision=? and p.id=json_extract(j.value,'$.producerRunId')
+      where json_extract(j.value,'$.subjectKind')=? and
+      (r.id is null or e.id is null or p.id is null or coalesce(p.file,'')<>r.file or
+       not exists(select 1 from json_each(r.ev) where value=json_extract(j.value,'$.evidenceId'))) limit 1`).get(linksJson,revision,revision,revision,kind);
+    if(bad)throw new Error("EVIDENCE_CORE_PERSISTED_BINDING");
   }
+  db.prepare(`insert into evidence_core_links select ?,json_extract(value,'$.subjectKind'),json_extract(value,'$.subjectId'),json_extract(value,'$.evidenceId'),json_extract(value,'$.producerRunId'),json_extract(value,'$.role') from json_each(?)`).run(revision,linksJson);
   for (const c of core.coverage) coverage.run(revision,c.id,c.producerRunId,c.domain,c.scope.kind === "FILE" ? c.scope.file : null,c.status,JSON.stringify(c));
 }
 
@@ -149,11 +155,12 @@ export function copyCoreDelta(db: DatabaseSync, old: string, revision: string): 
 
 /** Bound the whole revision, including provenance copied from its base. */
 export function enforceCoreRevisionLimits(db: DatabaseSync, revision: string): void {
+  const limits=evidenceCoreLimits();
   let bytes = 0;
   for (const table of ["evidence_core_producer_runs","evidence_core_coverage","evidence_core_links"]) {
     const row = db.prepare(`select count(*) n, coalesce(sum(length(cast(${table === "evidence_core_links" ? "json_array(subject_kind,subject_id,evidence_id,producer_run_id,role)" : "json"} as blob))),0) bytes from ${table} where revision=?`).get(revision) as {n:number;bytes:number};
-    if(row.n > 100000) throw new Error("EVIDENCE_CORE_RESOURCE_LIMIT: revision row cap");
+    if(row.n > limits.rows) throw new Error("EVIDENCE_CORE_RESOURCE_LIMIT: revision row cap");
     bytes += row.bytes;
   }
-  if(bytes > 16 * 1024 * 1024) throw new Error("EVIDENCE_CORE_RESOURCE_LIMIT: revision byte cap");
+  if(bytes > limits.bytes) throw new Error("EVIDENCE_CORE_RESOURCE_LIMIT: revision byte cap");
 }

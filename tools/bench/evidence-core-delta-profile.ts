@@ -1,5 +1,6 @@
+import {attachCoreStream} from "../../packages/core/src/evidence-core-stream.ts";
 import {execFileSync} from "node:child_process";
-import {mkdtempSync,writeFileSync,readFileSync,rmSync,unlinkSync} from "node:fs";
+import {mkdtempSync,writeFileSync,readFileSync,rmSync,unlinkSync,statSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {resolve,join} from "node:path";
 import {Store} from "../../packages/core/src/store.ts";
@@ -20,10 +21,12 @@ try {
         const {response,...metrics}=measurement;if(!response.ok)throw new Error(JSON.stringify(response.error));
         const at=performance.now();let batch;try{batch=JSON.parse(readFileSync(response.handle,"utf8"));}finally{unlinkSync(response.handle);}
         const readParseMs=performance.now()-at;
+        if(response.evidenceCoreHandle)attachCoreStream(batch,response.evidenceCoreHandle);
+        const metadataBytes=response.evidenceCoreHandle?statSync(response.evidenceCoreHandle).size:Buffer.byteLength(JSON.stringify(batch.evidenceCore??null));
         const persistAt=performance.now();if(operation==="full")store.putBatch(batch);else if(batch.mode==="delta")store.putDelta(batch);
         const persistMs=performance.now()-persistAt;
         if(operation==="full")base={revision:batch.revision,analyzerVersion:batch.analyzerVersion,digests:batch.manifest,evidenceCoreVersion:store.evidenceCoreBaseVersion(batch.revision)};
-        samples.push({repeat,mode,operation,resultMode:batch.mode,...metrics,readParseMs,persistMs,metadataBytes:Buffer.byteLength(JSON.stringify(batch.evidenceCore??null))});
+        samples.push({repeat,mode,operation,resultMode:batch.mode,...metrics,readParseMs,persistMs,metadataBytes,transport:response.evidenceCoreHandle?"stream":"inline"});
       }
     }finally{store.db.close();writeFileSync(join(source,"0.ts"),"export function f0(){return 0;}\n");}
   }

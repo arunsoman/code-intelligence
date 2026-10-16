@@ -1,3 +1,4 @@
+if(process.env.CIE_EVIDENCE_CORE_TRANSPORT==="stream")throw new Error("Use inline transport for complete-batch parity; stream parity is checked against persisted rows.");
 // Compare release workers on the same source tree; optional baseline checks exact output.
 import assert from "node:assert/strict";
 import {mkdtempSync,writeFileSync,rmSync} from "node:fs";

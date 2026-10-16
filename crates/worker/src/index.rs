@@ -1184,6 +1184,8 @@ pub fn index_repo(
     base: Option<&BaseRef>,
 ) -> Result<AnalysisBatch, String> {
     let evidence_core = crate::evidence_core::enabled()?;
+    crate::evidence_stream::limits()?;
+    let stream_core=crate::evidence_stream::streaming()?;
     // Reuse only bases carrying the compatible producer version.
     let base = if evidence_core { base.filter(|b| b.evidence_core_version.as_deref() == Some(crate::producer_registry::PRODUCER_VERSION)) } else { base };
     let t_all = std::time::Instant::now();
@@ -1772,15 +1774,17 @@ pub fn index_repo(
             .any(|e| e.location["kind"] == "CodeLocation"
                 && e.location["span"]["revision"] != batch.revision);
         if unbound { return Err("EVIDENCE_CORE_REVISION".into()); }
+        if !stream_core {
         let t_emit = std::time::Instant::now();
         let core = crate::evidence_core::emit(&batch)?;
         timing("provenance emit", t_emit);
         let t_cap = std::time::Instant::now();
-        if serde_json::to_vec(&core).map_err(|e| e.to_string())?.len() > 16 * 1024 * 1024 {
-            return Err("EVIDENCE_CORE_LIMIT: metadata exceeds 16 MiB; index not committed".into());
+        if serde_json::to_vec(&core).map_err(|e| e.to_string())?.len() > crate::evidence_stream::limits()?.bytes {
+            return Err("EVIDENCE_CORE_LIMIT: metadata exceeds configured byte budget; index not committed".into());
         }
         timing("metadata wire cap", t_cap);
         batch.evidence_core = Some(core);
+        }
     }
     timing("shard digests + delta", t_shard);
     timing("total index_repo", t_all);

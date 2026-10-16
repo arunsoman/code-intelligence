@@ -1,3 +1,4 @@
+import { coreStreamPath, insertCoreStream, releaseCoreStream } from "./evidence-core-stream.ts";
 import { validatedCore, insertCore, enforceCoreRevisionLimits, copyCoreDelta, evidenceCoreConfig, EVIDENCE_CORE_PRODUCER_VERSION } from "./evidence-core.ts";
 import { policyFor } from "./access.ts";
 import type { CoverageRecordV1, EvidenceLinkV1, ProducerRunV1 } from "@cie/schema";
@@ -210,20 +211,24 @@ export class Store {
   }
 
   putBatch(b: AnalysisBatch): RevisionRow {
-    const core = validatedCore(b);
+    try {
+    const stream=!!coreStreamPath(b);
+    const core = stream ? undefined : validatedCore(b);
     const files = b.entities.filter((e) => e.kind === "file").length;
     const row: RevisionRow = { id: b.revision, repoRoot: b.repoRoot, gitHead: b.gitHead, createdAt: new Date().toISOString(), analyzerVersion: b.analyzerVersion, diagnostics: b.diagnostics, fileCount: files };
     this.tx(() => {
       const exists = this.db.prepare("select 1 from revisions where id = ?").get(b.revision);
-      if (exists) { insertCore(this.db, b.revision, core); if(core) enforceCoreRevisionLimits(this.db,b.revision); return; } // content-addressed revision: identical content already indexed
+      if (exists) { if(stream)insertCoreStream(this.db,b,this.entities(b.revision),true);else insertCore(this.db, b.revision, core); if(core||stream) enforceCoreRevisionLimits(this.db,b.revision); return; } // content-addressed revision: identical content already indexed
       this.db.prepare("insert into revisions values (?,?,?,?,?,?,?)").run(row.id, row.repoRoot, row.gitHead, row.createdAt, row.analyzerVersion, JSON.stringify(row.diagnostics), files);
       this.insertRows(b.revision, b, this.ownerOf(b));
       this.insertManifest(b.revision, b.manifest);
-      insertCore(this.db, b.revision, core); if(core) enforceCoreRevisionLimits(this.db,b.revision);
+      if(stream)insertCoreStream(this.db,b,b.entities,true);else insertCore(this.db, b.revision, core); if(core||stream) enforceCoreRevisionLimits(this.db,b.revision);
+      if(stream)this.db.prepare("update revisions set diagnostics=? where id=?").run(JSON.stringify(b.diagnostics),b.revision);
       this.insertConceptClusters(b.revision, b.conceptClusters);
     });
     clearHistoryCache(b.repoRoot); // a newly indexed revision means the repository may have advanced
     return row;
+    } finally { releaseCoreStream(b); }
   }
 
   /**
@@ -232,10 +237,12 @@ export class Store {
    * Throws DeltaBaseError when the base is not usable, and the caller indexes in full instead; nothing is written in that case.
    */
   putDelta(b: AnalysisBatch): RevisionRow {
+    try {
+    const stream=!!coreStreamPath(b);
     const coreEnabled = evidenceCoreConfig().mode !== "off";
     const base = b.baseRevision ? this.revision(b.baseRevision, true) : null;
     if (!base || base.repoRoot !== b.repoRoot) throw new DeltaBaseError("the base revision is not held for this repository");
-    if (coreEnabled && (base.analyzerVersion !== b.analyzerVersion || this.evidenceCoreBaseVersion(base.id) !== EVIDENCE_CORE_PRODUCER_VERSION || !b.evidenceCore)) throw new DeltaBaseError("evidence-core base producer/version is incompatible; full reindex required");
+    if (coreEnabled && (base.analyzerVersion !== b.analyzerVersion || this.evidenceCoreBaseVersion(base.id) !== EVIDENCE_CORE_PRODUCER_VERSION || (!b.evidenceCore && !stream))) throw new DeltaBaseError("evidence-core base producer/version is incompatible; full reindex required");
     const baseFiles = this.revisionFiles(base.id);
     if (Object.keys(baseFiles).length === 0) throw new DeltaBaseError("the base revision was stored before per-file digests were recorded");
     const leaving = new Set([...(b.changedFiles ?? []), ...(b.removedFiles ?? [])]);
@@ -264,8 +271,11 @@ export class Store {
           throw error;
         }
         // Resolve evidence sources from the resulting revision, not just changed-file entities.
-        const core = validatedCore({...b, entities:this.entities(nu)});
-        insertCore(d,nu,core,false);
+        if(stream)insertCoreStream(d,b,this.entities(nu),false);
+        else {
+          const core = validatedCore({...b, entities:this.entities(nu)});
+          insertCore(d,nu,core,false);
+        }
         enforceCoreRevisionLimits(d,nu);
         d.prepare("update revisions set diagnostics=? where id=?").run(JSON.stringify(b.diagnostics),nu);
       }
@@ -277,6 +287,7 @@ export class Store {
     });
     clearHistoryCache(b.repoRoot); // a newly indexed revision means the repository may have advanced
     return row;
+    } finally { releaseCoreStream(b); }
   }
 
   tx<T>(fn: () => T): T {

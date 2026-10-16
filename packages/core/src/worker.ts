@@ -1,3 +1,4 @@
+import { attachCoreStream, cleanupCoreWorkerFiles } from "./evidence-core-stream.ts";
 import { diagnostic } from "./diagnostics.ts";
 // Supervisor/client for the Rust worker (contracts §10): length-prefixed JSON over stdio.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -96,7 +97,8 @@ export class WorkerClient {
     };
     // Writing to a process that just died raises on the pipe, not on the call: treat it as the worker having exited.
     this.child.stdin.on("error", (e) => fail(new Error(`worker exited (${(e as Error).message})`)));
-    this.child.on("exit", (code) => fail(new Error(`worker exited (${code})`)));
+    const workerPid=this.child.pid;
+    this.child.on("exit", (code) => {if(workerPid)cleanupCoreWorkerFiles(workerPid);fail(new Error(`worker exited (${code})`));});
     this.child.on("error", fail);
   }
 
@@ -192,7 +194,12 @@ export class WorkerClient {
     try { msg = await this.callRetry("index", { repoPath, changes, base }, timeoutMs); } finally { clearInterval(watch); }
     if (!msg.ok) throw new WorkerError(msg.error);
     if (msg.handle) {
-      try { return JSON.parse(readFileSync(msg.handle, "utf8")); } finally { try { unlinkSync(msg.handle); } catch {} }
+      try {
+        const batch=JSON.parse(readFileSync(msg.handle,"utf8"));
+        if(msg.evidenceCoreHandle)attachCoreStream(batch,msg.evidenceCoreHandle);
+        return batch;
+      } catch(error) {if(msg.evidenceCoreHandle)try{unlinkSync(msg.evidenceCoreHandle);}catch{}throw error;}
+      finally { try { unlinkSync(msg.handle); } catch {} }
     }
     return msg.result;
   }

@@ -64,9 +64,31 @@ pub fn enabled() -> Result<bool, String> {
         _ => Err("invalid CIE_EVIDENCE_CORE_MODE".into()),
     }
 }
+// These values are constructed by this module, never parsed from an RPC. A
+// serde Value already has unique keys and valid UTF-8; retain canon's numeric,
+// depth and schema-key checks without serializing and reparsing JSON.
+fn canonical_value(value: &Value) -> String {
+    fn convert(value: &Value, depth: usize) -> canon::Canon {
+        assert!(depth <= 128, "internal canonical payload depth");
+        match value {
+            Value::Null => canon::Canon::Null,
+            Value::Bool(v) => canon::Canon::Bool(*v),
+            Value::String(v) => canon::Canon::Str(v.clone()),
+            Value::Number(v) => {
+                canon::Canon::Int(v.as_i64().expect("internal integral canonical payload"))
+            }
+            Value::Array(v) => canon::Canon::Arr(v.iter().map(|v| convert(v, depth + 1)).collect()),
+            Value::Object(v) => canon::Canon::Obj(
+                v.iter()
+                    .map(|(k, v)| (k.clone(), convert(v, depth + 1)))
+                    .collect(),
+            ),
+        }
+    }
+    canon::canonicalize(&convert(value, 0)).unwrap()
+}
 pub fn identity(kind: &str, value: &Value) -> String {
-    let parsed = canon::parse_strict_json(&serde_json::to_vec(value).unwrap()).unwrap();
-    let text = canon::canonicalize(&parsed).unwrap();
+    let text = canonical_value(value);
     let name = format!("cie.evidence-core.{kind}");
     format!("{name}@1:{}", canon::canon_digest(&name, "1", &text))
 }
@@ -103,10 +125,21 @@ pub fn validate(batch: &AnalysisBatch) -> Result<(), String> {
         }
     }
     let mut seen = HashMap::new();
-    for (id, observation) in batch.facts.iter().map(|f| (f.id.as_str(), Observation::Fact(f)))
-        .chain(batch.relationships.iter().map(|r| (r.id.as_str(), Observation::Relationship(r)))) {
+    for (id, observation) in batch
+        .facts
+        .iter()
+        .map(|f| (f.id.as_str(), Observation::Fact(f)))
+        .chain(
+            batch
+                .relationships
+                .iter()
+                .map(|r| (r.id.as_str(), Observation::Relationship(r))),
+        )
+    {
         match seen.entry(id) {
-            std::collections::hash_map::Entry::Vacant(entry) => { entry.insert(observation); }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(observation);
+            }
             std::collections::hash_map::Entry::Occupied(entry) => {
                 if entry.get().payload() != observation.payload() {
                     return Err("EVIDENCE_CORE_ID_COLLISION".into());
@@ -172,7 +205,8 @@ pub fn emit(batch: &AnalysisBatch) -> Result<EvidenceCoreBatchV1, String> {
         .map(|f| f.evidence.len())
         .chain(batch.relationships.iter().map(|r| r.evidence.len()))
         .sum();
-    if links > 100_000 || batch.entities.iter().filter(|e| e.kind == "file").count() > 100_000 {
+    let limit = crate::evidence_stream::limits()?.rows;
+    if links > limit || batch.entities.iter().filter(|e| e.kind == "file").count() > limit {
         return Err("EVIDENCE_CORE_LIMIT: sidecar row cap exceeded".into());
     }
     let owners: HashMap<_, _> = batch
@@ -180,17 +214,6 @@ pub fn emit(batch: &AnalysisBatch) -> Result<EvidenceCoreBatchV1, String> {
         .iter()
         .map(|e| (e.entity_id.as_str(), e.file.as_str()))
         .collect();
-    let inputs: HashMap<_, _> = batch
-        .entities
-        .iter()
-        .filter(|e| e.kind == "file")
-        .filter_map(|e| {
-            e.spans
-                .first()
-                .map(|s| (e.file.as_str(), s.content_hash.as_str()))
-        })
-        .collect();
-    let mut fallback_input = None;
     let mut groups: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     for e in batch.entities.iter().filter(|e| e.kind == "file") {
         groups.entry(e.file.clone()).or_default();
@@ -218,14 +241,49 @@ pub fn emit(batch: &AnalysisBatch) -> Result<EvidenceCoreBatchV1, String> {
     {
         groups.entry(String::new()).or_default();
     }
+    finish(batch, groups)
+}
+/// Build one scope directly from borrowed graph rows; do not clone the graph.
+pub fn emit_scope(
+    batch: &AnalysisBatch,
+    file: &str,
+    facts: &[&crate::model::Fact],
+    relationships: &[&crate::model::Relationship],
+) -> Result<EvidenceCoreBatchV1, String> {
+    let mut associations = Vec::new();
+    for (kind, id, evidence) in facts.iter().map(|f| ("FACT", &f.id, &f.evidence)).chain(
+        relationships
+            .iter()
+            .map(|r| ("RELATIONSHIP", &r.id, &r.evidence)),
+    ) {
+        for e in evidence {
+            associations.push(
+                json!({"subjectKind":kind,"subjectId":id,"evidenceId":e.id,"role":"SUPPORTS"}),
+            );
+        }
+    }
+    finish(batch, BTreeMap::from([(file.to_string(), associations)]))
+}
+fn finish(
+    batch: &AnalysisBatch,
+    groups: BTreeMap<String, Vec<Value>>,
+) -> Result<EvidenceCoreBatchV1, String> {
+    let inputs: HashMap<_, _> = batch
+        .entities
+        .iter()
+        .filter(|e| e.kind == "file")
+        .filter_map(|e| {
+            e.spans
+                .first()
+                .map(|s| (e.file.as_str(), s.content_hash.as_str()))
+        })
+        .collect();
+    let mut fallback_input = None;
     let mut runs = vec![];
     let mut links = vec![];
     let mut coverage = vec![];
     for (file, mut associations) in groups {
-        associations.sort_by_cached_key(|v| {
-            canon::canonicalize(&canon::parse_strict_json(&serde_json::to_vec(v).unwrap()).unwrap())
-                .unwrap()
-        });
+        associations.sort_by_cached_key(canonical_value);
         associations.dedup();
         let scope = if file.is_empty() {
             json!({"kind":"REPOSITORY"})
@@ -237,7 +295,12 @@ pub fn emit(batch: &AnalysisBatch) -> Result<EvidenceCoreBatchV1, String> {
             .map(|s| s.to_string())
             .unwrap_or_else(|| {
                 fallback_input
-                    .get_or_insert_with(|| identity("input", &json!(batch.manifest)))
+                    .get_or_insert_with(|| {
+                        identity(
+                            "manifest-input",
+                            &json!(batch.manifest.iter().collect::<Vec<_>>()),
+                        )
+                    })
                     .clone()
             });
         let output = identity("output", &json!([batch.manifest.get(&file), associations]));
@@ -252,33 +315,81 @@ pub fn emit(batch: &AnalysisBatch) -> Result<EvidenceCoreBatchV1, String> {
                 output
             ]),
         );
-        let typed_scope = if file.is_empty() { Scope::REPOSITORY } else { Scope::FILE { file } };
+        let typed_scope = if file.is_empty() {
+            Scope::REPOSITORY
+        } else {
+            Scope::FILE { file }
+        };
         runs.push(ProducerRunV1 {
-            id: run.clone(), producer_id: PRODUCER_ID.into(), producer_version: PRODUCER_VERSION.into(),
-            analyzer_version: batch.analyzer_version.clone(), revision: batch.revision.clone(),
-            scope: if let Scope::FILE { file } = &typed_scope { Scope::FILE { file: file.clone() } } else { Scope::REPOSITORY },
-            status: "PARTIAL".into(), input_digest: input, output_digest: output,
+            id: run.clone(),
+            producer_id: PRODUCER_ID.into(),
+            producer_version: PRODUCER_VERSION.into(),
+            analyzer_version: batch.analyzer_version.clone(),
+            revision: batch.revision.clone(),
+            scope: if let Scope::FILE { file } = &typed_scope {
+                Scope::FILE { file: file.clone() }
+            } else {
+                Scope::REPOSITORY
+            },
+            status: "PARTIAL".into(),
+            input_digest: input,
+            output_digest: output,
         });
         for link in associations {
             links.push(EvidenceLinkV1 {
                 subject_kind: link["subjectKind"].as_str().unwrap().into(),
                 subject_id: link["subjectId"].as_str().unwrap().into(),
                 evidence_id: link["evidenceId"].as_str().unwrap().into(),
-                producer_run_id: run.clone(), role: "SUPPORTS".into(),
+                producer_run_id: run.clone(),
+                role: "SUPPORTS".into(),
             });
         }
         coverage.push(CoverageRecordV1 {
-            id: identity("coverage", &json!([run,DOMAIN])), producer_run_id: run,
-            revision: batch.revision.clone(), domain: DOMAIN.into(), scope: typed_scope,
-            status: "PARTIAL".into(), exclusions: ["reflection","dynamic dispatch","external dependencies","async delivery","generated or excluded sources"].iter().map(|s|s.to_string()).collect(),
-            unresolved: vec!["No closed-world completeness claim; parser diagnostics remain authoritative".into()],
+            id: identity("coverage", &json!([run, DOMAIN])),
+            producer_run_id: run,
+            revision: batch.revision.clone(),
+            domain: DOMAIN.into(),
+            scope: typed_scope,
+            status: "PARTIAL".into(),
+            exclusions: [
+                "reflection",
+                "dynamic dispatch",
+                "external dependencies",
+                "async delivery",
+                "generated or excluded sources",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            unresolved: vec![
+                "No closed-world completeness claim; parser diagnostics remain authoritative"
+                    .into(),
+            ],
         });
     }
-    Ok(EvidenceCoreBatchV1 { schema: SCHEMA.into(), producer_runs: runs, links, coverage })
+    Ok(EvidenceCoreBatchV1 {
+        schema: SCHEMA.into(),
+        producer_runs: runs,
+        links,
+        coverage,
+    })
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn constructed_values_match_the_strict_json_canonical_path() {
+        for value in [
+            json!({"z":[null,true,"é\n",9007199254740991i64],"a":-9007199254740991i64}),
+            json!([{"subjectKind":"FACT","subjectId":"x","evidenceId":"é","role":"SUPPORTS"}]),
+        ] {
+            let parsed = canon::parse_strict_json(&serde_json::to_vec(&value).unwrap()).unwrap();
+            assert_eq!(
+                canonical_value(&value),
+                canon::canonicalize(&parsed).unwrap()
+            );
+        }
+    }
     #[test]
     fn canonical_identity_is_order_independent() {
         assert_eq!(
@@ -297,13 +408,21 @@ mod tests {
     fn borrowed_evidence_checks_accept_equal_and_reject_conflicting_ids() {
         let mut b = AnalysisBatch::default();
         let e = crate::model::EvidenceRef {
-            id: "same-evidence".into(), source_id: "history".into(),
-            location: json!({"kind":"History"}), class: "HISTORY",
-            observed_at: "epoch".into(), access_scope_id: "local".into(), state: "CURRENT",
+            id: "same-evidence".into(),
+            source_id: "history".into(),
+            location: json!({"kind":"History"}),
+            class: "HISTORY",
+            observed_at: "epoch".into(),
+            access_scope_id: "local".into(),
+            state: "CURRENT",
         };
         b.facts.push(crate::model::Fact {
-            id: "f".into(), subject: "s".into(), predicate: "p".into(),
-            object: json!({}), resolution: "PARSED", evidence: vec![e.clone(),e],
+            id: "f".into(),
+            subject: "s".into(),
+            predicate: "p".into(),
+            object: json!({}),
+            resolution: "PARSED",
+            evidence: vec![e.clone(), e],
         });
         validate(&b).unwrap();
         b.facts[0].evidence[1].source_id = "other".into();

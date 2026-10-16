@@ -8,7 +8,7 @@ import { graphDigest } from "../src/indexer.ts";
 import { EvidenceCoreBatchSchema, type AnalysisBatch, type EvidenceCoreBatchV1 } from "@cie/schema";
 import { migrate, rollback, currentVersion } from "../src/migrations.ts";
 import { Store, DeltaBaseError } from "../src/store.ts";
-import { evidenceCoreIdentity, evidenceCoreConfig } from "../src/evidence-core.ts";
+import { evidenceCoreIdentity, evidenceCoreManifestInput, evidenceCoreConfig } from "../src/evidence-core.ts";
 function fixture(): AnalysisBatch {
   const span = {sourceId:"src/a.ts",revision:"r1",contentHash:"hash",startByte:0,endByteExclusive:0};
   const ev = {id:"ev1",sourceId:"src/a.ts",location:{kind:"CodeLocation" as const,span},class:"STATIC_PARSED" as const,observedAt:"1970-01-01T00:00:00Z",accessScopeId:"local",state:"CURRENT" as const};
@@ -143,4 +143,18 @@ test("nested field reads retain both observations and the first legacy ID",async
   assert.equal(store.evidenceCoreBaseVersion(batch.revision),"3");
   const oldBase={revision:batch.revision,analyzerVersion:batch.analyzerVersion,digests:batch.manifest!,evidenceCoreVersion:"2"};
   assert.equal((await worker.index(root,120000,undefined,oldBase)).mode,"full");
+});
+
+test("bulk metadata insertion retains persisted owner and evidence binding checks",t=>{
+  mode(t);
+  for(const sql of ["update facts set ev='[]'", "update facts set file='other.ts'", "delete from evidence"]){
+    const store=new Store(":memory:");try{store.putBatch(fixture());store.db.exec(sql);assert.throws(()=>store.putBatch(fixture()),/EVIDENCE_CORE_PERSISTED_BINDING/);assert.equal((store.db.prepare("select count(*) n from evidence_core_links").get() as {n:number}).n,1);}finally{store.db.close();}
+  }
+});
+
+test("repository input manifests encode empty owner keys and bind persisted digests",t=>{
+  mode(t);const scope={kind:"REPOSITORY" as const},manifest={"":"root"};
+  const input=evidenceCoreManifestInput(manifest),output=evidenceCoreIdentity("output",["root",[]]),id=evidenceCoreIdentity("run",["cie.rust.static","3","v1",scope,input,output]);
+  const b:AnalysisBatch={revision:"root-r1",repoRoot:"/repo",gitHead:null,analyzerVersion:"v1",entities:[],facts:[],relationships:[],diagnostics:[],manifest,evidenceCore:{schema:"cie.evidence-core.batch.v1",producerRuns:[{id,producerId:"cie.rust.static",producerVersion:"3",analyzerVersion:"v1",revision:"root-r1",scope,status:"PARTIAL",inputDigest:input,outputDigest:output}],links:[],coverage:[{...fixture().evidenceCore!.coverage[0],id:evidenceCoreIdentity("coverage",[id,"static.observations"]),producerRunId:id,revision:"root-r1",scope}]}};
+  const store=new Store(":memory:");try{store.putBatch(b);assert.equal(store.evidenceCoreBaseVersion(b.revision),"3");store.db.prepare("update rev_files set digest='moved' where revision=?").run(b.revision);assert.throws(()=>store.putBatch(b),/EVIDENCE_CORE_PERSISTED_BINDING/);}finally{store.db.close();}
 });
