@@ -7,10 +7,10 @@ import {attachCoreStream} from "../../packages/core/src/evidence-core-stream.ts"
 import {Store} from "../../packages/core/src/store.ts";
 const script=resolve(import.meta.filename);
 if(process.argv[2]==="--sample") {
-  const [root,mode,transport]=process.argv.slice(3);
+  const [root,mode,transport,workerPath]=process.argv.slice(3);
   process.env.CIE_EVIDENCE_CORE_MODE=mode;process.env.CIE_EVIDENCE_CORE_TRANSPORT=transport;process.env.CIE_EVIDENCE_CORE_STRICT="1";
   process.env.CIE_EVIDENCE_CORE_MAX_ROWS="250000";process.env.CIE_EVIDENCE_CORE_MAX_BYTES="134217728";
-  const at=performance.now(),m=JSON.parse(execFileSync("python3",[resolve("tools/bench/worker-resource.py"),resolve("target/release/worker"),root,mode],{encoding:"utf8",timeout:130000}));
+  const at=performance.now(),m=JSON.parse(execFileSync("python3",[resolve("tools/bench/worker-resource.py"),resolve(workerPath??"target/release/worker"),root,mode],{encoding:"utf8",timeout:130000}));
   const {response,...worker}=m;if(!response.ok)throw new Error(JSON.stringify(response.error));
   let batch;try{batch=JSON.parse(readFileSync(response.handle,"utf8"));}finally{unlinkSync(response.handle);}
   const transportAndParseMs=performance.now()-at;

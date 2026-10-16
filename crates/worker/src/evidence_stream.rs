@@ -80,6 +80,7 @@ pub fn write(batch: &AnalysisBatch, path: &Path) -> Result<(), String> {
 }
 fn write_inner(batch: &AnalysisBatch, path: &Path) -> Result<(), String> {
     let limits = limits()?;
+    let inputs = evidence_core::input_digests(batch);
     let owners: HashMap<_, _> = batch
         .entities
         .iter()
@@ -168,7 +169,7 @@ fn write_inner(batch: &AnalysisBatch, path: &Path) -> Result<(), String> {
                 })),
             limits.chunk_bytes,
         )?;
-        let core = evidence_core::emit_scope(batch, scope, &facts, &relationships)?;
+        let core = evidence_core::emit_scope(batch, scope, &inputs, &facts, &relationships)?;
         #[derive(Serialize)]
         struct Chunk<'a> {
             kind: &'static str,
@@ -250,7 +251,9 @@ mod tests {
         batch.revision = "repo-r1".into();
         batch.manifest.insert("".into(), "root".into());
         let full = evidence_core::emit(&batch).unwrap();
-        let scoped = evidence_core::emit_scope(&batch, "", &[], &[]).unwrap();
+        let scoped =
+            evidence_core::emit_scope(&batch, "", &evidence_core::input_digests(&batch), &[], &[])
+                .unwrap();
         assert_eq!(
             serde_json::to_value(full).unwrap(),
             serde_json::to_value(scoped).unwrap()

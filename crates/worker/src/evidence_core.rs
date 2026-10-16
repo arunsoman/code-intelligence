@@ -94,15 +94,15 @@ pub fn identity(kind: &str, value: &Value) -> String {
 }
 /// Reject incompatible IDs before the legacy deduper can silently retain the first row.
 pub fn validate(batch: &AnalysisBatch) -> Result<(), String> {
-    // Most IDs occur once. Retain borrowed rows and serialize only when an ID
-    // repeats, so collision checks keep their exact semantic comparison.
-    fn unique_borrowed<'a, T: Serialize + 'a>(
+    // Compare borrowed DTOs directly. All fields participate in their wire
+    // representation; duplicate IDs need no temporary JSON allocation.
+    fn unique_borrowed<'a, T: PartialEq + 'a>(
         rows: impl Iterator<Item = (&'a str, &'a T)>,
     ) -> Result<(), String> {
         let mut seen = HashMap::new();
         for (id, value) in rows {
             if let Some(previous) = seen.get(id) {
-                if serde_json::to_value(previous).unwrap() != serde_json::to_value(value).unwrap() {
+                if *previous != value {
                     return Err("EVIDENCE_CORE_ID_COLLISION".into());
                 }
             } else {
@@ -117,10 +117,18 @@ pub fn validate(batch: &AnalysisBatch) -> Result<(), String> {
         Relationship(&'a crate::model::Relationship),
     }
     impl Observation<'_> {
-        fn payload(&self) -> Value {
-            match self {
-                Self::Fact(f) => json!([f.subject, f.predicate, f.object, f.resolution]),
-                Self::Relationship(r) => json!([r.from, r.to, r.kind, r.resolution, r.label]),
+        fn same_payload(&self, other: &Self) -> bool {
+            match (self, other) {
+                (Self::Fact(a), Self::Fact(b)) => {
+                    (&a.subject, &a.predicate, &a.object, a.resolution)
+                        == (&b.subject, &b.predicate, &b.object, b.resolution)
+                }
+                (Self::Relationship(a), Self::Relationship(b)) => {
+                    (&a.from, &a.to, &a.kind, a.resolution, &a.label)
+                        == (&b.from, &b.to, &b.kind, b.resolution, &b.label)
+                }
+                // Legacy projections have different array lengths (four vs five).
+                _ => false,
             }
         }
     }
@@ -141,7 +149,7 @@ pub fn validate(batch: &AnalysisBatch) -> Result<(), String> {
                 entry.insert(observation);
             }
             std::collections::hash_map::Entry::Occupied(entry) => {
-                if entry.get().payload() != observation.payload() {
+                if !entry.get().same_payload(&observation) {
                     return Err("EVIDENCE_CORE_ID_COLLISION".into());
                 }
             }
@@ -241,12 +249,25 @@ pub fn emit(batch: &AnalysisBatch) -> Result<EvidenceCoreBatchV1, String> {
     {
         groups.entry(String::new()).or_default();
     }
-    finish(batch, groups)
+    finish(batch, groups, &input_digests(batch))
 }
-/// Build one scope directly from borrowed graph rows; do not clone the graph.
+pub(crate) fn input_digests(batch: &AnalysisBatch) -> HashMap<&str, &str> {
+    batch
+        .entities
+        .iter()
+        .filter(|e| e.kind == "file")
+        .filter_map(|e| {
+            e.spans
+                .first()
+                .map(|s| (e.file.as_str(), s.content_hash.as_str()))
+        })
+        .collect()
+}
+/// Build one scope directly from borrowed graph rows; reuse the batch file index.
 pub fn emit_scope(
     batch: &AnalysisBatch,
     file: &str,
+    inputs: &HashMap<&str, &str>,
     facts: &[&crate::model::Fact],
     relationships: &[&crate::model::Relationship],
 ) -> Result<EvidenceCoreBatchV1, String> {
@@ -262,22 +283,17 @@ pub fn emit_scope(
             );
         }
     }
-    finish(batch, BTreeMap::from([(file.to_string(), associations)]))
+    finish(
+        batch,
+        BTreeMap::from([(file.to_string(), associations)]),
+        inputs,
+    )
 }
 fn finish(
     batch: &AnalysisBatch,
     groups: BTreeMap<String, Vec<Value>>,
+    inputs: &HashMap<&str, &str>,
 ) -> Result<EvidenceCoreBatchV1, String> {
-    let inputs: HashMap<_, _> = batch
-        .entities
-        .iter()
-        .filter(|e| e.kind == "file")
-        .filter_map(|e| {
-            e.spans
-                .first()
-                .map(|s| (e.file.as_str(), s.content_hash.as_str()))
-        })
-        .collect();
     let mut fallback_input = None;
     let mut runs = vec![];
     let mut links = vec![];
@@ -444,6 +460,152 @@ mod tests {
         other.predicate = "b".into();
         b.facts.push(other);
         assert_eq!(validate(&b).unwrap_err(), "EVIDENCE_CORE_ID_COLLISION");
+    }
+    #[test]
+    fn observation_projections_preserve_all_payload_fields_and_shared_ids() {
+        use crate::model::{Fact, Relationship};
+        let fact = Fact {
+            id: "same".into(),
+            subject: "s".into(),
+            predicate: "p".into(),
+            object: json!({"value":1}),
+            resolution: "PARSED",
+            evidence: vec![],
+        };
+        let fact_mutations: &[fn(&mut Fact)] = &[
+            |f| f.subject.push('x'),
+            |f| f.predicate.push('x'),
+            |f| f.object = json!({"value":2}),
+            |f| f.resolution = "RESOLVED",
+        ];
+        let mut batch = AnalysisBatch::default();
+        batch.facts = vec![fact.clone(), fact.clone()];
+        validate(&batch).unwrap();
+        for mutate in fact_mutations {
+            let mut other = fact.clone();
+            mutate(&mut other);
+            batch.facts[1] = other;
+            assert_eq!(validate(&batch).unwrap_err(), "EVIDENCE_CORE_ID_COLLISION");
+        }
+        batch.facts.clear();
+        let rel = Relationship {
+            id: "same".into(),
+            from: "s".into(),
+            to: "t".into(),
+            kind: "calls".into(),
+            resolution: "PARSED",
+            label: None,
+            evidence: vec![],
+        };
+        let rel_mutations: &[fn(&mut Relationship)] = &[
+            |r| r.from.push('x'),
+            |r| r.to.push('x'),
+            |r| r.kind.push('x'),
+            |r| r.resolution = "RESOLVED",
+            |r| r.label = Some(String::new()),
+        ];
+        batch.relationships = vec![rel.clone(), rel.clone()];
+        validate(&batch).unwrap();
+        for mutate in rel_mutations {
+            let mut other = rel.clone();
+            mutate(&mut other);
+            batch.relationships[1] = other;
+            assert_eq!(validate(&batch).unwrap_err(), "EVIDENCE_CORE_ID_COLLISION");
+        }
+        batch.relationships = vec![rel];
+        batch.facts = vec![fact];
+        assert_eq!(validate(&batch).unwrap_err(), "EVIDENCE_CORE_ID_COLLISION");
+    }
+    #[test]
+    fn entity_metadata_collisions_still_match_the_wire_comparison() {
+        use crate::model::{Entity, SourceSpan};
+        let original = Entity {
+            entity_id: "same".into(),
+            kind: "function".into(),
+            name: "f".into(),
+            file: "a.ts".into(),
+            spans: vec![SourceSpan {
+                source_id: "a.ts".into(),
+                content_hash: "hash".into(),
+                revision: "r1".into(),
+                start_byte: 0,
+                end_byte_exclusive: 10,
+            }],
+            symbol_hash: None,
+            shape_hash: None,
+            ir_hash: None,
+            ir_dump: None,
+            ir_vec: None,
+        };
+        let mutations: &[fn(&mut Entity)] = &[
+            |e| e.kind.push('x'),
+            |e| e.name.push('x'),
+            |e| e.file.push('x'),
+            |e| e.spans[0].source_id.push('x'),
+            |e| e.spans[0].content_hash.push('x'),
+            |e| e.spans[0].revision.push('x'),
+            |e| e.spans[0].start_byte += 1,
+            |e| e.spans[0].end_byte_exclusive += 1,
+            |e| e.symbol_hash = Some(String::new()),
+            |e| e.shape_hash = Some("s".into()),
+            |e| e.ir_hash = Some("i".into()),
+            |e| e.ir_dump = Some("{}".into()),
+            |e| e.ir_vec = Some(vec![]),
+        ];
+        let mut batch = AnalysisBatch::default();
+        batch.entities = vec![original.clone(), original.clone()];
+        validate(&batch).unwrap();
+        for mutate in mutations {
+            let mut other = original.clone();
+            mutate(&mut other);
+            assert_ne!(
+                serde_json::to_value(&original).unwrap(),
+                serde_json::to_value(&other).unwrap()
+            );
+            batch.entities[1] = other;
+            assert_eq!(validate(&batch).unwrap_err(), "EVIDENCE_CORE_ID_COLLISION");
+        }
+    }
+    #[test]
+    fn evidence_metadata_collisions_still_match_the_wire_comparison() {
+        use crate::model::{EvidenceRef, Fact};
+        let original = EvidenceRef {
+            id: "e".into(),
+            source_id: "history".into(),
+            location: json!({"kind":"History"}),
+            class: "HISTORY",
+            observed_at: "epoch".into(),
+            access_scope_id: "local".into(),
+            state: "CURRENT",
+        };
+        let mutations: &[fn(&mut EvidenceRef)] = &[
+            |e| e.source_id.push('x'),
+            |e| e.location = json!({"kind":"History","extra":null}),
+            |e| e.class = "OTHER",
+            |e| e.observed_at.push('x'),
+            |e| e.access_scope_id.push('x'),
+            |e| e.state = "STALE",
+        ];
+        let mut batch = AnalysisBatch::default();
+        batch.facts.push(Fact {
+            id: "f".into(),
+            subject: "s".into(),
+            predicate: "p".into(),
+            object: json!({}),
+            resolution: "PARSED",
+            evidence: vec![original.clone(), original.clone()],
+        });
+        validate(&batch).unwrap();
+        for mutate in mutations {
+            let mut other = original.clone();
+            mutate(&mut other);
+            assert_ne!(
+                serde_json::to_value(&original).unwrap(),
+                serde_json::to_value(&other).unwrap()
+            );
+            batch.facts[0].evidence[1] = other;
+            assert_eq!(validate(&batch).unwrap_err(), "EVIDENCE_CORE_ID_COLLISION");
+        }
     }
 }
 #[cfg(test)]

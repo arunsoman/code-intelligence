@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceSpan {
     pub source_id: String,
@@ -12,7 +12,7 @@ pub struct SourceSpan {
     pub end_byte_exclusive: usize,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct EvidenceRef {
     pub id: String,
@@ -24,7 +24,7 @@ pub struct EvidenceRef {
     pub state: &'static str,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Entity {
     pub entity_id: String,
