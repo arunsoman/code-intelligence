@@ -8,6 +8,37 @@ import type { AnswerInvestigation } from "@cie/schema";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+
+test("a process killed after checkpointing leaves recoverable progress for the replacement owner", { timeout: 15000 }, async () => {
+ const dir=mkdtempSync(join(tmpdir(),"cie-kill-recovery-")), path=join(dir,"store.db");
+ const source = `import {Store} from ${JSON.stringify(new URL("../src/store.ts", import.meta.url).href)};
+ import {ConversationActions} from ${JSON.stringify(new URL("../src/conversation-actions.ts", import.meta.url).href)};
+ const store=new Store(${JSON.stringify(path)}),actions=new ConversationActions(store);
+ const ctx={requestId:"killed-owner",idempotencyKey:"kill-action",actor:{tenantId:"t",principalId:"t",sessionId:"t"},traceId:"t",deadlineMs:Date.now()+30000};
+ actions.begin(ctx,"chat",{text:"inspect"});
+ actions.checkpoint(ctx,"chat",{id:"killed-owner",question:"inspect",revision:"r",nextAction:"continue",missingEvidence:["provider unread"],inspectedIds:["debit"],sourceReads:{},sourceHashes:{},observations:[{name:"read_code",arguments:{id:"debit"},content:"inspected debit"}]});
+ process.stdout.write("CHECKPOINTED\\n");setInterval(()=>{},1000);`;
+ const child=spawn(process.execPath,["--input-type=module","-e",source],{stdio:["ignore","pipe","pipe"]});
+ let stderr="";child.stderr.on("data",chunk=>{stderr+=chunk;});
+ try {
+  await new Promise<void>((resolve,reject)=>{
+   const timer=setTimeout(()=>reject(new Error(`checkpoint timeout: ${stderr}`)),8000);
+   let output="";
+   child.stdout.on("data",chunk=>{output+=String(chunk);if(output.includes("CHECKPOINTED")){clearTimeout(timer);resolve();}});
+   child.once("error",error=>{clearTimeout(timer);reject(error);});child.once("exit",()=>{clearTimeout(timer);reject(new Error(`child exited before checkpoint: ${stderr}`));});
+  });
+  const exited=once(child,"exit");child.kill("SIGKILL");await exited;
+  const store=new Store(path);
+  try {
+   store.db.prepare("update conversation_actions set lease_until=0").run();
+   const action=new ConversationActions(store).begin(ctx("kill-action"),"chat",{text:"inspect"});
+   assert.equal(action.progress?.observations[0].content,"inspected debit");
+   assert.equal(action.progress?.question,"inspect");
+  } finally { store.db.close(); }
+ } finally { child.kill("SIGKILL");rmSync(dir,{recursive:true,force:true}); }
+});
 
 test("tool progress survives reopening SQLite and expired owners cannot overwrite a replacement", () => {
  const dir=mkdtempSync(join(tmpdir(),"cie-recovery-")), path=join(dir,"store.db");

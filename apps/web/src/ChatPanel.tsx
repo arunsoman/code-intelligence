@@ -30,9 +30,11 @@ interface Props {
   onShowAlt?: (alt: MessageAlt) => void;
   onContinueInvestigation?: (id: string) => void;
   onOpenEvidence?: (revision:string,entityId:string)=>void;
+  retryAvailable?: boolean;
+  onRetry?: () => void;
 }
 
-export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend, onDropReferent, onNewContext, seed, onShowResult, onCreateProvider, onShowAlt, onContinueInvestigation, onOpenEvidence }: Props) {
+export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend, onDropReferent, onNewContext, seed, onShowResult, onCreateProvider, onShowAlt, onContinueInvestigation, onOpenEvidence, retryAvailable, onRetry }: Props) {
   const [text, setText] = useState("");
   const [referentsExpanded, setReferentsExpanded] = useState(false);
   const end = useRef<HTMLDivElement>(null);
@@ -113,6 +115,10 @@ export function ChatPanel({ messages, referents, busy, canAsk, examples, onSend,
         {busy && <div className="msg assistant"><span className="who">Assistant</span><p className="muted">Working…</p></div>}
         <div ref={end} />
       </div>
+      {retryAvailable && <div className="chat-results" role="group" aria-label="Interrupted investigation recovery">
+        <button className="secondary small" disabled={busy || !canAsk} onClick={onRetry}>Retry investigation</button>
+        <p className="muted small">Retry the original request with its retained progress. If it is still running, wait for it to finish or its recovery lease to expire.</p>
+      </div>}
       {referents.length > 0 && (
         <div className="referents" role="group" aria-label="Selected elements the next message refers to">
           {(() => {

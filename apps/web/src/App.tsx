@@ -1,4 +1,5 @@
 import { EvidencePanel } from "./EvidencePanel.tsx";
+import { canRetryConversation, ConversationRequest } from "./conversation-retry.ts";
 import { CompoundQueryPanel } from "./CompoundQueryPanel.tsx";
 import { tableEvidenceElements } from "./table-cell.ts";
 import { ExplorationPanel } from "./ExplorationPanel.tsx";
@@ -101,6 +102,11 @@ export function App() {
   const [chatSessionId, setChatSessionId] = useState(() => {
     try { return localStorage.getItem("cie-chat-session") || uuid(); } catch { return uuid(); }
   });
+  const retryRequest = useRef<ConversationRequest | null>(null);
+  const [retryAvailable, setRetryAvailable] = useState(false);
+  const retryScope = `${repoGeneration.current}:${chatSessionId}:${info?.revision?.id ?? ""}`;
+  const currentRetryScope = useRef(retryScope); currentRetryScope.current = retryScope;
+  useEffect(() => { retryRequest.current = null; setRetryAvailable(false); }, [retryScope]);
   const chatRestoreGeneration = useRef(0);
   useEffect(() => { try { localStorage.setItem("cie-chat-session", chatSessionId); } catch { /* The active tab still keeps its session. */ } }, [chatSessionId]);
   useEffect(() => {
@@ -194,7 +200,7 @@ export function App() {
     if (index===responseWorkspace.breadcrumbs.length-1) responseWorkspace.cancel();
     else responseWorkspace.jump(index);
   };
-  const resetResponse = () => { responseGeneration.current++; responseWorkspace.reset(); canvasSnapshot.current = undefined; setCanvasRestore(undefined); };
+  const resetResponse = () => { retryRequest.current = null; setRetryAvailable(false); responseGeneration.current++; responseWorkspace.reset(); canvasSnapshot.current = undefined; setCanvasRestore(undefined); };
   const sourceContext = useRef(""); sourceContext.current = `${view?.revision}:${view?.id}:${selection.join("|")}`;
   const exploreTarget = explorationTarget(view, selection, exploreEdge);
   const exploreChoices = exploreTarget ? explorationChoices(exploreTarget.kind, responseWorkspace.workspace?.manifest, view?.revision) : [];
@@ -516,22 +522,28 @@ export function App() {
     }
   };
 
-  const send = async (text: string) => {
+  const send = async (text: string, retry = false) => {
     const command = text.trim().toLowerCase();
-    if (/^(go back|back|zoom out|go up|show parent view)$/.test(command)) { navigateBack(); return; }
-    if (/^(zoom in|zoom into (?:this|it|selected))$/.test(command)) { setExploreOpen(true); setNotice(exploreTarget ? `Choose a perspective on ${exploreTarget.label}.` : "Select one source-backed element to explore."); return; }
-    if (exploreOpen && exploreTarget) { const choice = explorationShortcut(command, exploreChoices); if (choice) { explore(choice); return; } }
+    if (!retry && /^(go back|back|zoom out|go up|show parent view)$/.test(command)) { navigateBack(); return; }
+    if (!retry && /^(zoom in|zoom into (?:this|it|selected))$/.test(command)) { setExploreOpen(true); setNotice(exploreTarget ? `Choose a perspective on ${exploreTarget.label}.` : "Select one source-backed element to explore."); return; }
+    if (!retry && exploreOpen && exploreTarget) { const choice = explorationShortcut(command, exploreChoices); if (choice) { explore(choice); return; } }
+    const attempt = retry ? retryRequest.current : new ConversationRequest({ text, sessionId: chatSessionId, view, selection, revision: info?.revision?.id, pins }, retryScope);
+    if (!attempt || !attempt.matches(currentRetryScope.current)) return;
+    retryRequest.current = attempt; setRetryAvailable(false);
     const responseToken = ++responseGeneration.current;
     responseWorkspace.cancel();
     chatRestoreGeneration.current++;
     const generation = repoGeneration.current;
-    say("user", text);
+    if (!retry) say("user", text);
     setBusy("Thinking…"); setError(null); setNotice(null);
     try {
       await chartFocusQueue.current;
-      const r = await call<ConverseResult>("C15", "converse", { text, sessionId: chatSessionId, view, selection, revision: info?.revision?.id, pins });
+      if (generation !== repoGeneration.current || responseToken !== responseGeneration.current || retryRequest.current !== attempt) return;
+      const r = await attempt.run(currentRetryScope.current);
+      if (!r) return;
       if (generation !== repoGeneration.current || responseToken !== responseGeneration.current) return;
-      if (!r.ok) { say("assistant", failMsg(r), true); return; }
+      if (!r.ok) { setRetryAvailable(canRetryConversation(r)); say("assistant", failMsg(r), true); return; }
+      retryRequest.current = null; setRetryAvailable(false);
       const v = r.value;
       for (const w of r.metadata.warnings) say("assistant", `Note: ${w}`);
       switch (v.kind) {
@@ -1110,7 +1122,7 @@ export function App() {
       </main>
 
       <aside id="workspace-right-panel" className="right" data-focus-open={focusPanel ? "true" : undefined} data-has-evidence={code || drawer ? "true" : "false"}>
-        <ChatPanel onOpenEvidence={(r,id)=>void openEvidenceSource(r,id)} onNewContext={() => { resetResponse(); setView(null); setSelection([]); setCellSel([]); setCode(null); setDrawer(null); setBusy(null); chatRestoreGeneration.current++; setChatSessionId(uuid()); setMessages([]); setError(null); setNotice("Started a new conversation context."); }} onShowResult={showChatResult} onContinueInvestigation={(id) => void send(`continue investigation ${id}`)} onShowAlt={(alt) => {
+        <ChatPanel retryAvailable={retryAvailable && !!retryRequest.current?.matches(retryScope)} onRetry={() => void send(retryRequest.current?.text ?? "", true)} onOpenEvidence={(r,id)=>void openEvidenceSource(r,id)} onNewContext={() => { resetResponse(); setView(null); setSelection([]); setCellSel([]); setCode(null); setDrawer(null); setBusy(null); chatRestoreGeneration.current++; setChatSessionId(uuid()); setMessages([]); setError(null); setNotice("Started a new conversation context."); }} onShowResult={showChatResult} onContinueInvestigation={(id) => void send(`continue investigation ${id}`)} onShowAlt={(alt) => {
           const current = responseWorkspace.current();
           if (alt.response && current?.manifest.responseId === alt.response.responseId) { void responseWorkspace.generate(alt.response.viewId); return; }
           void askForm(alt.prompt ?? alt.question, alt.form, alt.response?.subject, alt.kind, `Show as ${alt.name}`, alt.question, alt.chartCode, alt.response);
