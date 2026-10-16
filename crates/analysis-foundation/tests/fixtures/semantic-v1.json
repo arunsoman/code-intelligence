@@ -1,0 +1,71 @@
+{
+  "schema": "cie.semantic-ir.v1",
+  "revision": "golden-r1",
+  "producerVersion": "fixture-v1",
+  "environmentDigest": "fixture-env",
+  "documents": {
+    "d": {
+      "path": "value.py",
+      "sha256": "c10cc6fa03ea83945329d4012e5411f12374317b68af28d90ba83cdb17096f3a",
+      "language": "python",
+      "loweringVersion": "fixture-v1",
+      "semanticsVersion": "python-subset-fixture-v1",
+      "gaps": []
+    }
+  },
+  "functions": {
+    "f": {
+      "source": {
+        "document": "d",
+        "startByte": 0,
+        "endByte": 41
+      },
+      "parameters": [],
+      "returnType": {
+        "kind": "integer",
+        "bits": 64,
+        "signed": true
+      },
+      "values": {
+        "v": {
+          "kind": "integer",
+          "bits": 64,
+          "signed": true
+        }
+      },
+      "entry": "entry",
+      "blocks": {
+        "entry": {
+          "instructions": [
+            {
+              "exceptional": null,
+              "id": "i",
+              "source": {
+                "document": "d",
+                "startByte": 24,
+                "endByte": 40
+              },
+              "action": {
+                "kind": "constant",
+                "result": "v",
+                "literal": {
+                  "kind": "integer",
+                  "decimal": "9007199254740993"
+                }
+              }
+            }
+          ],
+          "terminator": {
+            "kind": "return",
+            "value": "v"
+          },
+          "source": {
+            "document": "d",
+            "startByte": 0,
+            "endByte": 41
+          }
+        }
+      }
+    }
+  }
+}
