@@ -1,12 +1,16 @@
 //! Versioned projection: retain legacy observations and disambiguate known emitter collisions.
 use crate::model::AnalysisBatch;
 pub fn normalize(batch: &mut AnalysisBatch) -> Result<(), String> {
-    // These two legacy emitters keyed distinct observations only by a shared start byte.
-    // Preserve the first (legacy-visible) record and add content-addressed v2 observation IDs.
+    // These legacy emitters keyed distinct observations only by a shared start byte.
+    // Preserve the first record. Existing call/defect suffixes stay v2; nested reads use v3.
     // Other conflicting IDs remain hard errors; do not repair arbitrary collisions.
     let mut seen = std::collections::HashMap::new();
     for fact in &mut batch.facts {
-        if !fact.id.starts_with("fact:unresolved-call:") && !fact.id.starts_with("fact:defect:") {
+        let nested_read = fact.id.starts_with("fact:reads:") && fact.predicate == "reads";
+        if !fact.id.starts_with("fact:unresolved-call:")
+            && !fact.id.starts_with("fact:defect:")
+            && !nested_read
+        {
             continue;
         }
         let payload = serde_json::to_vec(&serde_json::json!([
@@ -16,12 +20,11 @@ pub fn normalize(batch: &mut AnalysisBatch) -> Result<(), String> {
             fact.resolution
         ]))
         .unwrap();
-        if (fact.id.starts_with("fact:unresolved-call:") || fact.id.starts_with("fact:defect:"))
-            && seen.get(&fact.id).is_some_and(|old| old != &payload)
-        {
+        if seen.get(&fact.id).is_some_and(|old| old != &payload) {
             fact.id = format!(
-                "{}:observation-v2:{}",
+                "{}:observation-{}:{}",
                 fact.id,
+                if nested_read { "v3" } else { "v2" },
                 crate::canon::raw_hash(&payload)
             );
         }
@@ -80,6 +83,25 @@ mod tests {
             serde_json::to_value(&b.facts).unwrap()
         );
         assert_eq!(a.facts[0].id, "fact-id");
+    }
+    #[test]
+    fn arbitrary_fact_collision_is_not_repaired() {
+        let mut batch = AnalysisBatch::default();
+        let fact = Fact {
+            id: "fact:other:collision".into(),
+            subject: "s".into(),
+            predicate: "p".into(),
+            object: json!({"value":1}),
+            resolution: "PARSED",
+            evidence: vec![],
+        };
+        let mut other = fact.clone();
+        other.object = json!({"value":2});
+        batch.facts = vec![fact, other];
+        assert_eq!(
+            normalize(&mut batch).unwrap_err(),
+            "EVIDENCE_CORE_ID_COLLISION"
+        );
     }
     #[test]
     fn incompatible_evidence_ids_fail_before_deduplication() {

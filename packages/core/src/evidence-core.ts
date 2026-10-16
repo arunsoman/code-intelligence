@@ -1,7 +1,7 @@
 import { EvidenceCoreBatchSchema, type AnalysisBatch, type EvidenceCoreBatchV1, type Fact, type Relationship } from "@cie/schema";
 import { canonicalize, canonDigest, type Canon } from "@cie/canon";
 import type { DatabaseSync } from "node:sqlite";
-export const EVIDENCE_CORE_PRODUCER_VERSION = "2";
+export const EVIDENCE_CORE_PRODUCER_VERSION = "3";
 export function evidenceCoreConfig() {
   const mode = process.env.CIE_EVIDENCE_CORE_MODE ?? "off", strict = process.env.CIE_EVIDENCE_CORE_STRICT ?? "0", gates = process.env.CIE_EVIDENCE_CORE_COVERAGE_GATES ?? "0";
   if (!["off","shadow","on"].includes(mode) || !["0","1"].includes(strict) || gates !== "0") throw new Error("EVIDENCE_CORE_CONFIG: invalid flags or coverage gates not implemented");

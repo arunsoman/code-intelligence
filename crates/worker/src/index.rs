@@ -1261,7 +1261,7 @@ pub fn index_repo(
     let mut batch = AnalysisBatch {
         repo_root: root.to_string_lossy().into(),
         git_head: git_head(&root),
-        analyzer_version: if evidence_core { format!("{ANALYZER_VERSION}/evidence-core-v2") } else { ANALYZER_VERSION.into() },
+        analyzer_version: if evidence_core { format!("{ANALYZER_VERSION}/evidence-core-v{}", crate::producer_registry::PRODUCER_VERSION) } else { ANALYZER_VERSION.into() },
         ..Default::default()
     };
     let mut nirdosha_ir = if paths
@@ -1334,7 +1334,7 @@ pub fn index_repo(
     timing("pass1a read+hash", t_pass1);
     // The revision id is a hash of every file's path and bytes, so it is known before anything is parsed: when it is the base revision, stop here.
     let mut revision_id = format!("wt-{}", &hex(&rev_hasher.finalize())[..16]);
-    if evidence_core { revision_id.push_str("-ec2"); }
+    if evidence_core { revision_id.push_str(&format!("-ec{}", crate::producer_registry::PRODUCER_VERSION)); }
     if let Some(b) = base {
         if b.revision == revision_id && b.analyzer_version == batch.analyzer_version {
             batch.revision = revision_id;
