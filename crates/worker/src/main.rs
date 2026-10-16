@@ -179,6 +179,7 @@ fn handle(req: &Value) -> Value {
                             std::process::id(),
                             id
                         ));
+                        let t_write = std::time::Instant::now();
                         let written = std::fs::File::create(&path)
                             .map(std::io::BufWriter::new)
                             .map_err(|e| e.to_string())
@@ -189,6 +190,7 @@ fn handle(req: &Value) -> Value {
                                         std::io::Write::flush(&mut w).map_err(|e| e.to_string())
                                     })
                             });
+                        index::timing("handle serialization + flush", t_write);
                         match written {
                             Ok(()) => {
                                 return json!({"id": id, "ok": true, "handle": path.to_string_lossy()});

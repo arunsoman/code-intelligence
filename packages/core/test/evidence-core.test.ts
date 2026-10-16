@@ -117,3 +117,13 @@ test("optional incomplete scope metadata is discarded while legacy facts remain"
   assert.deepEqual(store.evidenceCoreProducerRuns("r1","src/a.ts"),[]);
   assert.ok(store.revision("r1")!.diagnostics.some(d=>d.code==="EVIDENCE_CORE_REJECTED"));
 });
+
+test("opt-in stage timing leaves the analysis batch unchanged",async t=>{
+  mode(t);const root=mkdtempSync(join(tmpdir(),"cie-timed-")),log=join(tmpdir(),`cie-stages-${process.pid}.log`),saved=process.env.CIE_WORKER_TIMING;
+  t.after(()=>{rmSync(root,{recursive:true,force:true});rmSync(log,{force:true});if(saved===undefined)delete process.env.CIE_WORKER_TIMING;else process.env.CIE_WORKER_TIMING=saved;});
+  writeFileSync(join(root,"a.ts"),'export function a(){return 1;}\n');
+  delete process.env.CIE_WORKER_TIMING;const plain=new WorkerClient();let baseline;try{baseline=await plain.index(root);}finally{plain.close();}
+  process.env.CIE_WORKER_TIMING=log;const timed=new WorkerClient();try{assert.deepEqual(await timed.index(root),baseline);}finally{timed.close();}
+  const stages=readFileSync(log,"utf8");
+  for(const name of ["normalization","delta sharding","provenance emit","metadata wire cap","handle serialization + flush"])assert.ok(stages.split("\n").some(line=>line.startsWith(name+": ")&&Number.isFinite(Number(line.slice(name.length+2).replace(" ms","")))));
+});

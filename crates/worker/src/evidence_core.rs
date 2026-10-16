@@ -252,17 +252,29 @@ pub fn emit(batch: &AnalysisBatch) -> Result<EvidenceCoreBatchV1, String> {
                 output
             ]),
         );
-        runs.push(json!({"id":run,"producerId":PRODUCER_ID,"producerVersion":PRODUCER_VERSION,"analyzerVersion":batch.analyzer_version,"revision":batch.revision,"scope":scope,"status":"PARTIAL","inputDigest":input,"outputDigest":output}));
-        for mut link in associations {
-            link["producerRunId"] = json!(run);
-            links.push(link);
+        let typed_scope = if file.is_empty() { Scope::REPOSITORY } else { Scope::FILE { file } };
+        runs.push(ProducerRunV1 {
+            id: run.clone(), producer_id: PRODUCER_ID.into(), producer_version: PRODUCER_VERSION.into(),
+            analyzer_version: batch.analyzer_version.clone(), revision: batch.revision.clone(),
+            scope: if let Scope::FILE { file } = &typed_scope { Scope::FILE { file: file.clone() } } else { Scope::REPOSITORY },
+            status: "PARTIAL".into(), input_digest: input, output_digest: output,
+        });
+        for link in associations {
+            links.push(EvidenceLinkV1 {
+                subject_kind: link["subjectKind"].as_str().unwrap().into(),
+                subject_id: link["subjectId"].as_str().unwrap().into(),
+                evidence_id: link["evidenceId"].as_str().unwrap().into(),
+                producer_run_id: run.clone(), role: "SUPPORTS".into(),
+            });
         }
-        coverage.push(json!({"id":identity("coverage", &json!([run,DOMAIN])),"producerRunId":run,"revision":batch.revision,"domain":DOMAIN,"scope":scope,"status":"PARTIAL","exclusions":["reflection","dynamic dispatch","external dependencies","async delivery","generated or excluded sources"],"unresolved":["No closed-world completeness claim; parser diagnostics remain authoritative"]}));
+        coverage.push(CoverageRecordV1 {
+            id: identity("coverage", &json!([run,DOMAIN])), producer_run_id: run,
+            revision: batch.revision.clone(), domain: DOMAIN.into(), scope: typed_scope,
+            status: "PARTIAL".into(), exclusions: ["reflection","dynamic dispatch","external dependencies","async delivery","generated or excluded sources"].iter().map(|s|s.to_string()).collect(),
+            unresolved: vec!["No closed-world completeness claim; parser diagnostics remain authoritative".into()],
+        });
     }
-    serde_json::from_value(
-        json!({"schema":SCHEMA,"producerRuns":runs,"links":links,"coverage":coverage}),
-    )
-    .map_err(|_| "EVIDENCE_CORE_SERIALIZATION".into())
+    Ok(EvidenceCoreBatchV1 { schema: SCHEMA.into(), producer_runs: runs, links, coverage })
 }
 #[cfg(test)]
 mod tests {
