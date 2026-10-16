@@ -14,8 +14,8 @@ function fixture(): AnalysisBatch {
   const ev = {id:"ev1",sourceId:"src/a.ts",location:{kind:"CodeLocation" as const,span},class:"STATIC_PARSED" as const,observedAt:"1970-01-01T00:00:00Z",accessScopeId:"local",state:"CURRENT" as const};
   const b: AnalysisBatch = {revision:"r1",gitHead:null,repoRoot:"/repo",analyzerVersion:"v1",entities:[{entityId:"file:src/a.ts",kind:"file",name:"a.ts",file:"src/a.ts",spans:[span]}],facts:[{id:"fact1",subject:"file:src/a.ts",predicate:"parsed",object:{kind:"literal"},resolution:"PARSED",evidence:[ev]}],relationships:[],diagnostics:[],manifest:{"src/a.ts":"manifest"}};
   const scope = {kind:"FILE" as const,file:"src/a.ts"}, association = {subjectKind:"FACT" as const,subjectId:"fact1",evidenceId:"ev1",role:"SUPPORTS" as const};
-  const output = evidenceCoreIdentity("output",["manifest",[association]]), run = evidenceCoreIdentity("run",["cie.rust.static","1","v1",scope,"hash",output]);
-  b.evidenceCore = {schema:"cie.evidence-core.batch.v1",producerRuns:[{id:run,producerId:"cie.rust.static",producerVersion:"1",analyzerVersion:"v1",revision:"r1",scope,status:"PARTIAL",inputDigest:"hash",outputDigest:output}],links:[{...association,producerRunId:run}],coverage:[{id:evidenceCoreIdentity("coverage",[run,"static.observations"]),producerRunId:run,revision:"r1",scope,domain:"static.observations",status:"PARTIAL",exclusions:["reflection","dynamic dispatch","external dependencies","async delivery","generated or excluded sources"],unresolved:["No closed-world completeness claim; parser diagnostics remain authoritative"]}]};
+  const output = evidenceCoreIdentity("output",["manifest",[association]]), run = evidenceCoreIdentity("run",["cie.rust.static","2","v1",scope,"hash",output]);
+  b.evidenceCore = {schema:"cie.evidence-core.batch.v1",producerRuns:[{id:run,producerId:"cie.rust.static",producerVersion:"2",analyzerVersion:"v1",revision:"r1",scope,status:"PARTIAL",inputDigest:"hash",outputDigest:output}],links:[{...association,producerRunId:run}],coverage:[{id:evidenceCoreIdentity("coverage",[run,"static.observations"]),producerRunId:run,revision:"r1",scope,domain:"static.observations",status:"PARTIAL",exclusions:["reflection","dynamic dispatch","external dependencies","async delivery","generated or excluded sources"],unresolved:["No closed-world completeness claim; parser diagnostics remain authoritative"]}]};
   return b;
 }
 function mode(t: { after: (f:()=>void)=>void }, value="on", strict="1") { const saved = {...process.env}; process.env.CIE_EVIDENCE_CORE_MODE=value; process.env.CIE_EVIDENCE_CORE_STRICT=strict; t.after(()=> { for (const key of ["CIE_EVIDENCE_CORE_MODE","CIE_EVIDENCE_CORE_STRICT","CIE_EVIDENCE_CORE_COVERAGE_GATES"]) { if(saved[key]===undefined)delete process.env[key];else process.env[key]=saved[key]; } }); }
@@ -44,8 +44,8 @@ test("invalid optional metadata is discarded with a diagnostic and no fabricated
   mode(t,"on","0");const store=new Store(":memory:");t.after(()=>store.db.close());const b=fixture();b.evidenceCore!.coverage[0].status="COMPLETE";
   store.putBatch(b);assert.equal(store.factsFor("r1","file:src/a.ts").length,1);assert.deepEqual(store.evidenceCoreCoverage("r1","static.observations","src/a.ts"),[]);assert.ok(store.revision("r1")!.diagnostics.some(d=>d.code==="EVIDENCE_CORE_REJECTED"));
 });
-test("producer versions and stale revision membership cannot be reused; delta is explicitly disabled", t=>{
-  mode(t);const store=new Store(":memory:");t.after(()=>store.db.close());const b=fixture();b.evidenceCore!.producerRuns[0].producerVersion="2";assert.throws(()=>store.putBatch(b),/EVIDENCE_CORE_INVALID/);
+test("producer versions and stale revision membership cannot be reused; missing delta bases are refused", t=>{
+  mode(t);const store=new Store(":memory:");t.after(()=>store.db.close());const b=fixture();b.evidenceCore!.producerRuns[0].producerVersion="99";assert.throws(()=>store.putBatch(b),/EVIDENCE_CORE_INVALID/);
   assert.throws(()=>store.putDelta(fixture()),DeltaBaseError);
   process.env.CIE_EVIDENCE_CORE_COVERAGE_GATES="1"; assert.throws(evidenceCoreConfig,/CONFIG/);
 });
@@ -56,15 +56,16 @@ test("default off preserves legacy DTO and shadow mode never exposes new metadat
 });
 
 
-test("real worker metadata roundtrips, preserves the legacy graph, and uses full recomputation for deltas", async t=>{
+test("real worker metadata roundtrips and fences older bases without changing legacy content IDs", async t=>{
   mode(t,"off","0");const root=mkdtempSync(join(tmpdir(),"cie-core-"));t.after(()=>rmSync(root,{recursive:true,force:true}));
   writeFileSync(join(root,"a.ts"),"export function paid(){return 1;}\nexport function topup(){return paid();}\n");
   const firstWorker=new WorkerClient();const start=performance.now();const legacy=await firstWorker.index(root);const baselineMs=performance.now()-start;firstWorker.close();
   const oldStore=new Store(":memory:");t.after(()=>oldStore.db.close());oldStore.putBatch(legacy);
   process.env.CIE_EVIDENCE_CORE_MODE="on";process.env.CIE_EVIDENCE_CORE_STRICT="1";
   const worker=new WorkerClient();t.after(()=>worker.close());const enabledStart=performance.now();const batch=await worker.index(root);const enabledMs=performance.now()-enabledStart;
-  assert.ok(batch.evidenceCore);assert.equal(batch.revision,legacy.revision);
-  assert.deepEqual(batch.entities,legacy.entities);assert.deepEqual(batch.facts,legacy.facts);assert.deepEqual(batch.relationships,legacy.relationships);
+  assert.ok(batch.evidenceCore);assert.equal(batch.revision,legacy.revision+"-ec2");
+  const rebind=(rows:unknown)=>JSON.parse(JSON.stringify(rows).replaceAll(legacy.revision,batch.revision));
+  assert.deepEqual(batch.entities,rebind(legacy.entities));assert.deepEqual(batch.facts,rebind(legacy.facts));assert.deepEqual(batch.relationships,rebind(legacy.relationships));
   const store=new Store(":memory:");t.after(()=>store.db.close());store.putBatch(batch);
   assert.equal(graphDigest(store,batch.revision).digest,graphDigest(oldStore,legacy.revision).digest);
   assert.ok(batch.evidenceCore.coverage.every(c=>c.status==="PARTIAL"));

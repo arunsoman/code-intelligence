@@ -147,6 +147,8 @@ pub struct AnalysisBatch {
 #[derive(Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct BaseRef {
+    #[serde(default)]
+    pub evidence_core_version: Option<String>,
     pub revision: String,
     pub analyzer_version: String,
     pub digests: HashMap<String, String>,

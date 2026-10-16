@@ -84,7 +84,7 @@ export interface AnalysisBatch {
   conceptClusters?: ConceptClusterRaw[];
 }
 /** What a caller holds of a revision, so the parser can send back only what differs. */
-export interface BaseRevision { revision: RevisionId; analyzerVersion: string; digests: Record<string, string> }
+export interface BaseRevision { evidenceCoreVersion?: string; revision: RevisionId; analyzerVersion: string; digests: Record<string, string> }
 
 export interface EvidenceBundle {
   projection?: EvidenceProjection;

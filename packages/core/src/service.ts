@@ -902,7 +902,7 @@ export class Service {
       const lap = <T>(name: string, fn: () => T): T => { const t = performance.now(); try { return fn(); } finally { phases[name] = Math.round((phases[name] ?? 0) + performance.now() - t); } };
       const prev = this.store.latestRevision(req.repoPath);
       const prevFiles = prev ? this.store.revisionFiles(prev.id) : {};
-      const base = prev && Object.keys(prevFiles).length ? { revision: prev.id, analyzerVersion: prev.analyzerVersion, digests: prevFiles } : undefined;
+      const base = prev && Object.keys(prevFiles).length ? { revision: prev.id, analyzerVersion: prev.analyzerVersion, digests: prevFiles, evidenceCoreVersion:this.store.evidenceCoreBaseVersion(prev.id) } : undefined;
       control?.progress({ phase: "hashing", message: base ? "Checking which files changed…" : "Reading the repository…" });
       control?.checkpoint();
       control?.progress({ phase: "parsing", message: "Parsing the code…" });

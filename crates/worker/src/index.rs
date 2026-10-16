@@ -317,14 +317,16 @@ fn shard(batch: &mut AnalysisBatch, base: Option<&BaseRef>) {
         .collect();
     batch.manifest = manifest;
     batch.mode = "full".into();
-    let delta = base.filter(|b| b.analyzer_version == ANALYZER_VERSION && !b.digests.is_empty());
+    let delta = base.filter(|b| b.analyzer_version == batch.analyzer_version && !b.digests.is_empty());
     if let Some(b) = delta {
-        let changed: HashSet<String> = batch
+        let mut changed: HashSet<String> = batch
             .manifest
             .iter()
             .filter(|(f, d)| b.digests.get(*f) != Some(*d))
             .map(|(f, _)| f.clone())
             .collect();
+        // Repository-scoped observations bind the whole manifest and cannot be copied.
+        if crate::evidence_core::enabled().unwrap_or(false) && batch.manifest.contains_key("") { changed.insert(String::new()); }
         batch.removed_files = b
             .digests
             .keys()
@@ -1183,7 +1185,7 @@ pub fn index_repo(
 ) -> Result<AnalysisBatch, String> {
     let evidence_core = crate::evidence_core::enabled()?;
     // Until delta certificates are implemented, enabled indexing recomputes the full batch.
-    let base = if evidence_core { None } else { base };
+    let base = if evidence_core { base.filter(|b| b.evidence_core_version.as_deref() == Some(crate::producer_registry::PRODUCER_VERSION)) } else { base };
     let t_all = std::time::Instant::now();
     if !root.is_dir() {
         return Err(format!("not a directory: {}", root.display()));
@@ -1259,7 +1261,7 @@ pub fn index_repo(
     let mut batch = AnalysisBatch {
         repo_root: root.to_string_lossy().into(),
         git_head: git_head(&root),
-        analyzer_version: ANALYZER_VERSION.into(),
+        analyzer_version: if evidence_core { format!("{ANALYZER_VERSION}/evidence-core-v2") } else { ANALYZER_VERSION.into() },
         ..Default::default()
     };
     let mut nirdosha_ir = if paths
@@ -1331,9 +1333,10 @@ pub fn index_repo(
     }
     timing("pass1a read+hash", t_pass1);
     // The revision id is a hash of every file's path and bytes, so it is known before anything is parsed: when it is the base revision, stop here.
-    let revision_id = format!("wt-{}", &hex(&rev_hasher.finalize())[..16]);
+    let mut revision_id = format!("wt-{}", &hex(&rev_hasher.finalize())[..16]);
+    if evidence_core { revision_id.push_str("-ec2"); }
     if let Some(b) = base {
-        if b.revision == revision_id && b.analyzer_version == ANALYZER_VERSION {
+        if b.revision == revision_id && b.analyzer_version == batch.analyzer_version {
             batch.revision = revision_id;
             batch.mode = "unchanged".into();
             batch.base_revision = Some(b.revision.clone());
@@ -3807,6 +3810,7 @@ mod delta_tests {
     }
     fn base_of(b: &AnalysisBatch) -> BaseRef {
         BaseRef {
+            evidence_core_version: None,
             revision: b.revision.clone(),
             analyzer_version: b.analyzer_version.clone(),
             digests: b

@@ -214,6 +214,11 @@ pub fn emit(batch: &AnalysisBatch) -> Result<EvidenceCoreBatchV1, String> {
             );
         }
     }
+    if batch.manifest.contains_key("")
+        && (batch.mode != "delta" || batch.changed_files.iter().any(|f| f.is_empty()))
+    {
+        groups.entry(String::new()).or_default();
+    }
     let mut runs = vec![];
     let mut links = vec![];
     let mut coverage = vec![];

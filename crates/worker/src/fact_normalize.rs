@@ -1,6 +1,29 @@
-//! Stable legacy projection: no ID rewrites; evidence unions are sets on the enabled path.
+//! Versioned projection: retain legacy observations and disambiguate known emitter collisions.
 use crate::model::AnalysisBatch;
 pub fn normalize(batch: &mut AnalysisBatch) -> Result<(), String> {
+    // These two legacy emitters keyed distinct observations only by a shared start byte.
+    // Preserve the first (legacy-visible) record and add content-addressed v2 observation IDs.
+    // Other conflicting IDs remain hard errors; do not repair arbitrary collisions.
+    let mut seen = std::collections::HashMap::new();
+    for fact in &mut batch.facts {
+        let payload = serde_json::to_vec(&serde_json::json!([
+            fact.subject,
+            fact.predicate,
+            fact.object,
+            fact.resolution
+        ]))
+        .unwrap();
+        if (fact.id.starts_with("fact:unresolved-call:") || fact.id.starts_with("fact:defect:"))
+            && seen.get(&fact.id).is_some_and(|old| old != &payload)
+        {
+            fact.id = format!(
+                "{}:observation-v2:{}",
+                fact.id,
+                crate::canon::raw_hash(&payload)
+            );
+        }
+        seen.entry(fact.id.clone()).or_insert(payload);
+    }
     crate::evidence_core::validate(batch)?;
     let mut ids = std::collections::HashSet::new();
     batch.entities.retain(|e| ids.insert(e.entity_id.clone()));

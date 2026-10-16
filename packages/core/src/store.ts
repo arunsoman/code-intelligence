@@ -1,4 +1,4 @@
-import { validatedCore, insertCore, evidenceCoreConfig } from "./evidence-core.ts";
+import { validatedCore, insertCore, copyCoreDelta, evidenceCoreConfig, EVIDENCE_CORE_PRODUCER_VERSION } from "./evidence-core.ts";
 import { policyFor } from "./access.ts";
 import type { CoverageRecordV1, EvidenceLinkV1, ProducerRunV1 } from "@cie/schema";
 import type { EvidenceSnapshot } from "@cie/schema";
@@ -169,6 +169,23 @@ export class Store {
   }
 
   /** Additive, access-filtered metadata. Legacy revisions naturally return unknown (empty). */
+  /** Only complete metadata membership from a compatible producer may authorize delta reuse. */
+  evidenceCoreBaseVersion(revision: string): string | undefined {
+    const rev=this.revision(revision);if(!rev || evidenceCoreConfig().mode === "off")return undefined;
+    const rows=this.db.prepare("select json from evidence_core_producer_runs where revision=?").all(revision) as {json:string}[];
+    if(!rows.length)return undefined;
+    const runs=rows.map(r=>JSON.parse(r.json) as ProducerRunV1);
+    if(runs.some(r=>r.revision!==revision || r.producerVersion!==EVIDENCE_CORE_PRODUCER_VERSION || r.producerId!=="cie.rust.static" || r.analyzerVersion!==rev.analyzerVersion))return undefined;
+    const files=new Set(runs.filter(r=>r.scope.kind === "FILE").map(r=>r.scope.kind === "FILE" ? r.scope.file : ""));
+    if(this.revisionFiles(revision)[""] && !runs.some(r=>r.scope.kind === "REPOSITORY"))return undefined;
+    if(Object.keys(this.revisionFiles(revision)).filter(f=>f!=="").some(f=>!files.has(f)))return undefined;
+    const covered=new Set((this.db.prepare("select producer_run_id from evidence_core_coverage where revision=?").all(revision) as {producer_run_id:string}[]).map(c=>c.producer_run_id));
+    if(runs.some(r=>!covered.has(r.id)))return undefined;
+    const expected=(this.db.prepare("select coalesce(sum(json_array_length(ev)),0) n from facts where revision=?").get(revision) as {n:number}).n+(this.db.prepare("select coalesce(sum(json_array_length(ev)),0) n from relationships where revision=?").get(revision) as {n:number}).n;
+    const actual=(this.db.prepare("select count(*) n from evidence_core_links where revision=?").get(revision) as {n:number}).n;
+    if(actual!==expected)return undefined;
+    return EVIDENCE_CORE_PRODUCER_VERSION;
+  }
   evidenceCoreProducerRuns(revision: string, file: string): ProducerRunV1[] {
     const rev = this.revision(revision); if (!rev || evidenceCoreConfig().mode !== "on" || policyFor(this,rev.repoRoot).denied(file)) return [];
     return (this.db.prepare("select json from evidence_core_producer_runs where revision=? and file=?").all(revision,file) as {json:string}[]).map(r => JSON.parse(r.json));
@@ -208,12 +225,14 @@ export class Store {
    * Throws DeltaBaseError when the base is not usable, and the caller indexes in full instead; nothing is written in that case.
    */
   putDelta(b: AnalysisBatch): RevisionRow {
-    if (evidenceCoreConfig().mode !== "off") throw new DeltaBaseError("evidence-core requires full indexing; delta certificates are not enabled");
+    const coreEnabled = evidenceCoreConfig().mode !== "off";
     const base = b.baseRevision ? this.revision(b.baseRevision, true) : null;
     if (!base || base.repoRoot !== b.repoRoot) throw new DeltaBaseError("the base revision is not held for this repository");
+    if (coreEnabled && (base.analyzerVersion !== b.analyzerVersion || this.evidenceCoreBaseVersion(base.id) !== EVIDENCE_CORE_PRODUCER_VERSION || !b.evidenceCore)) throw new DeltaBaseError("evidence-core base producer/version is incompatible; full reindex required");
     const baseFiles = this.revisionFiles(base.id);
     if (Object.keys(baseFiles).length === 0) throw new DeltaBaseError("the base revision was stored before per-file digests were recorded");
     const leaving = new Set([...(b.changedFiles ?? []), ...(b.removedFiles ?? [])]);
+    if (coreEnabled && Object.keys(baseFiles).some(file => !leaving.has(file) && baseFiles[file] !== b.manifest?.[file])) throw new DeltaBaseError("unchanged-file manifest fence moved");
     let row!: RevisionRow;
     this.tx(() => {
       const existing = this.revision(b.revision, true);
@@ -232,6 +251,16 @@ export class Store {
       for (const tbl of ["relationships", "facts"]) d.prepare(`insert or ignore into evidence select ?, e.id, replace(e.json, ?, ?) from ${tbl} r cross join json_each(r.ev) j cross join evidence e where e.revision = ? and e.id = j.value and r.revision = ? and r.file not in (select file from _delta_files)`).run(nu, old, nu, old, nu);
       this.insertRows(nu, b, this.ownerOf(b));
       this.insertManifest(nu, b.manifest);
+      if (coreEnabled) {
+        try { copyCoreDelta(d,old,nu); } catch (error) {
+          if (error instanceof Error && error.message === "EVIDENCE_CORE_DELTA_ORPHAN") throw new DeltaBaseError("unchanged provenance lost its evidence binding; full reindex required");
+          throw error;
+        }
+        // Resolve evidence sources from the resulting revision, not just changed-file entities.
+        const core = validatedCore({...b, entities:this.entities(nu)});
+        insertCore(d,nu,core,false);
+        d.prepare("update revisions set diagnostics=? where id=?").run(JSON.stringify(b.diagnostics),nu);
+      }
       const files = (d.prepare("select count(*) n from entities where revision = ? and kind = 'file'").get(nu) as { n: number }).n;
       const listed = Object.keys(b.manifest ?? {}).filter((f) => f !== "").length;
       if (files !== listed) throw new DeltaBaseError(`the new revision has ${files} files but the parser listed ${listed}`);
