@@ -7,12 +7,14 @@ import {z} from "zod";
 import type {DatabaseSync} from "node:sqlite";
 import type {AnalysisBatch,EvidenceCoreBatchV1} from "@cie/schema";
 import {evidenceCoreConfig,validatedCore,insertCore} from "./evidence-core.ts";
+import {claimCoreStream,releaseCoreStreamClaim} from "./evidence-core-cleanup.ts";
 const handles=new WeakMap<AnalysisBatch,string>(),pending=new Set<string>();
-const remove=(path:string)=>{pending.delete(path);try{unlinkSync(path);}catch{}};
+const remove=(path:string)=>{pending.delete(path);try{unlinkSync(path);}catch{}releaseCoreStreamClaim(path);};
 const cleanup=new FinalizationRegistry<string>(remove);
 process.once("exit",()=>{for(const path of pending)remove(path);});
 export function attachCoreStream(batch:AnalysisBatch,path:string):void {
   if(batch.evidenceCore || handles.has(batch))throw new Error("EVIDENCE_CORE_STREAM_INVALID: ambiguous transport");
+  claimCoreStream(path);
   handles.set(batch,path);pending.add(path);cleanup.register(batch,path,batch);
 }
 export function coreStreamPath(batch:AnalysisBatch):string|undefined{return handles.get(batch);}

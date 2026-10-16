@@ -1859,7 +1859,15 @@ fn cluster_concepts(batch: &mut AnalysisBatch, ir_seqs: &HashMap<String, Vec<u16
         for m in members {
             *name_counts.entry(short_name(&m.name)).or_insert(0) += 1;
         }
-        let heuristic_name = name_counts.into_iter().max_by_key(|(_, c)| *c).map(|(n, _)| n);
+        // Most frequent name, then smallest UTF-8 name: HashMap iteration must
+        // not change a cluster's visible label between identical indexes.
+        let heuristic_name = name_counts
+            .into_iter()
+            .max_by(|a, b| {
+                a.1.cmp(&b.1)
+                    .then_with(|| b.0.as_bytes().cmp(a.0.as_bytes()))
+            })
+            .map(|(n, _)| n);
         clusters.push(ConceptClusterRaw {
             cluster_id: cluster_id("exact-shape", &mut ids),
             kind: "exact-shape".into(),
@@ -4149,5 +4157,26 @@ mod concept_tests {
             .expect("two @Service classes in the same top-level package must form a framework-role cluster");
         assert_eq!(cluster.member_entity_ids.len(), 2);
         assert!(cluster.heuristic_name.as_deref().unwrap_or("").contains("provider"));
+    }
+    #[test]
+    fn exact_shape_names_break_frequency_ties_deterministically() {
+        for _ in 0..16 {
+            let b = fixture(&[
+                (
+                    "a.java",
+                    "public class Zebra { public int value(){return 1;} }\n",
+                ),
+                (
+                    "b.java",
+                    "public class Alpha { public int value(){return 1;} }\n",
+                ),
+            ]);
+            let cluster = b
+                .concept_clusters
+                .iter()
+                .find(|c| c.kind == "exact-shape")
+                .expect("same-shaped classes must cluster");
+            assert_eq!(cluster.heuristic_name.as_deref(), Some("Alpha"));
+        }
     }
 }

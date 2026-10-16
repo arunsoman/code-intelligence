@@ -1,9 +1,10 @@
 import {spawnSync} from "node:child_process";
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {mkdtempSync,writeFileSync,readFileSync,rmSync,existsSync,chmodSync} from "node:fs";
+import {mkdtempSync,writeFileSync,readFileSync,rmSync,existsSync,chmodSync,readdirSync,renameSync} from "node:fs";
 import {tmpdir} from "node:os";
-import {join} from "node:path";
+import {join,basename} from "node:path";
+import {cleanupStaleCoreStreams,CORE_STREAM_STALE_MS} from "../src/evidence-core-cleanup.ts";
 import {createHash} from "node:crypto";
 import {WorkerClient} from "../src/worker.ts";
 import {Store} from "../src/store.ts";
@@ -127,6 +128,13 @@ test("process death during staging recovers without a partial revision",async t=
   writeFileSync(script,`import {writeFileSync} from 'node:fs';import {WorkerClient} from ${JSON.stringify(workerModule)};import {Store} from ${JSON.stringify(storeModule)};import {coreStreamPath,attachCoreStream} from ${JSON.stringify(streamModule)};const w=new WorkerClient();const batch=await w.index(${JSON.stringify(root)});w.close();writeFileSync(${JSON.stringify(mark)},coreStreamPath(batch));const s=new Store(${JSON.stringify(db)});s.db.function('crash_stream',()=>{process.kill(process.pid,'SIGKILL');return 0;});s.db.exec("create trigger crash_stage before insert on evidence_core_coverage begin select crash_stream();end;");s.putBatch(batch);process.exit(99);`);
   const child=spawnSync(process.execPath,[script],{encoding:"utf8",timeout:15000});assert.equal(child.signal,"SIGKILL",child.stderr);const path=readFileSync(mark,"utf8");t.after(()=>rmSync(path,{force:true}));
   const recovered=new Store(db);try{assert.equal((recovered.db.prepare("select count(*) n from revisions").get() as {n:number}).n,0);assert.equal((recovered.db.prepare("select count(*) n from evidence_core_links").get() as {n:number}).n,0);assert.equal(Object.values(recovered.db.prepare("pragma integrity_check").get()!)[0],"ok");}finally{recovered.db.close();}
+  if(process.platform==="linux"){
+    const lease=readdirSync(tmpdir()).find(name=>name.startsWith(basename(path)+".lease-"));assert.ok(lease);
+    renameSync(path,join(root,basename(path)));renameSync(join(tmpdir(),lease),join(root,lease));
+    assert.equal(cleanupStaleCoreStreams(root),0,"recent crash handles are retained");
+    assert.equal(cleanupStaleCoreStreams(root,Date.now()+CORE_STREAM_STALE_MS+1000),1);
+    assert.ok(!existsSync(join(root,basename(path))));assert.ok(!existsSync(join(root,lease)));
+  }
 });
 
 test("inline and stream revisions can alternate as compatible delta bases",async t=>{

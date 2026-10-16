@@ -1,4 +1,5 @@
 import { attachCoreStream, cleanupCoreWorkerFiles } from "./evidence-core-stream.ts";
+import { cleanupCoreStreamsAtStartup } from "./evidence-core-cleanup.ts";
 import { diagnostic } from "./diagnostics.ts";
 // Supervisor/client for the Rust worker (contracts §10): length-prefixed JSON over stdio.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -74,6 +75,8 @@ export class WorkerClient {
   rssLimitMb = Number(process.env.CIE_WORKER_RSS_MB) || 2048;
 
   constructor(path = defaultWorkerPath()) {
+    const reclaimed=cleanupCoreStreamsAtStartup();
+    if(reclaimed)diagnostic("worker.core_stream_cleanup",{reclaimed});
     this.path = path;
     this.start();
   }

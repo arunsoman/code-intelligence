@@ -68,29 +68,14 @@ pub fn enabled() -> Result<bool, String> {
 // serde Value already has unique keys and valid UTF-8; retain canon's numeric,
 // depth and schema-key checks without serializing and reparsing JSON.
 fn canonical_value(value: &Value) -> String {
-    fn convert(value: &Value, depth: usize) -> canon::Canon {
-        assert!(depth <= 128, "internal canonical payload depth");
-        match value {
-            Value::Null => canon::Canon::Null,
-            Value::Bool(v) => canon::Canon::Bool(*v),
-            Value::String(v) => canon::Canon::Str(v.clone()),
-            Value::Number(v) => {
-                canon::Canon::Int(v.as_i64().expect("internal integral canonical payload"))
-            }
-            Value::Array(v) => canon::Canon::Arr(v.iter().map(|v| convert(v, depth + 1)).collect()),
-            Value::Object(v) => canon::Canon::Obj(
-                v.iter()
-                    .map(|(k, v)| (k.clone(), convert(v, depth + 1)))
-                    .collect(),
-            ),
-        }
-    }
-    canon::canonicalize(&convert(value, 0)).unwrap()
+    canon::canonicalize_json(value).unwrap()
 }
 pub fn identity(kind: &str, value: &Value) -> String {
-    let text = canonical_value(value);
+    identity_canonical(kind, &canonical_value(value))
+}
+fn identity_canonical(kind: &str, text: &str) -> String {
     let name = format!("cie.evidence-core.{kind}");
-    format!("{name}@1:{}", canon::canon_digest(&name, "1", &text))
+    format!("{name}@1:{}", canon::canon_digest(&name, "1", text))
 }
 /// Reject incompatible IDs before the legacy deduper can silently retain the first row.
 pub fn validate(batch: &AnalysisBatch) -> Result<(), String> {
@@ -298,9 +283,15 @@ fn finish(
     let mut runs = vec![];
     let mut links = vec![];
     let mut coverage = vec![];
-    for (file, mut associations) in groups {
-        associations.sort_by_cached_key(canonical_value);
-        associations.dedup();
+    for (file, associations) in groups {
+        // Retain canonical sort keys for the output digest rather than cloning
+        // and canonicalizing the same support objects a second time.
+        let mut associations: Vec<_> = associations
+            .into_iter()
+            .map(|value| (canonical_value(&value), value))
+            .collect();
+        associations.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+        associations.dedup_by(|a, b| a.0 == b.0);
         let scope = if file.is_empty() {
             json!({"kind":"REPOSITORY"})
         } else {
@@ -319,7 +310,17 @@ fn finish(
                     })
                     .clone()
             });
-        let output = identity("output", &json!([batch.manifest.get(&file), associations]));
+        let mut output_payload = String::from("[");
+        output_payload.push_str(&canonical_value(&json!(batch.manifest.get(&file))));
+        output_payload.push_str(",[");
+        for (i, (key, _)) in associations.iter().enumerate() {
+            if i > 0 {
+                output_payload.push(',');
+            }
+            output_payload.push_str(key);
+        }
+        output_payload.push_str("]]");
+        let output = identity_canonical("output", &output_payload);
         let run = identity(
             "run",
             &json!([
@@ -351,7 +352,7 @@ fn finish(
             input_digest: input,
             output_digest: output,
         });
-        for link in associations {
+        for (_, link) in associations {
             links.push(EvidenceLinkV1 {
                 subject_kind: link["subjectKind"].as_str().unwrap().into(),
                 subject_id: link["subjectId"].as_str().unwrap().into(),

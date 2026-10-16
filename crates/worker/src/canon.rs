@@ -99,6 +99,64 @@ pub fn canonicalize(v: &Canon) -> Result<String, CanonError> {
     Ok(s)
 }
 
+/// Canonicalize an already constructed JSON value without cloning its tree.
+/// This does not replace strict JSON parsing: duplicate keys and lexical -0
+/// cannot be recovered after serde has parsed external input.
+pub fn canonicalize_json(value: &serde_json::Value) -> Result<String, CanonError> {
+    fn emit(v: &serde_json::Value, depth: usize, out: &mut String) -> Result<(), CanonError> {
+        if depth > MAX_DEPTH {
+            return err(Code::UnsupportedValue, "value is nested too deeply");
+        }
+        match v {
+            serde_json::Value::Null => out.push_str("null"),
+            serde_json::Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            serde_json::Value::String(s) => quote(s, out),
+            serde_json::Value::Number(n) => {
+                let Some(n) = n.as_i64().filter(|n| (-MAX_SAFE..=MAX_SAFE).contains(n)) else {
+                    return err(Code::UnsafeNumber, "only safe integers are allowed");
+                };
+                out.push_str(&n.to_string());
+            }
+            serde_json::Value::Array(items) => {
+                out.push('[');
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    emit(item, depth + 1, out)?;
+                }
+                out.push(']');
+            }
+            serde_json::Value::Object(fields) => {
+                let mut fields: Vec<_> = fields.iter().collect();
+                for (key, _) in &fields {
+                    if key.is_empty() || !key.is_ascii() {
+                        return err(
+                            Code::BadKey,
+                            "object keys must be non-empty ASCII schema field names",
+                        );
+                    }
+                }
+                fields.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+                out.push('{');
+                for (i, (key, item)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    quote(key, out);
+                    out.push(':');
+                    emit(item, depth + 1, out)?;
+                }
+                out.push('}');
+            }
+        }
+        Ok(())
+    }
+    let mut out = String::new();
+    emit(value, 0, &mut out)?;
+    Ok(out)
+}
+
 fn write(v: &Canon, depth: usize, out: &mut String) -> Result<(), CanonError> {
     if depth > MAX_DEPTH {
         return err(Code::UnsupportedValue, "value is nested too deeply");
@@ -230,7 +288,11 @@ pub fn canon_decimal(input: &str) -> Result<String, CanonError> {
     }
     let int = {
         let t = int.trim_start_matches('0');
-        if t.is_empty() { "0" } else { t }
+        if t.is_empty() {
+            "0"
+        } else {
+            t
+        }
     };
     let frac = frac.trim_end_matches('0');
     let zero = int == "0" && frac.is_empty();
@@ -969,5 +1031,54 @@ mod tests {
             }
         }
         assert!(ran >= 70, "ran {ran} vectors");
+    }
+}
+
+#[cfg(test)]
+mod borrowed_json_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn borrowed_json_matches_strict_canonical_bytes_and_digests() {
+        let control: String = (0..32).map(char::from).collect();
+        for i in 0..128 {
+            let value = json!({"z":[null,true,false,9007199254740991i64,-9007199254740991i64],
+                "a":{"text":format!("é 😀 {}{}",control,i),"quote":"\"\\/"},"n":i});
+            let strict = parse_strict_json(&serde_json::to_vec(&value).unwrap()).unwrap();
+            let expected = canonicalize(&strict).unwrap();
+            let actual = canonicalize_json(&value).unwrap();
+            assert_eq!(actual, expected);
+            assert_eq!(
+                canon_digest("test", "1", &actual),
+                canon_digest("test", "1", &expected)
+            );
+        }
+    }
+    #[test]
+    fn borrowed_json_retains_key_number_and_depth_limits() {
+        for value in [json!({"":1}), json!({"é":1})] {
+            assert_eq!(canonicalize_json(&value).unwrap_err().code, Code::BadKey);
+        }
+        for value in [
+            json!(1.5),
+            json!(1.0),
+            json!(9007199254740992i64),
+            json!(i64::MIN),
+            json!(u64::MAX),
+        ] {
+            assert_eq!(
+                canonicalize_json(&value).unwrap_err().code,
+                Code::UnsafeNumber
+            );
+        }
+        let mut value = json!(null);
+        for _ in 0..128 {
+            value = json!([value]);
+        }
+        canonicalize_json(&value).unwrap();
+        assert_eq!(
+            canonicalize_json(&json!([value])).unwrap_err().code,
+            Code::UnsupportedValue
+        );
     }
 }
