@@ -59,3 +59,45 @@ export const traceFor = (root: string) => `FraudRejectedError: acct-9 over limit
     at charge (${root}/src/payments/payment-service.ts:10:3)
     at createPayment (${root}/src/api/payments-controller.ts:6:11)
     at Layer.handle (/usr/lib/node_modules/express/lib/router/layer.js:95:5)`;
+
+// ---------------------------------------------------------------------------
+// Deterministic view helpers (the ask rebuild's groundwork, used by fixture
+// worlds): they reproduce exactly what the deleted ask flow did for the three
+// forms the e2e suites relied on, with the offline (stub) model — no LLM.
+import { retrieveForQuestion } from "../src/retrieval.ts";
+import { compileView } from "../src/viewspec.ts";
+import { SCHEMA_REPRESENTATION } from "@cie/schema";
+import { ensureEdgeClaims, visualByForm, type Built } from "../src/visuals.ts";
+import { buildFailureGraph } from "../src/forms/causal.ts";
+import type { RevisionRow } from "../src/store.ts";
+
+const persistBuilt = (svc: any, rev: RevisionRow, b: Built) => { (svc as any).persist(b.claims); return b; };
+
+/** The ask flow's SemanticMap path (V1): retrieval → REPRESENT call → compileView → persist. */
+export async function askMap(svc: any, revision: string, question: string): Promise<Built> {
+  const rev = svc.store.revision(revision)!;
+  const r = retrieveForQuestion(svc.store, revision, question, { forModel: true, scope: "subject", resolveEvidence: (ev: any) => svc.resolveEvidence(rev, ev) });
+  const d = await svc.callModel({ ...ctx(), id: "map", requestId: "map" } as never, rev, { purpose: "REPRESENT", schemaId: SCHEMA_REPRESENTATION, question, bundle: r.bundle });
+  const ok = (d.result as { ok: boolean }).ok === true;
+  const built = ensureEdgeClaims(svc.store, rev, compileView({
+    question, bundle: r.bundle, tiers: r.tiers, scored: r.scored,
+    representation: ok ? (d.result as { value: never }).value : undefined,
+    run: ok ? (d.result as { run: never }).run : undefined,
+    diagnostics: [], store: svc.store as unknown as Store, systemName: rev.repoRoot.split("/").filter(Boolean).pop(),
+  }));
+  return persistBuilt(svc, rev, built);
+}
+
+/** Any V-series visual with a direct `build` (e.g. V4 TransactionJourney), then edge claims + persist. */
+export async function askVisual(svc: any, revision: string, code: string, question: string, subject?: string): Promise<Built> {
+  const rev = svc.store.revision(revision)!;
+  const visual = visualByForm(code);
+  if (!visual?.build) throw new Error(`visual ${code} has no direct build`);
+  return persistBuilt(svc, rev, ensureEdgeClaims(svc.store, rev, visual.build(svc.store as unknown as Store, rev, question, subject) as Built));
+}
+
+/** The native causal failure graph (V3), then edge claims + persist. */
+export async function askCausal(svc: any, revision: string, question: string): Promise<Built> {
+  const rev = svc.store.revision(revision)!;
+  return persistBuilt(svc, rev, ensureEdgeClaims(svc.store, rev, buildFailureGraph(svc.store as unknown as Store, rev, question) as Built));
+}
