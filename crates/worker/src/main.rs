@@ -596,6 +596,22 @@ fn main() {
         .map(|a| a.to_string_lossy().to_string())
         .collect();
     if !argv.is_empty() {
+        if argv[0] == "analysisFoundation" {
+            let result = (|| -> Result<_, String> {
+                if argv.len() != 2 { return Err("analysisFoundation requires exactly one snapshot JSON file".into()); }
+                let bytes = std::fs::read(&argv[1]).map_err(|e| e.to_string())?;
+                let snapshot: analysis_foundation::Snapshot = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+                analysis_foundation::analyze(&snapshot, 100_000)
+            })();
+            match result {
+                Ok(result) => println!("{}", serde_json::to_string(&result).unwrap()),
+                Err(message) => {
+                    println!("{}", json!({"error": {"code": "INVALID_FOUNDATION_INPUT", "message": message}}));
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
         if argv[0] == "contentRoot" {
             content_root_one_shot(&argv[1..]);
             return;
