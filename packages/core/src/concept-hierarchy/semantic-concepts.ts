@@ -9,6 +9,10 @@ import { conceptConfig } from "./config.ts";
 import { canonicalMotifHash } from "./canonicalize.ts";
 import { matchMotifsBatch, type MotifBatchMatcher } from "./motifs.ts";
 import type { Pdg } from "./types.ts";
+import { statSync } from "node:fs";
+import { defaultWorkerPath } from "../worker.ts";
+import { MotifCache, type MotifCacheStats } from "./motif-cache.ts";
+const productionMotifs = new MotifCache();
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
@@ -17,12 +21,14 @@ export interface SemanticBuildResult {
   /** Concepts whose id (and so label) carried over from the previous run. */
   carried: number;
   gaps: string[];
+  motifMatching?: MotifCacheStats;
 }
 
 const evidenceFor = (store: Store, revision: string, entityId: string): string[] => {
   const out: string[] = [];
+  const facts = store.factsFor(revision, entityId);
   for (const predicate of ["throws", "writes", "uses_transaction", "publishes", "subscribes"]) {
-    for (const f of store.factsFor(revision, entityId)) {
+    for (const f of facts) {
       if (f.predicate !== predicate) continue;
       for (const e of f.evidence) if (!out.includes(e.id)) out.push(e.id);
       if (out.length >= 8) return out;
@@ -62,12 +68,19 @@ const hashOf = (d: Draft) => canonicalMotifHash({ motifs: d.motifs, features: d.
  * One pass over the graphs. A function contributes one concept per distinct motif shape; composed
  * forms (debit/credit/transfer, leak candidates) replace the plain motif concept they specialise.
  */
-export function buildSemanticConcepts(store: Store, revision: string, pdgs: Pdg[], previous: SemanticConcept[] = [], motifBatch: MotifBatchMatcher = matchMotifsBatch): SemanticBuildResult {
+export function buildSemanticConcepts(store: Store, revision: string, pdgs: Pdg[], previous: SemanticConcept[] = [], motifBatch?: MotifBatchMatcher): SemanticBuildResult {
   const minMembers = conceptConfig().composedMinMembers.value;
   const drafts: Draft[] = [];
   // The per-function graph scans come from the injected batch (the Rust worker in production, the
   // local matchers in hermetic tests); the composition below is unchanged.
-  const matchesPerPdg = motifBatch(pdgs);
+  let motifMatching: MotifCacheStats | undefined;
+  const matchesPerPdg = motifBatch ? motifBatch(pdgs) : (() => {
+    const path=defaultWorkerPath(),stat=statSync(path,{bigint:true});
+    const result=productionMotifs.match(pdgs,matchMotifsBatch,`${path}:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`);
+    motifMatching=result.stats;return result.matches;
+  })();
+  const evidenceCache = new Map<string,string[]>();
+  const evidenceForMember=(id:string)=>{let evidence=evidenceCache.get(id);if(!evidence){evidence=evidenceFor(store,revision,id);evidenceCache.set(id,evidence);}return evidence;};
   for (const [i, pdg] of pdgs.entries()) {
     const matches = matchesPerPdg[i];
     const byMotif = new Map<string, number>();
@@ -142,7 +155,7 @@ export function buildSemanticConcepts(store: Store, revision: string, pdgs: Pdg[
       label: prev?.label ?? null,
       namedBy: prev?.namedBy ?? null,
       members,
-      evidenceIds: members.flatMap((m) => evidenceFor(store, revision, m)).slice(0, 8),
+      evidenceIds: members.flatMap(evidenceForMember).slice(0, 8),
       canonicalMotifHash: hash,
       compositionRule: d.compositionRule,
       features: d.features,
@@ -152,5 +165,5 @@ export function buildSemanticConcepts(store: Store, revision: string, pdgs: Pdg[
   }
   const seen = new Set<string>();
   const unique = concepts.filter((c) => (seen.has(c.id) ? false : (seen.add(c.id), true)));
-  return { concepts: unique, carried, gaps: [] };
+  return { concepts: unique, carried, gaps: [], ...(motifMatching?{motifMatching}:{}) };
 }

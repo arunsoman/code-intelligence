@@ -43,6 +43,7 @@ export interface HierarchyBuildResult {
     naming: { named: number; fallback: number; cacheHits: number };
     phasesMs: Record<string, number>;
     warnings: string[];
+    motifs?: import("./motif-cache.ts").MotifCacheStats;
   };
 }
 
@@ -122,8 +123,9 @@ export async function buildHierarchy(
     const file = n.path.replace(/^[a-z]+:/, "").split("#")[0];
     return [n.memberEntityIds[0], `arch:mod:${file}`];
   }));
+  const previousById = new Map(previousConcepts.map(c=>[c.id,c]));
   const anchored: SemanticConcept[] = sem.concepts.map((c) => {
-    const p = previousConcepts.find((x) => x.id === c.id);
+    const p = previousById.get(c.id);
     if (!p?.label) return c;
     const decision = shouldRename({
       prevLabel: p.label, prevMembers: p.members, nextMembers: c.members,
@@ -136,6 +138,7 @@ export async function buildHierarchy(
     return { ...c, label: null, namedBy: null };
   });
   const renamed = anchored.filter((c) => c.label === null).length;
+  const namingStarted = performance.now();
   const named = opts.adapter
     ? await nameConcepts(store, {
         concepts: anchored,
@@ -148,6 +151,7 @@ export async function buildHierarchy(
         arch: arch.nodes, named: 0, fallback: anchored.filter((c) => !c.label).length, cacheHits: 0,
       };
 
+  phases.naming = Math.round(performance.now()-namingStarted);
   const stats = {
     fullRebuild,
     changedFileRatio: ratio,
@@ -158,6 +162,7 @@ export async function buildHierarchy(
     naming: { named: named.named, fallback: named.fallback, cacheHits: named.cacheHits },
     phasesMs: phases,
     warnings,
+    ...(sem.motifMatching?{motifs:sem.motifMatching}:{}),
   };
 
   return {

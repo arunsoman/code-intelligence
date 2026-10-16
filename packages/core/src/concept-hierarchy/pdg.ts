@@ -47,7 +47,8 @@ function buildPdgsBatch(entries: { entityId: string; file: string; irHash: strin
     if (!parsed?.results || !Array.isArray(parsed.results)) {
       throw new Error(`worker irPdgs failed (exit ${r.status}${r.stderr ? `: ${String(r.stderr).slice(0, 200)}` : ""})`);
     }
-    return entries.map((e) => parsed!.results!.find((x) => x.entityId === e.entityId)?.pdg ?? null);
+    const byEntity = new Map(parsed.results.map(result=>[result.entityId,result.pdg]));
+    return entries.map(e=>byEntity.get(e.entityId)??null);
   } finally {
     rmSync(input, { force: true });
   }

@@ -1,0 +1,87 @@
+{
+  "baseline": "0337482",
+  "graphs": 1000,
+  "nodesPerGraph": 31,
+  "rounds": 5,
+  "coldMs": 601.448772,
+  "coldMotifs": {
+    "matched": 1000,
+    "reused": 0,
+    "entries": 1000,
+    "bytes": 2473700
+  },
+  "medianBaselineMs": 357.76127999999994,
+  "medianIncrementalMs": 121.65582099999983,
+  "speedup": 2.9407658183491314,
+  "measurements": [
+    {
+      "baselineMs": 385.345742,
+      "incrementalMs": 139.72077799999988,
+      "baselineReads": 5000,
+      "incrementalReads": 1000,
+      "motifs": {
+        "matched": 1,
+        "reused": 999,
+        "entries": 1001,
+        "bytes": 2476117
+      },
+      "outputEquivalent": true
+    },
+    {
+      "baselineMs": 357.76127999999994,
+      "incrementalMs": 169.30684999999994,
+      "baselineReads": 5000,
+      "incrementalReads": 1000,
+      "motifs": {
+        "matched": 1,
+        "reused": 999,
+        "entries": 1002,
+        "bytes": 2478534
+      },
+      "outputEquivalent": true
+    },
+    {
+      "baselineMs": 354.59916699999985,
+      "incrementalMs": 121.65582099999983,
+      "baselineReads": 5000,
+      "incrementalReads": 1000,
+      "motifs": {
+        "matched": 1,
+        "reused": 999,
+        "entries": 1003,
+        "bytes": 2480951
+      },
+      "outputEquivalent": true
+    },
+    {
+      "baselineMs": 398.68258300000025,
+      "incrementalMs": 119.10385600000018,
+      "baselineReads": 5000,
+      "incrementalReads": 1000,
+      "motifs": {
+        "matched": 1,
+        "reused": 999,
+        "entries": 1004,
+        "bytes": 2483368
+      },
+      "outputEquivalent": true
+    },
+    {
+      "baselineMs": 344.2203959999997,
+      "incrementalMs": 110.76672600000029,
+      "baselineReads": 5000,
+      "incrementalReads": 1000,
+      "motifs": {
+        "matched": 1,
+        "reused": 999,
+        "entries": 1005,
+        "bytes": 2485785
+      },
+      "outputEquivalent": true
+    }
+  ],
+  "limits": [
+    "Synthetic semantic-phase workload, no model, index or architecture/persistence I/O.",
+    "Process-local warm cache; restart is cold. Timings are specific to this environment."
+  ]
+}
