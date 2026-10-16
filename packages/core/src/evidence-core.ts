@@ -4,13 +4,15 @@ import type { DatabaseSync } from "node:sqlite";
 export const EVIDENCE_CORE_PRODUCER_VERSION = "3";
 export function evidenceCoreLimits() {
   const read=(key:string,fallback:number,max:number)=>{const raw=process.env[key]??String(fallback);if(!/^[1-9][0-9]*$/.test(raw)||!Number.isSafeInteger(Number(raw))||Number(raw)>max)throw new Error(`EVIDENCE_CORE_CONFIG: invalid budget ${key}`);return Number(raw);};
-  return {rows:read("CIE_EVIDENCE_CORE_MAX_ROWS",100000,1000000),bytes:read("CIE_EVIDENCE_CORE_MAX_BYTES",16*1024*1024,512*1024*1024),chunkBytes:read("CIE_EVIDENCE_CORE_CHUNK_BYTES",8*1024*1024,32*1024*1024),chunkRows:read("CIE_EVIDENCE_CORE_CHUNK_ROWS",16384,100000)};
+  return {rows:read("CIE_EVIDENCE_CORE_MAX_ROWS",100000,1000000),bytes:read("CIE_EVIDENCE_CORE_MAX_BYTES",16*1024*1024,512*1024*1024),chunkBytes:read("CIE_EVIDENCE_CORE_CHUNK_BYTES",8*1024*1024,32*1024*1024),chunkRows:read("CIE_EVIDENCE_CORE_CHUNK_ROWS",16384,100000),streamRows:read("CIE_EVIDENCE_CORE_STREAM_MAX_ROWS",1000000,4000000),streamBytes:read("CIE_EVIDENCE_CORE_STREAM_MAX_BYTES",256*1024*1024,512*1024*1024)};
 }
 export function evidenceCoreConfig() {
   const mode = process.env.CIE_EVIDENCE_CORE_MODE ?? "on", strict = process.env.CIE_EVIDENCE_CORE_STRICT ?? "0", gates = process.env.CIE_EVIDENCE_CORE_COVERAGE_GATES ?? "0";
   if (!["off","shadow","on"].includes(mode) || !["0","1"].includes(strict) || gates !== "0") throw new Error("EVIDENCE_CORE_CONFIG: invalid flags or coverage gates not implemented");
-  const transport=process.env.CIE_EVIDENCE_CORE_TRANSPORT??"inline";
-  if(!["inline","stream"].includes(transport))throw new Error("EVIDENCE_CORE_CONFIG: invalid transport");
+  // "auto" (the default) lets the worker attempt inline metadata first and fall back to a streamed
+  // sidecar when the inline row/byte caps overflow, so large repos never fail to index.
+  const transport=process.env.CIE_EVIDENCE_CORE_TRANSPORT??"auto";
+  if(!["inline","stream","auto"].includes(transport))throw new Error("EVIDENCE_CORE_CONFIG: invalid transport");
   return { mode, strict: strict === "1", transport, limits:evidenceCoreLimits() };
 }
 export function evidenceCoreIdentity(kind: string, value: Canon): string {
@@ -161,8 +163,8 @@ export function enforceCoreRevisionLimits(db: DatabaseSync, revision: string): v
   let bytes = 0;
   for (const table of ["evidence_core_producer_runs","evidence_core_coverage","evidence_core_links"]) {
     const row = db.prepare(`select count(*) n, coalesce(sum(length(cast(${table === "evidence_core_links" ? "json_array(subject_kind,subject_id,evidence_id,producer_run_id,role)" : "json"} as blob))),0) bytes from ${table} where revision=?`).get(revision) as {n:number;bytes:number};
-    if(row.n > limits.rows) throw new Error("EVIDENCE_CORE_RESOURCE_LIMIT: revision row cap");
+    if(row.n > limits.streamRows) throw new Error("EVIDENCE_CORE_RESOURCE_LIMIT: revision row cap");
     bytes += row.bytes;
   }
-  if(bytes > limits.bytes) throw new Error("EVIDENCE_CORE_RESOURCE_LIMIT: revision byte cap");
+  if(bytes > limits.streamBytes) throw new Error("EVIDENCE_CORE_RESOURCE_LIMIT: revision byte cap");
 }

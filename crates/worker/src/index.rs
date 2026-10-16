@@ -1776,14 +1776,29 @@ pub fn index_repo(
         if unbound { return Err("EVIDENCE_CORE_REVISION".into()); }
         if !stream_core {
         let t_emit = std::time::Instant::now();
-        let core = crate::evidence_core::emit(&batch)?;
-        timing("provenance emit", t_emit);
-        let t_cap = std::time::Instant::now();
-        if serde_json::to_vec(&core).map_err(|e| e.to_string())?.len() > crate::evidence_stream::limits()?.bytes {
-            return Err("EVIDENCE_CORE_LIMIT: metadata exceeds configured byte budget; index not committed".into());
+        let emitted = crate::evidence_core::emit(&batch).and_then(|core| {
+            let bytes = serde_json::to_vec(&core).map_err(|e| e.to_string())?.len();
+            if bytes > crate::evidence_stream::limits()?.bytes {
+                return Err("EVIDENCE_CORE_LIMIT: metadata exceeds configured byte budget".into());
+            }
+            timing("metadata wire cap", t_emit);
+            Ok(core)
+        });
+        match emitted {
+            Ok(core) => {
+                timing("provenance emit", t_emit);
+                batch.evidence_core = Some(core);
+            }
+            // The inline sidecar does not fit (large repo): with the default "auto" transport the index
+            // still commits and main.rs streams the metadata to a sidecar handle instead. A hard failure
+            // only remains when the transport was pinned to "inline" explicitly.
+            Err(e) if e.starts_with("EVIDENCE_CORE_LIMIT")
+                && crate::evidence_stream::transport().as_deref() == Ok("auto") =>
+            {
+                timing("inline overflow → streamed sidecar", t_emit);
+            }
+            Err(e) => return Err(e.into()),
         }
-        timing("metadata wire cap", t_cap);
-        batch.evidence_core = Some(core);
         }
     }
     timing("shard digests + delta", t_shard);

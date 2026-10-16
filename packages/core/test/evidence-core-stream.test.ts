@@ -84,7 +84,7 @@ test("missing, duplicate, reordered and forged chunks atomically reject and clea
 test("optional invalid stream drops all metadata while resource exhaustion stays fatal",async t=>{
   const root=setup(t);process.env.CIE_EVIDENCE_CORE_TRANSPORT="stream";process.env.CIE_EVIDENCE_CORE_STRICT="0";const store=new Store(":memory:");t.after(()=>store.db.close());
   const batch=await index(root);rewrite(coreStreamPath(batch)!,r=>r.slice(0,-1));store.putBatch(batch);assert.ok(store.allFacts(batch.revision).length);assert.equal(store.evidenceCoreBaseVersion(batch.revision),undefined);assert.equal((store.db.prepare("select count(*) n from evidence_core_links").get() as {n:number}).n,0);assert.ok(store.revision(batch.revision)!.diagnostics.some(d=>d.code==="EVIDENCE_CORE_REJECTED"));
-  writeFileSync(join(root,"a.ts"),'export function first(){return 10;}\n');const next=await index(root);process.env.CIE_EVIDENCE_CORE_MAX_BYTES="1";assert.throws(()=>store.putBatch(next),/EVIDENCE_CORE_RESOURCE_LIMIT/);assert.equal(store.revision(next.revision),null);
+  writeFileSync(join(root,"a.ts"),'export function first(){return 10;}\n');const next=await index(root);process.env.CIE_EVIDENCE_CORE_STREAM_MAX_BYTES="1";assert.throws(()=>store.putBatch(next),/EVIDENCE_CORE_RESOURCE_LIMIT/);assert.equal(store.revision(next.revision),null);
 });
 test("stream delta SQL failure rolls back copied metadata and preserves base",async t=>{
   const root=setup(t);process.env.CIE_EVIDENCE_CORE_TRANSPORT="stream";const worker=new WorkerClient(),store=new Store(":memory:");t.after(()=>{worker.close();store.db.close();});const first=await worker.index(root);store.putBatch(first);
@@ -118,7 +118,7 @@ test("combined copied and incoming stream metadata must fit the revision budget"
   const root=setup(t);process.env.CIE_EVIDENCE_CORE_TRANSPORT="stream";const worker=new WorkerClient(),store=new Store(":memory:");t.after(()=>{worker.close();store.db.close();});const first=await worker.index(root);store.putBatch(first);
   const count=(store.db.prepare("select count(*) n from evidence_core_links").get() as {n:number}).n;
   writeFileSync(join(root,"a.ts"),'export function first(){return 17;}\n');const delta=await worker.index(root,120000,undefined,{revision:first.revision,analyzerVersion:first.analyzerVersion,digests:first.manifest!,evidenceCoreVersion:"3"});
-  process.env.CIE_EVIDENCE_CORE_MAX_ROWS=String(count-1);
+  process.env.CIE_EVIDENCE_CORE_STREAM_MAX_ROWS=String(count-1);
   assert.throws(()=>store.putDelta(delta),/EVIDENCE_CORE_RESOURCE_LIMIT/);assert.equal(store.revision(delta.revision),null);assert.ok(store.revision(first.revision));
 });
 

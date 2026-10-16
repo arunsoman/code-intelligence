@@ -57,7 +57,7 @@ export function insertCoreStream(db:DatabaseSync,batch:AnalysisBatch,entities:An
   db.exec("savepoint evidence_core_stream");
   try {
     if(replace)db.prepare("delete from evidence_core_producer_runs where revision=?").run(batch.revision);
-    for(const line of lines(path,config.limits.chunkBytes,config.limits.bytes)){
+    for(const line of lines(path,config.limits.chunkBytes,config.limits.streamBytes)){
       let value:any;try{value=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(line));}catch{invalid();}
       if(!started){const h=header.safeParse(value);if(!h.success||h.data.revision!==batch.revision)invalid();started=true;continue;}
       if(finished)invalid();
@@ -68,7 +68,7 @@ export function insertCoreStream(db:DatabaseSync,batch:AnalysisBatch,entities:An
       if(c.sequence!==sequence++||!expected.has(c.scope)||seen.has(c.scope))invalid();seen.add(c.scope);hash.update(line);
       const raw=c.core as EvidenceCoreBatchV1;if(!raw||!Array.isArray(raw.links))invalid();
       links+=raw.links.length;
-      if(raw.links.length>config.limits.chunkRows||links>config.limits.rows||sequence>config.limits.rows)limit();
+      if(raw.links.length>config.limits.chunkRows||links>config.limits.streamRows||sequence>config.limits.streamRows)limit();
       const facts=factGroups.get(c.scope)??[],relationships=relGroups.get(c.scope)??[];
       const ids=new Set([...facts.map(f=>f.subject),...relationships.map(r=>r.from)]);
       // Only these file rows can participate in this scope's input/source checks.

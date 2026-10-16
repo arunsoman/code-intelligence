@@ -14,6 +14,10 @@ pub struct Limits {
     pub bytes: usize,
     pub chunk_bytes: usize,
     pub chunk_rows: usize,
+    /// Stream-sidecar budgets: that path is bounded-memory on both ends, so it can carry a full
+    /// large-repository revision where the inline JSON payload cannot.
+    pub stream_rows: usize,
+    pub stream_bytes: usize,
 }
 pub fn limits() -> Result<Limits, String> {
     fn value(key: &str, default: usize, max: usize) -> Result<usize, String> {
@@ -47,17 +51,33 @@ pub fn limits() -> Result<Limits, String> {
             32 * 1024 * 1024,
         )?,
         chunk_rows: value("CIE_EVIDENCE_CORE_CHUNK_ROWS", 16_384, 100_000)?,
+        stream_rows: value("CIE_EVIDENCE_CORE_STREAM_MAX_ROWS", 1_000_000, 4_000_000)?,
+        stream_bytes: value(
+            "CIE_EVIDENCE_CORE_STREAM_MAX_BYTES",
+            256 * 1024 * 1024,
+            512 * 1024 * 1024,
+        )?,
     })
 }
 pub fn streaming() -> Result<bool, String> {
-    match std::env::var("CIE_EVIDENCE_CORE_TRANSPORT")
-        .as_deref()
-        .unwrap_or("inline")
-    {
-        "inline" => Ok(false),
-        "stream" => Ok(true),
+    Ok(transport()? == "stream")
+}
+
+/// Effective transport: "inline", "stream", or the default "auto" (inline when the sidecar fits
+/// the row/byte caps, otherwise the index still succeeds and the metadata streams as a sidecar).
+pub fn transport() -> Result<&'static str, String> {
+    match std::env::var("CIE_EVIDENCE_CORE_TRANSPORT").as_deref() {
+        Ok("inline") => Ok("inline"),
+        Ok("stream") => Ok("stream"),
+        Ok("auto") | Err(std::env::VarError::NotPresent) => Ok("auto"),
         _ => Err("invalid CIE_EVIDENCE_CORE_TRANSPORT".into()),
     }
+}
+
+/// The worker-side streaming decision for a returned batch: explicit stream always streams;
+/// auto streams exactly when the inline sidecar did not fit (and the mode emits one at all).
+pub fn should_stream(transport: &str, mode: &str, has_inline_core: bool) -> bool {
+    mode != "unchanged" && (transport == "stream" || (transport == "auto" && !has_inline_core))
 }
 struct Bounded {
     bytes: Vec<u8>,
@@ -108,7 +128,7 @@ fn write_inner(batch: &AnalysisBatch, path: &Path) -> Result<(), String> {
             .1
             .push(rel);
     }
-    if groups.len() > limits.rows {
+    if groups.len() > limits.stream_rows {
         return Err("EVIDENCE_CORE_LIMIT: scope count".into());
     }
     use std::os::unix::fs::OpenOptionsExt;
@@ -149,7 +169,7 @@ fn write_inner(batch: &AnalysisBatch, path: &Path) -> Result<(), String> {
             .chain(relationships.iter().map(|r| r.evidence.len()))
             .sum();
         links += count;
-        if count > limits.chunk_rows || links > limits.rows {
+        if count > limits.chunk_rows || links > limits.stream_rows {
             return Err("EVIDENCE_CORE_LIMIT: scope or revision row cap".into());
         }
         // Bound identifier cloning before allocating JSON associations. The wire
@@ -233,7 +253,7 @@ fn send<T: Serialize>(
         .map_err(|_| "EVIDENCE_CORE_LIMIT: scope chunk byte cap")?;
     buffer.bytes.push(b'\n');
     *total += buffer.bytes.len();
-    if *total > limits.bytes {
+    if *total > limits.stream_bytes {
         return Err("EVIDENCE_CORE_LIMIT: revision byte cap".into());
     }
     if let Some(hash) = hash {
@@ -300,6 +320,8 @@ mod tests {
             bytes: 1,
             chunk_bytes: 100,
             chunk_rows: 100,
+            stream_rows: 1_000_000,
+            stream_bytes: 1,
         };
         assert!(send(
             &mut output,
@@ -310,5 +332,19 @@ mod tests {
         )
         .is_err());
         assert!(output.is_empty());
+    }
+
+    /// The auto transport streams exactly when the inline sidecar did not fit, and only for
+    /// modes whose revisions carry metadata at all; an explicit stream always streams.
+    #[test]
+    fn streamed_sidecar_is_chosen_on_inline_overflow_and_never_for_unchanged() {
+        assert!(!should_stream("auto", "delta", true));
+        assert!(should_stream("auto", "delta", false));
+        assert!(should_stream("auto", "full", false));
+        assert!(!should_stream("auto", "unchanged", false));
+        assert!(should_stream("stream", "delta", true));
+        assert!(should_stream("stream", "delta", false));
+        assert!(!should_stream("inline", "delta", false));
+        assert!(!should_stream("inline", "delta", true));
     }
 }

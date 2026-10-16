@@ -8,12 +8,15 @@ import { WorkerClient } from "../src/worker.ts";
 import { Store,DeltaBaseError } from "../src/store.ts";
 import { graphDigest } from "../src/indexer.ts";
 async function boot(t: {after:(f:()=>void)=>void}) {
-  const env={mode:process.env.CIE_EVIDENCE_CORE_MODE,strict:process.env.CIE_EVIDENCE_CORE_STRICT};
+  const env={mode:process.env.CIE_EVIDENCE_CORE_MODE,strict:process.env.CIE_EVIDENCE_CORE_STRICT,streamBytes:process.env.CIE_EVIDENCE_CORE_STREAM_MAX_BYTES};
   process.env.CIE_EVIDENCE_CORE_MODE="on";process.env.CIE_EVIDENCE_CORE_STRICT="1";
+  // The stored-side revision guard uses the stream budget; this suite's fault injection is sized
+  // against the historical 16 MiB cap, so pin it explicitly instead of inflating the padding.
+  process.env.CIE_EVIDENCE_CORE_STREAM_MAX_BYTES="16777216";
   const root=mkdtempSync(join(tmpdir(),"cie-delta-"));
   writeFileSync(join(root,"a.ts"),"export function first(){return 1;}\n");writeFileSync(join(root,"b.ts"),"export function second(){return 2;}\n");
   const worker=new WorkerClient(),store=new Store(":memory:");
-  t.after(()=>{worker.close();store.db.close();rmSync(root,{recursive:true,force:true});for(const [key,value]of [["CIE_EVIDENCE_CORE_MODE",env.mode],["CIE_EVIDENCE_CORE_STRICT",env.strict]]){if(value===undefined)delete process.env[key!];else process.env[key!]=value;}});
+  t.after(()=>{worker.close();store.db.close();rmSync(root,{recursive:true,force:true});for(const [key,value]of [["CIE_EVIDENCE_CORE_MODE",env.mode],["CIE_EVIDENCE_CORE_STRICT",env.strict],["CIE_EVIDENCE_CORE_STREAM_MAX_BYTES",env.streamBytes]]){if(value===undefined)delete process.env[key!];else process.env[key!]=value;}});
   const batch=await worker.index(root);store.putBatch(batch);
   const base={revision:batch.revision,analyzerVersion:batch.analyzerVersion,digests:batch.manifest!,evidenceCoreVersion:store.evidenceCoreBaseVersion(batch.revision)};
   return {root,worker,store,batch,base};
