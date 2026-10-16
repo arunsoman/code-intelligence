@@ -45,8 +45,10 @@ export function validatedCore(batch: AnalysisBatch): EvidenceCoreBatchV1 | undef
     if (runs.size !== core.producerRuns.length || new Set(core.coverage.map(c => c.id)).size !== core.coverage.length) throw new Error("duplicate identities");
     // A producer must account for every emitted scope, including evidence-free
     // files. Delta sidecars account only for changed, surviving manifest scopes.
-    const requiredScopes = new Set(Object.keys(batch.manifest ?? Object.fromEntries(files)).filter(file =>
-      batch.mode !== "delta" || (batch.changedFiles ?? []).includes(file)));
+    const manifest = batch.manifest ?? Object.fromEntries(files);
+    const requiredScopes = new Set(batch.mode === "delta"
+      ? (batch.changedFiles ?? []).filter(file => Object.hasOwn(manifest,file))
+      : Object.keys(manifest));
     const seenScopes = new Set<string>();
     for (const run of runs.values()) {
       const scopeKey = run.scope.kind === "FILE" ? run.scope.file : "";

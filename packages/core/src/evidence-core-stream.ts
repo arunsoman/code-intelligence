@@ -47,7 +47,8 @@ export function insertCoreStream(db:DatabaseSync,batch:AnalysisBatch,entities:An
   const config=evidenceCoreConfig();if(config.mode==="off")return;
   const expected=new Set(Object.keys(batch.manifest??{}).filter(f=>batch.mode!=="delta"||(batch.changedFiles??[]).includes(f)));
   const seen=new Set<string>(),hash=createHash("sha256");let sequence=0,started=false,finished=false,links=0;
-  const owners=new Map(entities.map(e=>[e.entityId,e])),files=entities.filter(e=>e.kind==="file");
+  const owners=new Map(entities.map(e=>[e.entityId,e]));
+  const files=new Map(entities.filter(e=>e.kind==="file").map(e=>[e.file,e]));
   const factGroups=new Map<string,AnalysisBatch["facts"]>(),relGroups=new Map<string,AnalysisBatch["relationships"]>();
   for(const row of batch.facts){const scope=owners.get(row.subject)?.file??"";const rows=factGroups.get(scope)??[];rows.push(row);factGroups.set(scope,rows);}
   for(const row of batch.relationships){const scope=owners.get(row.from)?.file??"";const rows=relGroups.get(scope)??[];rows.push(row);relGroups.set(scope,rows);}
@@ -68,7 +69,13 @@ export function insertCoreStream(db:DatabaseSync,batch:AnalysisBatch,entities:An
       if(raw.links.length>config.limits.chunkRows||links>config.limits.rows||sequence>config.limits.rows)limit();
       const facts=factGroups.get(c.scope)??[],relationships=relGroups.get(c.scope)??[];
       const ids=new Set([...facts.map(f=>f.subject),...relationships.map(r=>r.from)]);
-      const selected=[...files,...[...ids].map(id=>owners.get(id)).filter((e):e is NonNullable<typeof e>=>!!e&&e.kind!=="file")];
+      // Only these file rows can participate in this scope's input/source checks.
+      // Keep cross-file evidence sources; scanning every file per chunk is quadratic.
+      const sources=new Set([c.scope]);
+      for(const row of [...facts,...relationships])for(const ev of row.evidence)
+        if(ev.location.kind==="CodeLocation")sources.add(ev.sourceId);
+      const selected=[...[...sources].map(file=>files.get(file)).filter((e):e is NonNullable<typeof e>=>!!e),
+        ...[...ids].map(id=>owners.get(id)).filter((e):e is NonNullable<typeof e>=>!!e&&e.kind!=="file")];
       const scoped={...batch,mode:"delta" as const,changedFiles:[c.scope],entities:selected,facts,relationships,evidenceCore:raw};
       const core=validatedCore(scoped);if(!core)invalid();insertCore(db,batch.revision,core,false);
     }

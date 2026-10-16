@@ -31,6 +31,38 @@ test("stream and inline persist exactly equal metadata, including after worker c
   assert.deepEqual(rows(a,inline.revision),rows(b,stream.revision));assert.equal(graphDigest(a,inline.revision).digest,graphDigest(b,stream.revision).digest);assert.equal(b.evidenceCoreBaseVersion(stream.revision),"3");
   b.denyPath(root,"a.ts");assert.deepEqual(b.evidenceCoreCoverage(stream.revision,"static.observations","a.ts"),[]);b.setRevoked(root,true);assert.equal(b.evidenceCoreBaseVersion(stream.revision),undefined);
 });
+test("scoped stream validation retains cross-file evidence source checks",async t=>{
+  const root=setup(t);
+  for(const badSource of [false,true]){
+    process.env.CIE_EVIDENCE_CORE_TRANSPORT="inline";
+    const inline=await index(root);
+    process.env.CIE_EVIDENCE_CORE_TRANSPORT="stream";
+    const stream=await index(root);
+    for(const batch of [inline,stream]){
+      const source=batch.entities.find(e=>e.kind==="file"&&e.file==="b.ts")!;
+      const subjectIds=new Set(batch.entities.filter(e=>e.file==="a.ts").map(e=>e.entityId));
+      let changed=0;
+      for(const row of batch.facts.filter(f=>subjectIds.has(f.subject)))for(const ev of row.evidence){
+        if(ev.location.kind!=="CodeLocation")continue;
+        ev.sourceId=source.file;
+        ev.location={kind:"CodeLocation",span:{...source.spans[0],contentHash:badSource?"forged":source.spans[0].contentHash}};
+        changed++;
+      }
+      assert.ok(changed>0);
+    }
+    const a=new Store(":memory:"),b=new Store(":memory:");
+    try{
+      if(badSource){
+        assert.throws(()=>a.putBatch(inline),/EVIDENCE_CORE_INVALID/);
+        assert.throws(()=>b.putBatch(stream),/EVIDENCE_CORE_INVALID/);
+        assert.equal(b.revision(stream.revision),null);
+      }else{
+        a.putBatch(inline);b.putBatch(stream);
+        assert.deepEqual(rows(a,inline.revision),rows(b,stream.revision));
+      }
+    }finally{a.db.close();b.db.close();}
+  }
+});
 test("stream deltas equal clean full indexing and unchanged emits no stream",async t=>{
   const root=setup(t);process.env.CIE_EVIDENCE_CORE_TRANSPORT="stream";const worker=new WorkerClient(),store=new Store(":memory:"),clean=new Store(":memory:");t.after(()=>{worker.close();store.db.close();clean.db.close();});
   const first=await worker.index(root);store.putBatch(first);const base={revision:first.revision,analyzerVersion:first.analyzerVersion,digests:first.manifest!,evidenceCoreVersion:"3"};
