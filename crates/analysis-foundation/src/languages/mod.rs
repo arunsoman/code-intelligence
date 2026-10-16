@@ -1,5 +1,6 @@
 //! Automatically discovered, capability-scoped source adapters. This does not replace
 //! the existing worker indexer. Unsupported semantics remain explicit opaque regions.
+mod calls;
 mod expressions;
 
 use crate::semantic_ir::*;
@@ -212,6 +213,7 @@ impl LanguageAdapter for TreeAdapter {
                 reason: "syntax errors: recovered declarations are opaque".into(),
             });
         }
+        let resolutions = calls::resolve(self, root, &request.source, &request.path);
         let mut functions = BTreeMap::new();
         let mut represented = BTreeSet::new();
         let mut stack = vec![root];
@@ -223,7 +225,8 @@ impl LanguageAdapter for TreeAdapter {
                     node.start_byte(),
                     node.kind()
                 ));
-                let (f, covered, reason) = self.function(node, &request.source, root.has_error());
+                let (f, covered, reason) =
+                    self.function(node, &request.source, root.has_error(), &resolutions);
                 if let Some(reason) = reason {
                     gaps.push(Gap {
                         source: span(node),
@@ -260,6 +263,24 @@ impl LanguageAdapter for TreeAdapter {
             cs.reverse();
             stack.extend(cs);
         }
+        for function in functions.values() {
+            for block in function.blocks.values() {
+                if let Terminator::Invoke {
+                    call:
+                        CallSite {
+                            binding: Binding::Unresolved { reason, evidence },
+                            ..
+                        },
+                    ..
+                } = &block.terminator
+                {
+                    gaps.push(Gap {
+                        source: evidence.clone(),
+                        reason: reason.clone(),
+                    });
+                }
+            }
+        }
         let snapshot = Snapshot {
             schema: SCHEMA.into(),
             revision: request.revision.clone(),
@@ -293,6 +314,7 @@ impl TreeAdapter {
         node: Node<'_>,
         source: &str,
         syntax_error: bool,
+        resolutions: &calls::Resolutions,
     ) -> (Function, Covered, Option<String>) {
         let mut values = BTreeMap::new();
         let mut parameters = vec![];
@@ -360,7 +382,7 @@ impl TreeAdapter {
         {
             if let Some(body) = body {
                 if let Some((function, covered)) =
-                    self.straight_line(node, body, source, &f, expected.as_ref())
+                    self.straight_line(node, body, source, &f, expected.as_ref(), resolutions)
                 {
                     let assumption = if matches!(self.profile, Profile::TypeScript)
                         && !function.parameters.is_empty()

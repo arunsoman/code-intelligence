@@ -284,7 +284,10 @@ fn effectful_or_unmodeled_statements_cannot_be_erased_by_a_return() {
                 .snapshot
                 .functions
                 .values()
-                .all(|f| matches!(f.blocks[&f.entry].terminator, Terminator::Opaque { .. })),
+                .all(|f| f.blocks.values().any(|b| matches!(
+                    b.terminator,
+                    Terminator::Opaque { .. } | Terminator::Invoke { .. }
+                ))),
             "{source}"
         );
     }

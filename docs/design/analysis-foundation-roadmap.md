@@ -24,6 +24,7 @@ conformance pathway. This is not a retrospective audit of all CIE features.
 | P02 | Semantic IR schema and trust boundary, F019–F028 | Delivered as `cie-p02-semantic-ir.patch`, based on P01 / local baseline `3d13731` | Library only; no source adapter or application switch | 21 new semantic IR tests; 185 workspace tests passed; release build and crate Clippy passed |
 | P02a | Default Java/TS/JS adapters and automatic file discovery, F172–F180 | Delivered as `cie-default-language-adapters.patch`, after P02 / local base `48f1ba2` | Standalone library/worker; literal-return subset only | 200 workspace tests passed, source execution oracles and file-only discovery smoke passed |
 | P03a | Straight-line expressions and source fidelity, F036 and F181–F185 | Delivered as `cie-p03a-expressions.patch`, after P02a / base `38158aa` | Library/standalone worker; wider P03 still pending | 213 workspace tests passed; source execution comparisons and golden vectors |
+| P03b | Explicit calls, bindings and continuations, F186–F190 | Delivered as `cie-p03b-calls.patch`, after P03a / base `3523023` | Library/standalone worker; other P03 work pending | 229 workspace tests; Java/Node source comparisons |
 | Remaining P03–P19 | Planned below | Pending | Pending | Pending |
 
 P01 code: `crates/analysis-foundation`; worker command: `analysisFoundation`.
@@ -410,6 +411,23 @@ Evidence: `docs/testing/2026-10-16-p03a-expressions.md`. Scope:
 `docs/design/straight-line-expressions.md`. F036 golden snapshots are delivered
 for this subset; no universal source-fidelity claim is made.
 
+## P03b — Calls and continuations: delivered
+
+F031/F032 remain partial: builtins/rebinding proof, wider call resolution,
+raise/catch/finally and exception matching are still pending. Do not equate
+explicit propagated exits with implemented exception handlers.
+
+- [x] F186 Emit ordered invokes with captured/discarded results and unique continuation/value identities.
+- [x] F187 Represent normal successors and explicit propagated exception exits for calls/lookups.
+- [x] F188 Resolve only supported exact same-class private-static Java bindings; retain other targets as unknown.
+- [x] F189 Preserve lookup/argument order and invalidate local assumptions around unresolved ECMAScript code.
+- [x] F190 Validate call graphs, unknown outcomes, eval state and source-execution delegation/order cases.
+
+Evidence: `docs/testing/2026-10-16-p03b-calls.md`; contract:
+`docs/design/call-lowering.md`. Sixteen new call regressions and all previous
+workspace tests pass. No source-level business-defect or application enablement
+claim is made.
+
 ## Patch update template
 
 For each delivered patch append a ledger row with:
@@ -423,13 +441,14 @@ For each delivered patch append a ledger row with:
 
 ## Immediate next patch
 
-P03b: add explicit call/binding lowering and normal/exceptional continuations
-within the remaining F029–F038 scope. Branches/loops and broader fidelity follow;
-Python can be added independently. P03a delivered straight-line expressions. P02 is
+P03c: explicit branch/control-flow lowering and supported exceptional statement
+fidelity within the remaining F029–F038 scope. P03a delivered expressions; P03b
+delivered explicit calls and propagated exits. Loops and catch/finally remain
+pending; Python can be added independently. P02 is
 implemented in `semantic_ir`; its source hashes, schema vectors and graph checks
 establish model consistency, not translation correctness. P03 must prove the
 first adapter's fidelity before P06 can claim source-level anomaly detection.
 
 P02 evidence: `docs/testing/2026-10-16-p02-semantic-ir.md`; schema contract:
-`docs/design/semantic-ir-v1.md`. Current checklist: 43 complete, 142 pending, 185 total;
+`docs/design/semantic-ir-v1.md`. Current checklist: 48 complete, 142 pending, 190 total;
 these counts are task accounting, not engineering-effort percentages.

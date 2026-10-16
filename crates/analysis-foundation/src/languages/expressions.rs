@@ -13,6 +13,10 @@ struct Builder<'a> {
     bindings: BTreeMap<String, Binding>,
     instructions: Vec<Instruction>,
     covered: Covered,
+    resolutions: &'a calls::Resolutions,
+    current: BlockId,
+    sequence: usize,
+    call_count: usize,
 }
 
 impl TreeAdapter {
@@ -23,6 +27,7 @@ impl TreeAdapter {
         source: &str,
         function: &Function,
         expected: Option<&Type>,
+        resolutions: &calls::Resolutions,
     ) -> Option<(Function, Covered)> {
         let mut builder = Builder {
             adapter: self,
@@ -31,6 +36,10 @@ impl TreeAdapter {
             bindings: BTreeMap::new(),
             instructions: vec![],
             covered: Covered::new(),
+            resolutions,
+            current: "entry".into(),
+            sequence: 0,
+            call_count: 0,
         };
         let params = node
             .child_by_field_name("parameters")
@@ -85,7 +94,14 @@ impl TreeAdapter {
                     "local_variable_declaration"
                     | "lexical_declaration"
                     | "variable_declaration" => builder.declaration(statement)?,
-                    "expression_statement" => builder.assignment(*children(statement).first()?)?,
+                    "expression_statement" => {
+                        let expression = *children(statement).first()?;
+                        if matches!(expression.kind(), "call_expression" | "method_invocation") {
+                            builder.invoke(expression, None, false, 0)?;
+                        } else {
+                            builder.assignment(expression)?;
+                        }
+                    }
                     "return_statement" => {
                         // Preserve trailing source semantics conservatively, including unreachable statements.
                         if index + 1 != statements.len() {
@@ -102,7 +118,17 @@ impl TreeAdapter {
                 builder.mark(statement);
             }
             if statements.last()?.kind() != "return_statement" {
-                return None;
+                if expected.is_some_and(|ty| ty != &Type::Unit) {
+                    return None;
+                }
+                if !builder
+                    .function
+                    .blocks
+                    .values()
+                    .any(|b| matches!(b.terminator, Terminator::Invoke { .. }))
+                {
+                    return None;
+                }
             }
             result
         };
@@ -115,7 +141,7 @@ impl TreeAdapter {
         }
         builder.function.return_type = return_type;
         builder.function.blocks.insert(
-            "entry".into(),
+            builder.current.clone(),
             Block {
                 source: span(node),
                 instructions: builder.instructions,
@@ -130,19 +156,184 @@ impl TreeAdapter {
 }
 
 impl Builder<'_> {
+    fn invoke(
+        &mut self,
+        n: Node<'_>,
+        expected: Option<&Type>,
+        capture: bool,
+        depth: usize,
+    ) -> Option<Option<ValueId>> {
+        if depth >= 128 {
+            return None;
+        }
+        let arguments = n.child_by_field_name("arguments")?;
+        let callee = n
+            .child_by_field_name("function")
+            .or_else(|| n.child_by_field_name("name"))?;
+        let prefix = &self.source[n.start_byte()..arguments.start_byte()];
+        if prefix.contains("?.") || n.child_by_field_name("type_arguments").is_some() {
+            return None;
+        }
+        let candidate = self
+            .resolutions
+            .get(&(n.start_byte(), n.end_byte()))
+            .cloned();
+        let java = matches!(self.adapter.profile, Profile::Java);
+        if !java || n.child_by_field_name("object").is_some() {
+            // Receiver/member lookup may run getters or throw BEFORE argument evaluation.
+            // Preserve that opaque phase explicitly rather than evaluate it after arguments.
+            let evaluation_source = Span {
+                document: span(n).document,
+                start_byte: n.start_byte() as u64,
+                end_byte: callee.end_byte() as u64,
+            };
+            let mut inputs = BTreeSet::new();
+            let mut lookup_nodes = vec![callee];
+            if let Some(object) = n.child_by_field_name("object") {
+                lookup_nodes.push(object);
+            }
+            while let Some(node) = lookup_nodes.pop() {
+                if node.kind() == "identifier" {
+                    if let Some(binding) = self.bindings.get(raw(node, self.source)) {
+                        inputs.insert(binding.value.clone());
+                    }
+                }
+                lookup_nodes.extend(children(node));
+            }
+            let inputs = inputs.into_iter().collect();
+            self.instructions.push(Instruction {
+                id: InstructionId(format!("instruction:{}", self.sequence)),
+                source: evaluation_source,
+                exceptional: Some(ExceptionalExit::Propagate),
+                action: Action::Opaque {
+                    reason: "unmodeled callee/receiver lookup before arguments".into(),
+                    inputs,
+                    outputs: vec![],
+                },
+            });
+            self.sequence += 1;
+            if !java {
+                self.havoc_locals(span(callee));
+            }
+        }
+        let mut values = vec![];
+        for arg in children(arguments)
+            .into_iter()
+            .filter(|n| !matches!(n.kind(), "comment" | "line_comment" | "block_comment"))
+        {
+            if matches!(arg.kind(), "spread_element" | "spread_argument") {
+                return None;
+            }
+            // Infer argument types independently; do not force the candidate's signature
+            // onto literals or invent narrowing/promotions to make resolution succeed.
+            values.push(self.expression(arg, None, depth + 1)?);
+        }
+        let resolved = candidate.filter(|c| {
+            c.parameters.len() == values.len()
+                && c.parameters
+                    .iter()
+                    .zip(&values)
+                    .all(|(ty, v)| ty == &self.function.values[v])
+        });
+        let result_type = resolved
+            .as_ref()
+            .map(|c| c.return_type.clone())
+            .or_else(|| expected.cloned())
+            .unwrap_or_else(|| opaque_type("unresolved call result type"));
+        if expected.is_some_and(|ty| resolved.is_some() && ty != &result_type) {
+            return None;
+        }
+        let binding = if let Some(c) = resolved {
+            crate::semantic_ir::Binding::Resolved {
+                targets: BTreeSet::from([c.target]),
+                evidence: c.evidence,
+            }
+        } else {
+            crate::semantic_ir::Binding::Unresolved {
+                reason: format!(
+                    "unresolved call {}; runtime target, result and outcome are not established; contextual result types are assumptions",
+                    prefix.trim()
+                ),
+                evidence: span(n),
+            }
+        };
+        let call_index = self.call_count;
+        self.call_count += 1;
+        let result = capture.then(|| ValueId(format!("call-result:{call_index}")));
+        if let Some(value) = &result {
+            self.function.values.insert(value.clone(), result_type);
+        }
+        let normal = BlockId(format!("after-call:{call_index}"));
+        self.function.blocks.insert(
+            self.current.clone(),
+            Block {
+                source: self.function.source.clone(),
+                instructions: std::mem::take(&mut self.instructions),
+                terminator: Terminator::Invoke {
+                    result: result.clone(),
+                    call: CallSite {
+                        arguments: values,
+                        binding,
+                    },
+                    normal: normal.clone(),
+                    exceptional: ExceptionalExit::Propagate,
+                },
+            },
+        );
+        self.current = normal;
+        if !java {
+            self.havoc_locals(span(n));
+        }
+        self.mark(n);
+        Some(result)
+    }
+    /// Unknown ECMAScript code (including direct eval or accessors) must not leave
+    /// stale local values masquerading as facts. This is an explicit approximation.
+    fn havoc_locals(&mut self, source: Span) {
+        if self.bindings.is_empty() {
+            return;
+        }
+        let mut inputs = vec![];
+        let mut outputs = vec![];
+        for (index, binding) in self.bindings.values_mut().enumerate() {
+            inputs.push(binding.value.clone());
+            let value = ValueId(format!("unknown-local:{}:{index}", self.sequence));
+            self.function.values.insert(
+                value.clone(),
+                opaque_type(
+                    "local state may change during unresolved callee evaluation or invocation",
+                ),
+            );
+            binding.value = value.clone();
+            outputs.push(value);
+        }
+        self.instructions.push(Instruction {
+            id: InstructionId(format!("instruction:{}", self.sequence)),
+            source,
+            exceptional: None,
+            action: Action::Opaque {
+                reason: "conservative local-state invalidation around unresolved ECMAScript code"
+                    .into(),
+                inputs,
+                outputs,
+            },
+        });
+        self.sequence += 1;
+    }
     fn mark(&mut self, n: Node<'_>) {
         self.covered
             .insert((n.start_byte(), n.end_byte(), n.kind().into()));
     }
     fn emit(&mut self, n: Node<'_>, ty: Type, action: impl FnOnce(ValueId) -> Action) -> ValueId {
-        let id = ValueId(format!("expression:{}", self.instructions.len()));
+        let id = ValueId(format!("expression:{}", self.sequence));
         self.function.values.insert(id.clone(), ty);
         self.instructions.push(Instruction {
-            id: InstructionId(format!("instruction:{}", self.instructions.len())),
+            id: InstructionId(format!("instruction:{}", self.sequence)),
             source: span(n),
             exceptional: None,
             action: action(id.clone()),
         });
+        self.sequence += 1;
         self.mark(n);
         id
     }
@@ -175,6 +366,7 @@ impl Builder<'_> {
             return Some(self.emit(n, ty, |result| Action::Constant { result, literal }));
         }
         match n.kind() {
+            "call_expression" | "method_invocation" => self.invoke(n, expected, true, depth)?,
             "identifier" => {
                 let value = self.bindings.get(raw(n, self.source))?.value.clone();
                 self.mark(n);

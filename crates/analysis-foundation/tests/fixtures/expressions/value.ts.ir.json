@@ -20,9 +20,9 @@
         }
       ],
       "language": "typescript",
-      "loweringVersion": "typescript-expressions.v2",
+      "loweringVersion": "typescript-calls.v3",
       "path": "value.ts",
-      "semanticsVersion": "ecmascript-expression-subset.v2",
+      "semanticsVersion": "ecmascript-call-subset.v3",
       "sha256": "cb4e2291036fc7d22bc0173280dc37906e7ceb3cc0125949fe72d568d57adb53"
     }
   },
@@ -184,7 +184,7 @@
       }
     }
   },
-  "producerVersion": "typescript-expressions.v2",
+  "producerVersion": "typescript-calls.v3",
   "revision": "golden-p03a",
   "schema": "cie.semantic-ir.v1"
 }

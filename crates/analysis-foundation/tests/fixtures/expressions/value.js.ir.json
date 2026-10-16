@@ -12,9 +12,9 @@
         }
       ],
       "language": "javascript",
-      "loweringVersion": "javascript-expressions.v2",
+      "loweringVersion": "javascript-calls.v3",
       "path": "value.js",
-      "semanticsVersion": "ecmascript-expression-subset.v2",
+      "semanticsVersion": "ecmascript-call-subset.v3",
       "sha256": "d946bb9ae3f11a4dae1eee01fb6508cee27d9ab463861ff3a8cc98f9d3b8f69e"
     }
   },
@@ -213,7 +213,7 @@
       }
     }
   },
-  "producerVersion": "javascript-expressions.v2",
+  "producerVersion": "javascript-calls.v3",
   "revision": "golden-p03a",
   "schema": "cie.semantic-ir.v1"
 }

@@ -120,3 +120,11 @@ The literal-only scope above records P02a. P03a extends each default adapter to
 supported straight-line locals, references and selected expressions. Adapter and
 semantics versions advance to expression v2. See `straight-line-expressions.md`
 for the current contract, exclusions and TypeScript runtime-type assumptions.
+
+## P03b call extension
+
+Call v3 adapters now retain explicit invokes and propagated exceptional exits.
+Exact local private-static Java bindings are resolved conservatively; JS/TS
+call targets remain unknown. Lookup order and local-state invalidation are
+explicit. See `call-lowering.md`; the earlier literal-only tables are historical
+P02a scope, not the current complete capability description.

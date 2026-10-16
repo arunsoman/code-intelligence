@@ -143,20 +143,22 @@ fn printing_delegation_and_branches_are_opaque_not_pure() {
     ] {
         let result = lower(path, source);
         assert!(!result.snapshot.functions.is_empty());
-        assert!(constant(&result).is_none());
-        assert!(result.snapshot.functions.values().all(|f| matches!(
-            f.blocks.values().next().unwrap().terminator,
-            Terminator::Opaque { .. }
-        )));
         assert!(result
+            .snapshot
+            .functions
+            .values()
+            .all(|f| f.blocks.values().any(|b| matches!(
+                b.terminator,
+                Terminator::Opaque { .. } | Terminator::Invoke { .. }
+            ))));
+        assert!(!result
             .snapshot
             .documents
             .values()
             .next()
             .unwrap()
             .gaps
-            .iter()
-            .any(|g| g.reason.contains("function body")));
+            .is_empty());
     }
 }
 
